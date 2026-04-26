@@ -576,14 +576,16 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
 
     Components and weights:
       PGR corrected value  ±4.0   (1=Be- → -4, 5=Bu+ → +4)
-      Setup filter         ±2.0   (SMA20+dir3: True→+2, False→-2, None→0)
       Risk/Reward          -1..+2  (rr=0→-1, rr>=3→+2)
-      LT trend             ±1.0   (Strong/Weak)
+      LT trend             ±1.0   (Weak→+1 recovery play, Strong→-1 already extended)
       Money flow           ±0.75  (Strong/Weak)
       OB/OS zone           ±0.5   (Optimal→+0.5, Wait→-0.5, Early→+0.25)
       Industry strength    ±0.5   (Strong/Weak)
       PGR delta            ±0.25  (improving/declining vs yesterday)
       Seasonality          ±1.0   (avg monthly return: >+2%→+1, >+1%→+0.5, <-1%→-0.5, <-2%→-1)
+
+    setup_ok (col U) is display-only: backtesting showed it is a contrarian indicator
+    for raw 10d returns (False=+1.36%, True=+0.48%) so it is excluded from the score.
     """
     score = 0.0
 
@@ -591,14 +593,7 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
     pgr_map = {1: -4.0, 2: -2.0, 3: 0.0, 4: 2.0, 5: 4.0}
     score += pgr_map.get(power_g.pgr_corrected_value, 0.0)
 
-    # 2. Setup filter
-    setup = fields.get('setup_ok')
-    if setup is True:
-        score += 2.0
-    elif setup is False:
-        score -= 2.0
-
-    # 3. Risk/Reward ratio (use raw computed value, not sheet-zeroed value)
+    # 2. Risk/Reward ratio (use raw computed value, not sheet-zeroed value)
     rr = fields.get('risk_ratio', 0)
     if rr >= 3.0:
         score += 2.0
@@ -615,7 +610,7 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
 
     # 4. Long-term trend
     lt = str(power_g.lt_trend or '').strip()
-    lt_map = {'Strong': 1.0, 'Neutral': 0.0, 'Weak': -1.0}
+    lt_map = {'Strong': -1.0, 'Neutral': 0.0, 'Weak': 1.0}
     score += lt_map.get(lt, 0.0)
 
     # 5. Money flow
