@@ -37,8 +37,7 @@ def _to_float(val, default):
         return default
 
 SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.txt")
-_DEFAULT_PROXY = "http://proxy-dmz.intel.com:912"
-_PROXY_URL = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or _DEFAULT_PROXY
+_PROXY_URL = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 _PROXIES = {"http": _PROXY_URL, "https": _PROXY_URL} if _PROXY_URL else {}
 XLSX_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "investment.xlsx")
 XLSX_BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Backup")
