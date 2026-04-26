@@ -85,6 +85,7 @@ print(f"  col S  money_flow      = {pg.money_flow}")
 print(f"  col T  over_bt_sl      = {pg.over_bt_sl}")
 print(f"  col U  setup_ok        = {(1 if setup_ok else 0) if setup_ok is not None else None}")
 print(f"  col V  buying_ratio    = {fields['buying_ratio']}")
+print(f"  col W  seasonality     = {fields['seasonality']}  (month={pg.date.month})")
 
 # --- Missed market test ---
 print("\n=== Missed market test (price=-1 => row should be skipped) ===\n")

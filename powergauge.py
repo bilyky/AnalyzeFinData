@@ -525,6 +525,51 @@ def _backup_xlsx():
     print(f"Backup saved to {dst}")
 
 
+def _compute_seasonality(ohlcv_ts: dict, current_month: int) -> float:
+    """
+    Historical average monthly return for current_month across all available years.
+    Returns a score: +1.0 (strong seasonal tailwind) .. -1.0 (headwind).
+    Returns 0.0 if fewer than 3 years of data exist for this month.
+
+    Monthly return = (last close of month M) / (last close of month M-1) - 1.
+    """
+    if not ohlcv_ts:
+        return 0.0
+
+    all_dates = sorted(ohlcv_ts.keys())
+
+    # Build map: (year, month) -> last trading date of that month
+    month_ends = {}
+    for d in all_dates:
+        y, m = int(d[:4]), int(d[5:7])
+        month_ends[(y, m)] = d   # later dates overwrite, leaving the last one
+
+    returns = []
+    for (y, m), end_date in month_ends.items():
+        if m != current_month:
+            continue
+        prev_m = m - 1 if m > 1 else 12
+        prev_y = y if m > 1 else y - 1
+        prev_end = month_ends.get((prev_y, prev_m))
+        if not prev_end:
+            continue
+        close_end  = _to_float(ohlcv_ts[end_date].get('4. close'), 0)
+        close_prev = _to_float(ohlcv_ts[prev_end].get('4. close'), 0)
+        if close_prev > 0:
+            returns.append((close_end - close_prev) / close_prev * 100)
+
+    if len(returns) < 3:
+        return 0.0
+
+    avg = sum(returns) / len(returns)
+
+    if avg > 2.0:   return  1.0
+    if avg > 1.0:   return  0.5
+    if avg > -1.0:  return  0.0
+    if avg > -2.0:  return -0.5
+    return -1.0
+
+
 def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
     """
     Composite entry-quality score: -10 (strong sell) to +10 (strong buy).
@@ -538,6 +583,7 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
       OB/OS zone           ±0.5   (Optimal→+0.5, Wait→-0.5, Early→+0.25)
       Industry strength    ±0.5   (Strong/Weak)
       PGR delta            ±0.25  (improving/declining vs yesterday)
+      Seasonality          ±1.0   (avg monthly return: >+2%→+1, >+1%→+0.5, <-1%→-0.5, <-2%→-1)
     """
     score = 0.0
 
@@ -593,6 +639,9 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
         score += 0.25
     elif delta < 0:
         score -= 0.25
+
+    # 9. Seasonality
+    score += fields.get('seasonality', 0.0)
 
     return round(max(-10.0, min(10.0, score)), 1)
 
@@ -661,6 +710,7 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
         'stop_price': stop_price,
         'risk_ratio': risk_ratio,
         'setup_ok': setup_ok,      # True/False/None
+        'seasonality': _compute_seasonality(ohlcv_ts, power_g.date.month),
     }
     fields['buying_ratio'] = _buying_ratio(power_g, fields)
     return fields
@@ -734,6 +784,8 @@ def check_from_xls(form_cache, date=datetime.datetime.now(), symbols=None):
         row[20].value = (1 if setup_ok else 0) if setup_ok is not None else None
         # col V: buying ratio -10..+10
         row[21].value = f['buying_ratio']
+        # col W: seasonality score for current month (-1..+1)
+        row[22].value = f['seasonality'] if f['seasonality'] != 0.0 else None
 
         flag = "OK" if setup_ok else ("--" if setup_ok is False else "??")
         print(f"{symbol}: pgr={f['pgr']}, price={power_g.price}, "
