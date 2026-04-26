@@ -51,13 +51,14 @@ class PowerGauge:
         self.over_bt_sl = ""
         self.relative_strength = ""
 
-    def init_from_json(self, data_json):
+    def init_from_json(self, data_json, check_schema=True):
         cl = data_json.get('checklist_stocks') or {}
 
         # Early-out: invalid symbol reported by API
         if data_json.get('status') == 'invalid symbol':
             self.price = -1
-            self._check_schema(data_json)
+            if check_schema:
+                self._check_schema(data_json)
             return
 
         pgr_list = data_json.get('pgr') or []
@@ -91,7 +92,8 @@ class PowerGauge:
             technicals = pgr_list[3].get('Technicals') or []
             rs_score = next((t.get('Rel Strength vs Market') for t in technicals if 'Rel Strength vs Market' in t), None)
             self.relative_strength = str(rs_score) if rs_score is not None else ""
-        self._check_schema(data_json)
+        if check_schema:
+            self._check_schema(data_json)
 
     def _check_schema(self, data_json):
         warnings = []
@@ -109,9 +111,11 @@ class PowerGauge:
         if not metainfo:
             warnings.append("'metaInfo' list missing or empty")
         else:
-            for key in ('Last', 'Percentage ', 'Change', 'industry_name', 'signals'):
+            for key in ('Last', 'Percentage ', 'Change', 'signals'):
                 if key not in metainfo[0]:
                     warnings.append(f"metaInfo[0] missing key '{key}'")
+            if not any(k in metainfo[0] for k in ('industry_name', 'etf_group_name', 'industry_logo_name')):
+                warnings.append("metaInfo[0] missing industry key (industry_name/etf_group_name/industry_logo_name)")
         cl = data_json.get('checklist_stocks') or {}
         if not cl:
             warnings.append("'checklist_stocks' missing or empty")
@@ -150,7 +154,7 @@ class PowerGauge:
                 self.prevPG = PowerGauge(self.symbol, prev_date)
                 with open(path, "r") as f:
                     data_jsn = json.load(f)
-                self.prevPG.init_from_json(data_jsn)
+                self.prevPG.init_from_json(data_jsn, check_schema=False)
                 return
 
         # 2. Fall back to OHLCV data (Symbol_full/{symbol}_daily.json)
@@ -729,7 +733,7 @@ def check_from_xls(form_cache, date=datetime.datetime.now(), symbols=None):
     updated = 0
     skipped = 0
 
-    for row in ws.iter_rows(min_row=2):
+    for row in ws.iter_rows(min_row=2, max_col=23):
         symbol = row[3].value
         if not symbol or not str(symbol).strip():
             continue
