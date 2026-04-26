@@ -7,6 +7,28 @@ PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
 power_cookie = ""
 abs_path = "C:\\Develop\\StockTrading\\AnalyzeFinData\\"
 
+# Pre-built index of symbol → sorted list of cached JSON paths.
+# Populated by _build_cache_index(); find_prev_pf() falls back to glob when empty.
+_cache_file_index: dict = {}
+
+
+def _build_cache_index():
+    """Scan Data/Symbol once and build a symbol→[paths] index for find_prev_pf."""
+    global _cache_file_index
+    symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
+    from collections import defaultdict
+    idx: dict = defaultdict(list)
+    try:
+        for entry in os.scandir(symbol_dir):
+            if not entry.name.endswith('.json'):
+                continue
+            sym = entry.name.rsplit('_', 1)[0]
+            idx[sym].append(entry.path)
+    except OSError:
+        pass
+    _cache_file_index = {sym: sorted(paths) for sym, paths in idx.items()}
+    print(f"Cache index built: {len(_cache_file_index)} symbols")
+
 
 def _to_float(val, default):
     try:
@@ -136,10 +158,12 @@ class PowerGauge:
         self.percentage = round((self.change / prev_close) * 100, 4) if prev_close else 0
 
     def find_prev_pf(self):
-        import glob
-        symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
-        pattern = os.path.join(symbol_dir, f"{self.symbol}_*.json")
-        candidates = sorted(glob.glob(pattern))
+        if _cache_file_index:
+            candidates = _cache_file_index.get(self.symbol, [])
+        else:
+            import glob
+            symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
+            candidates = sorted(glob.glob(os.path.join(symbol_dir, f"{self.symbol}_*.json")))
         today_str = str(self.date)
 
         # 1. Try Chaikin cache (most recent file before today)
@@ -574,6 +598,55 @@ def _compute_seasonality(ohlcv_ts: dict, current_month: int) -> float:
     return -1.0
 
 
+# Backtested 10d win% by BR bucket (238k obs, 466 symbols, 2023-2025).
+# Validated: 5d and 10d win% monotonically increasing across all 5 buckets.
+_WIN_PCT_TABLE = [
+    (6.0,  0.552),  # br >= 6
+    (3.0,  0.548),  # br 3–6
+    (0.0,  0.533),  # br 0–3
+    (-3.0, 0.519),  # br -3 to 0
+]
+
+def _predicted_win_pct(br: float) -> float:
+    for threshold, pct in _WIN_PCT_TABLE:
+        if br >= threshold:
+            return pct
+    return 0.517  # br <= -3
+
+
+# Column headers and memo text for Research sheet row 1 (cols E–X, 0-indexed 4–23).
+# Keys are 0-based column indices. PRESERVE cols A–D (0-3) and I (8) and Q (16).
+_RESEARCH_HEADERS = {
+    4:  ("Industry",    "Sector/industry name from Chaikin metaInfo."),
+    5:  ("Prev PGR",    "Corrected PGR from the most recent prior cache file.\n1=Be-  2=Be  3=N  4=Bu  5=Bu+"),
+    6:  ("PGR",         "Current Corrected Power Gauge Rating.\n1=Be-  2=Be  3=Neutral  4=Bu  5=Bu+"),
+    7:  ("Ind Strength","Industry group signal from Chaikin.\nStrong / Weak / NA"),
+    9:  ("Stop",        "Stop price = min(3-day lows) × 0.99.\nZeroed when entry filter (col U) fails."),
+    10: ("Price",       "Last price from Chaikin API."),
+    11: ("Target",      "Resistance target = highest 10-day high above current price.\nZeroed when entry filter (col U) fails."),
+    12: ("R/R",         "Risk/Reward ratio = (Target − Price) / (Price − Stop).\nZeroed when entry filter (col U) fails."),
+    13: ("Prev Move%",  "% price move since the previous Chaikin cache snapshot."),
+    14: ("Prev %",      "Day-change% recorded in the previous Chaikin snapshot."),
+    15: ("Change%",     "Today's price change% from Chaikin."),
+    17: ("LT Trend",    "Long-term price trend from Chaikin.\nStrong / Neutral / Weak\n\nNote: Weak = recovery play (+1 in BR score);\nStrong = already extended (−1 in BR score)."),
+    18: ("Money Flow",  "Institutional money flow signal.\nStrong / Neutral / Weak"),
+    19: ("OB/OS",       "Overbought / Oversold zone.\nOptimal (+0.5) / Early (+0.25) / Neutral (0) / Wait (−0.5)"),
+    20: ("Setup",       "Entry filter: 1 = passed, 0 = failed.\nPass condition: Price > SMA(20) AND Price > Close[3d ago].\nAffects Stop / Target / R/R display only — NOT included in BR score."),
+    21: ("BR Score",    "Buying Ratio: composite entry-quality score −10 to +10.\n\nComponents:\n  PGR (1→-4 … 5→+4)\n  R/R (0→-1, ≥0.5→+0.5, ≥1→+1, ≥2→+1.5, ≥3→+2)\n  LT Trend (Weak→+1, Strong→-1)\n  Money Flow (Strong→+0.75, Weak→-0.75)\n  OB/OS (Optimal→+0.5, Early→+0.25, Wait→-0.5)\n  Industry (Strong→+0.5, Weak→-0.5)\n  PGR Delta (↑→+0.25, ↓→-0.25)\n  Seasonality (−1 to +1)\n\nThresholds: ≥6 strong buy | 3–6 moderate | 0–3 weak | −3–0 avoid | ≤−3 strong avoid"),
+    22: ("Seasonal",    "Monthly seasonality score for the current month.\nDerived from all available OHLCV history (avg monthly return).\n+1.0 = strong season (avg >+2%)   +0.5 = mild (>+1%)\n 0.0 = neutral                   −0.5 = mild weak (<−1%)\n−1.0 = weak season (avg <−2%)\nRequires ≥3 years of OHLCV data; 0 if insufficient."),
+    23: ("Win% 10d",    "Predicted 10-day win% from backtest (238k obs, 466 symbols, 2023–2025).\nBased on Buying Ratio (col V) bucket:\n  BR ≥  6  → 55.2%  (strong buy)\n  BR 3–6   → 54.8%  (moderate)\n  BR 0–3   → 53.3%  (weak)\n  BR −3–0  → 51.9%  (neutral/avoid)\n  BR ≤ −3  → 51.7%  (avoid)"),
+}
+
+
+def _write_research_headers(ws):
+    """Write column labels and cell comments to Research sheet row 1."""
+    from openpyxl.comments import Comment
+    for col_idx, (label, memo) in _RESEARCH_HEADERS.items():
+        cell = ws.cell(row=1, column=col_idx + 1)  # openpyxl is 1-based
+        cell.value = label
+        cell.comment = Comment(memo, "PowerGauge")
+
+
 def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
     """
     Composite entry-quality score: -10 (strong sell) to +10 (strong buy).
@@ -645,6 +718,25 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
     return round(max(-10.0, min(10.0, score)), 1)
 
 
+def _ohlcv_streak_perc(ohlcv_ts: dict, all_dates: list, idx: int, cur_pct: float) -> float:
+    """Sum consecutive same-direction daily % changes ending at idx (from OHLCV closes)."""
+    if idx < 1 or cur_pct == 0:
+        return round(cur_pct, 4)
+    going_up = cur_pct > 0
+    total = cur_pct
+    for i in range(idx - 1, max(0, idx - 15) - 1, -1):
+        prev_close = _to_float(ohlcv_ts[all_dates[i]].get('4. close'), 0)
+        curr_close = _to_float(ohlcv_ts[all_dates[i + 1]].get('4. close'), 0)
+        if prev_close <= 0 or curr_close <= 0:
+            break
+        daily_pct = (curr_close - prev_close) / prev_close * 100
+        if (daily_pct > 0) == going_up:
+            total += daily_pct
+        else:
+            break
+    return round(total, 4)
+
+
 def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
     str_bu = PGR_STR
     pgr_value = str_bu[power_g.pgr_value]
@@ -657,46 +749,52 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
     prev_move_price = 0
     stop_price = 0
     risk_ratio = 0
+
     if power_g.prevPG:
         prev_pgr_v = str_bu[power_g.prevPG.pgr_value]
         prev_pgr_cv = str_bu[power_g.prevPG.pgr_corrected_value]
         prev_pgr = prev_pgr_cv if prev_pgr_cv == prev_pgr_v else f"{prev_pgr_cv}/{prev_pgr_v}"
         prev_percentage = power_g.prevPG.percentage
         pgr_delta = power_g.pgr_corrected_value - power_g.prevPG.pgr_corrected_value
-        prev_move_perc = power_g.prevPG.get_prev_same_move_percent() or prev_percentage
-        prev_move_price = power_g.prevPG.get_prev_max_price(power_g.price)
-        local_low = power_g.prevPG.get_prev_min_of(deep=3).price
-        raw_stop = round(local_low * 0.99, 2) if local_low else 0
-        stop_price = raw_stop if raw_stop and raw_stop < power_g.price else 0
-        if power_g.price != 0 and stop_price:
-            risk_ratio = round(
-                (prev_move_price - power_g.price) / (power_g.price - stop_price), 2
-            )
 
-    # Entry filter: close > SMA(20) AND close > close[3 trading days ago]
-    # setup_ok=True  → valid entry, write stop/target to sheet
-    # setup_ok=False → filter fails, zero out J and L
-    # setup_ok=None  → no OHLCV data, write levels anyway (can't determine)
+    # Stop, target, streak, SMA filter — all from OHLCV (O(lookback), no chain traversal)
     setup_ok = None
     if ohlcv_ts:
         all_dates = sorted(ohlcv_ts.keys())
         date_str = str(power_g.date)
-        # nearest OHLCV date on or before today
-        candidates = [d for d in all_dates if d <= date_str]
-        if candidates:
-            idx = all_dates.index(candidates[-1])
-            sma_window = all_dates[max(0, idx - 20): idx]
-            if len(sma_window) >= 10:
-                sma20 = sum(_to_float(ohlcv_ts[d].get('4. close'), 0)
-                            for d in sma_window) / len(sma_window)
+        past = [d for d in all_dates if d <= date_str]
+        if past:
+            idx = all_dates.index(past[-1])
+
+            # stop: 3-day low (including today) × 0.99
+            stop_w = all_dates[max(0, idx - 2): idx + 1]
+            local_low = min((_to_float(ohlcv_ts[d].get('3. low'), 0) for d in stop_w), default=0)
+            raw_stop = round(local_low * 0.99, 2) if local_low else 0
+            stop_price = raw_stop if raw_stop and raw_stop < power_g.price else 0
+
+            # target: 20-day high lookback (excluding today)
+            tgt_w = all_dates[max(0, idx - 20): idx]
+            if tgt_w:
+                hi = max((_to_float(ohlcv_ts[d].get('2. high'), 0) for d in tgt_w), default=0)
+                prev_move_price = round(hi, 2) if hi > power_g.price else 0.0
+
+            # risk/reward
+            if power_g.price > 0 and stop_price and prev_move_price:
+                risk_ratio = round(
+                    (prev_move_price - power_g.price) / (power_g.price - stop_price), 2
+                )
+
+            # cumulative same-direction streak percentage
+            prev_move_perc = _ohlcv_streak_perc(ohlcv_ts, all_dates, idx, power_g.percentage)
+
+            # entry filter: close > SMA(20) AND close > close[3d ago]
+            sma_w = all_dates[max(0, idx - 20): idx]
+            if len(sma_w) >= 10:
+                sma20 = sum(_to_float(ohlcv_ts[d].get('4. close'), 0) for d in sma_w) / len(sma_w)
                 trend_ok = power_g.price > sma20
             else:
                 trend_ok = False
-            if idx >= 3:
-                price_3d = _to_float(ohlcv_ts[all_dates[idx - 3]].get('4. close'), 0)
-                dir_ok = power_g.price > price_3d
-            else:
-                dir_ok = False
+            dir_ok = power_g.price > _to_float(ohlcv_ts[all_dates[idx - 3]].get('4. close'), 0) if idx >= 3 else False
             setup_ok = trend_ok and dir_ok
 
     fields = {
@@ -722,18 +820,20 @@ def check_from_xls(form_cache, date=datetime.datetime.now(), symbols=None):
              Pass None (default) to process all rows.
     """
     import openpyxl
+    _build_cache_index()
     _backup_xlsx()
     session_id = login()
     print(f"SESSION ID: {session_id}")
 
     wb = openpyxl.load_workbook(XLSX_FILE)
     ws = wb['Research']
+    _write_research_headers(ws)
 
     filter_set = {s.upper() for s in symbols} if symbols else None
     updated = 0
     skipped = 0
 
-    for row in ws.iter_rows(min_row=2, max_col=23):
+    for row in ws.iter_rows(min_row=2, max_col=24):
         symbol = row[3].value
         if not symbol or not str(symbol).strip():
             continue
@@ -785,6 +885,8 @@ def check_from_xls(form_cache, date=datetime.datetime.now(), symbols=None):
         row[21].value = f['buying_ratio']
         # col W: seasonality score for current month (-1..+1)
         row[22].value = f['seasonality'] if f['seasonality'] != 0.0 else None
+        # col X: predicted 10d win% from backtest lookup
+        row[23].value = _predicted_win_pct(f['buying_ratio'])
 
         flag = "OK" if setup_ok else ("--" if setup_ok is False else "??")
         print(f"{symbol}: pgr={f['pgr']}, price={power_g.price}, "
