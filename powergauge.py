@@ -552,44 +552,55 @@ def _backup_xlsx():
     print(f"Backup saved to {dst}")
 
 
-def _compute_seasonality(ohlcv_ts: dict, current_month: int) -> float:
-    """
-    Historical average monthly return for current_month across all available years.
-    Returns a score: +1.0 (strong seasonal tailwind) .. -1.0 (headwind).
-    Returns 0.0 if fewer than 3 years of data exist for this month.
+def _week_of_month(day: int) -> int:
+    if day <= 7:  return 1
+    if day <= 15: return 2
+    if day <= 22: return 3
+    return 4
 
-    Monthly return = (last close of month M) / (last close of month M-1) - 1.
+
+def _compute_seasonality(ohlcv_ts: dict, current_month: int, current_day: int) -> float:
+    """
+    Historical average 10-day return for the current (month, week-of-month) slot
+    across all available years. Week-of-month: 1=days 1-7, 2=8-15, 3=16-22, 4=23+.
+
+    Backtesting showed week-of-month has 2.4x wider win% spread than monthly
+    averaging (20pp vs 8.5pp) and improves br>=6 bucket win% from 55.2% to 57.6%.
+
+    Returns a score: +1.0 (strong tailwind) .. -1.0 (headwind), or 0.0 if fewer
+    than 3 years of data exist for this slot.
     """
     if not ohlcv_ts:
         return 0.0
 
+    target_wk = _week_of_month(current_day)
     all_dates = sorted(ohlcv_ts.keys())
+    date_idx  = {d: i for i, d in enumerate(all_dates)}
 
-    # Build map: (year, month) -> last trading date of that month
-    month_ends = {}
+    # Last trading date in each (year, month, week) slot
+    wk_last = {}
     for d in all_dates:
-        y, m = int(d[:4]), int(d[5:7])
-        month_ends[(y, m)] = d   # later dates overwrite, leaving the last one
+        y, m, day = int(d[:4]), int(d[5:7]), int(d[8:10])
+        w = _week_of_month(day)
+        wk_last[(y, m, w)] = d
 
     returns = []
-    for (y, m), end_date in month_ends.items():
-        if m != current_month:
+    for (y, m, w), start_date in wk_last.items():
+        if m != current_month or w != target_wk:
             continue
-        prev_m = m - 1 if m > 1 else 12
-        prev_y = y if m > 1 else y - 1
-        prev_end = month_ends.get((prev_y, prev_m))
-        if not prev_end:
+        idx = date_idx[start_date]
+        future_idx = idx + 10
+        if future_idx >= len(all_dates):
             continue
-        close_end  = _to_float(ohlcv_ts[end_date].get('4. close'), 0)
-        close_prev = _to_float(ohlcv_ts[prev_end].get('4. close'), 0)
-        if close_prev > 0:
-            returns.append((close_end - close_prev) / close_prev * 100)
+        c_start  = _to_float(ohlcv_ts[start_date].get('4. close'), 0)
+        c_future = _to_float(ohlcv_ts[all_dates[future_idx]].get('4. close'), 0)
+        if c_start > 0 and c_future > 0:
+            returns.append((c_future - c_start) / c_start * 100)
 
     if len(returns) < 3:
         return 0.0
 
     avg = sum(returns) / len(returns)
-
     if avg > 2.0:   return  1.0
     if avg > 1.0:   return  0.5
     if avg > -1.0:  return  0.0
@@ -598,12 +609,12 @@ def _compute_seasonality(ohlcv_ts: dict, current_month: int) -> float:
 
 
 # Backtested 10d win% by BR bucket (238k obs, 466 symbols, 2023-2025).
-# Validated: 5d and 10d win% monotonically increasing across all 5 buckets.
+# Uses week-of-month seasonality. Monotonically increasing across all 5 buckets.
 _WIN_PCT_TABLE = [
-    (6.0,  0.552),  # br >= 6
-    (3.0,  0.548),  # br 3–6
-    (0.0,  0.533),  # br 0–3
-    (-3.0, 0.519),  # br -3 to 0
+    (6.0,  0.576),  # br >= 6
+    (3.0,  0.559),  # br 3-6
+    (0.0,  0.532),  # br 0-3
+    (-3.0, 0.513),  # br -3 to 0
 ]
 
 def _predicted_win_pct(br: float) -> float:
@@ -632,8 +643,8 @@ _RESEARCH_HEADERS = {
     19: ("OB/OS",       "Overbought / Oversold zone.\nOptimal (+0.5) / Early (+0.25) / Neutral (0) / Wait (−0.5)"),
     20: ("Setup",       "Entry filter: 1 = passed, 0 = failed.\nPass condition: Price > SMA(20) AND Price > Close[3d ago].\nAffects Stop / Target / R/R display only — NOT included in BR score."),
     21: ("BR Score",    "Buying Ratio: composite entry-quality score −10 to +10.\n\nComponents:\n  PGR (1→-4 … 5→+4)\n  R/R (0→-1, ≥0.5→+0.5, ≥1→+1, ≥2→+1.5, ≥3→+2)\n  LT Trend (Weak→+1, Strong→-1)\n  Money Flow (Strong→+0.75, Weak→-0.75)\n  OB/OS (Optimal→+0.5, Early→+0.25, Wait→-0.5)\n  Industry (Strong→+0.5, Weak→-0.5)\n  PGR Delta (↑→+0.25, ↓→-0.25)\n  Seasonality (−1 to +1)\n\nThresholds: ≥6 strong buy | 3–6 moderate | 0–3 weak | −3–0 avoid | ≤−3 strong avoid"),
-    22: ("Seasonal",    "Monthly seasonality score for the current month.\nDerived from all available OHLCV history (avg monthly return).\n+1.0 = strong season (avg >+2%)   +0.5 = mild (>+1%)\n 0.0 = neutral                   −0.5 = mild weak (<−1%)\n−1.0 = weak season (avg <−2%)\nRequires ≥3 years of OHLCV data; 0 if insufficient."),
-    23: ("Win% 10d",    "Predicted 10-day win% from backtest (238k obs, 466 symbols, 2023–2025).\nBased on Buying Ratio (col V) bucket:\n  BR ≥  6  → 55.2%  (strong buy)\n  BR 3–6   → 54.8%  (moderate)\n  BR 0–3   → 53.3%  (weak)\n  BR −3–0  → 51.9%  (neutral/avoid)\n  BR ≤ −3  → 51.7%  (avoid)"),
+    22: ("Seasonal",    "Week-of-month seasonality score (week 1=days 1-7, 2=8-15, 3=16-22, 4=23+).\nDerived from historical 10-day returns for this (month, week) slot across all available years.\n+1.0 = strong tailwind (avg >+2%)   +0.5 = mild tailwind (>+1%)\n 0.0 = neutral                      -0.5 = mild headwind (<-1%)\n-1.0 = strong headwind (avg <-2%)\nRequires >=3 years of OHLCV data; 0 if insufficient.\nNote: 2.4x more predictive than monthly averaging (20pp vs 8.5pp win% spread)."),
+    23: ("Win% 10d",    "Predicted 10-day win% from backtest (238k obs, 466 symbols, 2023-2025).\nBased on Buying Ratio (col V) bucket:\n  BR >=  6  -> 57.6%  (strong buy)\n  BR 3-6    -> 55.9%  (moderate)\n  BR 0-3    -> 53.2%  (weak)\n  BR -3-0   -> 51.3%  (neutral/avoid)\n  BR <= -3  -> 51.1%  (avoid)"),
 }
 
 
@@ -806,7 +817,7 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
         'stop_price': stop_price,
         'risk_ratio': risk_ratio,
         'setup_ok': setup_ok,      # True/False/None
-        'seasonality': _compute_seasonality(ohlcv_ts, power_g.date.month),
+        'seasonality': _compute_seasonality(ohlcv_ts, power_g.date.month, power_g.date.day),
     }
     fields['buying_ratio'] = _buying_ratio(power_g, fields)
     return fields

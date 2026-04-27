@@ -50,37 +50,49 @@ def load_ohlcv(symbol):
         return json.load(f).get("Time Series (Daily)") or None
 
 
+def _week_of_month(day: int) -> int:
+    if day <= 7:  return 1
+    if day <= 15: return 2
+    if day <= 22: return 3
+    return 4
+
+
 def precompute_seasonality(ohlcv_ts):
-    """Returns {month: score} for all 12 months."""
-    month_ends = {}
-    for d in sorted(ohlcv_ts.keys()):
-        y, m = int(d[:4]), int(d[5:7])
-        month_ends[(y, m)] = d
+    """Returns {(month, week): score} using historical 10-day returns per slot."""
+    all_dates = sorted(ohlcv_ts.keys())
+    date_idx  = {d: i for i, d in enumerate(all_dates)}
+
+    wk_last = {}
+    for d in all_dates:
+        y, m, day = int(d[:4]), int(d[5:7]), int(d[8:10])
+        w = _week_of_month(day)
+        wk_last[(y, m, w)] = d
+
+    from collections import defaultdict
+    raw = defaultdict(list)
+    for (y, m, w), start_date in wk_last.items():
+        idx = date_idx[start_date]
+        future_idx = idx + 10
+        if future_idx >= len(all_dates):
+            continue
+        c_start  = float(ohlcv_ts[start_date].get('4. close', 0))
+        c_future = float(ohlcv_ts[all_dates[future_idx]].get('4. close', 0))
+        if c_start > 0 and c_future > 0:
+            raw[(m, w)].append((c_future - c_start) / c_start * 100)
 
     result = {}
-    for mo in range(1, 13):
-        returns = []
-        for (y, m), end_date in month_ends.items():
-            if m != mo:
+    for m in range(1, 13):
+        for w in range(1, 5):
+            rets = raw.get((m, w), [])
+            if len(rets) < 3:
+                result[(m, w)] = 0.0
                 continue
-            prev_m = m - 1 if m > 1 else 12
-            prev_y = y if m > 1 else y - 1
-            prev_end = month_ends.get((prev_y, prev_m))
-            if not prev_end:
-                continue
-            c_end  = float(ohlcv_ts[end_date].get('4. close', 0))
-            c_prev = float(ohlcv_ts[prev_end].get('4. close', 0))
-            if c_prev > 0:
-                returns.append((c_end - c_prev) / c_prev * 100)
-        if len(returns) < 3:
-            result[mo] = 0.0
-            continue
-        avg = sum(returns) / len(returns)
-        if avg > 2.0:   result[mo] =  1.0
-        elif avg > 1.0: result[mo] =  0.5
-        elif avg > -1.0:result[mo] =  0.0
-        elif avg > -2.0:result[mo] = -0.5
-        else:           result[mo] = -1.0
+            avg = sum(rets) / len(rets)
+            if avg > 2.0:   result[(m, w)] =  1.0
+            elif avg > 1.0: result[(m, w)] =  0.5
+            elif avg > -1.0:result[(m, w)] =  0.0
+            elif avg > -2.0:result[(m, w)] = -0.5
+            else:           result[(m, w)] = -1.0
     return result
 
 
@@ -107,6 +119,8 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     over_bt_sl    = str(cl.get('overboughtOversold', '') or '').strip()
     industry      = str(cl.get('industry', '') or '').strip()
     month         = int(all_dates[idx][5:7])
+    day           = int(all_dates[idx][8:10])
+    week          = _week_of_month(day)
 
     # setup_ok: price > SMA20 AND price > close[3d ago]
     sma_w = all_dates[max(0, idx - SMA_DAYS): idx]
@@ -150,7 +164,7 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     score += OB_MAP.get(over_bt_sl, 0.0)
     score += IND_MAP.get(industry, 0.0)
     score += 0.25 if pgr_delta > 0 else (-0.25 if pgr_delta < 0 else 0.0)
-    score += seasonality_map.get(month, 0.0)
+    score += seasonality_map.get((month, week), 0.0)
 
     return round(max(-10.0, min(10.0, score)), 1)
 
