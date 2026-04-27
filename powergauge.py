@@ -2,6 +2,8 @@ import datetime
 import requests
 import json
 import os
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
 power_cookie = ""
