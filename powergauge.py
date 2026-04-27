@@ -621,7 +621,7 @@ def _predicted_win_pct(br: float) -> float:
     for threshold, pct in _WIN_PCT_TABLE:
         if br >= threshold:
             return pct
-    return 0.517  # br <= -3
+    return 0.511  # br <= -3
 
 
 # Column headers and memo text for Research sheet row 1 (cols E–X, 0-indexed 4–23).
@@ -776,14 +776,14 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
         if past:
             idx = all_dates.index(past[-1])
 
-            # stop: 3-day low (including today) × 0.99
-            stop_w = all_dates[max(0, idx - 2): idx + 1]
+            # stop: min low of previous 3 trading days (excluding today) × 0.99
+            stop_w = all_dates[max(0, idx - 3): idx]
             local_low = min((_to_float(ohlcv_ts[d].get('3. low'), 0) for d in stop_w), default=0)
             raw_stop = round(local_low * 0.99, 2) if local_low else 0
             stop_price = raw_stop if raw_stop and raw_stop < power_g.price else 0
 
-            # target: 20-day high lookback (excluding today)
-            tgt_w = all_dates[max(0, idx - 20): idx]
+            # target: 10-day high lookback (excluding today) — matches backtest validation
+            tgt_w = all_dates[max(0, idx - 10): idx]
             if tgt_w:
                 hi = max((_to_float(ohlcv_ts[d].get('2. high'), 0) for d in tgt_w), default=0)
                 prev_move_price = round(hi, 2) if hi > power_g.price else 0.0

@@ -23,7 +23,7 @@ SMA_DAYS        = 20
 FWD_W           = 10   # trading days for forward return
 
 PGR_MAP = {1: -4.0, 2: -2.0, 3: 0.0, 4: 2.0, 5: 4.0}
-LT_MAP  = {'Strong': 1.0, 'Neutral': 0.0, 'Weak': -1.0}
+LT_MAP  = {'Strong': -1.0, 'Neutral': 0.0, 'Weak': 1.0}  # Weak = recovery play
 MF_MAP  = {'Strong': 0.75, 'Neutral': 0.0, 'Weak': -0.75}
 OB_MAP  = {'Optimal': 0.5, 'Early': 0.25, 'Neutral': 0.0, 'Wait': -0.5}
 IND_MAP = {'Strong': 0.5, 'Weak': -0.5}
@@ -37,35 +37,45 @@ def load_ohlcv(symbol):
         return json.load(f).get("Time Series (Daily)") or None
 
 
+def _week_of_month(day: int) -> int:
+    if day <= 7:  return 1
+    if day <= 15: return 2
+    if day <= 22: return 3
+    return 4
+
+
 def precompute_seasonality(ohlcv_ts):
-    month_ends = {}
-    for d in sorted(ohlcv_ts.keys()):
-        y, m = int(d[:4]), int(d[5:7])
-        month_ends[(y, m)] = d
-    result = {}
-    for mo in range(1, 13):
-        returns = []
-        for (y, m), end_date in month_ends.items():
-            if m != mo:
-                continue
-            prev_m = m - 1 if m > 1 else 12
-            prev_y = y if m > 1 else y - 1
-            prev_end = month_ends.get((prev_y, prev_m))
-            if not prev_end:
-                continue
-            c_end  = float(ohlcv_ts[end_date].get('4. close', 0))
-            c_prev = float(ohlcv_ts[prev_end].get('4. close', 0))
-            if c_prev > 0:
-                returns.append((c_end - c_prev) / c_prev * 100)
-        if len(returns) < 3:
-            result[mo] = 0.0
+    """Returns {(month, week): score} using 10-day forward returns per slot."""
+    from collections import defaultdict
+    all_dates = sorted(ohlcv_ts.keys())
+    date_idx  = {d: i for i, d in enumerate(all_dates)}
+    wk_last = {}
+    for d in all_dates:
+        y, m, day = int(d[:4]), int(d[5:7]), int(d[8:10])
+        wk_last[(y, m, _week_of_month(day))] = d
+    raw = defaultdict(list)
+    for (y, m, w), start_date in wk_last.items():
+        idx = date_idx[start_date]
+        fi = idx + FWD_W
+        if fi >= len(all_dates):
             continue
-        avg = sum(returns) / len(returns)
-        if avg > 2.0:   result[mo] =  1.0
-        elif avg > 1.0: result[mo] =  0.5
-        elif avg > -1.0:result[mo] =  0.0
-        elif avg > -2.0:result[mo] = -0.5
-        else:           result[mo] = -1.0
+        c0 = float(ohlcv_ts[start_date].get('4. close', 0))
+        c1 = float(ohlcv_ts[all_dates[fi]].get('4. close', 0))
+        if c0 > 0 and c1 > 0:
+            raw[(m, w)].append((c1 - c0) / c0 * 100)
+    result = {}
+    for m in range(1, 13):
+        for w in range(1, 5):
+            rets = raw.get((m, w), [])
+            if len(rets) < 3:
+                result[(m, w)] = 0.0
+                continue
+            avg = sum(rets) / len(rets)
+            if avg > 2.0:   result[(m, w)] =  1.0
+            elif avg > 1.0: result[(m, w)] =  0.5
+            elif avg > -1.0:result[(m, w)] =  0.0
+            elif avg > -2.0:result[(m, w)] = -0.5
+            else:           result[(m, w)] = -1.0
     return result
 
 
@@ -153,6 +163,8 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
         over_bt_sl    = str(cl.get('overboughtOversold', '') or '').strip()
         industry      = str(cl.get('industry', '') or '').strip()
         month         = int(date_str[5:7])
+        day           = int(date_str[8:10])
+        week          = _week_of_month(day)
 
         # setup_ok
         sma_w = all_dates[max(0, idx - SMA_DAYS): idx]
@@ -194,7 +206,7 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
             'money_flow': money_flow,
             'over_bt_sl': over_bt_sl,
             'industry':  industry,
-            'season':    seasonality_map.get(month, 0.0),
+            'season':    seasonality_map.get((month, week), 0.0),
             'fwd10':     fwd10,
         })
         prev_data = data
