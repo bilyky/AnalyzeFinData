@@ -95,7 +95,9 @@ class PowerGauge:
         )
         metainfo = data_json.get('metaInfo') or [{}]
         m = metainfo[0]
-        industry = m.get('industry_name') or m.get('etf_group_name') or m.get('industry_logo_name') or ''
+        industry = (m.get('industry_name') or m.get('etf_group_name') or m.get('industry_logo_name')
+                    or (m.get('etf_data') or {}).get('list_name')
+                    or m.get('name') or '')
         self.industry_name = industry.replace(',', '')
         self.price = m.get('Last') if m.get('Last') is not None else _to_float(cl.get('lastPrice'), -1)
         self.max_price = self.price
@@ -138,7 +140,8 @@ class PowerGauge:
                 if key not in metainfo[0]:
                     warnings.append(f"metaInfo[0] missing key '{key}'")
             if not any(k in metainfo[0] for k in ('industry_name', 'etf_group_name', 'industry_logo_name')):
-                warnings.append("metaInfo[0] missing industry key (industry_name/etf_group_name/industry_logo_name)")
+                if not ((metainfo[0].get('etf_data') or {}).get('list_name') or metainfo[0].get('name')):
+                    warnings.append("metaInfo[0] missing industry key (industry_name/etf_group_name/industry_logo_name/name)")
         cl = data_json.get('checklist_stocks') or {}
         if not cl:
             warnings.append("'checklist_stocks' missing or empty")
@@ -604,17 +607,17 @@ def _compute_seasonality(ohlcv_ts: dict, current_month: int, current_day: int) -
 # Backtested 10d win% by BR bucket (238k obs, 466 symbols, 2023-2025).
 # Uses week-of-month seasonality. Monotonically increasing across all 5 buckets.
 _WIN_PCT_TABLE = [
-    (6.0,  0.576),  # br >= 6
-    (3.0,  0.559),  # br 3-6
-    (0.0,  0.532),  # br 0-3
-    (-3.0, 0.513),  # br -3 to 0
+    (4.0,  0.643),  # br >= 4
+    (2.0,  0.576),  # br 2-4
+    (0.0,  0.531),  # br 0-2
+    (-2.0, 0.503),  # br -2 to 0
 ]
 
 def _predicted_win_pct(br: float) -> float:
     for threshold, pct in _WIN_PCT_TABLE:
         if br >= threshold:
             return pct
-    return 0.511  # br <= -3
+    return 0.463  # br <= -2
 
 
 # Column headers and memo text for Research sheet row 1 (cols E–X, 0-indexed 4–23).
@@ -633,11 +636,11 @@ _RESEARCH_HEADERS = {
     15: ("Change%",     "Today's price change% from Chaikin."),
     17: ("LT Trend",    "Long-term price trend from Chaikin.\nStrong / Neutral / Weak\n\nNote: Weak = recovery play (+1 in BR score);\nStrong = already extended (−1 in BR score)."),
     18: ("Money Flow",  "Institutional money flow signal.\nStrong / Neutral / Weak"),
-    19: ("OB/OS",       "Overbought / Oversold zone.\nOptimal (+0.5) / Early (+0.25) / Neutral (0) / Wait (−0.5)"),
+    19: ("OB/OS",       "Overbought / Oversold zone.\nOptimal (+1.0) / Early (+0.25) / Neutral (0) / Wait (−0.25)"),
     20: ("Setup",       "Entry filter: 1 = passed, 0 = failed.\nPass condition: Price > SMA(20) AND Price > Close[3d ago].\nAffects Stop / Target / R/R display only — NOT included in BR score."),
-    21: ("BR Score",    "Buying Ratio: composite entry-quality score −10 to +10.\n\nComponents:\n  PGR (1→-4 … 5→+4)\n  R/R (0→-1, ≥0.5→+0.5, ≥1→+1, ≥2→+1.5, ≥3→+2)\n  LT Trend (Weak→+1, Strong→-1)\n  Money Flow (Strong→+0.75, Weak→-0.75)\n  OB/OS (Optimal→+0.5, Early→+0.25, Wait→-0.5)\n  Industry (Strong→+0.5, Weak→-0.5)\n  PGR Delta (↑→+0.25, ↓→-0.25)\n  Seasonality (−1 to +1)\n\nThresholds: ≥6 strong buy | 3–6 moderate | 0–3 weak | −3–0 avoid | ≤−3 strong avoid"),
+    21: ("BR Score",    "Buying Ratio: composite entry-quality score −10 to +10.\n\nComponents:\n  PGR (1→-2 … 5→+2)\n  R/R (0→-1, ≥0.5→+0.5, ≥1→+1, ≥2→+1.5, ≥3→+2)\n  LT Trend (Weak→+1, Strong→-1)\n  Money Flow (Strong→+0.75, Weak→-0.75)\n  OB/OS (Optimal→+1, Early→+0.25, Wait→-0.25)\n  Industry (Weak→+0.5, Strong→-0.5)\n  PGR Delta (any change→+0.25)\n  Seasonality (−1 to +1)\n\nThresholds: ≥4 strong buy | 2–4 moderate | 0–2 weak | −2–0 avoid | ≤−2 strong avoid"),
     22: ("Seasonal",    "Week-of-month seasonality score (week 1=days 1-7, 2=8-15, 3=16-22, 4=23+).\nDerived from historical 10-day returns for this (month, week) slot across all available years.\n+1.0 = strong tailwind (avg >+2%)   +0.5 = mild tailwind (>+1%)\n 0.0 = neutral                      -0.5 = mild headwind (<-1%)\n-1.0 = strong headwind (avg <-2%)\nRequires >=3 years of OHLCV data; 0 if insufficient.\nNote: 2.4x more predictive than monthly averaging (20pp vs 8.5pp win% spread)."),
-    23: ("Win% 10d",    "Predicted 10-day win% from backtest (238k obs, 466 symbols, 2023-2025).\nBased on Buying Ratio (col V) bucket:\n  BR >=  6  -> 57.6%  (strong buy)\n  BR 3-6    -> 55.9%  (moderate)\n  BR 0-3    -> 53.2%  (weak)\n  BR -3-0   -> 51.3%  (neutral/avoid)\n  BR <= -3  -> 51.1%  (avoid)"),
+    23: ("Win% 10d",    "Predicted 10-day win% from backtest (238k obs, 466 symbols, 2023-2025).\nBased on Buying Ratio (col V) bucket:\n  BR >=  4  -> 64.3%  (strong buy)\n  BR 2-4    -> 57.6%  (moderate)\n  BR 0-2    -> 53.1%  (weak/watch)\n  BR -2-0   -> 50.3%  (neutral/avoid)\n  BR <= -2  -> 46.3%  (avoid)"),
 }
 
 
@@ -655,14 +658,14 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
     Composite entry-quality score: -10 (strong sell) to +10 (strong buy).
 
     Components and weights:
-      PGR corrected value  ±4.0   (1=Be- → -4, 5=Bu+ → +4)
+      PGR corrected value  ±2.0   (1=Be- → -2, 5=Bu+ → +2)
       Risk/Reward          -1..+2  (rr=0→-1, rr>=3→+2)
       LT trend             ±1.0   (Weak→+1 recovery play, Strong→-1 already extended)
       Money flow           ±0.75  (Strong/Weak)
-      OB/OS zone           ±0.5   (Optimal→+0.5, Wait→-0.5, Early→+0.25)
-      Industry strength    ±0.5   (Strong/Weak)
-      PGR delta            ±0.25  (improving/declining vs yesterday)
-      Seasonality          ±1.0   (avg monthly return: >+2%→+1, >+1%→+0.5, <-1%→-0.5, <-2%→-1)
+      OB/OS zone           -0.25..+1.0  (Optimal→+1, Early→+0.25, Wait→-0.25)
+      Industry strength    ±0.5   (Weak→+0.5 recovery, Strong→-0.5 extended)
+      PGR delta            +0.25  (any change vs yesterday = interesting)
+      Seasonality          ±1.0   (week-of-month 10d avg return buckets)
 
     setup_ok (col U) is display-only: backtesting showed it is a contrarian indicator
     for raw 10d returns (False=+1.36%, True=+0.48%) so it is excluded from the score.
@@ -670,7 +673,7 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
     score = 0.0
 
     # 1. PGR corrected value (1-5)
-    pgr_map = {1: -4.0, 2: -2.0, 3: 0.0, 4: 2.0, 5: 4.0}
+    pgr_map = {1: -2.0, 2: -1.0, 3: 0.0, 4: 1.0, 5: 2.0}
     score += pgr_map.get(power_g.pgr_corrected_value, 0.0)
 
     # 2. Risk/Reward ratio (use raw computed value, not sheet-zeroed value)
@@ -700,20 +703,17 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
 
     # 6. Overbought/Oversold zone
     ob = str(power_g.over_bt_sl or '').strip()
-    ob_map = {'Optimal': 0.5, 'Early': 0.25, 'Neutral': 0.0, 'Wait': -0.5}
+    ob_map = {'Optimal': 1.0, 'Early': 0.25, 'Neutral': 0.0, 'Wait': -0.25}
     score += ob_map.get(ob, 0.0)
 
     # 7. Industry strength
     ind = str(power_g.industry_strength or '').strip()
-    ind_map = {'Strong': 0.5, 'Weak': -0.5}
+    ind_map = {'Strong': -0.5, 'Weak': 0.5}
     score += ind_map.get(ind, 0.0)
 
     # 8. PGR delta vs yesterday
     delta = fields.get('pgr_delta', 0)
-    if delta > 0:
-        score += 0.25
-    elif delta < 0:
-        score -= 0.25
+    score += 0.25 if delta != 0 else 0.0
 
     # 9. Seasonality
     score += fields.get('seasonality', 0.0)
