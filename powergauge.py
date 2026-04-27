@@ -473,72 +473,63 @@ def get_symbol_data(symbol: str, date, from_cache, session_id) -> PowerGauge:
 
 
 def check_from_file(form_cache, date=datetime.datetime.now()):
+    _build_cache_index()
     session_id = login()
     print(f"SESSION ID: {session_id}")
     dd = date
     str_bu = PGR_STR
-    str_sig = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    with open(f"{abs_path}Data\\symbols_to_check.txt", "r") as f:
-        with open(f"{abs_path}Data\\symbols_to_check_{dd.date()}.csv", "w") as fw:
+    syms_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "symbols_to_check.txt")
+    csv_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", f"symbols_to_check_{dd.date()}.csv")
+    with open(syms_path, "r") as f:
+        with open(csv_path, "w") as fw:
             for line in f.readlines():
                 split_line = line.strip().split()
                 symbol = split_line[-1]
                 symbol_line = f"{split_line[0]},{symbol}"
                 power_g = get_symbol_data(symbol, dd.date(), form_cache, session_id=session_id)
-                pgr_value = str_bu[power_g.pgr_value]
-                pgr_corrected_value = str_bu[power_g.pgr_corrected_value]
-                pgr = pgr_corrected_value
-                if pgr_corrected_value != pgr_value:
-                    pgr = f"{pgr_corrected_value}/{pgr_value}"
-                prev_pgr = 0
-                prev_percentage = 0
-                prev_change = ""
-                pgr_delta = 0
-                percentage_delta = 0
-                prev_move_perc = 0
-                percentage_delta_plus = 0
-                prev_move_price = 0
-                risk_ratio = 0
-                if power_g.prevPG:
-                    prev_pgr_value = str_bu[power_g.prevPG.pgr_value]
-                    prev_pgr_corrected_value = str_bu[power_g.prevPG.pgr_corrected_value]
-                    prev_pgr = prev_pgr_corrected_value
-                    if prev_pgr_corrected_value != prev_pgr_value:
-                        prev_pgr = f"{prev_pgr_corrected_value}/{prev_pgr_value}"
-                    prev_percentage = power_g.prevPG.percentage
-                    prev_change = power_g.prevPG.change
-                    pgr_delta = power_g.pgr_corrected_value - power_g.prevPG.pgr_corrected_value
-                    prev_move_perc = power_g.prevPG.get_prev_same_move_percent() or prev_percentage
-                    prev_move_price = power_g.prevPG.get_prev_max_price(power_g.price)
-                    if power_g.price == 0:
-                        risk_ratio = 0
-                    else:
-                        risk_ratio = round((prev_move_price - power_g.price)/(power_g.price - power_g.price*0.95), 2)
-                    if power_g.pgr_value > 3:
-                        prev_move = power_g.prevPG.get_prev_same_move_count()
-                        cur_move = power_g.get_prev_same_move_count()
-                        if prev_move < 0 and cur_move > 0:
-                            percentage_delta = prev_move
-                        elif prev_move > 0 and power_g.percentage < 0:
-                            percentage_delta = prev_move
-                        elif prev_move > 0 and power_g.percentage > 0:
-                            percentage_delta_plus = prev_move + 1
-                            prev_move_perc += power_g.percentage
-                        else:
-                            percentage_delta_plus = prev_move - 1
-                            prev_move_perc += power_g.percentage
 
-                msg = f"{symbol_line},{power_g.industry_name},{prev_pgr},{pgr},{power_g.industry_strength}," \
-                      f"{round(power_g.price*0.95, 2)},{power_g.price},{prev_move_price}," \
-                      f"{risk_ratio},{power_g.signals}," \
-                      f"{prev_percentage}%,{power_g.percentage}%,{prev_move_perc}%," \
+                ohlcv_ts = None
+                ohlcv_path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
+                if os.path.exists(ohlcv_path):
+                    try:
+                        with open(ohlcv_path) as _f:
+                            ohlcv_ts = json.load(_f).get('Time Series (Daily)')
+                    except Exception:
+                        ohlcv_ts = None
+
+                f_fields = _compute_pgr_fields(power_g, ohlcv_ts=ohlcv_ts)
+
+                prev_change = power_g.prevPG.change if power_g.prevPG else ""
+                percentage_delta = 0
+                percentage_delta_plus = 0
+
+                if ohlcv_ts and power_g.pgr_value > 3:
+                    all_dates = sorted(ohlcv_ts.keys())
+                    date_str = str(dd.date())
+                    past = [d for d in all_dates if d <= date_str]
+                    if past:
+                        idx = all_dates.index(past[-1])
+                        prev_count = _ohlcv_streak_count(ohlcv_ts, all_dates, idx - 1, f_fields['prev_percentage']) if idx >= 1 else 0
+                        cur_count  = _ohlcv_streak_count(ohlcv_ts, all_dates, idx,     power_g.percentage)
+                        if prev_count < 0 and cur_count > 0:
+                            percentage_delta = prev_count
+                        elif prev_count > 0 and power_g.percentage < 0:
+                            percentage_delta = prev_count
+                        elif prev_count > 0 and power_g.percentage > 0:
+                            percentage_delta_plus = prev_count + 1
+                        else:
+                            percentage_delta_plus = prev_count - 1
+
+                msg = f"{symbol_line},{power_g.industry_name},{f_fields['prev_pgr']},{f_fields['pgr']},{power_g.industry_strength}," \
+                      f"{round(power_g.price*0.95, 2)},{power_g.price},{f_fields['prev_move_price']}," \
+                      f"{f_fields['risk_ratio']},{power_g.signals}," \
+                      f"{f_fields['prev_percentage']}%,{power_g.percentage}%,{f_fields['prev_move_perc']}%," \
                       f"${prev_change},${power_g.change}," \
-                      f"{pgr_delta},{percentage_delta * (-1)},{percentage_delta_plus}," \
+                      f"{f_fields['pgr_delta']},{percentage_delta * (-1)},{percentage_delta_plus}," \
                       f"{power_g.lt_trend},{power_g.money_flow},{power_g.over_bt_sl}"
 
                 print(msg)
                 fw.write(f"{msg}\n")
-                # return
 
 
 def _backup_xlsx():
@@ -745,6 +736,25 @@ def _ohlcv_streak_perc(ohlcv_ts: dict, all_dates: list, idx: int, cur_pct: float
         else:
             break
     return round(total, 4)
+
+
+def _ohlcv_streak_count(ohlcv_ts: dict, all_dates: list, idx: int, cur_pct: float) -> int:
+    """Count consecutive same-direction days ending at idx (positive = up-streak, negative = down)."""
+    if idx < 1 or cur_pct == 0:
+        return 0
+    going_up = cur_pct > 0
+    count = 1 if going_up else -1
+    for i in range(idx - 1, max(0, idx - 30) - 1, -1):
+        prev_close = _to_float(ohlcv_ts[all_dates[i]].get('4. close'), 0)
+        curr_close = _to_float(ohlcv_ts[all_dates[i + 1]].get('4. close'), 0)
+        if prev_close <= 0 or curr_close <= 0:
+            break
+        daily_pct = (curr_close - prev_close) / prev_close * 100
+        if (daily_pct > 0) == going_up:
+            count += 1 if going_up else -1
+        else:
+            break
+    return count
 
 
 def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
