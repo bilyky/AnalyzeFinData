@@ -88,10 +88,13 @@ def main():
             print(f"{day}: all {len(symbols)} symbols cached — skip")
             continue
 
-        print(f"{day}: fetching {len(missing)}/{len(symbols)} symbols...")
+        total = len(missing)
+        print(f"{day}: fetching {total}/{len(symbols)} symbols...")
         ok = 0
         skip = 0
-        for symbol in missing:
+        errors = 0
+        for i, symbol in enumerate(missing, 1):
+            print(f"  [{i}/{total}] {symbol:<8}", end='\r', flush=True)
             try:
                 pg = powergauge.get_symbol_data(
                     symbol, day, from_cache=True, session_id=session_id
@@ -101,16 +104,17 @@ def main():
                 else:
                     ok += 1
             except EnvironmentError:
-                print("  Session expired — re-logging in...")
+                print(f"\n  Session expired — re-logging in...")
                 session_id = powergauge.login()
                 pg = powergauge.get_symbol_data(
                     symbol, day, from_cache=True, session_id=session_id
                 )
                 ok += 1
             except Exception as e:
-                print(f"  {symbol}: ERROR {e}")
+                print(f"\n  {symbol}: ERROR {e}")
+                errors += 1
 
-        print(f"  done: {ok} fetched, {skip} no-data, {len(missing)-ok-skip} errors\n")
+        print(f"  done: {ok} fetched, {skip} no-data, {errors} errors          \n")
 
     print("History backfill complete.")
     print("Run check_from_xls to update the Research sheet with today's data.")
