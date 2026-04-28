@@ -87,6 +87,7 @@ if __name__ == '__main__':
     dd = datetime.datetime.now()
     # dd = datetime.datetime(2024, 6, 17)
     powergauge.check_from_file(form_cache, dd)
+    powergauge.check_from_xls(form_cache, dd)
 
     print(f'CHARTING support - resistance')
     print(f'INDICATOR MA RCI')

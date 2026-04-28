@@ -27,18 +27,18 @@ SMA_DAYS       = 20
 FWD_WINDOWS    = [5, 10, 20]  # trading days
 
 # Buying ratio component maps (mirrors _buying_ratio in powergauge.py)
-PGR_MAP  = {1: -4.0, 2: -2.0, 3: 0.0, 4: 2.0, 5: 4.0}
+PGR_MAP  = {1: -2.0, 2: -1.0, 3: 0.0, 4: 1.0, 5: 2.0}   # was ±4, halved
 LT_MAP   = {'Strong': -1.0, 'Neutral': 0.0, 'Weak': 1.0}
 MF_MAP   = {'Strong': 0.75, 'Neutral': 0.0, 'Weak': -0.75}
-OB_MAP   = {'Optimal': 0.5, 'Early': 0.25, 'Neutral': 0.0, 'Wait': -0.5}
-IND_MAP  = {'Strong': 0.5, 'Weak': -0.5}
+OB_MAP   = {'Optimal': 1.0, 'Early': 0.25, 'Neutral': 0.0, 'Wait': -0.25}  # Optimal raised, Wait softened
+IND_MAP  = {'Strong': -0.5, 'Weak': 0.5}                  # flipped: Weak = recovery play
 
 BUCKETS = [
-    ("br <= -3",  lambda b: b <= -3),
-    ("-3 to  0",  lambda b: -3 < b <= 0),
-    (" 0 to  3",  lambda b: 0  < b <= 3),
-    (" 3 to  6",  lambda b: 3  < b <= 6),
-    ("br >=  6",  lambda b: b  > 6),
+    ("br <= -2",  lambda b: b <= -2),
+    ("-2 to  0",  lambda b: -2 < b <= 0),
+    (" 0 to  2",  lambda b: 0  < b <= 2),
+    (" 2 to  4",  lambda b: 2  < b <= 4),
+    ("br >=  4",  lambda b: b  > 4),
 ]
 
 
@@ -163,7 +163,7 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     score += MF_MAP.get(money_flow, 0.0)
     score += OB_MAP.get(over_bt_sl, 0.0)
     score += IND_MAP.get(industry, 0.0)
-    score += 0.25 if pgr_delta > 0 else (-0.25 if pgr_delta < 0 else 0.0)
+    score += 0.25 if pgr_delta != 0 else 0.0  # any change = interesting, not just upgrades
     score += seasonality_map.get((month, week), 0.0)
 
     return round(max(-10.0, min(10.0, score)), 1)
