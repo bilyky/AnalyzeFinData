@@ -1,5 +1,6 @@
 # Cache, API data, personal files — never commit
 Data/
+etrade_config.json
 
 # Python
 __pycache__/

@@ -1,70 +1,159 @@
+import json
+import os
+import time
 import pyetrade
 
-# Your active PROD API key is: ba5857a1b82dafee4f94a8142084dafa, and secret is: 5878c6883ec3d92a78ecca21fa3242cca828e6eb28d084e258dc14fa2b81214c.
-# Your active SANDBOX API key is: 7368cfd017a8d45288f91e6dc95efcff, and secret is: 42e7835fffb6f95225f805a9f5b233f362014eba1a8a771db1ffe02338c73c5a.
+_DIR = os.path.dirname(__file__)
+_CONFIG_PATH = os.path.join(_DIR, "etrade_config.json")
+_TOKEN_PATH  = os.path.join(_DIR, "Data", "etrade_tokens.json")
 
 
-consumer_key = "7368cfd017a8d45288f91e6dc95efcff"
-consumer_secret = "42e7835fffb6f95225f805a9f5b233f362014eba1a8a771db1ffe02338c73c5a"
-# # Using the EtradeOAuth object to retrive the URL to request tokens
-# oauth = pyetrade.ETradeOAuth(consumer_key, consumer_secret)
-# print(oauth.get_request_token())  # Use the printed URL
-#
-# # Use the printed URL to retrive Verification code
-# verifier_code = input("Enter verification code: ")
-# tokens = oauth.get_access_token(verifier_code)
-# print(tokens)
-tokens = {'oauth_token': '5fL4HlxDvIarDIIa3oxp3+Q61esJxRy/mRbCNWFVkm0=', 'oauth_token_secret': 'edqzUZVr9cXgg0CIBUzui3zBTyWYRCx4uGkoCP0jA0w='}
-# {'LookupResponse': {'Data': [{'symbol': 'A', 'description': 'AGILENT TECHNOLOGIES INC COM'}, {'symbol': 'AA', 'description': 'ALCOA INC COM'}, {'symbol': 'AU', 'description': 'ANGLOGOLD ASHANTI LTD SPONSORED ADR'}, {'symbol': 'AAPL', 'description': 'APPLE INC COM'}, {'symbol': 'AAUKF', 'description': 'ANGLO AMERICAN PLC SHS'}, {'symbol': 'AAUKY', 'description': 'ANGLO AMERN PLC ADR NEW'}, {'symbol': 'AB', 'description': 'ALLIANCEBERNSTEIN HOLDING LP UNIT LTD PARTN'}, {'symbol': 'ABT', 'description': 'ABBOTT LABS COM'}, {'symbol': 'ABV', 'description': 'COMPANHIA DE BEBIDAS DAS AMERS SPON ADR PFD'}, {'symbol': 'ABX', 'description': 'BARRICK GOLD CORP COM'}]}}
-# {'LookupResponse': {'Data': [{'symbol': 'A', 'description': 'AGILENT TECHNOLOGIES INC COM'}, {'symbol': 'AA', 'description': 'ALCOA INC COM'}, {'symbol': 'AU', 'description': 'ANGLOGOLD ASHANTI LTD SPONSORED ADR'}, {'symbol': 'AAPL', 'description': 'APPLE INC COM'}, {'symbol': 'AAUKF', 'description': 'ANGLO AMERICAN PLC SHS'}, {'symbol': 'AAUKY', 'description': 'ANGLO AMERN PLC ADR NEW'}, {'symbol': 'AB', 'description': 'ALLIANCEBERNSTEIN HOLDING LP UNIT LTD PARTN'}, {'symbol': 'ABT', 'description': 'ABBOTT LABS COM'}, {'symbol': 'ABV', 'description': 'COMPANHIA DE BEBIDAS DAS AMERS SPON ADR PFD'}, {'symbol': 'ABX', 'description': 'BARRICK GOLD CORP COM'}]}}
-# {'QuoteResponse': {'QuoteData': [{'dateTime': '16:00:00 EDT 06-20-2012', 'dateTimeUTC': 1340222400, 'quoteStatus': 'REALTIME', 'ahFlag': 'false', 'All': {'adjustedFlag': False, 'ask': 579.73, 'askSize': 100, 'askTime': '16:00:00 EDT 06-20-2012', 'bid': 574.04, 'bidExchange': '', 'bidSize': 100, 'bidTime': '16:00:00 EDT 06-20-2012', 'changeClose': 0.0, 'changeClosePercentage': 0.0, 'companyName': 'GOOGLE INC CL A', 'daysToExpiration': 0, 'dirLast': '1', 'dividend': 0.0, 'eps': 32.99727, 'estEarnings': 43.448, 'exDividendDate': 1344947183, 'high': 0.0, 'high52': 670.25, 'lastTrade': 577.51, 'low': 0.0, 'low52': 473.02, 'open': 0.0, 'openInterest': 0, 'optionStyle': '', 'previousClose': 577.51, 'previousDayVolume': 2433786, 'primaryExchange': 'NASDAQ NM', 'symbolDescription': 'GOOGLE INC CL A', 'totalVolume': 0, 'upc': 0, 'cashDeliverable': 0, 'marketCap': 188282697750.0, 'sharesOutstanding': 326025, 'nextEarningDate': '', 'beta': 0.93, 'yield': 0.0, 'declaredDividend': 0.0, 'dividendPayableDate': 0, 'pe': 17.5017, 'week52LowDate': 1308908670, 'week52HiDate': 1325673870, 'intrinsicValue': 0.0, 'timePremium': 0.0, 'optionMultiplier': 0.0, 'contractSize': 0.0, 'expirationDate': 0, 'timeOfLastTrade': 1341334800, 'averageVolume': 13896435}, 'Product': {'symbol': 'GOOG', 'securityType': 'EQ'}}]}}
-# {'OptionChainResponse': {'OptionPair': [{'Call': {'optionCategory': 'STANDARD', 'optionRootSymbol': 'AAPL', 'timeStamp': 1363975980, 'adjustedFlag': False, 'displaySymbol': "AAPL Mar 22 '13 $485 Call", 'optionType': 'CALL', 'strikePrice': 485.0, 'symbol': 'AAPL', 'bid': 0.02, 'ask': 0.01, 'bidSize': 0, 'askSize': 25, 'inTheMoney': 'n', 'volume': 178, 'openInterest': 2782, 'netChange': -0.01, 'lastPrice': 0.01, 'quoteDetail': 'https://api.sit.etrade.com/v1/market/quote/AAPL:2013:3:22:CALL:485.000000', 'osiKey': 'AAPL--130322C00485000', 'OptionGreeks': {'rho': 0.0095, 'vega': 0.0751, 'theta': -0.018, 'delta': 0.0848, 'gamma': 0.0316, 'iv': 0.1407, 'currentValue': False}}, 'Put': {'optionCategory': 'STANDARD', 'optionRootSymbol': 'AAPL', 'timeStamp': 1363974660, 'adjustedFlag': False, 'displaySymbol': "AAPL Mar 22 '13 $485 Put", 'optionType': 'PUT', 'strikePrice': 485.0, 'symbol': 'AAPL', 'bid': 23.6, 'ask': 23.9, 'bidSize': 4, 'askSize': 2, 'inTheMoney': 'y', 'volume': 81, 'openInterest': 273, 'netChange': -8.95, 'lastPrice': 23.7, 'quoteDetail': 'https://api.sit.etrade.com/v1/market/quote/AAPL:2013:3:22:PUT:485.000000', 'osiKey': 'AAPL--130322P00485000', 'OptionGreeks': {'rho': 0.0095, 'vega': 0.0751, 'theta': -0.018, 'delta': 0.0848, 'gamma': 0.0316, 'iv': 0.1407, 'currentValue': False}}}], 'SelectedED': {'month': 3, 'year': 2013, 'day': 22}}}
-# {'OptionChainResponse': {'OptionPair': [{'Call': {'optionCategory': 'STANDARD', 'optionRootSymbol': 'AAPL', 'timeStamp': 1363975980, 'adjustedFlag': False, 'displaySymbol': "AAPL Mar 22 '13 $485 Call", 'optionType': 'CALL', 'strikePrice': 485.0, 'symbol': 'AAPL', 'bid': 0.02, 'ask': 0.01, 'bidSize': 0, 'askSize': 25, 'inTheMoney': 'n', 'volume': 178, 'openInterest': 2782, 'netChange': -0.01, 'lastPrice': 0.01, 'quoteDetail': 'https://api.sit.etrade.com/v1/market/quote/AAPL:2013:3:22:CALL:485.000000', 'osiKey': 'AAPL--130322C00485000', 'OptionGreeks': {'rho': 0.0095, 'vega': 0.0751, 'theta': -0.018, 'delta': 0.0848, 'gamma': 0.0316, 'iv': 0.1407, 'currentValue': False}}, 'Put': {'optionCategory': 'STANDARD', 'optionRootSymbol': 'AAPL', 'timeStamp': 1363974660, 'adjustedFlag': False, 'displaySymbol': "AAPL Mar 22 '13 $485 Put", 'optionType': 'PUT', 'strikePrice': 485.0, 'symbol': 'AAPL', 'bid': 23.6, 'ask': 23.9, 'bidSize': 4, 'askSize': 2, 'inTheMoney': 'y', 'volume': 81, 'openInterest': 273, 'netChange': -8.95, 'lastPrice': 23.7, 'quoteDetail': 'https://api.sit.etrade.com/v1/market/quote/AAPL:2013:3:22:PUT:485.000000', 'osiKey': 'AAPL--130322P00485000', 'OptionGreeks': {'rho': 0.0095, 'vega': 0.0751, 'theta': -0.018, 'delta': 0.0848, 'gamma': 0.0316, 'iv': 0.1407, 'currentValue': False}}}], 'SelectedED': {'month': 3, 'year': 2013, 'day': 22}}}
+# ---------------------------------------------------------------------------
+# Config / token helpers
+# ---------------------------------------------------------------------------
+
+def _load_config(env="sandbox"):
+    with open(_CONFIG_PATH) as f:
+        cfg = json.load(f)
+    ck = cfg[env]["consumer_key"]
+    cs = cfg[env]["consumer_secret"]
+    username = cfg.get("username", "")
+    password = cfg.get("password", "")
+    proxy = cfg.get("proxy")
+    if proxy:
+        os.environ["HTTPS_PROXY"] = proxy
+        os.environ["HTTP_PROXY"]  = proxy
+    else:
+        os.environ.pop("HTTPS_PROXY", None)
+        os.environ.pop("HTTP_PROXY",  None)
+    return ck, cs, username, password
 
 
+def _save_tokens(tokens, env):
+    tokens["env"] = env
+    tokens["saved_at"] = time.time()
+    os.makedirs(os.path.dirname(_TOKEN_PATH), exist_ok=True)
+    with open(_TOKEN_PATH, "w") as f:
+        json.dump(tokens, f, indent=2)
 
 
-class ETrade:
-    def __init__(self):
-        print('AA')
-
-
-
-
-def get_tokens():
-    oauth = pyetrade.ETradeOAuth(consumer_key, consumer_secret)
-    print(oauth.get_request_token())  # Use the printed URL
-    verifier_code = input("Enter verification code: ")
-    tokens = oauth.get_access_token(verifier_code)
-    print(tokens)
+def _load_tokens(env):
+    """Return cached tokens if they exist and are less than 90 minutes old."""
+    if not os.path.exists(_TOKEN_PATH):
+        return None
+    with open(_TOKEN_PATH) as f:
+        tokens = json.load(f)
+    if tokens.get("env") != env:
+        return None
+    age_minutes = (time.time() - tokens.get("saved_at", 0)) / 60
+    if age_minutes > 90:
+        print(f"Cached tokens expired ({age_minutes:.0f} min old), re-authenticating...")
+        return None
+    print(f"Using cached tokens ({age_minutes:.0f} min old).")
     return tokens
 
 
-def get_quote():
-    # Setting up the object used for alerts activity
-    # Arg dev determines the environment Sandbox (dev=True)
-    # or Live/Production (dev=False)
-    # tokens = get_tokens()
-    market = pyetrade.ETradeMarket(
-        consumer_key,
-        consumer_secret,
-        tokens['oauth_token'],
-        tokens['oauth_token_secret'],
-        dev=True
-    )
+# ---------------------------------------------------------------------------
+# OAuth — automated via Playwright
+# ---------------------------------------------------------------------------
 
-    # Getting products symbol with search string
-    print(market.look_up_product('alphabet', resp_format='json'))
-    print(market.look_up_product('American', resp_format='json'))
+def _get_tokens_via_playwright(auth_url, username, password):
+    """Open the E*TRADE auth URL, log in, accept, and return the verifier code."""
+    from playwright.sync_api import sync_playwright
 
-    # Getting market quote
-    print(market.get_quote(['GOOG'], resp_format='json', detail_flag='week_52'))
+    verifier = [None]
 
-    # Getting Options chain with expiry_date=None
-    print(market.get_option_chains('GOOG', expiry_date=None, resp_format='json'))
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False, channel="chrome")
+        page = browser.new_page()
 
-    # Getting Options chain with expiry_date specified with datetime
-    import datetime as dt
-    datt = dt.datetime(year=2020, month=10, day=16)
+        print(f"Opening E*TRADE authorization page...")
+        page.goto(auth_url, wait_until="domcontentloaded", timeout=30000)
 
-    print(market.get_option_chains('GOOG', expiry_date=datt, resp_format='json'))
+        # --- Login form ---
+        page.wait_for_selector("input#USER", timeout=15000)
+        page.fill("input#USER", username)
+        page.fill("input#PASSWORD", password)
+        page.click("input#logon_button")
+
+        # --- Accept/Authorize page ---
+        page.wait_for_selector("input[value='Accept']", timeout=15000)
+        page.click("input[value='Accept']")
+
+        # --- Verification code page ---
+        # E*TRADE shows the code in a <div> or <input> after accepting
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
+
+        # Try to find the verifier code — E*TRADE renders it as plain text
+        # in a div with id="oauth_pin" or similar, or in the page body
+        for selector in ["div#oauth_pin", "input#oauth_pin", "div.oauth-pin", "span.verifier"]:
+            el = page.query_selector(selector)
+            if el:
+                verifier[0] = el.inner_text().strip()
+                break
+
+        if not verifier[0]:
+            # Fallback: grab it from the URL query param if redirected
+            url = page.url
+            if "oauth_verifier=" in url:
+                verifier[0] = url.split("oauth_verifier=")[1].split("&")[0]
+
+        if not verifier[0]:
+            # Last resort: print the page text so we can see what E*TRADE returned
+            print("Could not auto-extract verifier. Page content:")
+            print(page.inner_text("body")[:500])
+            verifier[0] = input("Enter the verification code manually: ").strip()
+
+        browser.close()
+
+    return verifier[0]
+
+
+def get_tokens(env="sandbox"):
+    """Get OAuth tokens — uses cache if fresh, otherwise runs Playwright login."""
+    cached = _load_tokens(env)
+    if cached:
+        return cached
+
+    ck, cs, username, password = _load_config(env)
+    oauth = pyetrade.ETradeOAuth(ck, cs)
+    auth_url = oauth.get_request_token()
+    print(f"Auth URL: {auth_url}")
+
+    verifier_code = _get_tokens_via_playwright(auth_url, username, password)
+    print(f"Verifier code: {verifier_code}")
+
+    tokens = oauth.get_access_token(verifier_code)
+    _save_tokens(tokens, env)
+    print("Tokens saved to cache.")
+    return tokens
+
+
+# ---------------------------------------------------------------------------
+# API object factories
+# ---------------------------------------------------------------------------
+
+def get_market(tokens, env="sandbox"):
+    ck, cs, _, _ = _load_config(env)
+    return pyetrade.ETradeMarket(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"], dev=(env == "sandbox"))
+
+
+def get_accounts(tokens, env="sandbox"):
+    ck, cs, _, _ = _load_config(env)
+    return pyetrade.ETradeAccounts(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"], dev=(env == "sandbox"))
+
+
+# ---------------------------------------------------------------------------
+# Quick test
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    tokens = get_tokens()
+
+    print("\n--- Quote: AAPL ---")
+    market = get_market(tokens)
+    print(market.get_quote(["AAPL"], resp_format="json"))
+
+    print("\n--- Accounts ---")
+    accts = get_accounts(tokens)
+    print(accts.list_accounts(resp_format="json"))
