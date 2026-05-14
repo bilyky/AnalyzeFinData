@@ -9,6 +9,7 @@ from excel_output import (
     write_research_headers as _write_research_headers,
     write_picks_sheet      as _write_picks_sheet,
     fix_comment_shape_ids  as _fix_comment_shape_ids,
+    backup_xlsx            as _backup_xlsx,
 )
 from scoring import (
     REGIME_SYMBOL,
@@ -25,7 +26,6 @@ from scoring import (
 
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
 power_cookie = ""
-abs_path = "C:\\Develop\\StockTrading\\AnalyzeFinData\\"
 
 # Pre-built index of symbol → sorted list of cached JSON paths.
 # Populated by _build_cache_index(); find_prev_pf() falls back to glob when empty.
@@ -74,9 +74,9 @@ Then re-run the script.
 """.strip()
 
 class PowerGauge:
-    def __init__(self, symbol, date=datetime.datetime.now().date()):
+    def __init__(self, symbol, date=None):
         self.symbol = symbol
-        self.date = date
+        self.date = date if date is not None else datetime.date.today()
         self.pgr_value = 0
         self.pgr_corrected_value = 0
         self.industry_name = ""
@@ -221,9 +221,6 @@ class PowerGauge:
         self.prevPG = PowerGauge(self.symbol, datetime.date.fromisoformat(prev_date_str))
         self.prevPG.init_from_ohlcv(entry)
 
-    def get_prev_same_move_count1(self, days=3, start_price=0):
-        pass
-
     def get_prev_same_move_count(self):
         if not self.prevPG:
             self.find_prev_pf()
@@ -294,22 +291,6 @@ class PowerGauge:
             if pr.price >= self.price:
                 return pr
         return self
-
-
-def load_date_from_file(date) -> list:
-    result = []
-    file_name = f"{abs_path}Data\\symbols_to_check_{date}.csv"
-    # WMB, N, Oil Gas & Consumable Fuels, 33.62, 000000000000, 2.91%, $0.95
-    if not os.path.exists(file_name):
-        return result
-    with open(file_name, "r") as f:
-        for line in f.readlines():
-            sym_data = line.split(',')
-            symb = PowerGauge(sym_data[0].strip(), date)
-            symb.init_from_raw(sym_data)
-            result.append(symb)
-            break
-    return result
 
 
 def _load_session_from_file() -> str:
@@ -495,7 +476,9 @@ def get_symbol_data(symbol: str, date, from_cache, session_id) -> PowerGauge:
     return pg
 
 
-def check_from_file(form_cache, date=datetime.datetime.now()):
+def check_from_file(form_cache, date=None):
+    if date is None:
+        date = datetime.datetime.now()
     _build_cache_index()
     session_id = login()
     print(f"SESSION ID: {session_id}")
@@ -553,17 +536,6 @@ def check_from_file(form_cache, date=datetime.datetime.now()):
 
                 print(msg)
                 fw.write(f"{msg}\n")
-
-
-def _backup_xlsx():
-    import shutil
-    now = datetime.datetime.now()
-    year_dir = os.path.join(XLSX_BACKUP_DIR, str(now.year))
-    os.makedirs(year_dir, exist_ok=True)
-    ts = now.strftime("%Y-%m-%d_%H%M%S")
-    dst = os.path.join(year_dir, f"investment_{ts}.xlsx")
-    shutil.copy2(XLSX_FILE, dst)
-    print(f"Backup saved to {dst}")
 
 
 # _week_of_month, _compute_seasonality, _predicted_win_pct, _market_regime,
@@ -723,15 +695,17 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
     return fields
 
 
-def check_from_xls(form_cache, date=datetime.datetime.now(), symbols=None):
+def check_from_xls(form_cache, date=None, symbols=None):
     """Update Research sheet from PowerGauge data.
 
     symbols: optional list/set of ticker strings — process only those rows.
              Pass None (default) to process all rows.
     """
+    if date is None:
+        date = datetime.datetime.now()
     import openpyxl
     _build_cache_index()
-    _backup_xlsx()
+    _backup_xlsx(XLSX_FILE)
     session_id = login()
     print(f"SESSION ID: {session_id}")
 

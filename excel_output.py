@@ -178,11 +178,13 @@ def fix_comment_shape_ids(xlsx_path: str):
 
 
 def backup_xlsx(xlsx_path: str):
-    """Copy xlsx to a timestamped backup before overwriting."""
+    """Copy xlsx to a timestamped backup in Backup/{year}/ before overwriting."""
     if not os.path.exists(xlsx_path):
         return
-    ts  = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    now = datetime.datetime.now()
+    ts  = now.strftime("%Y-%m-%d_%H%M%S")
     dst = os.path.join(os.path.dirname(xlsx_path), "Backup",
-                       f"investment_{ts}.xlsx")
+                       str(now.year), f"investment_{ts}.xlsx")
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copy2(xlsx_path, dst)
+    print(f"Backup saved to {dst}")

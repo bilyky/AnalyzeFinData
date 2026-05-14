@@ -90,10 +90,10 @@ def rel_volume_bucket(ohlcv: dict, entry_date: str, lookback: int = 20) -> str |
     if avg_vol <= 0:
         return None
     rv = entry_vol / avg_vol
-    if rv >= 2.0:   return "Very High (2x+)"
-    if rv >= 1.5:   return "High (1.5-2x)"
-    if rv >= 0.75:  return "Normal (0.75-1.5x)"
-    return "Low (<0.75x)"
+    if rv >= 2.0:   return "Very High"
+    if rv >= 1.5:   return "High"
+    if rv >= 0.75:  return "Normal"
+    return "Low"
 
 
 SYM_DIR = os.path.join(DATA_DIR, "Symbol")

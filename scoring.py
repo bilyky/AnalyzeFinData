@@ -12,6 +12,8 @@ import os
 # Set to "" to disable. Change to "SPY", "QQQ", "IWM", etc. as needed.
 REGIME_SYMBOL = "RSP"
 
+_regime_cache: dict = {}  # date_str → "Bull"/"Neutral"/"Bear"; avoids re-reading file per symbol
+
 # ── Local helper (mirrors powergauge._to_float, kept here to avoid circular import) ──
 def _to_float(val, default):
     try:
@@ -135,12 +137,16 @@ def market_regime(date_str: str, sma_period: int = 50) -> str:
       Bull:    price > SMA by > 2%
       Bear:    price < SMA by > 2%
       Neutral: within +-2% of SMA, or data unavailable
+    Result is cached by date_str — safe to call once per symbol with same date.
     """
     if not REGIME_SYMBOL:
         return "Neutral"
+    if date_str in _regime_cache:
+        return _regime_cache[date_str]
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "Data", "Symbol_full", f"{REGIME_SYMBOL}_daily.json")
     if not os.path.exists(path):
+        _regime_cache[date_str] = "Neutral"
         return "Neutral"
     try:
         with open(path) as f:
@@ -148,15 +154,18 @@ def market_regime(date_str: str, sma_period: int = 50) -> str:
         dates = sorted(ts.keys())
         past  = [d for d in dates if d <= date_str]
         if len(past) < sma_period:
-            return "Neutral"
-        closes = [float(ts[d]["4. close"]) for d in past[-sma_period:]]
-        sma = sum(closes) / sma_period
-        pct = (closes[-1] - sma) / sma
-        if pct > 0.02:   return "Bull"
-        if pct < -0.02:  return "Bear"
-        return "Neutral"
+            result = "Neutral"
+        else:
+            closes = [float(ts[d]["4. close"]) for d in past[-sma_period:]]
+            sma = sum(closes) / sma_period
+            pct = (closes[-1] - sma) / sma
+            if pct > 0.02:    result = "Bull"
+            elif pct < -0.02: result = "Bear"
+            else:             result = "Neutral"
     except Exception:
-        return "Neutral"
+        result = "Neutral"
+    _regime_cache[date_str] = result
+    return result
 
 
 # ── Relative volume ──────────────────────────────────────────────────────────
