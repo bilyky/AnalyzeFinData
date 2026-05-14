@@ -9,6 +9,10 @@ PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
 power_cookie = ""
 abs_path = "C:\\Develop\\StockTrading\\AnalyzeFinData\\"
 
+# Market regime filter: ticker whose SMA(50) trend gates short/long scores.
+# Set to "" to disable. Swap to "SPY", "QQQ", "IWM", etc. as needed.
+REGIME_SYMBOL = "RSP"
+
 # Pre-built index of symbol → sorted list of cached JSON paths.
 # Populated by _build_cache_index(); find_prev_pf() falls back to glob when empty.
 _cache_file_index: dict = {}
@@ -620,6 +624,138 @@ def _predicted_win_pct(br: float) -> float:
     return 0.463  # br <= -2
 
 
+def _market_regime(date_str: str, sma_period: int = 50) -> str:
+    """
+    Bull / Neutral / Bear based on REGIME_SYMBOL SMA(sma_period) trend.
+    Returns 'Neutral' if REGIME_SYMBOL is empty or data is unavailable.
+      Bull:    price > SMA by more than 2%
+      Bear:    price < SMA by more than 2%
+      Neutral: within ±2% of SMA
+    """
+    if not REGIME_SYMBOL:
+        return "Neutral"
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "Data", "Symbol_full", f"{REGIME_SYMBOL}_daily.json")
+    if not os.path.exists(path):
+        return "Neutral"
+    try:
+        with open(path) as f:
+            ts = json.load(f).get("Time Series (Daily)", {})
+        dates = sorted(ts.keys())
+        past = [d for d in dates if d <= date_str]
+        if len(past) < sma_period:
+            return "Neutral"
+        closes = [float(ts[d]["4. close"]) for d in past[-sma_period:]]
+        sma = sum(closes) / sma_period
+        pct = (closes[-1] - sma) / sma
+        if pct > 0.02:   return "Bull"
+        if pct < -0.02:  return "Bear"
+        return "Neutral"
+    except Exception:
+        return "Neutral"
+
+
+def _rel_volume_bucket(ohlcv_ts: dict, date_str: str, lookback: int = 20) -> str | None:
+    """Relative volume: entry-day vol / avg vol of prior `lookback` days → bucket string."""
+    if not ohlcv_ts:
+        return None
+    dates = sorted(ohlcv_ts.keys())
+    past = [d for d in dates if d <= date_str]
+    if len(past) < lookback + 1:
+        return None
+    idx = len(past) - 1
+    entry_vol = _to_float(ohlcv_ts[past[idx]].get('5. volume'), 0)
+    avg_vol = sum(
+        _to_float(ohlcv_ts[past[i]].get('5. volume'), 0)
+        for i in range(idx - lookback, idx)
+    ) / lookback
+    if avg_vol <= 0 or entry_vol <= 0:
+        return None
+    rv = entry_vol / avg_vol
+    if rv >= 2.0:   return "Very High"
+    if rv >= 1.5:   return "High"
+    if rv >= 0.75:  return "Normal"
+    return "Low"
+
+
+def _short_score(power_g: 'PowerGauge', fields: dict) -> float:
+    """
+    10-day entry-quality score: -10 to +10.
+
+    Weights derived from backtest factor spreads (336k obs, 2023-2025, NA-filtered):
+      Rel Volume     4.4% spread  → #1 factor (High 1.5-2x best; Very High near baseline)
+      OB/OS          4.3% spread
+      Money Flow     3.5% spread
+      Industry Str   3.1% spread  (contrarian: Weak > Strong)
+      LT Trend       2.1% spread  (contrarian: Weak > Strong)
+      Seasonality    ±1.0         (week-of-month 10d avg return)
+
+    Removed vs old BR score: PGR (1.3%), PGR Delta (1.0%), R/R (2.0%) — all below noise floor.
+    """
+    score = 0.0
+
+    rv = fields.get('rel_vol')
+    score += {'High': 2.5, 'Very High': 0.5, 'Normal': 0.0, 'Low': -2.0}.get(rv or '', 0.0)
+
+    ob = str(power_g.over_bt_sl or '').strip()
+    score += {'Optimal': 3.0, 'Early': 1.0, 'Neutral': 0.0, 'Wait': -2.0}.get(ob, 0.0)
+
+    mf = str(power_g.money_flow or '').strip()
+    score += {'Strong': 3.0, 'Neutral': 0.0, 'Weak': -2.0}.get(mf, 0.0)
+
+    ind = str(power_g.industry_strength or '').strip()
+    score += {'Weak': 2.0, 'Strong': -2.0}.get(ind, 0.0)
+
+    lt = str(power_g.lt_trend or '').strip()
+    score += {'Weak': 1.5, 'Neutral': 0.0, 'Strong': -1.5}.get(lt, 0.0)
+
+    score += fields.get('seasonality', 0.0)
+
+    regime = fields.get('market_regime', 'Neutral')
+    score += {'Bull': 1.0, 'Neutral': 0.0, 'Bear': -1.0}.get(regime, 0.0)
+
+    return round(max(-10.0, min(10.0, score)), 1)
+
+
+def _long_score(power_g: 'PowerGauge', fields: dict) -> float:
+    """
+    60-day position-quality score: -10 to +10.
+
+    Weights derived from backtest factor spreads (336k obs, 2023-2025, NA-filtered):
+      LT Trend       4.5% spread  → highest weight (contrarian: Weak > Strong)
+      Rel Volume     2.8% spread  (High 1.5-2x best; Very High near baseline)
+      Money Flow     2.5% spread
+      Industry Str   2.4% spread  (contrarian: Weak > Strong)
+      OB/OS          2.3% spread  → lower weight than short score
+      Seasonality    ±0.5         (less relevant at 60d)
+
+    Removed vs old BR score: PGR, PGR Delta, R/R — all <2% spread at 60d.
+    """
+    score = 0.0
+
+    lt = str(power_g.lt_trend or '').strip()
+    score += {'Weak': 4.0, 'Neutral': 0.0, 'Strong': -3.0}.get(lt, 0.0)
+
+    rv = fields.get('rel_vol')
+    score += {'High': 2.0, 'Very High': 0.0, 'Normal': 0.0, 'Low': -1.0}.get(rv or '', 0.0)
+
+    mf = str(power_g.money_flow or '').strip()
+    score += {'Strong': 2.5, 'Neutral': 0.0, 'Weak': -2.0}.get(mf, 0.0)
+
+    ind = str(power_g.industry_strength or '').strip()
+    score += {'Weak': 2.0, 'Strong': -1.5}.get(ind, 0.0)
+
+    ob = str(power_g.over_bt_sl or '').strip()
+    score += {'Optimal': 1.5, 'Early': 0.5, 'Neutral': 0.0, 'Wait': -0.5}.get(ob, 0.0)
+
+    score += fields.get('seasonality', 0.0) * 0.5
+
+    regime = fields.get('market_regime', 'Neutral')
+    score += {'Bull': 1.5, 'Neutral': 0.0, 'Bear': -1.5}.get(regime, 0.0)
+
+    return round(max(-10.0, min(10.0, score)), 1)
+
+
 # Column headers and memo text for Research sheet row 1 (cols E–X, 0-indexed 4–23).
 # Keys are 0-based column indices. PRESERVE cols A–D (0-3) and I (8) and Q (16).
 _RESEARCH_HEADERS = {
@@ -641,6 +777,8 @@ _RESEARCH_HEADERS = {
     21: ("BR Score",    "Buying Ratio: composite entry-quality score −10 to +10.\n\nComponents:\n  PGR (1→-2 … 5→+2)\n  R/R (0→-1, ≥0.5→+0.5, ≥1→+1, ≥2→+1.5, ≥3→+2)\n  LT Trend (Weak→+1, Strong→-1)\n  Money Flow (Strong→+0.75, Weak→-0.75)\n  OB/OS (Optimal→+1, Early→+0.25, Wait→-0.25)\n  Industry (Weak→+0.5, Strong→-0.5)\n  PGR Delta (any change→+0.25)\n  Seasonality (−1 to +1)\n\nThresholds: ≥4 strong buy | 2–4 moderate | 0–2 weak | −2–0 avoid | ≤−2 strong avoid"),
     22: ("Seasonal",    "Week-of-month seasonality score (week 1=days 1-7, 2=8-15, 3=16-22, 4=23+).\nDerived from historical 10-day returns for this (month, week) slot across all available years.\n+1.0 = strong tailwind (avg >+2%)   +0.5 = mild tailwind (>+1%)\n 0.0 = neutral                      -0.5 = mild headwind (<-1%)\n-1.0 = strong headwind (avg <-2%)\nRequires >=3 years of OHLCV data; 0 if insufficient.\nNote: 2.4x more predictive than monthly averaging (20pp vs 8.5pp win% spread)."),
     23: ("Win% 10d",    "Predicted 10-day win% from backtest (238k obs, 466 symbols, 2023-2025).\nBased on Buying Ratio (col V) bucket:\n  BR >=  4  -> 64.3%  (strong buy)\n  BR 2-4    -> 57.6%  (moderate)\n  BR 0-2    -> 53.1%  (weak/watch)\n  BR -2-0   -> 50.3%  (neutral/avoid)\n  BR <= -2  -> 46.3%  (avoid)"),
+    24: ("Short10",    "10-day entry-quality score: -10 to +10.\nWeights from backtest factor spreads (336k obs, 2023-2025, NA-filtered):\n  Rel Volume (4.4% spread, #1): High->+2.5, Very High->+0.5, Normal->0, Low->-2\n  OB/OS (4.3%): Optimal->+3, Early->+1, Neutral->0, Wait->-2\n  Money Flow (3.5%): Strong->+3, Neutral->0, Weak->-2\n  Industry Str (3.1%, contrarian): Weak->+2, Strong->-2\n  LT Trend (2.1%, contrarian): Weak->+1.5, Neutral->0, Strong->-1.5\n  Seasonality: +-1.0\nRemoved vs BR score: PGR (<1.3%), PGR Delta (1.0%), R/R (2.0%) -- below noise floor."),
+    25: ("Long60",     "60-day position-quality score: -10 to +10.\nWeights from backtest factor spreads (336k obs, 2023-2025, NA-filtered):\n  LT Trend (4.5% spread, contrarian): Weak->+4, Neutral->0, Strong->-3\n  Rel Volume (2.8%): High->+2, Very High->0, Normal->0, Low->-1\n  Money Flow (2.5%): Strong->+2.5, Neutral->0, Weak->-2\n  Industry Str (2.4%, contrarian): Weak->+2, Strong->-1.5\n  OB/OS (2.3%): Optimal->+1.5, Early->+0.5, Neutral->0, Wait->-0.5\n  Seasonality: +-0.5 (less relevant at 60d)\nRemoved vs BR score: PGR, PGR Delta, R/R -- all <2% spread at 60d."),
 }
 
 
@@ -830,9 +968,53 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
         'risk_ratio': risk_ratio,
         'setup_ok': setup_ok,      # True/False/None
         'seasonality': _compute_seasonality(ohlcv_ts, power_g.date.month, power_g.date.day),
+        'rel_vol': _rel_volume_bucket(ohlcv_ts, str(power_g.date)),
+        'market_regime': _market_regime(str(power_g.date)),
     }
     fields['buying_ratio'] = _buying_ratio(power_g, fields)
+    fields['short_score']  = _short_score(power_g, fields)
+    fields['long_score']   = _long_score(power_g, fields)
     return fields
+
+
+def _fix_comment_shape_ids(xlsx_path: str):
+    """
+    Fix openpyxl bug where all comment shapeIds are written as "0".
+    Reads the actual sequential spids from the VML file and patches
+    the comments XML to match — prevents Excel "corrupt content" error.
+    """
+    import zipfile, re
+    from io import BytesIO
+
+    with zipfile.ZipFile(xlsx_path, 'r') as zin:
+        names = zin.namelist()
+
+        # Find comment + VML file pairs
+        comment_files = sorted(n for n in names if re.match(r'xl/comments/comment\d+\.xml', n))
+        vml_files     = sorted(n for n in names if re.match(r'xl/drawings/commentsDrawing\d+\.vml', n))
+
+        if not comment_files or not vml_files:
+            return  # nothing to fix
+
+        modified = {}
+        for cf, vf in zip(comment_files, vml_files):
+            vml     = zin.read(vf).decode('utf-8')
+            spids   = re.findall(r'id="_x0000_s(\d+)"', vml)
+            if not spids:
+                continue
+
+            comments = zin.read(cf).decode('utf-8')
+            it = iter(spids)
+            patched = re.sub(r'shapeId="\d+"', lambda _: f'shapeId="{next(it)}"', comments)
+            modified[cf] = patched.encode('utf-8')
+
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for name in names:
+                zout.writestr(name, modified[name] if name in modified else zin.read(name))
+
+    with open(xlsx_path, 'wb') as f:
+        f.write(buf.getvalue())
 
 
 def check_from_xls(form_cache, date=datetime.datetime.now(), symbols=None):
@@ -855,7 +1037,7 @@ def check_from_xls(form_cache, date=datetime.datetime.now(), symbols=None):
     updated = 0
     skipped = 0
 
-    for row in ws.iter_rows(min_row=2, max_col=24):
+    for row in ws.iter_rows(min_row=2, max_col=26):
         symbol = row[3].value
         if not symbol or not str(symbol).strip():
             continue
@@ -909,20 +1091,27 @@ def check_from_xls(form_cache, date=datetime.datetime.now(), symbols=None):
         row[22].value = f['seasonality'] if f['seasonality'] != 0.0 else None
         # col X: predicted 10d win% from backtest lookup
         row[23].value = _predicted_win_pct(f['buying_ratio'])
+        # col Y: short-term 10d entry score
+        row[24].value = f['short_score']
+        # col Z: long-term 60d position score
+        row[25].value = f['long_score']
 
         flag = "OK" if setup_ok else ("--" if setup_ok is False else "??")
         print(f"{symbol}: pgr={f['pgr']}, price={power_g.price}, "
               f"stop={f['stop_price']}, target={f['prev_move_price']}, "
-              f"rr={f['risk_ratio']}, setup={flag}, br={f['buying_ratio']}")
+              f"rr={f['risk_ratio']}, setup={flag}, br={f['buying_ratio']}, "
+              f"s10={f['short_score']}, l60={f['long_score']}")
         updated += 1
 
     try:
         wb.save(XLSX_FILE)
+        _fix_comment_shape_ids(XLSX_FILE)
         print(f"Research sheet updated ({updated} rows written, {skipped} skipped) -> {XLSX_FILE}")
     except PermissionError:
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
         alt = os.path.join(os.path.dirname(XLSX_FILE), f"investment_pending_{ts}.xlsx")
         wb.save(alt)
+        _fix_comment_shape_ids(alt)
         print(f"ERROR: {XLSX_FILE} is open in another application.")
         print(f"Changes saved to: {alt}")
         print(f"Close Excel and rename/copy that file to investment.xlsx")
