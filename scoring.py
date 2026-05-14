@@ -31,6 +31,8 @@ def ohlcv_streak_perc(ohlcv_ts: dict, all_dates: list, idx: int, cur_pct: float)
     going_up = cur_pct > 0
     total = cur_pct
     for i in range(idx - 1, max(0, idx - 15) - 1, -1):
+        if i + 1 >= len(all_dates):
+            break
         prev_close = _to_float(ohlcv_ts[all_dates[i]].get('4. close'), 0)
         curr_close = _to_float(ohlcv_ts[all_dates[i + 1]].get('4. close'), 0)
         if prev_close <= 0 or curr_close <= 0:
@@ -50,6 +52,8 @@ def ohlcv_streak_count(ohlcv_ts: dict, all_dates: list, idx: int, cur_pct: float
     going_up = cur_pct > 0
     count = 1 if going_up else -1
     for i in range(idx - 1, max(0, idx - 30) - 1, -1):
+        if i + 1 >= len(all_dates):
+            break
         prev_close = _to_float(ohlcv_ts[all_dates[i]].get('4. close'), 0)
         curr_close = _to_float(ohlcv_ts[all_dates[i + 1]].get('4. close'), 0)
         if prev_close <= 0 or curr_close <= 0:
@@ -120,6 +124,11 @@ _WIN_PCT_TABLE = [
     (0.0,  0.531),
     (-2.0, 0.503),
 ]
+
+
+def clear_regime_cache():
+    """Clear cached regime values — call between independent runs in the same process."""
+    _regime_cache.clear()
 
 
 def predicted_win_pct(br: float) -> float:

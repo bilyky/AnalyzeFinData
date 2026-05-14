@@ -25,16 +25,17 @@ from scoring import (
 )
 
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
-power_cookie = ""
 
 # Pre-built index of symbol → sorted list of cached JSON paths.
-# Populated by _build_cache_index(); find_prev_pf() falls back to glob when empty.
-_cache_file_index: dict = {}
+# None = not yet scanned; {} = scanned but empty directory.
+_cache_file_index: dict | None = None
 
 
 def _build_cache_index():
-    """Scan Data/Symbol once and build a symbol→[paths] index for find_prev_pf."""
+    """Scan Data/Symbol once and build a symbol→[paths] index for find_prev_pf. Idempotent."""
     global _cache_file_index
+    if _cache_file_index is not None:
+        return
     symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
     from collections import defaultdict
     idx: dict = defaultdict(list)
@@ -180,12 +181,9 @@ class PowerGauge:
         self.percentage = round((self.change / prev_close) * 100, 4) if prev_close else 0
 
     def find_prev_pf(self):
-        if _cache_file_index:
-            candidates = _cache_file_index.get(self.symbol, [])
-        else:
-            import glob
-            symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
-            candidates = sorted(glob.glob(os.path.join(symbol_dir, f"{self.symbol}_*.json")))
+        if _cache_file_index is None:
+            _build_cache_index()
+        candidates = (_cache_file_index or {}).get(self.symbol, [])
         today_str = str(self.date)
 
         # 1. Try Chaikin cache (most recent file before today)
@@ -261,7 +259,6 @@ class PowerGauge:
         if not min_pr.prevPG:
             min_pr.find_prev_pf()
         if min_pr.prevPG:
-            min_pr.max_price = min_pr.prevPG.max_price = self.max_price
             if min_pr.price < cur_price:
                 return min_pr.prevPG.get_prev_max_price(cur_price)
             return max(min_pr.get_prev_same_move_price() or min_pr.price, self.max_price)
@@ -334,6 +331,33 @@ def _jwt_to_session_id(jwt_token: str) -> str:
     return session_id
 
 
+CREDENTIALS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chaikin_config.json")
+
+
+def _load_credentials() -> tuple[str, str]:
+    """Load Chaikin credentials: env vars (CHAIKIN_EMAIL/CHAIKIN_PASSWORD) take priority,
+    then chaikin_config.json in the project root."""
+    email    = os.environ.get('CHAIKIN_EMAIL', '')
+    password = os.environ.get('CHAIKIN_PASSWORD', '')
+    if email and password:
+        return email, password
+    if os.path.exists(CREDENTIALS_FILE):
+        try:
+            with open(CREDENTIALS_FILE) as f:
+                cfg = json.load(f)
+            email    = cfg.get('email', '')
+            password = cfg.get('password', '')
+        except Exception as e:
+            raise EnvironmentError(f"Failed to parse {CREDENTIALS_FILE}: {e}") from e
+    if not email or not password:
+        raise EnvironmentError(
+            "Chaikin credentials not found.\n"
+            "  Option 1: set env vars CHAIKIN_EMAIL and CHAIKIN_PASSWORD\n"
+            f"  Option 2: copy chaikin_config.json.example → {CREDENTIALS_FILE} and fill in values"
+        )
+    return email, password
+
+
 def _login_via_browser() -> str:
     from playwright.sync_api import sync_playwright
 
@@ -363,8 +387,9 @@ def _login_via_browser() -> str:
 
         page.goto('https://members.chaikinanalytics.com/login', wait_until='domcontentloaded', timeout=60000)
 
-        page.fill('input[name="email"]', 'bilyky@gmail.com')
-        page.fill('input[name="password"]', '0605BIYU@')
+        email, password = _load_credentials()
+        page.fill('input[name="email"]', email)
+        page.fill('input[name="password"]', password)
 
         # Wait for Turnstile to enable the submit button (auto-verifies or user clicks widget)
         print("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
@@ -427,15 +452,8 @@ def login() -> str:
 
 
 def get_symbol_data(symbol: str, date, from_cache, session_id) -> PowerGauge:
-
-    #     """:authority: 0mlhor0lf8.execute-api.us-east-1.amazonaws.com
-    # {email: "bilyky@gmail.com", password: "0605BIYU@"}
-    # https://0mlhor0lf8.execute-api.us-east-1.amazonaws.com/prod/login
-    industry_url = f"https://app.chaikinanalytics.com/CPTRestSecure/app/portfolio/getChecklistStocks?symbol={symbol}"
     industry_url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getChecklistStocks?symbol={symbol}"
-    url = f"https://app.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid=1101733&symbol={symbol}&components=metaInfo,EPSData,pgr"
-    url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid=1101733&symbol={symbol}&components=pgr,metaInfo,EPSData,fundamentalData,technical&uid=1101733"
-    # https://app.chaikinanalytics.com/login
+    url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid=1101733&symbol={symbol}&components=pgr,metaInfo,EPSData,fundamentalData,technical"
     payload = {}
     session_id = f'JSESSIONID={session_id};'
     headers = {
@@ -469,7 +487,8 @@ def get_symbol_data(symbol: str, date, from_cache, session_id) -> PowerGauge:
             print(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
             raise EnvironmentError(f"Session rejected (HTTP {response.status_code}). Update {SESSION_FILE}.")
         else:
-            print(f"RESP for {url}: {response.status_code} {response.text}")
+            print(f"Warning: API error for {symbol} (HTTP {response.status_code}) — row will be skipped")
+            pg.price = -1
     if data_jsn:
         pg.init_from_json(data_jsn)
         pg.find_prev_pf()
@@ -478,21 +497,21 @@ def get_symbol_data(symbol: str, date, from_cache, session_id) -> PowerGauge:
 
 def check_from_file(form_cache, date=None):
     if date is None:
-        date = datetime.datetime.now()
+        date = datetime.date.today()
+    elif isinstance(date, datetime.datetime):
+        date = date.date()
     _build_cache_index()
     session_id = login()
     print(f"SESSION ID: {session_id}")
-    dd = date
-    str_bu = PGR_STR
     syms_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "symbols_to_check.txt")
-    csv_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", f"symbols_to_check_{dd.date()}.csv")
+    csv_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", f"symbols_to_check_{date}.csv")
     with open(syms_path, "r") as f:
         with open(csv_path, "w") as fw:
             for line in f.readlines():
                 split_line = line.strip().split()
                 symbol = split_line[-1]
                 symbol_line = f"{split_line[0]},{symbol}"
-                power_g = get_symbol_data(symbol, dd.date(), form_cache, session_id=session_id)
+                power_g = get_symbol_data(symbol, date, form_cache, session_id=session_id)
 
                 ohlcv_ts = None
                 ohlcv_path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
@@ -511,7 +530,7 @@ def check_from_file(form_cache, date=None):
 
                 if ohlcv_ts and power_g.pgr_value > 3:
                     all_dates = sorted(ohlcv_ts.keys())
-                    date_str = str(dd.date())
+                    date_str = str(date)
                     past = [d for d in all_dates if d <= date_str]
                     if past:
                         idx = all_dates.index(past[-1])
@@ -662,7 +681,7 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
 
             # entry filter: close > SMA(20) AND close > close[3d ago]
             sma_w = all_dates[max(0, idx - 20): idx]
-            if len(sma_w) >= 10:
+            if len(sma_w) >= 20:
                 sma20 = sum(_to_float(ohlcv_ts[d].get('4. close'), 0) for d in sma_w) / len(sma_w)
                 trend_ok = power_g.price > sma20
             else:
@@ -702,7 +721,9 @@ def check_from_xls(form_cache, date=None, symbols=None):
              Pass None (default) to process all rows.
     """
     if date is None:
-        date = datetime.datetime.now()
+        date = datetime.date.today()
+    elif isinstance(date, datetime.datetime):
+        date = date.date()
     import openpyxl
     _build_cache_index()
     _backup_xlsx(XLSX_FILE)
@@ -717,32 +738,35 @@ def check_from_xls(form_cache, date=None, symbols=None):
     updated = 0
     skipped = 0
     picks_data = []
+    ohlcv_cache: dict = {}  # symbol → Time Series dict; avoids re-reading same file twice
 
     for row in ws.iter_rows(min_row=2, max_col=26):
         symbol = row[3].value
-        if not symbol or not str(symbol).strip():
+        if not symbol:
             continue
         symbol = str(symbol).strip()
+        if not symbol:
+            continue
 
         if filter_set and symbol.upper() not in filter_set:
             continue
 
-        power_g = get_symbol_data(symbol, date.date(), form_cache, session_id=session_id)
+        power_g = get_symbol_data(symbol, date, form_cache, session_id=session_id)
 
         if power_g.price == -1:
             print(f"{symbol}: no market data - row skipped (existing values preserved)")
             skipped += 1
             continue
 
-        # Load OHLCV for entry-filter computation (SMA20 + dir3)
-        ohlcv_ts = None
-        ohlcv_path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
-        if os.path.exists(ohlcv_path):
+        # Load OHLCV for entry-filter computation (SMA20 + dir3) — cached per symbol
+        if symbol not in ohlcv_cache:
+            ohlcv_path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
             try:
                 with open(ohlcv_path) as _f:
-                    ohlcv_ts = json.load(_f).get('Time Series (Daily)')
+                    ohlcv_cache[symbol] = json.load(_f).get('Time Series (Daily)')
             except Exception:
-                ohlcv_ts = None
+                ohlcv_cache[symbol] = None
+        ohlcv_ts = ohlcv_cache[symbol]
 
         f = _compute_pgr_fields(power_g, ohlcv_ts=ohlcv_ts)
         setup_ok = f['setup_ok']   # True / False / None
