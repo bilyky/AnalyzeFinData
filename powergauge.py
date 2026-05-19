@@ -43,7 +43,7 @@ _cache_file_index: dict | None = None
 
 
 def _build_cache_index():
-    """Scan Data/Symbol once and build a symbol→[paths] index for find_prev_pf. Idempotent."""
+    """Scan Data/Symbol recursively and build a symbol→[paths] index for find_prev_pf."""
     global _cache_file_index
     if _cache_file_index is not None:
         return
@@ -51,11 +51,12 @@ def _build_cache_index():
     from collections import defaultdict
     idx: dict = defaultdict(list)
     try:
-        for entry in os.scandir(symbol_dir):
-            if not entry.name.endswith('.json'):
-                continue
-            sym = entry.name.rsplit('_', 1)[0]
-            idx[sym].append(entry.path)
+        for root, _dirs, files in os.walk(symbol_dir):
+            for name in files:
+                if not name.endswith('.json'):
+                    continue
+                sym = name.rsplit('_', 1)[0]
+                idx[sym].append(os.path.join(root, name))
     except OSError:
         pass
     _cache_file_index = {sym: sorted(paths) for sym, paths in idx.items()}
@@ -512,7 +513,10 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id: str) -> P
     ind_data_jsn = {}
 
     if date and prefer_cache:
-        file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol", f"{symbol}_{date}.json")
+        _base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
+        file = os.path.join(_base, symbol, f"{symbol}_{date}.json")
+        if not os.path.exists(file):
+            file = os.path.join(_base, f"{symbol}_{date}.json")  # flat fallback
         if os.path.exists(file):
             with open(file, "r") as f:
                 data_jsn = json.load(f)
@@ -526,7 +530,8 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id: str) -> P
             data_jsn = response.json()
             if ind_data_jsn:
                 data_jsn["checklist_stocks"] = ind_data_jsn
-            symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
+            symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol", symbol)
+            os.makedirs(symbol_dir, exist_ok=True)
             cache_date = date if date else datetime.date.today()
             with open(os.path.join(symbol_dir, f"{symbol}_{cache_date}.json"), "w") as fw:
                 json.dump(data_jsn, fw)
