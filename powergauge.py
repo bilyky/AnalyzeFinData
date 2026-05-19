@@ -1,9 +1,14 @@
 import datetime
+import re
 import requests
 import json
 import os
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from utils import _to_float
 
 from excel_output import (
     write_research_headers as _write_research_headers,
@@ -25,6 +30,12 @@ from scoring import (
 )
 
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
+
+
+def _pgr_str(v: int) -> str:
+    if 0 <= v < len(PGR_STR):
+        return PGR_STR[v]
+    return ""
 
 # Pre-built index of symbol → sorted list of cached JSON paths.
 # None = not yet scanned; {} = scanned but empty directory.
@@ -51,18 +62,49 @@ def _build_cache_index():
     print(f"Cache index built: {len(_cache_file_index)} symbols")
 
 
-def _to_float(val, default):
-    try:
-        return float(val) if val is not None else default
-    except (TypeError, ValueError):
-        return default
-
 SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.txt")
 _PROXY_URL = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 _PROXIES = {"http": _PROXY_URL, "https": _PROXY_URL} if _PROXY_URL else {}
+
+_http_session: requests.Session | None = None
+
+
+def _get_http_session() -> requests.Session:
+    """Return a shared Session with retry logic and proxy pre-configured."""
+    global _http_session
+    if _http_session is None:
+        _http_session = requests.Session()
+        _retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+        adapter = HTTPAdapter(max_retries=_retry)
+        _http_session.mount("https://", adapter)
+        _http_session.mount("http://", adapter)
+        _http_session.verify = False
+        if _PROXIES:
+            _http_session.proxies.update(_PROXIES)
+    return _http_session
+
+
 XLSX_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "investment.xlsx")
 XLSX_BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Backup")
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
+
+# ── Chaikin API ───────────────────────────────────────────────────────────────
+# Client API key embedded in Chaikin's own web app; override via env var if it rotates.
+_CHAIKIN_API_KEY = os.environ.get(
+    "CHAIKIN_API_KEY",
+    "76J!7fb?jhEtz/hd7i6rHPKklawGZb5VLReDQXa0?4-jGCqQFi74xYCsb0H-hqUC",
+)
+# Concurrent workers for parallel symbol fetch in check_from_xls.
+_FETCH_WORKERS = int(os.environ.get("CHAIKIN_WORKERS", "10"))
+
+# ── Symbol validation ─────────────────────────────────────────────────────────
+_SYMBOL_RE = re.compile(r"^[A-Z0-9._\-]+$")
+
+# ── OHLCV / entry-filter parameters ──────────────────────────────────────────
+_STOP_LOOKBACK_DAYS   = 3    # min-low window for stop price
+_TARGET_LOOKBACK_DAYS = 10   # max-high window for target price
+_TREND_SMA_PERIOD     = 20   # SMA period for trend filter
+_DIR_CHECK_DAYS       = 3    # "price above N days ago" direction check
 SESSION_INSTRUCTIONS = """
 Session expired or missing. To get a new session token:
   1. Open https://app.chaikinanalytics.com in your browser and log in.
@@ -86,7 +128,7 @@ class PowerGauge:
         self.signals = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         self.percentage = 0.0
         self.change = 0.0
-        self.prevPG: PowerGauge = None
+        self.prevPG: PowerGauge | None = None
         self.industry_strength = ""
         self.lt_trend = ""
         self.money_flow = ""
@@ -181,6 +223,8 @@ class PowerGauge:
         self.percentage = round((self.change / prev_close) * 100, 4) if prev_close else 0
 
     def find_prev_pf(self):
+        if self.prevPG is not None:
+            return
         if _cache_file_index is None:
             _build_cache_index()
         candidates = (_cache_file_index or {}).get(self.symbol, [])
@@ -219,61 +263,64 @@ class PowerGauge:
         self.prevPG = PowerGauge(self.symbol, datetime.date.fromisoformat(prev_date_str))
         self.prevPG.init_from_ohlcv(entry)
 
-    def get_prev_same_move_count(self):
+    def get_prev_same_move_count(self, _depth: int = 0) -> int:
+        if _depth > 30:
+            return -1 if self.percentage < 0 else 1
         if not self.prevPG:
             self.find_prev_pf()
         if self.prevPG:
             if self.percentage > 0 and self.prevPG.percentage > 0:
-                return self.prevPG.get_prev_same_move_count() + 1
+                return self.prevPG.get_prev_same_move_count(_depth + 1) + 1
             if self.percentage < 0 and self.prevPG.percentage < 0:
-                return self.prevPG.get_prev_same_move_count() - 1
+                return self.prevPG.get_prev_same_move_count(_depth + 1) - 1
             return -1 if self.percentage < 0 else 1
         return 0
 
-    def get_prev_same_move_percent(self):
+    def get_prev_same_move_percent(self, _depth: int = 0) -> float:
+        if _depth > 30:
+            return self.percentage
         if not self.prevPG:
             self.find_prev_pf()
         if self.prevPG:
             if self.percentage > 0 and self.prevPG.percentage > 0:
-                return (self.prevPG.get_prev_same_move_percent() or self.prevPG.percentage) + self.percentage
+                return (self.prevPG.get_prev_same_move_percent(_depth + 1) or self.prevPG.percentage) + self.percentage
             if self.percentage < 0 and self.prevPG.percentage < 0:
-                return (self.prevPG.get_prev_same_move_percent() or self.prevPG.percentage) + self.percentage
+                return (self.prevPG.get_prev_same_move_percent(_depth + 1) or self.prevPG.percentage) + self.percentage
         return 0
 
-    def get_prev_same_move_price(self):
+    def get_prev_same_move_price(self, _depth: int = 0) -> float:
+        if _depth > 30:
+            return self.price
         if not self.prevPG:
             self.find_prev_pf()
         if self.change and self.prevPG and self.prevPG.change:
             if self.change > 0 and self.prevPG.change > 0:
-                return self.prevPG.get_prev_same_move_price() or self.prevPG.price
+                return self.prevPG.get_prev_same_move_price(_depth + 1) or self.prevPG.price
             if self.change < 0 and self.prevPG.change < 0:
-                return self.prevPG.get_prev_same_move_price() or self.prevPG.price
+                return self.prevPG.get_prev_same_move_price(_depth + 1) or self.prevPG.price
         return 0
 
     def get_prev_max_price(self, cur_price):
-        # print(f"cur_price: {cur_price}")
         if not self.prevPG:
             self.find_prev_pf()
         min_pr = self.get_prev_min_of(deep=3)
-        self.max_price = max(self.max_price, self.get_prev_max_of(deep=3).price)
+        local_max = max(self.max_price, self.get_prev_max_of(deep=3).price)
         if not min_pr.prevPG:
             min_pr.find_prev_pf()
         if min_pr.prevPG:
             if min_pr.price < cur_price:
                 return min_pr.prevPG.get_prev_max_price(cur_price)
-            return max(min_pr.get_prev_same_move_price() or min_pr.price, self.max_price)
-        return self.max_price
+            return max(min_pr.get_prev_same_move_price() or min_pr.price, local_max)
+        return local_max
 
     def get_prev_min_of(self, deep=3):
         if not self.prevPG:
             self.find_prev_pf()
         if self.prevPG:
             self.max_price = max(self.prevPG.max_price, self.max_price)
-            # print(f"UUUU: {self.prevPG.max_price}, {self.price} ")
             pr = self
             if deep > 0:
                 pr = self.prevPG.get_prev_min_of(deep-1)
-            # print(f"MIN: {min(pr.price, self.price)}")
             if pr.price < self.price:
                 return pr
         return self
@@ -308,9 +355,9 @@ def _validate_session(session_id: str) -> bool:
                "?uid=1101733&symbol=AAPL&components=pgr"
     headers = {'Cookie': f'JSESSIONID={session_id};'}
     try:
-        r = requests.get(test_url, headers=headers, timeout=15, proxies=_PROXIES, verify=False)
+        r = _get_http_session().get(test_url, headers=headers, timeout=15)
         return r.status_code == 200
-    except Exception:
+    except (requests.Timeout, requests.ConnectionError, requests.RequestException):
         return False
 
 
@@ -319,10 +366,10 @@ def _jwt_to_session_id(jwt_token: str) -> str:
            "/authenticate/getJWTAuthorization?acquireSessionForcibly=Yes"
            f"&jwtToken={jwt_token}")
     headers = {
-        'X-Api-Key': '76J!7fb?jhEtz/hd7i6rHPKklawGZb5VLReDQXa0?4-jGCqQFi74xYCsb0H-hqUC',
+        'X-Api-Key': _CHAIKIN_API_KEY,
         'X-App-Id': 'omni',
     }
-    r = requests.get(url, headers=headers, timeout=15, proxies=_PROXIES, verify=False)
+    r = _get_http_session().get(url, headers=headers, timeout=15)
     if not r.ok:
         raise EnvironmentError(f"JWT exchange failed: HTTP {r.status_code}")
     session_id = r.json().get('sessionId')
@@ -345,10 +392,13 @@ def _load_credentials() -> tuple[str, str]:
         try:
             with open(CREDENTIALS_FILE) as f:
                 cfg = json.load(f)
-            email    = cfg.get('email', '')
-            password = cfg.get('password', '')
         except Exception as e:
             raise EnvironmentError(f"Failed to parse {CREDENTIALS_FILE}: {e}") from e
+        missing = {'email', 'password'} - set(cfg.keys())
+        if missing:
+            raise EnvironmentError(f"Missing required keys in {CREDENTIALS_FILE}: {missing}")
+        email    = cfg['email']
+        password = cfg['password']
     if not email or not password:
         raise EnvironmentError(
             "Chaikin credentials not found.\n"
@@ -451,31 +501,29 @@ def login() -> str:
     )
 
 
-def get_symbol_data(symbol: str, date, from_cache, session_id) -> PowerGauge:
+def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id: str) -> PowerGauge:
+    if not _SYMBOL_RE.match(symbol):
+        raise ValueError(f"Invalid symbol format: {symbol!r}")
     industry_url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getChecklistStocks?symbol={symbol}"
     url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid=1101733&symbol={symbol}&components=pgr,metaInfo,EPSData,fundamentalData,technical"
-    payload = {}
-    session_id = f'JSESSIONID={session_id};'
-    headers = {
-      'Cookie': session_id
-    }
+    headers = {'Cookie': f'JSESSIONID={session_id};'}
     pg = PowerGauge(symbol, date)
     data_jsn = {}
     ind_data_jsn = {}
 
-    if date and from_cache:
+    if date and prefer_cache:
         file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol", f"{symbol}_{date}.json")
         if os.path.exists(file):
             with open(file, "r") as f:
                 data_jsn = json.load(f)
 
     if not data_jsn:
-        ind_responce = requests.request("GET", industry_url, headers=headers, data=payload, proxies=_PROXIES, verify=False)
+        ind_responce = _get_http_session().get(industry_url, headers=headers, timeout=20)
         if ind_responce.ok:
-            ind_data_jsn = json.loads(ind_responce.text)
-        response = requests.request("GET", url, headers=headers, data=payload, proxies=_PROXIES, verify=False)
+            ind_data_jsn = ind_responce.json()
+        response = _get_http_session().get(url, headers=headers, timeout=20)
         if response.ok:
-            data_jsn = json.loads(response.text)
+            data_jsn = response.json()
             if ind_data_jsn:
                 data_jsn["checklist_stocks"] = ind_data_jsn
             symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
@@ -495,7 +543,7 @@ def get_symbol_data(symbol: str, date, from_cache, session_id) -> PowerGauge:
     return pg
 
 
-def check_from_file(form_cache, date=None):
+def check_from_file(prefer_cache: bool, date=None):
     if date is None:
         date = datetime.date.today()
     elif isinstance(date, datetime.datetime):
@@ -505,22 +553,29 @@ def check_from_file(form_cache, date=None):
     print(f"SESSION ID: {session_id}")
     syms_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "symbols_to_check.txt")
     csv_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", f"symbols_to_check_{date}.csv")
+    ohlcv_cache: dict = {}
     with open(syms_path, "r") as f:
         with open(csv_path, "w") as fw:
             for line in f.readlines():
                 split_line = line.strip().split()
                 symbol = split_line[-1]
+                if not _SYMBOL_RE.match(symbol):
+                    print(f"  [SKIP] invalid symbol format: {symbol!r}")
+                    continue
                 symbol_line = f"{split_line[0]},{symbol}"
-                power_g = get_symbol_data(symbol, date, form_cache, session_id=session_id)
+                power_g = get_symbol_data(symbol, date, prefer_cache, session_id=session_id)
 
-                ohlcv_ts = None
-                ohlcv_path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
-                if os.path.exists(ohlcv_path):
+                if symbol not in ohlcv_cache:
+                    ohlcv_path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
                     try:
                         with open(ohlcv_path) as _f:
-                            ohlcv_ts = json.load(_f).get('Time Series (Daily)')
-                    except Exception:
-                        ohlcv_ts = None
+                            ohlcv_cache[symbol] = json.load(_f).get('Time Series (Daily)')
+                    except FileNotFoundError:
+                        ohlcv_cache[symbol] = None
+                    except (json.JSONDecodeError, OSError) as e:
+                        print(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
+                        ohlcv_cache[symbol] = None
+                ohlcv_ts = ohlcv_cache[symbol]
 
                 f_fields = _compute_pgr_fields(power_g, ohlcv_ts=ohlcv_ts)
 
@@ -630,9 +685,8 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
 
 
 def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
-    str_bu = PGR_STR
-    pgr_value = str_bu[power_g.pgr_value]
-    pgr_corrected_value = str_bu[power_g.pgr_corrected_value]
+    pgr_value = _pgr_str(power_g.pgr_value)
+    pgr_corrected_value = _pgr_str(power_g.pgr_corrected_value)
     pgr = pgr_corrected_value if pgr_corrected_value == pgr_value else f"{pgr_corrected_value}/{pgr_value}"
     prev_pgr = 0
     prev_percentage = 0
@@ -643,8 +697,8 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
     risk_ratio = 0
 
     if power_g.prevPG:
-        prev_pgr_v = str_bu[power_g.prevPG.pgr_value]
-        prev_pgr_cv = str_bu[power_g.prevPG.pgr_corrected_value]
+        prev_pgr_v = _pgr_str(power_g.prevPG.pgr_value)
+        prev_pgr_cv = _pgr_str(power_g.prevPG.pgr_corrected_value)
         prev_pgr = prev_pgr_cv if prev_pgr_cv == prev_pgr_v else f"{prev_pgr_cv}/{prev_pgr_v}"
         prev_percentage = power_g.prevPG.percentage
         pgr_delta = power_g.pgr_corrected_value - power_g.prevPG.pgr_corrected_value
@@ -658,14 +712,14 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
         if past:
             idx = all_dates.index(past[-1])
 
-            # stop: min low of previous 3 trading days (excluding today) × 0.99
-            stop_w = all_dates[max(0, idx - 3): idx]
+            # stop: min low of previous _STOP_LOOKBACK_DAYS trading days (excluding today) × 0.99
+            stop_w = all_dates[max(0, idx - _STOP_LOOKBACK_DAYS): idx]
             local_low = min((_to_float(ohlcv_ts[d].get('3. low'), 0) for d in stop_w), default=0)
             raw_stop = round(local_low * 0.99, 2) if local_low else 0
             stop_price = raw_stop if raw_stop and raw_stop < power_g.price else 0
 
-            # target: 10-day high lookback (excluding today) — matches backtest validation
-            tgt_w = all_dates[max(0, idx - 10): idx]
+            # target: _TARGET_LOOKBACK_DAYS high lookback (excluding today) — matches backtest validation
+            tgt_w = all_dates[max(0, idx - _TARGET_LOOKBACK_DAYS): idx]
             if tgt_w:
                 hi = max((_to_float(ohlcv_ts[d].get('2. high'), 0) for d in tgt_w), default=0)
                 prev_move_price = round(hi, 2) if hi > power_g.price else 0.0
@@ -679,14 +733,14 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
             # cumulative same-direction streak percentage
             prev_move_perc = _ohlcv_streak_perc(ohlcv_ts, all_dates, idx, power_g.percentage)
 
-            # entry filter: close > SMA(20) AND close > close[3d ago]
-            sma_w = all_dates[max(0, idx - 20): idx]
-            if len(sma_w) >= 20:
-                sma20 = sum(_to_float(ohlcv_ts[d].get('4. close'), 0) for d in sma_w) / len(sma_w)
-                trend_ok = power_g.price > sma20
+            # entry filter: close > SMA(_TREND_SMA_PERIOD) AND close > close[_DIR_CHECK_DAYS ago]
+            sma_w = all_dates[max(0, idx - _TREND_SMA_PERIOD): idx]
+            if len(sma_w) >= _TREND_SMA_PERIOD:
+                sma = sum(_to_float(ohlcv_ts[d].get('4. close'), 0) for d in sma_w) / len(sma_w)
+                trend_ok = power_g.price > sma
             else:
                 trend_ok = False
-            dir_ok = power_g.price > _to_float(ohlcv_ts[all_dates[idx - 3]].get('4. close'), 0) if idx >= 3 else False
+            dir_ok = power_g.price > _to_float(ohlcv_ts[all_dates[idx - _DIR_CHECK_DAYS]].get('4. close'), 0) if idx >= _DIR_CHECK_DAYS else False
             setup_ok = trend_ok and dir_ok
 
     fields = {
@@ -714,11 +768,12 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
     return fields
 
 
-def check_from_xls(form_cache, date=None, symbols=None):
+def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     """Update Research sheet from PowerGauge data.
 
     symbols: optional list/set of ticker strings — process only those rows.
              Pass None (default) to process all rows.
+    Fetches are parallelised (_FETCH_WORKERS threads); cell writes remain serial.
     """
     if date is None:
         date = datetime.date.today()
@@ -735,11 +790,9 @@ def check_from_xls(form_cache, date=None, symbols=None):
     _write_research_headers(ws)
 
     filter_set = {s.upper() for s in symbols} if symbols else None
-    updated = 0
-    skipped = 0
-    picks_data = []
-    ohlcv_cache: dict = {}  # symbol → Time Series dict; avoids re-reading same file twice
 
+    # ── Phase 1: collect valid (symbol, row) pairs in sheet order ────────────
+    valid_rows: list[tuple[str, tuple]] = []
     for row in ws.iter_rows(min_row=2, max_col=26):
         symbol = row[3].value
         if not symbol:
@@ -747,24 +800,64 @@ def check_from_xls(form_cache, date=None, symbols=None):
         symbol = str(symbol).strip()
         if not symbol:
             continue
-
         if filter_set and symbol.upper() not in filter_set:
             continue
+        if not _SYMBOL_RE.match(symbol):
+            print(f"  [SKIP] invalid symbol format: {symbol!r}")
+            continue
+        valid_rows.append((symbol, row))
 
-        power_g = get_symbol_data(symbol, date, form_cache, session_id=session_id)
+    total = len(valid_rows)
+    unique_syms = list(dict.fromkeys(s for s, _ in valid_rows))
+    print(f"Fetching {len(unique_syms)} unique symbols ({_FETCH_WORKERS} workers)...")
+
+    # ── Phase 2: parallel fetch ───────────────────────────────────────────────
+    pg_results: dict[str, PowerGauge] = {}
+    with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
+        future_to_sym = {
+            pool.submit(get_symbol_data, sym, date, prefer_cache, session_id): sym
+            for sym in unique_syms
+        }
+        done = 0
+        for future in as_completed(future_to_sym):
+            sym = future_to_sym[future]
+            done += 1
+            try:
+                pg_results[sym] = future.result()
+            except EnvironmentError:
+                pool.shutdown(wait=False, cancel_futures=True)
+                raise
+            except Exception as e:
+                print(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
+                sentinel = PowerGauge(sym, date)
+                sentinel.price = -1
+                pg_results[sym] = sentinel
+    print(f"Fetch complete ({len(unique_syms)} symbols).")
+
+    # ── Phase 3: serial compute + write ──────────────────────────────────────
+    updated = 0
+    skipped = 0
+    picks_data: list[dict] = []
+    ohlcv_cache: dict = {}  # symbol → Time Series dict
+
+    for n, (symbol, row) in enumerate(valid_rows, 1):
+        power_g = pg_results[symbol]
 
         if power_g.price == -1:
-            print(f"{symbol}: no market data - row skipped (existing values preserved)")
+            print(f"[{n}/{total}] {symbol}: no market data - row skipped (existing values preserved)")
             skipped += 1
             continue
 
-        # Load OHLCV for entry-filter computation (SMA20 + dir3) — cached per symbol
+        # Load OHLCV for entry-filter computation — cached per symbol
         if symbol not in ohlcv_cache:
             ohlcv_path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
             try:
                 with open(ohlcv_path) as _f:
                     ohlcv_cache[symbol] = json.load(_f).get('Time Series (Daily)')
-            except Exception:
+            except FileNotFoundError:
+                ohlcv_cache[symbol] = None
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
                 ohlcv_cache[symbol] = None
         ohlcv_ts = ohlcv_cache[symbol]
 
@@ -817,7 +910,7 @@ def check_from_xls(form_cache, date=None, symbols=None):
         })
 
         flag = "OK" if setup_ok else ("--" if setup_ok is False else "??")
-        print(f"{symbol}: pgr={f['pgr']}, price={power_g.price}, "
+        print(f"[{n}/{total}] {symbol}: pgr={f['pgr']}, price={power_g.price}, "
               f"stop={f['stop_price']}, target={f['prev_move_price']}, "
               f"rr={f['risk_ratio']}, setup={flag}, br={f['buying_ratio']}, "
               f"s10={f['short_score']}, l60={f['long_score']}")
@@ -835,7 +928,6 @@ def check_from_xls(form_cache, date=None, symbols=None):
         alt = os.path.join(os.path.dirname(XLSX_FILE), f"investment_pending_{ts}.xlsx")
         wb.save(alt)
         _fix_comment_shape_ids(alt)
-        print(f"Picks sheet written to alt file.")
         print(f"ERROR: {XLSX_FILE} is open in another application.")
         print(f"Changes saved to: {alt}")
         print(f"Close Excel and rename/copy that file to investment.xlsx")

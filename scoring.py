@@ -6,20 +6,17 @@ Called by _compute_pgr_fields() in powergauge.py.
 
 import json
 import os
+from utils import _to_float
 
 # ── Market regime config ─────────────────────────────────────────────────────
 # Ticker whose SMA(50) trend gates short/long scores.
-# Set to "" to disable. Change to "SPY", "QQQ", "IWM", etc. as needed.
-REGIME_SYMBOL = "RSP"
+# Override with REGIME_SYMBOL env var, e.g. REGIME_SYMBOL=SPY. Set to "" to disable.
+REGIME_SYMBOL = os.environ.get("REGIME_SYMBOL", "RSP")
 
-_regime_cache: dict = {}  # date_str → "Bull"/"Neutral"/"Bear"; avoids re-reading file per symbol
+_STREAK_LOOKBACK_SHORT = 15   # max lookback days for ohlcv_streak_perc
+_STREAK_LOOKBACK_LONG  = 30   # max lookback days for ohlcv_streak_count
 
-# ── Local helper (mirrors powergauge._to_float, kept here to avoid circular import) ──
-def _to_float(val, default):
-    try:
-        return float(val) if val is not None else default
-    except (TypeError, ValueError):
-        return default
+_regime_cache: dict = {}  # (REGIME_SYMBOL, date_str) → "Bull"/"Neutral"/"Bear"
 
 
 # ── OHLCV streak helpers ─────────────────────────────────────────────────────
@@ -30,7 +27,7 @@ def ohlcv_streak_perc(ohlcv_ts: dict, all_dates: list, idx: int, cur_pct: float)
         return round(cur_pct, 4)
     going_up = cur_pct > 0
     total = cur_pct
-    for i in range(idx - 1, max(0, idx - 15) - 1, -1):
+    for i in range(idx - 1, max(0, idx - _STREAK_LOOKBACK_SHORT) - 1, -1):
         if i + 1 >= len(all_dates):
             break
         prev_close = _to_float(ohlcv_ts[all_dates[i]].get('4. close'), 0)
@@ -51,7 +48,7 @@ def ohlcv_streak_count(ohlcv_ts: dict, all_dates: list, idx: int, cur_pct: float
         return 0
     going_up = cur_pct > 0
     count = 1 if going_up else -1
-    for i in range(idx - 1, max(0, idx - 30) - 1, -1):
+    for i in range(idx - 1, max(0, idx - _STREAK_LOOKBACK_LONG) - 1, -1):
         if i + 1 >= len(all_dates):
             break
         prev_close = _to_float(ohlcv_ts[all_dates[i]].get('4. close'), 0)
@@ -127,7 +124,7 @@ _WIN_PCT_TABLE = [
 
 
 def clear_regime_cache():
-    """Clear cached regime values — call between independent runs in the same process."""
+    """Clear cached regime values — call between independent runs or after changing REGIME_SYMBOL."""
     _regime_cache.clear()
 
 
@@ -150,12 +147,13 @@ def market_regime(date_str: str, sma_period: int = 50) -> str:
     """
     if not REGIME_SYMBOL:
         return "Neutral"
-    if date_str in _regime_cache:
-        return _regime_cache[date_str]
+    _cache_key = (REGIME_SYMBOL, date_str)
+    if _cache_key in _regime_cache:
+        return _regime_cache[_cache_key]
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "Data", "Symbol_full", f"{REGIME_SYMBOL}_daily.json")
     if not os.path.exists(path):
-        _regime_cache[date_str] = "Neutral"
+        _regime_cache[_cache_key] = "Neutral"
         return "Neutral"
     try:
         with open(path) as f:
@@ -163,6 +161,7 @@ def market_regime(date_str: str, sma_period: int = 50) -> str:
         dates = sorted(ts.keys())
         past  = [d for d in dates if d <= date_str]
         if len(past) < sma_period:
+            print(f"  [Regime] {REGIME_SYMBOL}: only {len(past)} dates before {date_str}, need {sma_period} — using Neutral")
             result = "Neutral"
         else:
             closes = [float(ts[d]["4. close"]) for d in past[-sma_period:]]
@@ -171,9 +170,10 @@ def market_regime(date_str: str, sma_period: int = 50) -> str:
             if pct > 0.02:    result = "Bull"
             elif pct < -0.02: result = "Bear"
             else:             result = "Neutral"
-    except Exception:
+    except (json.JSONDecodeError, KeyError, ValueError, ZeroDivisionError) as e:
+        print(f"  [Regime] {REGIME_SYMBOL} {date_str}: error computing regime — {e}")
         result = "Neutral"
-    _regime_cache[date_str] = result
+    _regime_cache[_cache_key] = result
     return result
 
 
