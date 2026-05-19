@@ -13,11 +13,12 @@ entry-quality scores from local OHLCV history, and writes results into `Data/inv
 4. [Running the Screener](#running-the-screener)
 5. [Environment Variables](#environment-variables)
 6. [Data / Folder Structure](#data--folder-structure)
-7. [Changing the Folder Structure](#changing-the-folder-structure)
-8. [Testing](#testing)
-9. [Excel Output — Column Reference](#excel-output--column-reference)
-10. [Score Definitions](#score-definitions)
-11. [Backtest Summary](#backtest-summary)
+7. [Reorganising the Symbol Cache](#reorganising-the-symbol-cache)
+8. [Changing the Folder Structure](#changing-the-folder-structure)
+9. [Testing](#testing)
+10. [Excel Output — Column Reference](#excel-output--column-reference)
+11. [Score Definitions](#score-definitions)
+12. [Backtest Summary](#backtest-summary)
 
 ---
 
@@ -184,13 +185,32 @@ AnalyzeFinData/
     ├── session.txt              # Cached Chaikin session token
     ├── symbols_to_check.txt     # One symbol per line, used by check_from_file()
     ├── Symbol/                  # Per-symbol, per-date Chaikin API cache
-    │   └── <SYMBOL>_<DATE>.json
+    │   └── <SYMBOL>/            # One subdir per ticker (flat fallback still supported)
+    │       └── <SYMBOL>_<DATE>.json
     ├── Symbol_full/             # Daily OHLCV history (Alpha Vantage format)
     │   └── <SYMBOL>_daily.json
     └── Backup/
         └── <YEAR>/
             └── investment_<TIMESTAMP>.xlsx
 ```
+
+### Symbol cache layout (after reorganisation)
+
+```
+Data/Symbol/
+├── AAPL/
+│   ├── AAPL_2025-05-16.json
+│   └── AAPL_2025-05-19.json
+├── NVDA/
+│   └── NVDA_2025-05-19.json
+└── ...
+```
+
+The screener reads from `Symbol/<SYM>/<SYM>_<DATE>.json` and falls back to the
+old flat `Symbol/<SYM>_<DATE>.json` if the file isn't found in the subdir.
+New fetches are always written into the per-symbol subdir.
+
+---
 
 ### Symbol_full JSON format
 
@@ -209,6 +229,44 @@ Each file is a standard Alpha Vantage "Time Series (Daily)" response:
   }
 }
 ```
+
+---
+
+## Reorganising the Symbol Cache
+
+Run this once to move all flat `Data/Symbol/<SYM>_<DATE>.json` files into
+per-symbol subdirectories. Handles any number of files; safe to re-run (already-moved
+files are skipped because they don't appear in the flat root any more).
+
+```bash
+python organize_symbol_files.py
+```
+
+**What it does:**
+
+1. Scans `Data/Symbol/` for files matching `<SYM>_<DATE>.json`
+2. Creates `Data/Symbol/<SYM>/` for each unique symbol
+3. Moves every file into its symbol's subfolder
+4. Prints progress every 10,000 files and a final summary
+
+**Expected output (first run on a full dataset):**
+
+```
+  10000/414264 moved...
+  ...
+  410000/414264 moved...
+Done: 414264 files moved into 528 symbol folders.
+```
+
+**`powergauge.py` is fully compatible with both layouts:**
+
+| Operation | Subdir path tried first | Flat fallback |
+|-----------|------------------------|---------------|
+| Cache read (`prefer_cache=True`) | `Symbol/<SYM>/<SYM>_<DATE>.json` | `Symbol/<SYM>_<DATE>.json` |
+| Cache write (after API fetch) | `Symbol/<SYM>/` (created if absent) | — |
+| Index scan (`_build_cache_index`) | `os.walk` — picks up both flat and subdir | — |
+
+No code changes are needed before or after running the script.
 
 ---
 
