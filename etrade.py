@@ -140,7 +140,8 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
     _PASS_SELECTORS = ["input#PASSWORD", "input[name='PASSWORD']",
                        "input[name='password']", "input[type='password']"]
     _ACCEPT_SELECTORS = ["input[value='Accept']", "button[value='Accept']",
-                         "input[value='accept']", "a:has-text('Accept')"]
+                         "input[value='accept']", "button:has-text('Accept')",
+                         "a:has-text('Accept')"]
     _VERIFIER_SELECTORS = ["div#oauth_pin", "input#oauth_pin",
                            "div.oauth-pin", "span.verifier", "div.verifier"]
 
@@ -266,19 +267,79 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
                     pass
                 _snap("06_authorize_page")
 
-                # Auto-click Accept/Authorize button
-                accepted = False
-                for sel in _ACCEPT_SELECTORS:
+                # Scroll window + any scrollable divs to reveal checkbox/buttons
+                try:
+                    page.evaluate("""
+                        window.scrollTo(0, document.body.scrollHeight);
+                        Array.from(document.querySelectorAll('div')).forEach(d => {
+                            if (d.scrollHeight > d.clientHeight) d.scrollTop = d.scrollHeight;
+                        });
+                    """)
+                    page.wait_for_timeout(700)
+                except Exception:
+                    pass
+
+                # Check agreement checkbox — try role locator, CSS, then JS fallback
+                try:
+                    page.get_by_role("checkbox").first.check(timeout=3000)
+                    print("  [Auth] Checked agreement checkbox (role).")
+                    page.wait_for_timeout(500)
+                except Exception:
                     try:
-                        page.wait_for_selector(sel, timeout=8000)
-                        with page.expect_navigation(timeout=15000):
-                            page.click(sel)
-                        print("  [Auth] Clicked Accept.")
-                        _snap("07_after_accept")
-                        accepted = True
-                        break
-                    except (PWTimeout, Exception):
-                        continue
+                        page.locator("input[type='checkbox']").first.check(timeout=2000)
+                        print("  [Auth] Checked agreement checkbox (locator).")
+                        page.wait_for_timeout(500)
+                    except Exception:
+                        try:
+                            page.evaluate(
+                                "document.querySelector('input[type=\"checkbox\"]')?.click()"
+                            )
+                            page.wait_for_timeout(500)
+                            print("  [Auth] Checked agreement checkbox (JS).")
+                        except Exception:
+                            pass
+
+                # Auto-click Accept — try role locator first, then CSS selectors, then JS
+                accepted = False
+                try:
+                    with page.expect_navigation(timeout=15000):
+                        page.get_by_role("button", name="Accept").click(timeout=5000)
+                    print("  [Auth] Clicked Accept (role).")
+                    _snap("07_after_accept")
+                    accepted = True
+                except Exception:
+                    pass
+
+                if not accepted:
+                    for sel in _ACCEPT_SELECTORS:
+                        try:
+                            page.wait_for_selector(sel, timeout=5000)
+                            with page.expect_navigation(timeout=15000):
+                                page.click(sel)
+                            print("  [Auth] Clicked Accept.")
+                            _snap("07_after_accept")
+                            accepted = True
+                            break
+                        except (PWTimeout, Exception):
+                            continue
+
+                if not accepted:
+                    # JS fallback — click any button whose visible text is "Accept"
+                    try:
+                        _url_before = page.url
+                        page.evaluate("""() => {
+                            const btns = [...document.querySelectorAll('button, input[type=submit]')];
+                            const a = btns.find(b => (b.textContent || b.value || '').trim() === 'Accept');
+                            if (a) a.click();
+                        }""")
+                        page.wait_for_timeout(3000)
+                        if page.url != _url_before:
+                            print("  [Auth] Clicked Accept (JS).")
+                            _snap("07_after_accept")
+                            accepted = True
+                    except Exception:
+                        pass
+
                 if not accepted:
                     _snap("07_no_accept")
                     print("  [Auth] Accept button not found — complete it manually in the browser.")
@@ -334,12 +395,15 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
         except Exception as e:
             print(f"  [Auth] Browser interaction error: {e}")
         finally:
-            # Save browser state (trusted-device cookies) before closing
+            # Save browser state (trusted-device cookies) before closing.
+            # Write via json.dump with utf-8 to avoid Windows cp1252 encoding errors.
             if verifier:
                 try:
                     os.makedirs(os.path.dirname(_BROWSER_STATE_PATH), exist_ok=True)
-                    ctx.storage_state(path=_BROWSER_STATE_PATH)
-                    print(f"  [Auth] Browser state saved → future logins skip MFA.")
+                    state = ctx.storage_state()   # returns dict — no file I/O by Playwright
+                    with open(_BROWSER_STATE_PATH, "w", encoding="utf-8") as _f:
+                        json.dump(state, _f, indent=2, ensure_ascii=False)
+                    print("  [Auth] Browser state saved — future logins skip MFA.")
                 except Exception as e:
                     print(f"  [Auth] Could not save browser state: {e}")
             try:
@@ -395,6 +459,78 @@ def get_tokens(env="sandbox"):
     _save_tokens(tokens, env)
     print("Tokens saved to cache.")
     return tokens
+
+
+# ---------------------------------------------------------------------------
+# Portfolio helpers
+# ---------------------------------------------------------------------------
+
+def _walk(d, key):
+    """Safely extract a list for `key` from arbitrarily nested dicts."""
+    if isinstance(d, dict):
+        for k, v in d.items():
+            if k == key:
+                return v if isinstance(v, list) else [v]
+            r = _walk(v, key)
+            if r:
+                return r
+    return []
+
+
+def fetch_positions(tokens, env="sandbox") -> list[dict]:
+    """Return open positions across all accounts as flat dicts."""
+    accts = get_accounts(tokens, env)
+    raw   = accts.list_accounts(resp_format="json")
+    acct_list = (raw.get("AccountListResponse", {})
+                    .get("Accounts", {}).get("Account", []))
+    if isinstance(acct_list, dict):
+        acct_list = [acct_list]
+    out = []
+    for acct in acct_list:
+        key = acct.get("accountIdKey", "")
+        if not key:
+            continue
+        try:
+            port = accts.get_account_portfolio(key, resp_format="json")
+        except Exception:
+            continue
+        for ap in _walk(port, "AccountPortfolio"):
+            for pos in _walk(ap, "Position"):
+                sym  = pos.get("symbolDescription", "").strip().upper()
+                qty  = float(pos.get("quantity",    0) or 0)
+                cost = float(pos.get("costPerShare", 0) or 0)
+                mval = float(pos.get("marketValue",  0) or 0)
+                px   = float((pos.get("Quick") or {}).get("lastTrade", 0) or 0)
+                if sym:
+                    out.append({
+                        "symbol": sym,
+                        "qty":    qty,
+                        "cost":   cost,
+                        "price":  px or (mval / qty if qty else 0),
+                        "mval":   mval,
+                    })
+    return out
+
+
+def fetch_quotes(tokens, symbols: list[str], env="sandbox") -> dict[str, float]:
+    """Return {SYMBOL: last_price} for the given symbols. Batches to 25 per request."""
+    if not symbols:
+        return {}
+    market = get_market(tokens, env)
+    out: dict[str, float] = {}
+    # E*TRADE limits quote requests to 25 symbols per call
+    for i in range(0, len(symbols), 25):
+        batch = symbols[i:i + 25]
+        try:
+            data = market.get_quote(batch, resp_format="json")
+            for q in _walk(data, "QuoteData"):
+                sym = q.get("Product", {}).get("symbol", "").upper()
+                px  = float((q.get("All") or {}).get("lastTrade", 0) or 0)
+                if sym and px:
+                    out[sym] = px
+        except Exception:
+            continue
+    return out
 
 
 # ---------------------------------------------------------------------------

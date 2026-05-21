@@ -11,10 +11,11 @@ from urllib3.util.retry import Retry
 from utils import _to_float
 
 from excel_output import (
-    write_research_headers as _write_research_headers,
-    write_picks_sheet      as _write_picks_sheet,
-    fix_comment_shape_ids  as _fix_comment_shape_ids,
-    backup_xlsx            as _backup_xlsx,
+    write_research_headers    as _write_research_headers,
+    write_picks_sheet         as _write_picks_sheet,
+    update_short_long_scores  as _update_short_long_scores,
+    fix_comment_shape_ids     as _fix_comment_shape_ids,
+    backup_xlsx               as _backup_xlsx,
 )
 from scoring import (
     REGIME_SYMBOL,
@@ -404,7 +405,7 @@ def _load_credentials() -> tuple[str, str]:
         raise EnvironmentError(
             "Chaikin credentials not found.\n"
             "  Option 1: set env vars CHAIKIN_EMAIL and CHAIKIN_PASSWORD\n"
-            f"  Option 2: copy chaikin_config.json.example → {CREDENTIALS_FILE} and fill in values"
+            f"  Option 2: copy chaikin_config.json.example -> {CREDENTIALS_FILE} and fill in values"
         )
     return email, password
 
@@ -786,7 +787,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         date = date.date()
     import openpyxl
     _build_cache_index()
-    _backup_xlsx(XLSX_FILE)
+    _orig_backup = _backup_xlsx(XLSX_FILE)
     session_id = login()
     print(f"SESSION ID: {session_id}")
 
@@ -924,15 +925,36 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     if picks_data:
         _write_picks_sheet(wb, picks_data, date)
 
+    _touched_sheets = {"Research", "Picks"}
+    try:
+        import etrade as _et
+        _tok = _et._load_tokens("production")
+        if _tok:
+            _tok = _et.renew_tokens(_tok, "production")
+        if _tok:
+            _lk   = {p["symbol"]: p for p in picks_data}
+            _pos  = _et.fetch_positions(_tok, "production")
+            _syms = list({p["symbol"] for p in _pos})
+            _qts  = _et.fetch_quotes(_tok, _syms, "production")
+            _update_short_long_scores(wb, _lk, _qts, _pos)
+            _touched_sheets.add("Short_Long")
+            print(f"Short_Long sheet synced: {len(_pos)} positions.")
+    except Exception as _e:
+        print(f"[E*TRADE] Short_Long skipped: {_e}")
+
     try:
         wb.save(XLSX_FILE)
-        _fix_comment_shape_ids(XLSX_FILE)
+        _fix_comment_shape_ids(XLSX_FILE,
+                               original_xlsx=_orig_backup,
+                               touched_sheet_names=_touched_sheets)
         print(f"Research sheet updated ({updated} rows written, {skipped} skipped) -> {XLSX_FILE}")
     except PermissionError:
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
         alt = os.path.join(os.path.dirname(XLSX_FILE), f"investment_pending_{ts}.xlsx")
         wb.save(alt)
-        _fix_comment_shape_ids(alt)
+        _fix_comment_shape_ids(alt,
+                               original_xlsx=_orig_backup,
+                               touched_sheet_names=_touched_sheets)
         print(f"ERROR: {XLSX_FILE} is open in another application.")
         print(f"Changes saved to: {alt}")
         print(f"Close Excel and rename/copy that file to investment.xlsx")

@@ -52,14 +52,15 @@ def trading_days(n: int) -> list[datetime.date]:
 
 
 def load_symbols() -> list[str]:
-    import openpyxl
+    import openpyxl, re
+    _sym_re = re.compile(r"^[A-Z0-9._\-]+$")
     wb = openpyxl.load_workbook(powergauge.XLSX_FILE, data_only=True)
     ws = wb['Research']
     syms = []
     for row in ws.iter_rows(min_row=2):
-        val = row[3].value
-        if val and str(val).strip():
-            syms.append(str(val).strip())
+        val = str(row[3].value or '').strip()
+        if val and _sym_re.match(val):
+            syms.append(val)
     return syms
 
 
@@ -97,7 +98,7 @@ def main():
             print(f"  [{i}/{total}] {symbol:<8}", end='\r', flush=True)
             try:
                 pg = powergauge.get_symbol_data(
-                    symbol, day, from_cache=True, session_id=session_id
+                    symbol, day, prefer_cache=True, session_id=session_id
                 )
                 if pg.price == -1:
                     skip += 1
@@ -107,7 +108,7 @@ def main():
                 print(f"\n  Session expired — re-logging in...")
                 session_id = powergauge.login()
                 pg = powergauge.get_symbol_data(
-                    symbol, day, from_cache=True, session_id=session_id
+                    symbol, day, prefer_cache=True, session_id=session_id
                 )
                 ok += 1
             except Exception as e:
