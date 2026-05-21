@@ -26,6 +26,7 @@ from scoring import (
     predicted_win_pct    as _predicted_win_pct,
     market_regime        as _market_regime,
     rel_volume_bucket    as _rel_volume_bucket,
+    fibonacci_retracement_score as _fib_score,
     short_score          as _short_score_fn,
     long_score           as _long_score_fn,
 )
@@ -762,6 +763,7 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
         'seasonality':    _compute_seasonality(ohlcv_ts, power_g.date.month, power_g.date.day),
         'rel_vol':        _rel_volume_bucket(ohlcv_ts, str(power_g.date)),
         'market_regime':  _market_regime(str(power_g.date)),
+        'fibonacci':      _fib_score(ohlcv_ts, str(power_g.date)),
         # Chaikin signal fields needed by scoring.py functions
         'ob_os':           str(power_g.over_bt_sl      or '').strip(),
         'money_flow':      str(power_g.money_flow       or '').strip(),

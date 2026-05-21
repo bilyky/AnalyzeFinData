@@ -23,6 +23,7 @@ from scoring import (
     week_of_month, predicted_win_pct,
     rel_volume_bucket, short_score, long_score,
     market_regime, clear_regime_cache,
+    fibonacci_retracement_score,
 )
 from utils import _to_float
 from tests.conftest import make_ohlcv
@@ -327,6 +328,46 @@ class TestMarketRegime(unittest.TestCase):
             result_b = market_regime(last_a)
         self.assertEqual(result_a, "Bull")
         self.assertEqual(result_b, "Bear")
+
+
+# ── fibonacci_retracement_score ──────────────────────────────────────────────
+
+class TestFibonacciRetracementScore(unittest.TestCase):
+    def test_golden_support(self):
+        # High 200, Low 100. Diff 100. 61.8% = 138.2
+        # Price 138.5 (above level -> support)
+        ohlcv = make_ohlcv([150]*20 + [100, 200, 138.5])
+        dates = sorted(ohlcv.keys())
+        score = fibonacci_retracement_score(ohlcv, dates[-1])
+        self.assertEqual(score, 0.5)
+
+    def test_golden_resistance(self):
+        # Price 137.9 (below level -> resistance)
+        ohlcv = make_ohlcv([150]*20 + [100, 200, 137.9])
+        dates = sorted(ohlcv.keys())
+        score = fibonacci_retracement_score(ohlcv, dates[-1])
+        self.assertEqual(score, -0.5)
+
+    def test_other_support(self):
+        # High 200, Low 100. Diff 100.
+        # 23.6% = 200 - 23.6 = 176.4
+        # Price 177.5 (clearly above 176.4 -> support)
+        ohlcv = make_ohlcv([150]*20 + [100, 200, 177.5])
+        dates = sorted(ohlcv.keys())
+        score = fibonacci_retracement_score(ohlcv, dates[-1])
+        self.assertEqual(score, 0.25)
+
+    def test_threshold_enforced(self):
+        # 61.8% = 138.2. Price 140 (1.3% away -> should be 0)
+        ohlcv = make_ohlcv([150]*20 + [100, 200, 140.0])
+        dates = sorted(ohlcv.keys())
+        score = fibonacci_retracement_score(ohlcv, dates[-1])
+        self.assertEqual(score, 0.0)
+
+    def test_insufficient_history(self):
+        ohlcv = make_ohlcv([100, 110])
+        dates = sorted(ohlcv.keys())
+        self.assertEqual(fibonacci_retracement_score(ohlcv, dates[-1]), 0.0)
 
 
 if __name__ == "__main__":

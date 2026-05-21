@@ -208,6 +208,51 @@ def rel_volume_bucket(ohlcv_ts: dict, date_str: str, lookback: int = 20) -> str 
     return "Low"
 
 
+# ── Fibonacci Retracement ────────────────────────────────────────────────────
+
+def fibonacci_retracement_score(ohlcv_ts: dict, date_str: str, lookback: int = 252) -> float:
+    """
+    Calculate Fibonacci retracement levels and return a score based on support/resistance.
+    Support (Price > Level): Positive bias.
+    Resistance (Price < Level): Negative bias.
+    Threshold: 0.5% proximity.
+    """
+    if not ohlcv_ts:
+        return 0.0
+    dates = sorted(ohlcv_ts.keys())
+    past = [d for d in dates if d <= date_str]
+    if len(past) < 20:
+        return 0.0
+    
+    window = past[-lookback:]
+    high = max(_to_float(ohlcv_ts[d].get('2. high'), 0) for d in window)
+    low = min(_to_float(ohlcv_ts[d].get('3. low'), 0) for d in window)
+    diff = high - low
+    if diff <= 0:
+        return 0.0
+    
+    current_price = _to_float(ohlcv_ts[past[-1]].get('4. close'), 0)
+    levels = [
+        high,
+        high - 0.236 * diff,
+        high - 0.382 * diff,
+        high - 0.500 * diff,
+        high - 0.618 * diff,
+        high - 0.786 * diff,
+        low
+    ]
+    
+    for i, level in enumerate(levels):
+        if level <= 0: continue
+        prox = (current_price - level) / level
+        if abs(prox) < 0.005:  # 0.5% proximity
+            is_golden = (2 <= i <= 4)
+            base_score = 0.5 if is_golden else 0.25
+            return base_score if prox > 0 else -base_score
+            
+    return 0.0
+
+
 # ── Short-term and long-term scores ─────────────────────────────────────────
 # These take plain dicts extracted from PowerGauge fields — no class dependency.
 
@@ -223,6 +268,7 @@ def short_score(pg_fields: dict) -> float:
       LT Trend       2.1%:        Weak +1.5, Strong -1.5  (contrarian)
       Seasonality    +-1.0
       Regime         +-1.0
+      Fibonacci      +-1.0
     """
     score = 0.0
     rv = pg_fields.get('rel_vol')
@@ -233,6 +279,7 @@ def short_score(pg_fields: dict) -> float:
     score += {'Weak': 1.5, 'Neutral': 0.0, 'Strong': -1.5}.get(pg_fields.get('lt_trend', ''), 0.0)
     score += pg_fields.get('seasonality', 0.0)
     score += {'Bull': 1.0, 'Neutral': 0.0, 'Bear': -1.0}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)
+    score += pg_fields.get('fibonacci', 0.0)
     return round(max(-10.0, min(10.0, score)), 1)
 
 
@@ -248,6 +295,7 @@ def long_score(pg_fields: dict) -> float:
       OB/OS          2.3%:        Optimal +1.5, Early +0.5, Wait -0.5
       Seasonality    +-0.5
       Regime         +-1.5
+      Fibonacci      +-0.5
     """
     score = 0.0
     score += {'Weak': 4.0, 'Neutral': 0.0, 'Strong': -3.0}.get(pg_fields.get('lt_trend', ''), 0.0)
@@ -258,4 +306,6 @@ def long_score(pg_fields: dict) -> float:
     score += {'Optimal': 1.5, 'Early': 0.5, 'Neutral': 0.0, 'Wait': -0.5}.get(pg_fields.get('ob_os', ''), 0.0)
     score += pg_fields.get('seasonality', 0.0) * 0.5
     score += {'Bull': 1.5, 'Neutral': 0.0, 'Bear': -1.5}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)
+    score += pg_fields.get('fibonacci', 0.0) * 0.5
     return round(max(-10.0, min(10.0, score)), 1)
+

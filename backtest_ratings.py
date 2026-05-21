@@ -17,6 +17,13 @@ import os
 import sys
 import glob
 from collections import defaultdict
+from scoring import (
+    short_score as _short_score_fn,
+    long_score as _long_score_fn,
+    fibonacci_retracement_score as _fib_score,
+    rel_volume_bucket as _rel_vol_fn,
+    market_regime as _market_regime,
+)
 
 SYM_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
@@ -39,6 +46,15 @@ BUCKETS = [
     (" 0 to  2",  lambda b: 0  < b <= 2),
     (" 2 to  4",  lambda b: 2  < b <= 4),
     ("br >=  4",  lambda b: b  > 4),
+]
+
+SHORT_BUCKETS = [
+    ("score <= -4", lambda s: s <= -4),
+    ("-4 to -2",    lambda s: -4 < s <= -2),
+    ("-2 to  0",    lambda s: -2 < s <= 0),
+    (" 0 to  2",    lambda s: 0  < s <= 2),
+    (" 2 to  4",    lambda s: 2  < s <= 4),
+    ("score >=  4", lambda s: s  > 4),
 ]
 
 
@@ -118,8 +134,9 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     money_flow    = str(cl.get('moneyFlow', '') or '').strip()
     over_bt_sl    = str(cl.get('overboughtOversold', '') or '').strip()
     industry      = str(cl.get('industry', '') or '').strip()
-    month         = int(all_dates[idx][5:7])
-    day           = int(all_dates[idx][8:10])
+    date_str      = all_dates[idx]
+    month         = int(date_str[5:7])
+    day           = int(date_str[8:10])
     week          = _week_of_month(day)
 
     # setup_ok: price > SMA20 AND price > close[3d ago]
@@ -150,27 +167,50 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     else:
         rr = 0.0
 
-    # score
-    score = 0.0
-    score += PGR_MAP.get(pgr_corr, 0.0)
-    if rr >= 3.0:   score += 2.0
-    elif rr >= 2.0: score += 1.5
-    elif rr >= 1.0: score += 1.0
-    elif rr >= 0.5: score += 0.5
-    elif rr > 0:    score += 0.0
-    else:           score -= 1.0
-    score += LT_MAP.get(lt_trend, 0.0)
-    score += MF_MAP.get(money_flow, 0.0)
-    score += OB_MAP.get(over_bt_sl, 0.0)
-    score += IND_MAP.get(industry, 0.0)
-    score += 0.25 if pgr_delta != 0 else 0.0  # any change = interesting, not just upgrades
-    score += seasonality_map.get((month, week), 0.0)
+    seasonality = seasonality_map.get((month, week), 0.0)
+    
+    # BR score
+    br = 0.0
+    br += PGR_MAP.get(pgr_corr, 0.0)
+    if rr >= 3.0:   br += 2.0
+    elif rr >= 2.0: br += 1.5
+    elif rr >= 1.0: br += 1.0
+    elif rr >= 0.5: br += 0.5
+    elif rr > 0:    br += 0.0
+    else:           br -= 1.0
+    br += LT_MAP.get(lt_trend, 0.0)
+    br += MF_MAP.get(money_flow, 0.0)
+    br += OB_MAP.get(over_bt_sl, 0.0)
+    br += IND_MAP.get(industry, 0.0)
+    br += 0.25 if pgr_delta != 0 else 0.0
+    br += seasonality
+    br = round(max(-10.0, min(10.0, br)), 1)
 
-    return round(max(-10.0, min(10.0, score)), 1)
+    # Short/Long scores
+    fields = {
+        'rel_vol': _rel_vol_fn(ohlcv_ts, date_str),
+        'ob_os': over_bt_sl,
+        'money_flow': money_flow,
+        'industry_strength': industry,
+        'lt_trend': lt_trend,
+        'seasonality': seasonality,
+        'market_regime': _market_regime(date_str),
+        'fibonacci': _fib_score(ohlcv_ts, date_str),
+    }
+    short = _short_score_fn(fields)
+    long = _long_score_fn(fields)
+
+    # Version without Fibonacci
+    f_no_fib = fields.copy()
+    f_no_fib['fibonacci'] = 0.0
+    short_no_fib = _short_score_fn(f_no_fib)
+    long_no_fib = _long_score_fn(f_no_fib)
+
+    return br, short, long, short_no_fib, long_no_fib
 
 
 def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
-    """Returns list of (br, fwd_5, fwd_10, fwd_20) tuples."""
+    """Returns list of (br, short, long, s_nf, l_nf, fwd_5, fwd_10, fwd_20) tuples."""
     seasonality_map = precompute_seasonality(ohlcv_ts)
     ohlcv_date_set = set(all_dates)
 
@@ -238,7 +278,7 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
             prev_data, prev_date = data, date_str
             continue
 
-        br = compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map)
+        br, short, long, s_nf, l_nf = compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map)
 
         # Forward returns from OHLCV
         fwd = []
@@ -249,16 +289,14 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
                 fwd.append((fwd_close - price) / price * 100 if fwd_close > 0 else None)
             else:
                 fwd.append(None)
-
-        if fwd[1] is not None:   # require 10d forward return at minimum
-            results.append((br, fwd[0], fwd[1], fwd[2]))
-
+        
+        results.append((br, short, long, s_nf, l_nf, fwd[0], fwd[1], fwd[2]))
         prev_data, prev_date = data, date_str
 
     return results
 
 
-def run(min_year=2023):
+def run(min_year=2023, max_symbols=None):
     print(f"\nBacktesting buying_ratio >= {min_year} ...")
 
     # Find symbols with both Chaikin cache and OHLCV
@@ -267,10 +305,21 @@ def run(min_year=2023):
     cache_syms  = {os.path.basename(f).rsplit('_', 1)[0]
                    for f in glob.glob(os.path.join(SYM_DIR, '*.json'))}
     symbols = sorted(ohlcv_files & cache_syms)
+    if max_symbols:
+        symbols = symbols[:max_symbols]
     print(f"  Symbols with both Chaikin + OHLCV: {len(symbols)}")
 
     # Collect all results
-    bucket_data = {label: {w: [] for w in FWD_WINDOWS} for label, _ in BUCKETS}
+    br_buckets = {label: {w: [] for w in FWD_WINDOWS} for label, _ in BUCKETS}
+    
+    # Short buckets
+    s_buckets = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
+    s_buckets_nf = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
+    
+    # Long buckets
+    l_buckets = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
+    l_buckets_nf = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
+    
     total_obs = 0
 
     for i, sym in enumerate(symbols, 1):
@@ -279,52 +328,73 @@ def run(min_year=2023):
             continue
         all_dates = sorted(ohlcv_ts.keys())
         rows = process_symbol(sym, str(min_year), ohlcv_ts, all_dates)
-        for br, f5, f10, f20 in rows:
+        for br, short, long, s_nf, l_nf, f5, f10, f20 in rows:
+            total_obs += 1
+            fwds = {5: f5, 10: f10, 20: f20}
+
+            # Bucket BR
             for label, test in BUCKETS:
                 if test(br):
-                    if f5  is not None: bucket_data[label][5].append(f5)
-                    if f10 is not None: bucket_data[label][10].append(f10)
-                    if f20 is not None: bucket_data[label][20].append(f20)
-                    total_obs += 1
+                    for w in FWD_WINDOWS:
+                        if fwds[w] is not None:
+                            br_buckets[label][w].append(fwds[w])
                     break
+            
+            # Bucket Short
+            for label, test in SHORT_BUCKETS:
+                if test(short):
+                    for w in FWD_WINDOWS:
+                        if fwds[w] is not None:
+                            s_buckets[label][w].append(fwds[w])
+                if test(s_nf):
+                    for w in FWD_WINDOWS:
+                        if fwds[w] is not None:
+                            s_buckets_nf[label][w].append(fwds[w])
+
+            # Bucket Long
+            for label, test in SHORT_BUCKETS:
+                if test(long):
+                    for w in FWD_WINDOWS:
+                        if fwds[w] is not None:
+                            l_buckets[label][w].append(fwds[w])
+                if test(l_nf):
+                    for w in FWD_WINDOWS:
+                        if fwds[w] is not None:
+                            l_buckets_nf[label][w].append(fwds[w])
+
         if i % 50 == 0:
             print(f"  ... {i}/{len(symbols)} symbols processed")
 
     print(f"\n  Total observations: {total_obs:,}\n")
 
-    # Report
-    header = f"  {'Bucket':<12}  {'Count':>6}  " + \
-             "  ".join(f"{'Avg '+str(w)+'d':>8}  {'Med'+str(w)+'d':>7}  {'Win%'+str(w)+'d':>8}" for w in FWD_WINDOWS)
-    print(header)
-    print("  " + "-" * (len(header) - 2))
+    def print_table(title, buckets, bucket_labels):
+        print(f"\n--- {title} ---")
+        header = f"  {'Bucket':<12}  {'Count':>6}  " + \
+                 "  ".join(f"{'Avg '+str(w)+'d':>8}  {'Win%'+str(w)+'d':>8}" for w in FWD_WINDOWS)
+        print(header)
+        print("-" * len(header))
+        for label, _ in bucket_labels:
+            data = buckets[label]
+            count = len(data[FWD_WINDOWS[1]]) if data[FWD_WINDOWS[1]] else 0
+            cols = []
+            for w in FWD_WINDOWS:
+                rets = data[w]
+                if not rets:
+                    cols.extend(["N/A", "N/A"])
+                else:
+                    avg = sum(rets) / len(rets)
+                    win = len([r for r in rets if r > 0]) / len(rets) * 100
+                    cols.extend([f"{avg:>8.2f}%", f"{win:>8.1f}%"])
+            print(f"  {label:<12}  {count:>6}  " + "  ".join(cols))
 
-    all_wins = {w: [] for w in FWD_WINDOWS}
-    for label, _ in BUCKETS:
-        d = bucket_data[label]
-        n = len(d[10])
-        row = f"  {label:<12}  {n:>6}"
-        for w in FWD_WINDOWS:
-            vals = d[w]
-            if vals:
-                avg = sum(vals) / len(vals)
-                svals = sorted(vals)
-                med = svals[len(svals) // 2]
-                win = 100 * sum(1 for v in vals if v > 0) / len(vals)
-                row += f"  {avg:>+7.2f}%  {med:>+6.2f}%  {win:>7.1f}%"
-                all_wins[w].append((label, win))
-            else:
-                row += f"  {'N/A':>8}  {'N/A':>7}  {'N/A':>8}"
-        print(row)
-
-    # Monotonicity check on win% (more robust than avg return)
-    print(f"\n  Monotonicity check on Win% (more robust to outliers):")
-    for w in FWD_WINDOWS:
-        wins = [a for _, a in all_wins[w]]
-        is_mono = all(wins[i] <= wins[i+1] for i in range(len(wins)-1))
-        print(f"    {w:2d}d window: {'PASS' if is_mono else 'FAIL'}  "
-              f"{' < '.join(f'{a:.1f}' for a in wins)}")
+    print_table("BUYING RATIO (Control)", br_buckets, BUCKETS)
+    print_table("SHORT10 (WITH FIB)", s_buckets, SHORT_BUCKETS)
+    print_table("SHORT10 (NO FIB)", s_buckets_nf, SHORT_BUCKETS)
+    print_table("LONG60 (WITH FIB)", l_buckets, SHORT_BUCKETS)
+    print_table("LONG60 (NO FIB)", l_buckets_nf, SHORT_BUCKETS)
 
 
 if __name__ == "__main__":
     min_year = int(sys.argv[1]) if len(sys.argv) > 1 else 2023
-    run(min_year)
+    max_symbols = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    run(min_year, max_symbols)
