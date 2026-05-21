@@ -76,7 +76,7 @@ def _get_http_session() -> requests.Session:
     global _http_session
     if _http_session is None:
         _http_session = requests.Session()
-        _retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+        _retry = Retry(total=1, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
         adapter = HTTPAdapter(max_retries=_retry)
         _http_session.mount("https://", adapter)
         _http_session.mount("http://", adapter)
@@ -357,7 +357,7 @@ def _validate_session(session_id: str) -> bool:
                "?uid=1101733&symbol=AAPL&components=pgr"
     headers = {'Cookie': f'JSESSIONID={session_id};'}
     try:
-        r = _get_http_session().get(test_url, headers=headers, timeout=15)
+        r = _get_http_session().get(test_url, headers=headers, timeout=(5, 15))
         return r.status_code == 200
     except (requests.Timeout, requests.ConnectionError, requests.RequestException):
         return False
@@ -371,7 +371,7 @@ def _jwt_to_session_id(jwt_token: str) -> str:
         'X-Api-Key': _CHAIKIN_API_KEY,
         'X-App-Id': 'omni',
     }
-    r = _get_http_session().get(url, headers=headers, timeout=15)
+    r = _get_http_session().get(url, headers=headers, timeout=(5, 15))
     if not r.ok:
         raise EnvironmentError(f"JWT exchange failed: HTTP {r.status_code}")
     session_id = r.json().get('sessionId')
@@ -523,10 +523,10 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id: str) -> P
                 data_jsn = json.load(f)
 
     if not data_jsn:
-        ind_responce = _get_http_session().get(industry_url, headers=headers, timeout=20)
+        ind_responce = _get_http_session().get(industry_url, headers=headers, timeout=(5, 20))
         if ind_responce.ok:
             ind_data_jsn = ind_responce.json()
-        response = _get_http_session().get(url, headers=headers, timeout=20)
+        response = _get_http_session().get(url, headers=headers, timeout=(5, 20))
         if response.ok:
             data_jsn = response.json()
             if ind_data_jsn:

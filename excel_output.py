@@ -178,6 +178,78 @@ def _strip_external_formulas(data: bytes) -> bytes:
     ).encode('utf-8')
 
 
+def _xml_escape(s: str) -> str:
+    return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+def _generate_research_comment_xml(base_shape_id: int = 1025) -> bytes:
+    """Generate a complete comment XML for the Research sheet row-1 headers."""
+    from openpyxl.utils import get_column_letter
+    RPR = ('<rPr><sz val="9"/><color indexed="81"/>'
+           '<rFont val="Tahoma"/><charset val="1"/></rPr>')
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+        '<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<authors><author>PowerGauge</author></authors>'
+        '<commentList>'
+    ]
+    for i, (col_idx, (_, memo)) in enumerate(sorted(RESEARCH_HEADERS.items())):
+        col_letter = get_column_letter(col_idx + 1)
+        shape_id = base_shape_id + i
+        text = _xml_escape(memo)
+        parts.append(
+            f'<comment ref="{col_letter}1" authorId="0" shapeId="{shape_id}">'
+            f'<text><r>{RPR}<t xml:space="preserve">{text}</t></r></text>'
+            f'</comment>'
+        )
+    parts.append('</commentList></comments>')
+    return ''.join(parts).encode('utf-8')
+
+
+def _generate_research_vml(base_shape_id: int = 1025) -> bytes:
+    """Generate a complete VML drawing for the Research sheet row-1 comment boxes."""
+    parts = [
+        '<xml xmlns:v="urn:schemas-microsoft-com:vml"'
+        ' xmlns:o="urn:schemas-microsoft-com:office:office"'
+        ' xmlns:x="urn:schemas-microsoft-com:office:excel">\r\n'
+        '<o:shapelayout v:ext="edit">'
+        '<o:idmap v:ext="edit" data="1"/>'
+        '</o:shapelayout>\r\n'
+        '<v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202"'
+        ' path="m,l,21600r21600,l21600,xe">'
+        '<v:stroke joinstyle="miter"/>'
+        '<v:path gradientshapeok="t" o:connecttype="rect"/>'
+        '</v:shapetype>\r\n'
+    ]
+    for i, (col_idx, _) in enumerate(sorted(RESEARCH_HEADERS.items())):
+        shape_id = base_shape_id + i
+        row = 0
+        col = col_idx
+        anchor = f'{col + 1}, 15, {row + 1}, 2, {col + 3}, 0, {row + 5}, 3'
+        parts.append(
+            f'<v:shape id="_x0000_s{shape_id}" type="#_x0000_t202"'
+            f' style="position:absolute;margin-left:59.25pt;margin-top:1.5pt;'
+            f'width:144pt;height:72pt;z-index:{i + 1};visibility:hidden"'
+            f' fillcolor="#ffffe1" o:insetmode="auto">'
+            f'<v:fill color2="#ffffe1"/>'
+            f'<v:shadow on="t" color="black" obscured="t"/>'
+            f'<v:path o:connecttype="none"/>'
+            f'<v:textbox style="mso-direction-alt:auto">'
+            f'<div style="text-align:left"/>'
+            f'</v:textbox>'
+            f'<x:ClientData ObjectType="Note">'
+            f'<x:MoveWithCells/><x:SizeWithCells/>'
+            f'<x:Anchor>{anchor}</x:Anchor>'
+            f'<x:AutoFill>False</x:AutoFill>'
+            f'<x:Row>{row}</x:Row>'
+            f'<x:Column>{col}</x:Column>'
+            f'</x:ClientData>'
+            f'</v:shape>\r\n'
+        )
+    parts.append('</xml>')
+    return ''.join(parts).encode('utf-8')
+
+
 def _fix_comment_xml(data: bytes) -> bytes:
     """Add XML declaration and convert plain-text comments to rich-text format.
 
@@ -334,9 +406,54 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
         vml_files     = sorted(n for n in names if re.match(r'xl/drawings/commentsDrawing\d+\.vml', n))
 
         modified: dict[str, bytes] = {}
+
+        # ── 0. Always regenerate Research sheet's comment+VML from scratch ────
+        # This bypasses all openpyxl/backup-restore uncertainty: our generated
+        # content is guaranteed to be valid Excel XML with matching shapeIds.
+        try:
+            _wb_xml  = zin.read('xl/workbook.xml').decode('utf-8') if 'xl/workbook.xml' in names else ''
+            _wb_rels = zin.read('xl/_rels/workbook.xml.rels').decode('utf-8') if 'xl/_rels/workbook.xml.rels' in names else ''
+            _research_rid = None
+            for _chunk in re.findall(r'<sheet\s[^>]+/?>', _wb_xml):
+                _nm = re.search(r'\bname="([^"]*)"', _chunk)
+                _ri = re.search(r'\br:id="([^"]*)"', _chunk)
+                if _nm and _nm.group(1) == 'Research' and _ri:
+                    _research_rid = _ri.group(1)
+                    break
+            if _research_rid:
+                _research_tgt = None
+                for _chunk in re.findall(r'<Relationship\s[^>]+/?>', _wb_rels):
+                    _id_m = re.search(r'\bId="([^"]*)"', _chunk)
+                    _tgt  = re.search(r'\bTarget="([^"]*)"', _chunk)
+                    if _id_m and _id_m.group(1) == _research_rid and _tgt:
+                        _research_tgt = _tgt.group(1)
+                        break
+                if _research_tgt:
+                    _rxf = ('xl/' + _research_tgt) if not _research_tgt.startswith('/') else _research_tgt.lstrip('/')
+                    _rparts = _rxf.split('/')
+                    _rels_p = '/'.join(_rparts[:-1]) + '/_rels/' + _rparts[-1] + '.rels'
+                    if _rels_p in names:
+                        _rrels = zin.read(_rels_p).decode('utf-8')
+                        for _rel_tgt in re.findall(r'\bTarget="([^"]*)"', _rrels):
+                            if _rel_tgt.startswith('/'):
+                                _res = _rel_tgt.lstrip('/')
+                            elif _rel_tgt.startswith('../'):
+                                _res = 'xl/' + _rel_tgt[3:]
+                            else:
+                                _res = 'xl/worksheets/' + _rel_tgt
+                            if re.match(r'xl/comments/comment\d+\.xml$', _res):
+                                modified[_res] = _generate_research_comment_xml()
+                                restore_from_orig.pop(_res, None)
+                            elif re.match(r'xl/drawings/commentsDrawing\d+\.vml$', _res):
+                                modified[_res] = _generate_research_vml()
+                                restore_from_orig.pop(_res, None)
+        except Exception:
+            pass  # fall back to existing shapeId patch + _fix_comment_xml/_fix_vml_ns
+
+        # ── 1. shapeId patch (only for comment XMLs not restored from original) ──
         for cf, vf in zip(comment_files, vml_files):
-            if cf in restore_from_orig:
-                continue    # restored from original — shapeIds already correct
+            if cf in restore_from_orig or cf in modified:
+                continue    # restored from original or already regenerated
             vml   = zin.read(vf).decode('utf-8')
             spids = re.findall(r'id="_x0000_s(\d+)"', vml)
             if not spids:
