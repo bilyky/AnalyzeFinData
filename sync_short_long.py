@@ -75,21 +75,16 @@ def main():
     orig_backup = backup_xlsx(XLSX_FILE)
     update_short_long_scores(wb, picks_lookup, quotes, positions)
 
-    try:
-        wb.save(XLSX_FILE)
-        fix_comment_shape_ids(XLSX_FILE,
-                              original_xlsx=orig_backup,
-                              touched_sheet_names={"Short_Long"})
-        print(f"Saved -> {XLSX_FILE}")
-    except PermissionError:
-        import os
-        ts  = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        alt = os.path.join(os.path.dirname(XLSX_FILE), f"investment_sl_{ts}.xlsx")
-        wb.save(alt)
-        fix_comment_shape_ids(alt,
-                              original_xlsx=orig_backup,
-                              touched_sheet_names={"Short_Long"})
-        print(f"File was open — saved to {alt}")
+    while True:
+        try:
+            wb.save(XLSX_FILE)
+            fix_comment_shape_ids(XLSX_FILE,
+                                  original_xlsx=orig_backup,
+                                  touched_sheet_names={"Short_Long"})
+            print(f"Saved -> {XLSX_FILE}")
+            break
+        except PermissionError:
+            input(f"Close {XLSX_FILE} in Excel, then press Enter to retry...")
 
 
 if __name__ == "__main__":

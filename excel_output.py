@@ -323,6 +323,53 @@ def _fix_vml_ns(data: bytes) -> bytes:
     return text.encode('utf-8')
 
 
+def _fix_ns_prefix(data: bytes, default_ns_url: str, prefix: str) -> bytes:
+    """Restore a namespace prefix that openpyxl flattened into a default xmlns.
+
+    openpyxl saves spreadsheetDrawing files as  xmlns="...spreadsheetDrawing"
+    and chart files as  xmlns="...chart"  instead of the expected xdr:/c: prefixes.
+    Excel's parser rejects the default-namespace form and removes the shape/chart.
+
+    Strategy: convert  xmlns="<url>"  back to  xmlns:<prefix>="<url>"  and add
+    <prefix>: to every element tag that has no namespace prefix (i.e., belongs to
+    the default namespace).  Already-prefixed tags (a:xxx, c:xxx, r:xxx …) are left
+    untouched because the regex stops matching when it sees a colon in the tag name.
+    """
+    text = data.decode('utf-8')
+    default_decl = f'xmlns="{default_ns_url}"'
+    if prefix + ':' in text or default_decl not in text:
+        return data  # already fixed or not our target
+
+    if not text.startswith('<?xml'):
+        text = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' + text
+
+    text = text.replace(default_decl, f'xmlns:{prefix}="{default_ns_url}"')
+
+    def _add_prefix(m):
+        slash, tag = m.group(1), m.group(2)
+        return f'<{slash}{prefix}:{tag}'
+
+    # Match unprefixed tags: the identifier stops at ':' so prefixed tags never match
+    text = re.sub(r'<(/?)((?:[a-zA-Z][a-zA-Z0-9_]*))(?=[\s/>])', _add_prefix, text)
+    return text.encode('utf-8')
+
+
+def _fix_drawing_xml(data: bytes) -> bytes:
+    return _fix_ns_prefix(
+        data,
+        'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
+        'xdr',
+    )
+
+
+def _fix_chart_xml(data: bytes) -> bytes:
+    return _fix_ns_prefix(
+        data,
+        'http://schemas.openxmlformats.org/drawingml/2006/chart',
+        'c',
+    )
+
+
 def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
                           touched_sheet_names: set = None):
     """Fix openpyxl-save artefacts in one zip pass.
@@ -447,6 +494,25 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
                             elif re.match(r'xl/drawings/commentsDrawing\d+\.vml$', _res):
                                 modified[_res] = _generate_research_vml()
                                 restore_from_orig.pop(_res, None)
+
+                    # Ensure the Research sheet XML has <legacyDrawing r:id="anysvml">.
+                    # openpyxl strips it when it writes a touched sheet — without it
+                    # Excel cannot locate the VML comment boxes and removes all comments.
+                    _ws_data = (restore_from_orig.get(_rxf)
+                                or (zin.read(_rxf) if _rxf in names else None))
+                    if _ws_data:
+                        _ws_text = _ws_data.decode('utf-8')
+                        if '<legacyDrawing' not in _ws_text:
+                            _legacy = (
+                                '<legacyDrawing'
+                                ' xmlns:r="http://schemas.openxmlformats.org'
+                                '/officeDocument/2006/relationships"'
+                                ' r:id="anysvml" />'
+                            )
+                            _ws_text = _ws_text.replace('</worksheet>',
+                                                        _legacy + '</worksheet>')
+                        modified[_rxf] = _ws_text.encode('utf-8')
+                        restore_from_orig.pop(_rxf, None)
         except Exception:
             pass  # fall back to existing shapeId patch + _fix_comment_xml/_fix_vml_ns
 
@@ -491,6 +557,8 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
         _is_vml     = re.compile(r'xl/drawings/commentsDrawing\d+\.vml').fullmatch
         _is_ws      = re.compile(r'xl/worksheets/sheet\d+\.xml').fullmatch
         _is_comment = re.compile(r'xl/comments/comment\d+\.xml').fullmatch
+        _is_drawing = re.compile(r'xl/drawings/drawing\d+\.xml').fullmatch
+        _is_chart   = re.compile(r'xl/charts/chart\d+\.xml').fullmatch
 
         def _apply_fixes(name, data):
             if _is_vml(name):
@@ -499,6 +567,10 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
                 return _strip_external_formulas(data)
             if _is_comment(name):
                 return _fix_comment_xml(data)
+            if _is_drawing(name):
+                return _fix_drawing_xml(data)
+            if _is_chart(name):
+                return _fix_chart_xml(data)
             return data
 
         buf = BytesIO()
@@ -528,10 +600,9 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
 def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: list[dict]):
     """Sync the Short_Long sheet with E*TRADE positions and write score columns Q-W.
 
-    - Rows where symbol is no longer in E*TRADE positions → deleted
-    - E*TRADE positions not yet in the sheet → new row appended to the relevant table
-    - Existing rows → col E (Top) updated from live quotes
-    - All data rows → cols Q-W written: Short10, Long60, Win%, Status, Days Green, Days Red, In Profit
+    Two account-based tables:
+    - Account 0053 (ACCT_T1) → top table, rows 3-T1_MAX
+    - Account 1315 (ACCT_T2) → bottom table, rows T1_MAX+1+
     - Rows 51+ (user notes) are never touched.
     """
     import datetime
@@ -541,6 +612,10 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
     if "Short_Long" not in wb.sheetnames:
         return
     ws = wb["Short_Long"]
+
+    ACCT_T1 = "0053"
+    ACCT_T2 = "1315"
+    T1_MAX  = 26    # last row of top table
 
     # ── Styling constants ────────────────────────────────────────────────────
     GRN_FILL  = PatternFill("solid", fgColor="C6EFCE")
@@ -571,108 +646,153 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
 
     today = datetime.date.today()
 
-    # ── 1. Locate header row and discover data rows (max row 50) ─────────────
+    # ── 1. Locate header row ─────────────────────────────────────────────────
     HDR_ROW = None
     for row in ws.iter_rows(min_row=1, max_row=10):
-        if row[1].value == "Symb":          # col B
+        if row[1].value == "Symb":
             HDR_ROW = row[0].row
             break
 
-    DATA_MAX = 50   # never touch rows beyond this
-
     def _is_data_row(r):
-        """True if the row looks like a position entry (col B is a non-empty string ≠ 'Symb')."""
-        v = r[1].value  # col B (0-based index 1)
+        v = r[1].value
         return isinstance(v, str) and v.strip() and v.strip().upper() != "SYMB"
 
-    # Build {sym: row_index} for current data rows
-    sheet_rows: dict[str, int] = {}
-    for row in ws.iter_rows(min_row=3, max_row=DATA_MAX):
-        if _is_data_row(row):
-            sym = row[1].value.strip().upper()
-            if sym not in sheet_rows:          # keep first occurrence if dup
-                sheet_rows[sym] = row[0].row
+    def _build_row_maps():
+        """Return (t1_rows, t2_rows): {sym: row_num} for T1 (<=T1_MAX) and T2 (>T1_MAX)."""
+        t1: dict[str, int] = {}
+        t2: dict[str, int] = {}
+        for row in ws.iter_rows(min_row=3, max_row=200):
+            if _is_data_row(row):
+                sym = row[1].value.strip().upper()
+                rn  = row[0].row
+                if rn <= T1_MAX:
+                    if sym not in t1:
+                        t1[sym] = rn
+                else:
+                    if sym not in t2:
+                        t2[sym] = rn
+        return t1, t2
 
-    etrade_syms  = {p["symbol"] for p in positions}
-    etrade_by_sym = {p["symbol"]: p for p in positions}
-    to_remove    = set(sheet_rows) - etrade_syms
-    to_add       = etrade_syms - set(sheet_rows)
+    sheet_t1_rows, sheet_t2_rows = _build_row_maps()
 
-    # ── 2. Remove closed positions (reverse order avoids row-shift bugs) ──────
-    for sym in to_remove:
-        ws.delete_rows(sheet_rows[sym])
+    # Split E*TRADE positions by account; unknown accounts fall through to T1
+    etrade_t1 = [p for p in positions if p.get("account_last4") == ACCT_T1]
+    etrade_t2 = [p for p in positions if p.get("account_last4") == ACCT_T2]
+    known     = {ACCT_T1, ACCT_T2}
+    etrade_t1 += [p for p in positions if p.get("account_last4") not in known]
 
-    # Rebuild row map after deletions
-    sheet_rows = {}
-    for row in ws.iter_rows(min_row=3, max_row=DATA_MAX + len(to_remove)):
-        if _is_data_row(row):
-            sym = row[1].value.strip().upper()
-            if sym not in sheet_rows:
-                sheet_rows[sym] = row[0].row
+    etrade_t1_by_sym = {p["symbol"]: p for p in etrade_t1}
+    etrade_t2_by_sym = {p["symbol"]: p for p in etrade_t2}
+    etrade_t1_syms   = set(etrade_t1_by_sym)
+    etrade_t2_syms   = set(etrade_t2_by_sym)
 
-    # ── 3. Add new E*TRADE positions ─────────────────────────────────────────
-    for sym in sorted(to_add):
-        pos  = etrade_by_sym[sym]
+    to_remove_t1 = set(sheet_t1_rows) - etrade_t1_syms
+    to_add_t1    = etrade_t1_syms - set(sheet_t1_rows)
+    to_remove_t2 = set(sheet_t2_rows) - etrade_t2_syms
+    to_add_t2    = etrade_t2_syms - set(sheet_t2_rows)
+
+    # ── 1b. Detect sell/rebuy per table ──────────────────────────────────────
+    for sym in set(sheet_t1_rows) & etrade_t1_syms:
+        etrade_date = etrade_t1_by_sym[sym].get("date_acquired")
+        if not etrade_date:
+            continue
+        kval = ws.cell(sheet_t1_rows[sym], 11).value
+        if isinstance(kval, datetime.datetime):
+            kval = kval.date()
+        if isinstance(kval, datetime.date) and etrade_date > kval:
+            to_remove_t1.add(sym)
+            to_add_t1.add(sym)
+            print(f"[Short_Long] T1 {sym}: dateAcquired moved {kval} -> {etrade_date}, replacing record")
+
+    for sym in set(sheet_t2_rows) & etrade_t2_syms:
+        etrade_date = etrade_t2_by_sym[sym].get("date_acquired")
+        if not etrade_date:
+            continue
+        kval = ws.cell(sheet_t2_rows[sym], 11).value
+        if isinstance(kval, datetime.datetime):
+            kval = kval.date()
+        if isinstance(kval, datetime.date) and etrade_date > kval:
+            to_remove_t2.add(sym)
+            to_add_t2.add(sym)
+            print(f"[Short_Long] T2 {sym}: dateAcquired moved {kval} -> {etrade_date}, replacing record")
+
+    # ── 2. Remove closed/replaced positions (reverse row order) ─────────────
+    rows_to_delete = (
+        [sheet_t1_rows[s] for s in to_remove_t1] +
+        [sheet_t2_rows[s] for s in to_remove_t2]
+    )
+    for rn in sorted(rows_to_delete, reverse=True):
+        ws.delete_rows(rn)
+
+    sheet_t1_rows, sheet_t2_rows = _build_row_maps()
+
+    # ── 3. Add new positions — T1 first (insertions shift T2 row numbers) ────
+    for sym in sorted(to_add_t1):
+        pos  = etrade_t1_by_sym[sym]
         pick = picks_lookup.get(sym, {})
-        s10  = pick.get("short10")
-        l60  = pick.get("long60")
-        # Prefer Short table if Short10 score is better, else Long table
-        # Find last occupied data row in range 3-26 (Table 1) and 27-DATA_MAX (Table 2)
-        t1_last = max((r for r in sheet_rows.values() if r <= 26), default=2)
-        t2_last = max((r for r in sheet_rows.values() if r >= 27), default=26)
-        insert_after = t1_last if (s10 or 0) >= (l60 or 0) else t2_last
-        new_row_num  = insert_after + 1
+        t1_last     = max(sheet_t1_rows.values(), default=2)
+        new_row_num = t1_last + 1
         ws.insert_rows(new_row_num)
-        ws.cell(new_row_num, 1).value  = None          # rank — renumbered below
+        ws.cell(new_row_num, 1).value  = None
         ws.cell(new_row_num, 2).value  = sym
         ws.cell(new_row_num, 3).value  = pos["qty"]
         ws.cell(new_row_num, 4).value  = pos["cost"]
-        ws.cell(new_row_num, 5).value  = pos["price"]  # Top = current price
-        ws.cell(new_row_num, 11).value = today          # K = buy date
+        ws.cell(new_row_num, 5).value  = pos["price"]
+        ws.cell(new_row_num, 11).value = pos.get("date_acquired") or today
         ws.cell(new_row_num, 12).value = pick.get("industry", "")
-        sheet_rows[sym] = new_row_num
+        sheet_t1_rows[sym] = new_row_num
+
+    # Rebuild T2 map after T1 insertions may have shifted rows
+    _, sheet_t2_rows = _build_row_maps()
+
+    for sym in sorted(to_add_t2):
+        pos  = etrade_t2_by_sym[sym]
+        pick = picks_lookup.get(sym, {})
+        t2_last     = max(sheet_t2_rows.values(), default=T1_MAX)
+        new_row_num = t2_last + 1
+        ws.insert_rows(new_row_num)
+        ws.cell(new_row_num, 1).value  = None
+        ws.cell(new_row_num, 2).value  = sym
+        ws.cell(new_row_num, 3).value  = pos["qty"]
+        ws.cell(new_row_num, 4).value  = pos["cost"]
+        ws.cell(new_row_num, 5).value  = pos["price"]
+        ws.cell(new_row_num, 11).value = pos.get("date_acquired") or today
+        ws.cell(new_row_num, 12).value = pick.get("industry", "")
+        sheet_t2_rows[sym] = new_row_num
 
     # ── 4. Renumber col A within each table ──────────────────────────────────
-    def _renumber(rows_in_range):
-        for rank, rn in enumerate(sorted(rows_in_range), 1):
+    sheet_t1_rows, sheet_t2_rows = _build_row_maps()
+
+    def _renumber(row_map):
+        for rank, rn in enumerate(sorted(row_map.values()), 1):
             ws.cell(rn, 1).value = rank
 
-    all_data_rows = []
-    for row in ws.iter_rows(min_row=3, max_row=DATA_MAX + len(to_add) + 5):
-        if _is_data_row(row):
-            all_data_rows.append(row[0].row)
+    _renumber(sheet_t1_rows)
+    _renumber(sheet_t2_rows)
 
-    t1_rows = [r for r in all_data_rows if r <= 26]
-    t2_rows = [r for r in all_data_rows if r >= 27]
-    _renumber(t1_rows)
-    _renumber(t2_rows)
-
-    # Rebuild row map one final time
-    sheet_rows = {}
-    for row in ws.iter_rows(min_row=3, max_row=DATA_MAX + len(to_add) + 5):
-        if _is_data_row(row):
-            sym = row[1].value.strip().upper()
-            if sym not in sheet_rows:
-                sheet_rows[sym] = row[0].row
+    sheet_t1_rows, sheet_t2_rows = _build_row_maps()
 
     # ── 5. Write header for new score columns ────────────────────────────────
     if HDR_ROW:
         for col, label in enumerate(
             ["Short10", "Long60", "Win%", "Status", "Days G", "Days R", "In Profit"],
-            start=17,   # col Q = 17
+            start=17,
         ):
             ws.cell(HDR_ROW, col).value = label
 
     # ── 6. Update Top (col E) and write score columns Q-W ────────────────────
-    for sym, rn in sheet_rows.items():
-        # Update current price (col E = 5)
+    # Process each table with its own position lookup so AMZN (in both) is correct
+    all_rows = (
+        [(sym, rn, etrade_t1_by_sym) for sym, rn in sheet_t1_rows.items()] +
+        [(sym, rn, etrade_t2_by_sym) for sym, rn in sheet_t2_rows.items()]
+    )
+    for sym, rn, pos_lookup in all_rows:
         if sym in quotes:
             ws.cell(rn, 5).value = quotes[sym]
 
-        top  = ws.cell(rn, 5).value   # E: Top/current price
-        buy  = ws.cell(rn, 4).value   # D: cost basis
-        qty  = ws.cell(rn, 3).value   # C: quantity
-        kval = ws.cell(rn, 11).value  # K: buy date
+        top  = ws.cell(rn, 5).value
+        buy  = ws.cell(rn, 4).value
+        kval = ws.cell(rn, 11).value
 
         pick = picks_lookup.get(sym, {})
         s10  = pick.get("short10")
@@ -681,7 +801,6 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         winp = round(_pwp(br) * 100, 1) if br is not None else None
         status_label, status_fill = _status(l60)
 
-        # Days held
         if isinstance(kval, datetime.datetime):
             kval = kval.date()
         days = (today - kval).days if isinstance(kval, datetime.date) else None

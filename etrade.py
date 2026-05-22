@@ -501,13 +501,21 @@ def fetch_positions(tokens, env="sandbox") -> list[dict]:
                 cost = float(pos.get("costPerShare", 0) or 0)
                 mval = float(pos.get("marketValue",  0) or 0)
                 px   = float((pos.get("Quick") or {}).get("lastTrade", 0) or 0)
+                date_ms = int(pos.get("dateAcquired", 0) or 0)
+                acq_date = (datetime.datetime
+                            .fromtimestamp(date_ms / 1000, tz=datetime.timezone.utc)
+                            .date()) if date_ms else None
+                acct_id   = acct.get("accountId", "")
+                acct_last4 = acct_id[-4:] if len(acct_id) >= 4 else acct_id
                 if sym:
                     out.append({
-                        "symbol": sym,
-                        "qty":    qty,
-                        "cost":   cost,
-                        "price":  px or (mval / qty if qty else 0),
-                        "mval":   mval,
+                        "symbol":        sym,
+                        "qty":           qty,
+                        "cost":          cost,
+                        "price":         px or (mval / qty if qty else 0),
+                        "mval":          mval,
+                        "date_acquired": acq_date,
+                        "account_last4": acct_last4,
                     })
     return out
 
