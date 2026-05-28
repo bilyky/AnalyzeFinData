@@ -242,9 +242,13 @@ class PowerGauge:
                     prev_date = datetime.date.fromisoformat(date_str)
                 except ValueError:
                     continue
+                try:
+                    with open(path, "r") as f:
+                        data_jsn = json.load(f)
+                except (json.JSONDecodeError, OSError) as e:
+                    print(f"  [CACHE] {self.symbol}: skipping corrupt cache {path}: {e}")
+                    continue
                 self.prevPG = PowerGauge(self.symbol, prev_date)
-                with open(path, "r") as f:
-                    data_jsn = json.load(f)
                 self.prevPG.init_from_json(data_jsn, check_schema=False)
                 return
 

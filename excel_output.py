@@ -495,22 +495,36 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
                                 modified[_res] = _generate_research_vml()
                                 restore_from_orig.pop(_res, None)
 
-                    # Ensure the Research sheet XML has <legacyDrawing r:id="anysvml">.
-                    # openpyxl strips it when it writes a touched sheet — without it
-                    # Excel cannot locate the VML comment boxes and removes all comments.
+                    # Ensure the Research sheet XML has:
+                    # 1. xmlns:r at the ROOT <worksheet> element (not inline on legacyDrawing)
+                    # 2. <legacyDrawing r:id="anysvml"/> at the end
+                    # Excel's worksheet XML parser requires the r: namespace at root level;
+                    # an inline xmlns:r on <legacyDrawing> is valid XML but Excel rejects it
+                    # and fails to resolve the VML reference, causing "Removed Records: Comments".
+                    _R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
                     _ws_data = (restore_from_orig.get(_rxf)
                                 or (zin.read(_rxf) if _rxf in names else None))
                     if _ws_data:
                         _ws_text = _ws_data.decode('utf-8')
-                        if '<legacyDrawing' not in _ws_text:
-                            _legacy = (
-                                '<legacyDrawing'
-                                ' xmlns:r="http://schemas.openxmlformats.org'
-                                '/officeDocument/2006/relationships"'
-                                ' r:id="anysvml" />'
+                        # Remove any inline xmlns:r from legacyDrawing
+                        _ws_text = re.sub(
+                            r'<legacyDrawing[^>]*/?>',
+                            '<legacyDrawing r:id="anysvml" />',
+                            _ws_text,
+                        )
+                        # Ensure xmlns:r is on the root <worksheet> element
+                        if f'xmlns:r="{_R_NS}"' not in _ws_text:
+                            _ws_text = _ws_text.replace(
+                                '<worksheet ',
+                                f'<worksheet xmlns:r="{_R_NS}" ',
+                                1,
                             )
-                            _ws_text = _ws_text.replace('</worksheet>',
-                                                        _legacy + '</worksheet>')
+                        # Add legacyDrawing if still missing (e.g. openpyxl stripped it)
+                        if '<legacyDrawing' not in _ws_text:
+                            _ws_text = _ws_text.replace(
+                                '</worksheet>',
+                                '<legacyDrawing r:id="anysvml" /></worksheet>',
+                            )
                         modified[_rxf] = _ws_text.encode('utf-8')
                         restore_from_orig.pop(_rxf, None)
         except Exception:
@@ -759,6 +773,21 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         ws.cell(new_row_num, 11).value = pos.get("date_acquired") or today
         ws.cell(new_row_num, 12).value = pick.get("industry", "")
         sheet_t2_rows[sym] = new_row_num
+
+    # ── 3b. Ensure exactly 3 blank separator rows between T1 and T2 ──────────
+    # NOTE: blank rows inside T1 (e.g. leftover at rows 10-12) are left alone —
+    # deleting them would shift T2 data above T1_MAX and break _build_row_maps.
+    sheet_t1_rows, sheet_t2_rows = _build_row_maps()
+    if sheet_t1_rows and sheet_t2_rows:
+        t1_end   = max(sheet_t1_rows.values())
+        t2_start = min(sheet_t2_rows.values())
+        gap = t2_start - t1_end - 1
+        if gap < 3:
+            for _ in range(3 - gap):
+                ws.insert_rows(t1_end + 1)
+        elif gap > 3:
+            for _ in range(gap - 3):
+                ws.delete_rows(t1_end + 1)
 
     # ── 4. Renumber col A within each table ──────────────────────────────────
     sheet_t1_rows, sheet_t2_rows = _build_row_maps()
