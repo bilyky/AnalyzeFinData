@@ -71,6 +71,10 @@ def write_picks_sheet(wb, picks_data: list, run_date):
     if "Picks" in wb.sheetnames:
         del wb["Picks"]
     ws = wb.create_sheet("Picks")
+    if "Research" in wb.sheetnames:
+        target_idx  = wb.sheetnames.index("Research") + 1
+        current_idx = len(wb.sheetnames) - 1
+        wb.move_sheet("Picks", offset=target_idx - current_idx)
 
     col_widths = [6, 9, 30, 8, 7, 7, 10, 10, 10, 7, 9]
     col_labels = ["Rank", "Symbol", "Industry", "Score", "BR", "PGR",
@@ -614,10 +618,10 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
 def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: list[dict]):
     """Sync the Short_Long sheet with E*TRADE positions and write score columns Q-W.
 
-    Two account-based tables:
-    - Account 0053 (ACCT_T1) → top table, rows 3-T1_MAX
-    - Account 1315 (ACCT_T2) → bottom table, rows T1_MAX+1+
-    - Rows 51+ (user notes) are never touched.
+    Two account-based tables separated by exactly 3 blank rows:
+    - Account 0053 (ACCT_T1) → top table
+    - Account 1315 (ACCT_T2) → bottom table
+    - User notes below T2 are never touched.
     """
     import datetime
     from openpyxl.styles import PatternFill, Font, Alignment
@@ -629,7 +633,6 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
 
     ACCT_T1 = "0053"
     ACCT_T2 = "1315"
-    T1_MAX  = 26    # last row of top table
 
     # ── Styling constants ────────────────────────────────────────────────────
     GRN_FILL  = PatternFill("solid", fgColor="C6EFCE")
@@ -671,21 +674,64 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         v = r[1].value
         return isinstance(v, str) and v.strip() and v.strip().upper() != "SYMB"
 
+    def _find_separator() -> int | None:
+        """Return first blank row of the T1/T2 separator (3+ consecutive blanks with data on both sides)."""
+        data_seen   = False
+        blank_start = None
+        blank_count = 0
+        for row in ws.iter_rows(min_row=3, max_row=200):
+            if _is_data_row(row):
+                if data_seen and blank_start is not None and blank_count >= 3:
+                    return blank_start
+                blank_start = None
+                blank_count = 0
+                data_seen   = True
+            elif all(c.value is None for c in row[:6]):
+                if blank_start is None:
+                    blank_start = row[0].row
+                blank_count += 1
+            else:
+                blank_start = None
+                blank_count = 0
+        return None
+
     def _build_row_maps():
-        """Return (t1_rows, t2_rows): {sym: row_num} for T1 (<=T1_MAX) and T2 (>T1_MAX)."""
+        """Return (t1_rows, t2_rows): {sym: row_num}, split at the 3-blank separator."""
+        sep = _find_separator()
         t1: dict[str, int] = {}
         t2: dict[str, int] = {}
         for row in ws.iter_rows(min_row=3, max_row=200):
             if _is_data_row(row):
                 sym = row[1].value.strip().upper()
                 rn  = row[0].row
-                if rn <= T1_MAX:
+                if sep is None or rn < sep:
                     if sym not in t1:
                         t1[sym] = rn
                 else:
                     if sym not in t2:
                         t2[sym] = rn
         return t1, t2
+
+    # ── 0. Compact any internal blank rows within T1 ─────────────────────────
+    # Identifies T1 rows by matching current E*TRADE T1 symbols; deletes blank
+    # rows found strictly between the first and last T1 data row.
+    _acct_t1_syms = {
+        p["symbol"] for p in positions
+        if p.get("account_last4") not in {ACCT_T2}   # unknown accounts → T1
+    }
+    _t1_data_rows = sorted(
+        r[0].row for r in ws.iter_rows(min_row=3, max_row=200)
+        if _is_data_row(r) and r[1].value.strip().upper() in _acct_t1_syms
+    )
+    if len(_t1_data_rows) >= 2:
+        _t1_first, _t1_last = _t1_data_rows[0], _t1_data_rows[-1]
+        _internal_blanks = [
+            r[0].row for r in ws.iter_rows(min_row=_t1_first + 1, max_row=_t1_last - 1)
+            if not _is_data_row(r)
+        ]
+        for _rn in sorted(_internal_blanks, reverse=True):
+            ws.delete_rows(_rn)
+            print(f"[Short_Long] Compacted internal blank row {_rn} in T1")
 
     sheet_t1_rows, sheet_t2_rows = _build_row_maps()
 
@@ -762,7 +808,7 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
     for sym in sorted(to_add_t2):
         pos  = etrade_t2_by_sym[sym]
         pick = picks_lookup.get(sym, {})
-        t2_last     = max(sheet_t2_rows.values(), default=T1_MAX)
+        t2_last     = max(sheet_t2_rows.values(), default=max(sheet_t1_rows.values(), default=2) + 3)
         new_row_num = t2_last + 1
         ws.insert_rows(new_row_num)
         ws.cell(new_row_num, 1).value  = None
@@ -775,8 +821,6 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         sheet_t2_rows[sym] = new_row_num
 
     # ── 3b. Ensure exactly 3 blank separator rows between T1 and T2 ──────────
-    # NOTE: blank rows inside T1 (e.g. leftover at rows 10-12) are left alone —
-    # deleting them would shift T2 data above T1_MAX and break _build_row_maps.
     sheet_t1_rows, sheet_t2_rows = _build_row_maps()
     if sheet_t1_rows and sheet_t2_rows:
         t1_end   = max(sheet_t1_rows.values())
