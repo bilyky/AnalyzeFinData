@@ -941,9 +941,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     _touched_sheets = {"Research", "Picks"}
     try:
         import etrade as _et
-        _tok = _et._load_tokens("production")
-        if _tok:
-            _tok = _et.renew_tokens(_tok, "production")
+        _tok = _et.get_tokens("production")
         if _tok:
             _lk   = {p["symbol"]: p for p in picks_data}
             _pos  = _et.fetch_positions(_tok, "production")

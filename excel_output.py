@@ -498,6 +498,15 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
                             elif re.match(r'xl/drawings/commentsDrawing\d+\.vml$', _res):
                                 modified[_res] = _generate_research_vml()
                                 restore_from_orig.pop(_res, None)
+                        # Convert absolute comment paths to relative in the _rels file
+                        _patched_rels = re.sub(
+                            r'Target="(/xl/comments/(comment\d+\.xml))"',
+                            r'Target="../comments/\2"',
+                            _rrels,
+                        )
+                        if _patched_rels != _rrels:
+                            modified[_rels_p] = _patched_rels.encode('utf-8')
+                            restore_from_orig.pop(_rels_p, None)
 
                     # Ensure the Research sheet XML has:
                     # 1. xmlns:r at the ROOT <worksheet> element (not inline on legacyDrawing)
@@ -832,6 +841,20 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         elif gap > 3:
             for _ in range(gap - 3):
                 ws.delete_rows(t1_end + 1)
+
+    # ── 3c. Final compact: remove any residual internal blanks within T1 ─────
+    sheet_t1_rows, _ = _build_row_maps()
+    if len(sheet_t1_rows) >= 2:
+        _t1_sorted = sorted(sheet_t1_rows.values())
+        _final_blanks = [
+            r[0].row for r in ws.iter_rows(
+                min_row=_t1_sorted[0] + 1, max_row=_t1_sorted[-1] - 1
+            )
+            if not _is_data_row(r)
+        ]
+        for _rn in sorted(_final_blanks, reverse=True):
+            ws.delete_rows(_rn)
+            print(f"[Short_Long] Final-compact: removed residual blank row {_rn}")
 
     # ── 4. Renumber col A within each table ──────────────────────────────────
     sheet_t1_rows, sheet_t2_rows = _build_row_maps()
