@@ -498,11 +498,16 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
                             elif re.match(r'xl/drawings/commentsDrawing\d+\.vml$', _res):
                                 modified[_res] = _generate_research_vml()
                                 restore_from_orig.pop(_res, None)
-                        # Convert absolute comment paths to relative in the _rels file
+                        # Convert absolute paths to relative in the _rels file
                         _patched_rels = re.sub(
                             r'Target="(/xl/comments/(comment\d+\.xml))"',
                             r'Target="../comments/\2"',
                             _rrels,
+                        )
+                        _patched_rels = re.sub(
+                            r'Target="(/xl/drawings/(commentsDrawing\d+\.vml))"',
+                            r'Target="../drawings/\2"',
+                            _patched_rels,
                         )
                         if _patched_rels != _rrels:
                             modified[_rels_p] = _patched_rels.encode('utf-8')
