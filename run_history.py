@@ -54,7 +54,11 @@ def trading_days(n: int) -> list[datetime.date]:
 def load_symbols() -> list[str]:
     import openpyxl, re
     _sym_re = re.compile(r"^[A-Z0-9._\-]+$")
-    wb = openpyxl.load_workbook(powergauge.XLSX_FILE, data_only=True)
+    try:
+        wb = openpyxl.load_workbook(powergauge.XLSX_FILE, data_only=True, read_only=True)
+    except Exception:
+        # Fallback if read_only=True still fails, though unlikely
+        wb = openpyxl.load_workbook(powergauge.XLSX_FILE, data_only=True)
     ws = wb['Research']
     syms = []
     for row in ws.iter_rows(min_row=2):

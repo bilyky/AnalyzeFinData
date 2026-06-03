@@ -797,7 +797,14 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     session_id = login()
     print(f"SESSION ID: {session_id}")
 
-    wb = openpyxl.load_workbook(XLSX_FILE)
+    try:
+        wb = openpyxl.load_workbook(XLSX_FILE)
+    except Exception as e:
+        print(f"  [ERROR] Failed to load {XLSX_FILE} in write mode: {e}")
+        print(f"  [INFO] Attempting to load in read-only mode for analysis...")
+        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True)
+        # Note: we won't be able to save if we are in read-only mode
+    
     ws = wb['Research']
     _write_research_headers(ws)
 
