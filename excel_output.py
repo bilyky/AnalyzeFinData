@@ -677,6 +677,18 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
 
     today = datetime.date.today()
 
+    import re as _re
+    _TICKER_RE = _re.compile(r'^[A-Z][A-Z0-9.]{0,7}$')
+
+    def _is_valid_sym(sym: str) -> bool:
+        return bool(_TICKER_RE.match(sym)) if sym else False
+
+    # Drop CVRs, bonds, zero-price items before any sheet logic runs
+    positions = [
+        p for p in positions
+        if _is_valid_sym(p["symbol"]) and (p.get("price") or 0) > 0
+    ]
+
     # ── 1. Locate header row ─────────────────────────────────────────────────
     HDR_ROW = None
     for row in ws.iter_rows(min_row=1, max_row=10):
@@ -725,6 +737,21 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
                     if sym not in t2:
                         t2[sym] = rn
         return t1, t2
+
+    # ── Pre-0. Remove invalid symbols and zero-price rows from the sheet ──────
+    _bad_rows = []
+    for _row in ws.iter_rows(min_row=3, max_row=300):
+        if not _is_data_row(_row):
+            continue
+        _sym   = (_row[1].value or "").strip().upper()
+        _cost  = _row[3].value   # col D  (buy price)
+        _price = _row[4].value   # col E  (current price)
+        if not _is_valid_sym(_sym) or (not _price and not _cost):
+            _bad_rows.append(_row[0].row)
+    for _rn in sorted(_bad_rows, reverse=True):
+        _sym_val = ws.cell(_rn, 2).value
+        ws.delete_rows(_rn)
+        print(f"[Short_Long] Removed invalid/priceless row {_rn}: {_sym_val!r}")
 
     # ── 0. Compact any internal blank rows within T1 ─────────────────────────
     # Identifies T1 rows by matching current E*TRADE T1 symbols; deletes blank
