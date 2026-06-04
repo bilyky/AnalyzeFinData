@@ -1,7 +1,7 @@
 import openpyxl
 import os
 
-xlsx_file = 'Data/investment.xlsx'
+xlsx_file = 'Data/state_of_the_day.xlsx'
 if not os.path.exists(xlsx_file):
     print(f"File {xlsx_file} not found")
     exit(1)

@@ -15,7 +15,7 @@ def get_best():
     
     # Load symbols from Research sheet
     import openpyxl
-    wb = openpyxl.load_workbook('Data/investment.xlsx', data_only=True)
+    wb = openpyxl.load_workbook('Data/state_of_the_day.xlsx', data_only=True)
     ws = wb['Research']
     
     results = []

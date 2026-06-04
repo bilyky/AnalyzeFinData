@@ -1,6 +1,6 @@
 import openpyxl
 
-xlsx_file = 'Data/investment.xlsx'
+xlsx_file = 'Data/state_of_the_day.xlsx'
 wb = openpyxl.load_workbook(xlsx_file, read_only=True, data_only=True)
 ws = wb['Research']
 

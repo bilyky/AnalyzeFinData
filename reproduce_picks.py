@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import powergauge
 
 def get_picks():
-    xlsx_file = 'Data/investment.xlsx'
+    xlsx_file = 'Data/state_of_the_day.xlsx'
     if not os.path.exists(xlsx_file):
         print(f"File {xlsx_file} not found")
         return

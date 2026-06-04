@@ -14,7 +14,7 @@ def get_comprehensive_stats():
     session_id = "dummy"
     powergauge._build_cache_index()
     
-    wb = openpyxl.load_workbook('Data/investment.xlsx', data_only=True)
+    wb = openpyxl.load_workbook('Data/state_of_the_day.xlsx', data_only=True)
     ws_research = wb['Research']
     
     all_data = []

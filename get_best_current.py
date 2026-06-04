@@ -14,7 +14,7 @@ def get_best(date):
     powergauge._build_cache_index()
     
     # Load symbols from Research sheet
-    wb = openpyxl.load_workbook('Data/investment.xlsx', data_only=True)
+    wb = openpyxl.load_workbook('Data/state_of_the_day.xlsx', data_only=True)
     ws = wb['Research']
     
     results = []

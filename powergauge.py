@@ -88,7 +88,7 @@ def _get_http_session() -> requests.Session:
     return _http_session
 
 
-XLSX_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "investment.xlsx")
+XLSX_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "state_of_the_day.xlsx")
 XLSX_BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Backup")
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
 
@@ -970,4 +970,4 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
                                touched_sheet_names=_touched_sheets)
         print(f"ERROR: {XLSX_FILE} is open in another application.")
         print(f"Changes saved to: {alt}")
-        print(f"Close Excel and rename/copy that file to investment.xlsx")
+        print(f"Close Excel and rename/copy that file to state_of_the_day.xlsx")
