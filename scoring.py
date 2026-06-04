@@ -253,6 +253,93 @@ def fibonacci_retracement_score(ohlcv_ts: dict, date_str: str, lookback: int = 2
     return 0.0
 
 
+# ── RSI Divergence ────────────────────────────────────────────────────────────
+
+def _rsi(closes: list, period: int = 14) -> list:
+    """Wilder's smoothed RSI. Returns RSI values, length = len(closes) - period."""
+    if len(closes) <= period:
+        return []
+    gains, losses = [], []
+    for i in range(1, period + 1):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0.0))
+        losses.append(max(-diff, 0.0))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    rsi_values = [100.0 - 100.0 / (1.0 + avg_gain / avg_loss) if avg_loss > 0 else 100.0]
+    for i in range(period + 1, len(closes)):
+        diff = closes[i] - closes[i - 1]
+        avg_gain = (avg_gain * (period - 1) + max(diff, 0.0)) / period
+        avg_loss = (avg_loss * (period - 1) + max(-diff, 0.0)) / period
+        rsi_values.append(100.0 - 100.0 / (1.0 + avg_gain / avg_loss) if avg_loss > 0 else 100.0)
+    return rsi_values
+
+
+def rsi_divergence_score(ohlcv_ts: dict, date_str: str,
+                         rsi_period: int = 14, scan_bars: int = 60,
+                         min_gap: int = 5) -> float:
+    """
+    Detects RSI divergence over the past scan_bars bars.
+      Bullish (price lower low, RSI higher low): +1.0 strong / +0.5 mild
+      Bearish (price higher high, RSI lower high): -1.0 strong / -0.5 mild
+    Strong: price diff >= 1.5%, RSI diff >= 3 pts.
+    Mild:   price diff >= 0.5%, RSI diff >= 1 pt.
+    Returns the stronger of bull/bear signal, or 0.0 if neither fires.
+    """
+    if not ohlcv_ts:
+        return 0.0
+    dates = sorted(ohlcv_ts.keys())
+    past = [d for d in dates if d <= date_str]
+    if len(past) < rsi_period + scan_bars + 5:
+        return 0.0
+
+    window_dates = past[-(rsi_period + scan_bars):]
+    closes = [_to_float(ohlcv_ts[d].get('4. close'), 0) for d in window_dates]
+    if any(c <= 0 for c in closes):
+        return 0.0
+
+    rsi_vals = _rsi(closes, rsi_period)   # length = scan_bars
+    scan_closes = closes[rsi_period:]      # aligned with rsi_vals
+
+    nb = 3  # neighbor bars required on each side for local extremum
+    lows, highs = [], []
+    for k in range(nb, scan_bars - nb):
+        c, r = scan_closes[k], rsi_vals[k]
+        if all(c <= scan_closes[k - j] and c <= scan_closes[k + j] for j in range(1, nb + 1)):
+            lows.append((k, c, r))
+        if all(c >= scan_closes[k - j] and c >= scan_closes[k + j] for j in range(1, nb + 1)):
+            highs.append((k, c, r))
+
+    bull_signal = 0.0
+    bear_signal = 0.0
+
+    if len(lows) >= 2:
+        low2 = lows[-1]
+        low1 = next((lows[i] for i in range(len(lows) - 2, -1, -1)
+                     if low2[0] - lows[i][0] >= min_gap), None)
+        if low1 and low2[1] < low1[1] and low2[2] > low1[2]:
+            price_diff = abs(low2[1] - low1[1]) / low1[1] * 100
+            rsi_diff   = low2[2] - low1[2]
+            if price_diff >= 1.5 and rsi_diff >= 3.0:
+                bull_signal = 1.0
+            elif price_diff >= 0.5 and rsi_diff >= 1.0:
+                bull_signal = 0.5
+
+    if len(highs) >= 2:
+        high2 = highs[-1]
+        high1 = next((highs[i] for i in range(len(highs) - 2, -1, -1)
+                      if high2[0] - highs[i][0] >= min_gap), None)
+        if high1 and high2[1] > high1[1] and high2[2] < high1[2]:
+            price_diff = abs(high2[1] - high1[1]) / high1[1] * 100
+            rsi_diff   = high1[2] - high2[2]
+            if price_diff >= 1.5 and rsi_diff >= 3.0:
+                bear_signal = -1.0
+            elif price_diff >= 0.5 and rsi_diff >= 1.0:
+                bear_signal = -0.5
+
+    return bull_signal if abs(bull_signal) >= abs(bear_signal) else bear_signal
+
+
 # ── Short-term and long-term scores ─────────────────────────────────────────
 # These take plain dicts extracted from PowerGauge fields — no class dependency.
 
@@ -269,6 +356,7 @@ def short_score(pg_fields: dict) -> float:
       Seasonality    +-1.0
       Regime         +-1.0
       Fibonacci      +-1.0
+      RSI Divergence 1.85% spread: +/-0.5 (calibrated Phase A backtest)
     """
     score = 0.0
     rv = pg_fields.get('rel_vol')
@@ -280,6 +368,7 @@ def short_score(pg_fields: dict) -> float:
     score += pg_fields.get('seasonality', 0.0)
     score += {'Bull': 1.0, 'Neutral': 0.0, 'Bear': -1.0}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)
     score += pg_fields.get('fibonacci', 0.0)
+    score += pg_fields.get('rsi_divergence', 0.0) * 0.5
     return round(max(-10.0, min(10.0, score)), 1)
 
 
@@ -296,6 +385,7 @@ def long_score(pg_fields: dict) -> float:
       Seasonality    +-0.5
       Regime         +-1.5
       Fibonacci      +-0.5
+      RSI Divergence 1.85% spread: +/-0.25 (calibrated Phase A backtest)
     """
     score = 0.0
     score += {'Weak': 4.0, 'Neutral': 0.0, 'Strong': -3.0}.get(pg_fields.get('lt_trend', ''), 0.0)
@@ -307,5 +397,6 @@ def long_score(pg_fields: dict) -> float:
     score += pg_fields.get('seasonality', 0.0) * 0.5
     score += {'Bull': 1.5, 'Neutral': 0.0, 'Bear': -1.5}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)
     score += pg_fields.get('fibonacci', 0.0) * 0.5
+    score += pg_fields.get('rsi_divergence', 0.0) * 0.25
     return round(max(-10.0, min(10.0, score)), 1)
 

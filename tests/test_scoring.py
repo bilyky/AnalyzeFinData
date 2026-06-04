@@ -24,6 +24,7 @@ from scoring import (
     rel_volume_bucket, short_score, long_score,
     market_regime, clear_regime_cache,
     fibonacci_retracement_score,
+    rsi_divergence_score,
 )
 from utils import _to_float
 from tests.conftest import make_ohlcv
@@ -368,6 +369,68 @@ class TestFibonacciRetracementScore(unittest.TestCase):
         ohlcv = make_ohlcv([100, 110])
         dates = sorted(ohlcv.keys())
         self.assertEqual(fibonacci_retracement_score(ohlcv, dates[-1]), 0.0)
+
+
+# ── rsi_divergence_score ─────────────────────────────────────────────────────
+
+class TestRSIDivergenceScore(unittest.TestCase):
+    RSI_PERIOD = 14
+    SCAN_BARS  = 60
+
+    def _make_div(self, price_pattern: list) -> dict:
+        """Prepend enough flat warmup bars so total >= rsi_period + scan_bars + 5."""
+        needed = self.RSI_PERIOD + self.SCAN_BARS + 5
+        warmup = [100.0] * max(self.RSI_PERIOD + 5, needed - len(price_pattern))
+        return make_ohlcv(warmup + price_pattern)
+
+    def test_empty_ohlcv(self):
+        self.assertEqual(rsi_divergence_score({}, "2024-06-01"), 0.0)
+
+    def test_insufficient_history(self):
+        ohlcv = make_ohlcv([100.0] * 18)
+        self.assertEqual(rsi_divergence_score(ohlcv, sorted(ohlcv.keys())[-1]), 0.0)
+
+    def test_no_divergence_returns_zero(self):
+        # Flat data: every bar is both local min and max, but price diffs are 0
+        # → neither bullish nor bearish condition can be satisfied
+        ohlcv = make_ohlcv([100.0] * 90)
+        self.assertEqual(rsi_divergence_score(ohlcv, sorted(ohlcv.keys())[-1]), 0.0)
+
+    def test_bullish_divergence_strong(self):
+        # Sharp drop to 85 (low1) → RSI ~0 (all losses from flat).
+        # Slow grind to 82 (low2 < low1) → RSI well above 0 (less momentum).
+        # Pattern is exactly 60 bars so it fills the scan window.
+        flat  = [100.0] * 20
+        drop1 = [100.0, 97.0, 94.0, 91.0, 88.0, 85.0, 85.0, 85.0]   # 8 bars, low at k=25..27
+        recov = [86.0, 88.0, 90.0, 92.0, 93.0, 94.0, 93.0, 92.0, 91.0, 90.0]  # 10 bars
+        drop2 = [90.0, 89.5, 89.0, 88.0, 86.0, 84.0, 82.0, 82.0, 82.0]        # 9 bars, low at k=44..46
+        tail  = [83.0, 85.0, 87.0, 89.0, 91.0, 93.0, 94.0, 95.0, 96.0, 97.0, 98.0, 99.0, 100.0]  # 13 bars
+        ohlcv = self._make_div(flat + drop1 + recov + drop2 + tail)
+        result = rsi_divergence_score(ohlcv, sorted(ohlcv.keys())[-1])
+        self.assertIn(result, [0.5, 1.0])
+
+    def test_bearish_divergence_strong(self):
+        # Sharp rise to 115 (high1) → RSI ~100.
+        # Slow grind to 118 (high2 > high1) → RSI lower than high1 peak.
+        flat    = [100.0] * 20
+        rise1   = [100.0, 103.0, 106.0, 109.0, 112.0, 115.0, 115.0, 115.0]   # 8 bars, high k=25..27
+        retrace = [114.0, 112.0, 110.0, 108.0, 107.0, 108.0, 109.0, 110.0, 111.0, 112.0]  # 10 bars
+        rise2   = [112.0, 113.0, 114.0, 115.0, 116.0, 117.0, 118.0, 118.0, 118.0]          # 9 bars, high k=44..46
+        tail    = [117.0, 115.0, 113.0, 111.0, 109.0, 107.0, 105.0, 103.0, 101.0, 100.0, 99.0, 98.0, 97.0]  # 13 bars
+        ohlcv = self._make_div(flat + rise1 + retrace + rise2 + tail)
+        result = rsi_divergence_score(ohlcv, sorted(ohlcv.keys())[-1])
+        self.assertIn(result, [-0.5, -1.0])
+
+    def test_bullish_mild_not_bearish(self):
+        # Mild decline — result should be non-negative (no bearish signal).
+        flat  = [100.0] * 20
+        drop1 = [100.0, 99.5, 99.0, 98.8, 98.7, 98.7, 98.7]
+        recov = [98.9, 99.2, 99.5, 99.7, 99.8, 99.7, 99.6, 99.5]
+        drop2 = [99.5, 99.3, 99.1, 98.9, 98.5, 98.4, 98.3]
+        tail  = [98.4, 98.5, 98.7, 98.9, 99.1, 99.3, 99.5, 99.7, 99.8, 99.9, 100.0, 100.0, 100.0]
+        ohlcv = self._make_div(flat + drop1 + recov + drop2 + tail)
+        result = rsi_divergence_score(ohlcv, sorted(ohlcv.keys())[-1])
+        self.assertGreaterEqual(result, 0.0)   # never negative for a bullish setup
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from scoring import (
     short_score as _short_score_fn,
     long_score as _long_score_fn,
     fibonacci_retracement_score as _fib_score,
+    rsi_divergence_score as _rsi_div_score,
     rel_volume_bucket as _rel_vol_fn,
     market_regime as _market_regime,
 )
@@ -196,6 +197,7 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
         'seasonality': seasonality,
         'market_regime': _market_regime(date_str),
         'fibonacci': _fib_score(ohlcv_ts, date_str),
+        'rsi_divergence': _rsi_div_score(ohlcv_ts, date_str),
     }
     short = _short_score_fn(fields)
     long = _long_score_fn(fields)
@@ -206,16 +208,24 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     short_no_fib = _short_score_fn(f_no_fib)
     long_no_fib = _long_score_fn(f_no_fib)
 
-    return br, short, long, short_no_fib, long_no_fib
+    rsi_div = fields['rsi_divergence']
+
+    # Version without RSI divergence
+    f_no_div = fields.copy()
+    f_no_div['rsi_divergence'] = 0.0
+    short_no_div = _short_score_fn(f_no_div)
+    long_no_div  = _long_score_fn(f_no_div)
+
+    return br, short, long, short_no_fib, long_no_fib, rsi_div, short_no_div, long_no_div
 
 
 def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
-    """Returns list of (br, short, long, s_nf, l_nf, fwd_5, fwd_10, fwd_20) tuples."""
+    """Returns list of (br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, fwd_5, fwd_10, fwd_20) tuples."""
     seasonality_map = precompute_seasonality(ohlcv_ts)
     ohlcv_date_set = set(all_dates)
 
     # Load all Chaikin cache files for this symbol, sorted by date
-    pattern = os.path.join(SYM_DIR, f"{symbol}_*.json")
+    pattern = os.path.join(SYM_DIR, symbol, f"{symbol}_*.json")
     cache_files = sorted(glob.glob(pattern))
 
     # Build date → (data, path) map
@@ -278,7 +288,7 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
             prev_data, prev_date = data, date_str
             continue
 
-        br, short, long, s_nf, l_nf = compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map)
+        br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd = compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map)
 
         # Forward returns from OHLCV
         fwd = []
@@ -290,7 +300,7 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
             else:
                 fwd.append(None)
         
-        results.append((br, short, long, s_nf, l_nf, fwd[0], fwd[1], fwd[2]))
+        results.append((br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, fwd[0], fwd[1], fwd[2]))
         prev_data, prev_date = data, date_str
 
     return results
@@ -302,8 +312,8 @@ def run(min_year=2023, max_symbols=None):
     # Find symbols with both Chaikin cache and OHLCV
     ohlcv_files = {os.path.basename(f).replace('_daily.json', '')
                    for f in glob.glob(os.path.join(OHLCV_DIR, '*_daily.json'))}
-    cache_syms  = {os.path.basename(f).rsplit('_', 1)[0]
-                   for f in glob.glob(os.path.join(SYM_DIR, '*.json'))}
+    cache_syms  = {d for d in os.listdir(SYM_DIR)
+                   if os.path.isdir(os.path.join(SYM_DIR, d))}
     symbols = sorted(ohlcv_files & cache_syms)
     if max_symbols:
         symbols = symbols[:max_symbols]
@@ -311,15 +321,23 @@ def run(min_year=2023, max_symbols=None):
 
     # Collect all results
     br_buckets = {label: {w: [] for w in FWD_WINDOWS} for label, _ in BUCKETS}
-    
+
     # Short buckets
     s_buckets = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
     s_buckets_nf = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
-    
+
     # Long buckets
     l_buckets = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
     l_buckets_nf = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
-    
+
+    # RSI divergence raw spread (Phase A calibration)
+    DIV_VALUES = [-1.0, -0.5, 0.0, 0.5, 1.0]
+    div_buckets = {v: {w: [] for w in FWD_WINDOWS} for v in DIV_VALUES}
+
+    # WITH/NO DIV comparison (Phase B)
+    s_buckets_nd = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
+    l_buckets_nd = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
+
     total_obs = 0
 
     for i, sym in enumerate(symbols, 1):
@@ -328,7 +346,7 @@ def run(min_year=2023, max_symbols=None):
             continue
         all_dates = sorted(ohlcv_ts.keys())
         rows = process_symbol(sym, str(min_year), ohlcv_ts, all_dates)
-        for br, short, long, s_nf, l_nf, f5, f10, f20 in rows:
+        for br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, f5, f10, f20 in rows:
             total_obs += 1
             fwds = {5: f5, 10: f10, 20: f20}
 
@@ -362,6 +380,26 @@ def run(min_year=2023, max_symbols=None):
                         if fwds[w] is not None:
                             l_buckets_nf[label][w].append(fwds[w])
 
+            # RSI divergence raw spread
+            if rsi_div in div_buckets:
+                for w in FWD_WINDOWS:
+                    if fwds[w] is not None:
+                        div_buckets[rsi_div][w].append(fwds[w])
+
+            # WITH/NO DIV (short)
+            for label, test in SHORT_BUCKETS:
+                if test(s_nd):
+                    for w in FWD_WINDOWS:
+                        if fwds[w] is not None:
+                            s_buckets_nd[label][w].append(fwds[w])
+
+            # WITH/NO DIV (long)
+            for label, test in SHORT_BUCKETS:
+                if test(l_nd):
+                    for w in FWD_WINDOWS:
+                        if fwds[w] is not None:
+                            l_buckets_nd[label][w].append(fwds[w])
+
         if i % 50 == 0:
             print(f"  ... {i}/{len(symbols)} symbols processed")
 
@@ -392,6 +430,48 @@ def run(min_year=2023, max_symbols=None):
     print_table("SHORT10 (NO FIB)", s_buckets_nf, SHORT_BUCKETS)
     print_table("LONG60 (WITH FIB)", l_buckets, SHORT_BUCKETS)
     print_table("LONG60 (NO FIB)", l_buckets_nf, SHORT_BUCKETS)
+    print_table("SHORT10 (WITH DIV)", s_buckets, SHORT_BUCKETS)
+    print_table("SHORT10 (NO DIV)", s_buckets_nd, SHORT_BUCKETS)
+    print_table("LONG60 (WITH DIV)", l_buckets, SHORT_BUCKETS)
+    print_table("LONG60 (NO DIV)", l_buckets_nd, SHORT_BUCKETS)
+
+    # RSI Divergence raw factor spread (Phase A - calibration)
+    print("\n--- RSI DIVERGENCE - Raw Factor Spread (Phase A) ---")
+    print("  (measure 10d spread = avg at +1.0 minus avg at -1.0; use to calibrate weight)")
+    div_header = f"  {'Bucket':>6}  {'Count':>6}  " + \
+                 "  ".join(f"{'Avg '+str(w)+'d':>8}  {'Win%'+str(w)+'d':>8}" for w in FWD_WINDOWS)
+    print(div_header)
+    print("-" * len(div_header))
+    for v in DIV_VALUES:
+        data = div_buckets[v]
+        count = len(data[FWD_WINDOWS[1]]) if data[FWD_WINDOWS[1]] else 0
+        cols = []
+        for w in FWD_WINDOWS:
+            rets = data[w]
+            if not rets:
+                cols.extend(["     N/A", "     N/A"])
+            else:
+                avg = sum(rets) / len(rets)
+                win = len([r for r in rets if r > 0]) / len(rets) * 100
+                cols.extend([f"{avg:>8.2f}%", f"{win:>8.1f}%"])
+        label = f"{v:+.1f}"
+        print(f"  {label:>6}  {count:>6}  " + "  ".join(cols))
+
+    avg10_bull = (sum(div_buckets[1.0][10]) / len(div_buckets[1.0][10])
+                  if div_buckets[1.0][10] else None)
+    avg10_bear = (sum(div_buckets[-1.0][10]) / len(div_buckets[-1.0][10])
+                  if div_buckets[-1.0][10] else None)
+    if avg10_bull is not None and avg10_bear is not None:
+        spread = avg10_bull - avg10_bear
+        print(f"\n  10d spread (+1.0 vs -1.0): {spread:.2f}%")
+        if spread >= 3.0:
+            print("  -> Suggested weight: +/-1.5 in short_score, +/-0.75 in long_score")
+        elif spread >= 2.0:
+            print("  -> Suggested weight: +/-1.0 in short_score, +/-0.5 in long_score")
+        elif spread >= 1.0:
+            print("  -> Suggested weight: +/-0.5 in short_score, +/-0.25 in long_score")
+        else:
+            print("  -> Spread < 1% - consider dropping this factor")
 
 
 if __name__ == "__main__":
