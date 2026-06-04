@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from collections import defaultdict
 
-SYMBOL_DIR = Path(r"D:\Develop\AnalyzeFinData\Data\Symbol")
+SYMBOL_DIR = Path(r"C:\Develop\StockTrading\AnalyzeFinData\Data\Symbol")
 
 
 def organize():
