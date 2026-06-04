@@ -11,11 +11,21 @@ import openpyxl
 # os.environ['CHAIKIN_PASSWORD'] = '...'
 # os.environ['SMTP_PASSWORD'] = '...'
 
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "daily_task.log")
+
+def log(msg):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(LOG_FILE, "a") as f:
+        f.write(f"[{timestamp}] {msg}\n")
+    print(msg)
+
 def run_command(command_list):
-    print(f"Running: {' '.join(command_list)}")
+    log(f"Running: {' '.join(command_list)}")
     result = subprocess.run(command_list, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"Error: {result.stderr}")
+        log(f"Error (exit code {result.returncode}): {result.stderr}")
+    else:
+        log("Command completed successfully.")
     return result.stdout
 
 def get_symbols_from_xls():
@@ -110,6 +120,9 @@ def get_description(r):
     return "; ".join(desc) if desc else "Solid technical setup"
 
 def main():
+    # Ensure we are in the script's directory
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    
     today = datetime.date.today()
     print(f"Starting daily automation for {today}")
 
