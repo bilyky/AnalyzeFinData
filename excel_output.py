@@ -185,18 +185,21 @@ def write_picks_sheet(wb, picks_data: list, run_date):
     write_table(3,  "CONSERVATIVE -- TOP 5 BUY -- Combined (Bullish + S10 + BR)", 
                 top5_filtered(picks_data, lambda r: r['short10'] + r['br'], True), BUY_FILL)
     
-    write_table(11, "CONSERVATIVE -- TOP 5 BUY -- Short10 (Bullish Only)",     
+    write_table(11, "CONSERVATIVE -- TOP 5 BUY -- Short10 (Safe 10)",     
                 top5_filtered(picks_data, 'short10', True),  BUY_FILL)
                 
+    write_table(19, "CONSERVATIVE -- TOP 5 BUY -- Long60 (Safe 60)",  
+                top5_filtered(picks_data, 'long60', True),  BUY_FILL)
+                
     # --- SECTION 2: AGGRESSIVE (RAW MOMENTUM - UNFILTERED) ---
-    write_table(19, "AGGRESSIVE -- TOP 5 MOMENTUM -- Raw Short10 (Unfiltered)",  
+    write_table(27, "AGGRESSIVE -- TOP 5 MOMENTUM -- Raw Short10 (Unfiltered)",  
                 top5_raw(picks_data, 'short10', True),  BUY_FILL)
     
-    write_table(27, "AGGRESSIVE -- TOP 5 MOMENTUM -- Raw Long60 (Unfiltered)", 
+    write_table(35, "AGGRESSIVE -- TOP 5 MOMENTUM -- Raw Long60 (Unfiltered)", 
                 top5_raw(picks_data, 'long60', True), BUY_FILL)
 
     # --- SECTION 3: WEAKNESS ---
-    write_table(35, "TOP 5 SELL -- Entry Weakness (Raw S10 Lows)", top5_sell(picks_data, 'short10', False), SELL_FILL)
+    write_table(43, "TOP 5 SELL -- Entry Weakness (Raw S10 Lows)", top5_sell(picks_data, 'short10', False), SELL_FILL)
 
 
 def _strip_external_formulas(data: bytes) -> bytes:

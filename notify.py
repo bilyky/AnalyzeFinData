@@ -29,7 +29,8 @@ def send_email(subject, body, is_html=False):
         server.quit()
         print("Email sent successfully.")
     except Exception as e:
-        print(f"Error sending email: {e}")
+        # Avoid printing the full exception which might contain parts of the password/email in some SMTP implementations
+        print("Error sending email: [Redacted for security]")
 
 if __name__ == "__main__":
     # Test

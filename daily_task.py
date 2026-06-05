@@ -191,9 +191,14 @@ def main():
     html += add_rows(top_combined, "buy", use_combined=True)
     html += "</tbody></table>"
 
-    html += "<b>TOP 5 BUY -- Short10 (Bullish Only)</b>"
+    html += "<b>TOP 5 BUY -- Short10 (Safe 10)</b>"
     html += "<table><thead><tr><th>Rank</th><th>Symbol</th><th>PGR</th><th>S10</th><th>BR</th><th>L60</th><th>Rationale</th></tr></thead><tbody>"
     html += add_rows(top_s10, "buy")
+    html += "</tbody></table>"
+
+    html += "<b>TOP 5 BUY -- Long60 (Safe 60)</b>"
+    html += "<table><thead><tr><th>Rank</th><th>Symbol</th><th>PGR</th><th>S10</th><th>BR</th><th>L60</th><th>Rationale</th></tr></thead><tbody>"
+    html += add_rows(top_l60, "buy")
     html += "</tbody></table>"
 
     html += "<h3>SECTION 2: AGGRESSIVE (Raw Momentum - Unfiltered)</h3>"
