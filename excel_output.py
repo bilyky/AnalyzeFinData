@@ -76,15 +76,15 @@ def write_picks_sheet(wb, picks_data: list, run_date):
         current_idx = len(wb.sheetnames) - 1
         wb.move_sheet("Picks", offset=target_idx - current_idx)
 
-    col_widths = [6, 9, 30, 8, 7, 7, 10, 10, 10, 7, 9]
+    col_widths = [6, 9, 25, 8, 7, 7, 10, 10, 10, 7, 9, 35]
     col_labels = ["Rank", "Symbol", "Industry", "Score", "BR", "PGR",
-                  "OB/OS", "Money Flow", "LT Trend", "Setup", "Price"]
+                  "OB/OS", "Money Flow", "LT Trend", "Setup", "Price", "Technical Rationale"]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     regime = picks_data[0]['regime'] if picks_data else "N/A"
 
-    ws.merge_cells("A1:K1")
+    ws.merge_cells("A1:L1")
     title = ws["A1"]
     title.value = f"Top Picks  --  {run_date.strftime('%Y-%m-%d')}    |    Market Regime: {regime}"
     title.fill = DARK_HDR
@@ -92,8 +92,19 @@ def write_picks_sheet(wb, picks_data: list, run_date):
     title.alignment = CENTER
     ws.row_dimensions[1].height = 22
 
+    def get_description(r):
+        desc = []
+        if r['short10'] >= 5: desc.append(f"Strong entry (S10: {r['short10']})")
+        elif r['short10'] > 0: desc.append(f"Positive entry (S10: {r['short10']})")
+        if r['br'] >= 2.5: desc.append(f"Massive pressure (BR: {r['br']})")
+        elif r['br'] >= 1.5: desc.append(f"Accumulation (BR: {r['br']})")
+        if r['long60'] >= 3: desc.append(f"Strong trend (L60: {r['long60']})")
+        elif r['long60'] > 0: desc.append(f"Healthy trend (L60: {r['long60']})")
+        if r['pgr'] == 'Bu+': desc.append("Very Bullish")
+        return "; ".join(desc) if desc else "Solid technicals"
+
     def write_table(start_row: int, label: str, rows: list, row_fill):
-        ws.merge_cells(f"A{start_row}:K{start_row}")
+        ws.merge_cells(f"A{start_row}:L{start_row}")
         sh = ws.cell(start_row, 1)
         sh.value = label
         sh.fill = BLUE_HDR
@@ -124,12 +135,13 @@ def write_picks_sheet(wb, picks_data: list, run_date):
                 rec['lt_trend'],
                 "OK" if rec['setup'] == 1 else ("--" if rec['setup'] == 0 else "?"),
                 rec['price'],
+                get_description(rec)
             ]
             for col, val in enumerate(vals, 1):
                 c = ws.cell(dr, col)
                 c.value = val
                 c.fill  = row_fill
-                c.alignment = CENTER if col != 3 else LEFT
+                c.alignment = CENTER if col not in [3, 12] else LEFT
                 c.border = THIN_BORDER
                 if col == 4:
                     c.font = Font(bold=True, color="375623" if (val or 0) >= 0 else "9C0006")
@@ -137,15 +149,54 @@ def write_picks_sheet(wb, picks_data: list, run_date):
                     c.fill = SETUP_OK if rec['setup'] == 1 else SETUP_NO
             ws.row_dimensions[dr].height = 14
 
-    def top5(data, key, reverse):
-        ranked = sorted((r for r in data if r.get(key) is not None),
-                        key=lambda r: r[key], reverse=reverse)[:5]
+    def top5_filtered(data, key_or_func, reverse):
+        # 1. Filter: Bullish only, Setup OK only
+        # Mapping PGR strings to values for filtering
+        p_map = {'Bu+': 5, 'Bu': 4, 'N': 3, 'Be': 2, 'Be-': 1}
+        filtered = [r for r in data if p_map.get(r['pgr'], 0) >= 4 and r['setup'] == 1]
+        
+        # 2. Fallback: If no symbols pass setup filter, show all bullish
+        if not filtered:
+            filtered = [r for r in data if p_map.get(r['pgr'], 0) >= 4]
+
+        def get_val(r):
+            if callable(key_or_func): return key_or_func(r)
+            return r.get(key_or_func, 0)
+
+        ranked = sorted(filtered, key=get_val, reverse=reverse)[:5]
+        return [dict(r, score=round(get_val(r), 1)) for r in ranked]
+
+    def top5_raw(data, key_or_func, reverse):
+        def get_val(r):
+            if callable(key_or_func): return key_or_func(r)
+            return r.get(key_or_func, 0)
+        ranked = sorted(data, key=get_val, reverse=reverse)[:5]
+        return [dict(r, score=round(get_val(r), 1)) for r in ranked]
+
+    # For SELL tables, we show non-bullish (PGR < 4) with bad setup if available
+    def top5_sell(data, key, reverse):
+        p_map = {'Bu+': 5, 'Bu': 4, 'N': 3, 'Be': 2, 'Be-': 1}
+        filtered = [r for r in data if p_map.get(r['pgr'], 0) < 4]
+        if not filtered: filtered = data
+        ranked = sorted(filtered, key=lambda x: x.get(key, 0), reverse=reverse)[:5]
         return [dict(r, score=r[key]) for r in ranked]
 
-    write_table(3,  "TOP 5 BUY  --  Short10 (10-day entry score)",     top5(picks_data, 'short10', True),  BUY_FILL)
-    write_table(11, "TOP 5 SELL  --  Short10 (10-day entry score)",    top5(picks_data, 'short10', False), SELL_FILL)
-    write_table(19, "TOP 5 BUY  --  Long60  (60-day position score)",  top5(picks_data, 'long60',  True),  BUY_FILL)
-    write_table(27, "TOP 5 SELL  --  Long60  (60-day position score)", top5(picks_data, 'long60',  False), SELL_FILL)
+    # --- SECTION 1: CONSERVATIVE (BULLISH + SETUP OK) ---
+    write_table(3,  "CONSERVATIVE -- TOP 5 BUY -- Combined (Bullish + S10 + BR)", 
+                top5_filtered(picks_data, lambda r: r['short10'] + r['br'], True), BUY_FILL)
+    
+    write_table(11, "CONSERVATIVE -- TOP 5 BUY -- Short10 (Bullish Only)",     
+                top5_filtered(picks_data, 'short10', True),  BUY_FILL)
+                
+    # --- SECTION 2: AGGRESSIVE (RAW MOMENTUM - UNFILTERED) ---
+    write_table(19, "AGGRESSIVE -- TOP 5 MOMENTUM -- Raw Short10 (Unfiltered)",  
+                top5_raw(picks_data, 'short10', True),  BUY_FILL)
+    
+    write_table(27, "AGGRESSIVE -- TOP 5 MOMENTUM -- Raw Long60 (Unfiltered)", 
+                top5_raw(picks_data, 'long60', True), BUY_FILL)
+
+    # --- SECTION 3: WEAKNESS ---
+    write_table(35, "TOP 5 SELL -- Entry Weakness (Raw S10 Lows)", top5_sell(picks_data, 'short10', False), SELL_FILL)
 
 
 def _strip_external_formulas(data: bytes) -> bytes:
