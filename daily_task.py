@@ -130,6 +130,7 @@ def main():
 
     top_combined = sorted(bullish, key=lambda x: x['s10'] + x['br'], reverse=True)[:5]
     top_s10      = sorted(bullish, key=lambda x: x['s10'], reverse=True)[:5]
+    top_l60      = sorted(bullish, key=lambda x: x['l60'], reverse=True)[:5]
     
     # Aggressive (Unfiltered)
     agg_s10      = sorted(all_symbols_data, key=lambda x: x['s10'], reverse=True)[:5]
