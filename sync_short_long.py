@@ -42,6 +42,8 @@ def _read_picks_from_research(wb) -> dict:
             "ob_os":    str(_g(row, 19) or "").strip(),    # col T
             "money_fl": str(_g(row, 18) or "").strip(),    # col S
             "lt_trend": str(_g(row, 17) or "").strip(),    # col R
+            "stop":     _g(row, 9),                        # col J
+            "target":   _g(row, 11),                       # col L
         }
     return lookup
 

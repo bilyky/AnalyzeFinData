@@ -11,11 +11,12 @@ from urllib3.util.retry import Retry
 from utils import _to_float
 
 from excel_output import (
-    write_research_headers    as _write_research_headers,
-    write_picks_sheet         as _write_picks_sheet,
-    update_short_long_scores  as _update_short_long_scores,
-    fix_comment_shape_ids     as _fix_comment_shape_ids,
-    backup_xlsx               as _backup_xlsx,
+    write_research_headers      as _write_research_headers,
+    write_picks_sheet           as _write_picks_sheet,
+    update_short_long_scores    as _update_short_long_scores,
+    update_replacements_sheet   as _update_replacements_sheet,
+    fix_comment_shape_ids       as _fix_comment_shape_ids,
+    backup_xlsx                 as _backup_xlsx,
 )
 from scoring import (
     REGIME_SYMBOL,
@@ -928,6 +929,8 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
             'money_fl': str(power_g.money_flow  or '').strip(),
             'lt_trend': str(power_g.lt_trend    or '').strip(),
             'regime':   f['market_regime'],
+            'stop':     f['stop_price'],
+            'target':   f['prev_move_price'],
         })
 
         flag = "OK" if setup_ok else ("--" if setup_ok is False else "??")
@@ -954,6 +957,10 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
             print(f"Short_Long sheet synced: {len(_pos)} positions.")
     except Exception as _e:
         print(f"[E*TRADE] Short_Long skipped: {_e}")
+
+    if picks_data:
+        _update_replacements_sheet(wb, picks_data, date.date() if hasattr(date, "date") else date)
+        _touched_sheets.add("Replacements")
 
     try:
         wb.save(XLSX_FILE)

@@ -750,6 +750,17 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
             HDR_ROW = row[0].row
             break
 
+    # Scan header row for Stop / Target column positions (sheet-defined headers)
+    _SL_STOP_COL   = None
+    _SL_TARGET_COL = None
+    if HDR_ROW:
+        for _c in ws[HDR_ROW]:
+            _v = str(_c.value or "").strip().lower()
+            if _v == "stop":
+                _SL_STOP_COL = _c.column
+            elif _v in ("target", "tgt"):
+                _SL_TARGET_COL = _c.column
+
     def _is_data_row(r):
         v = r[1].value
         return isinstance(v, str) and v.strip() and v.strip().upper() != "SYMB"
@@ -895,6 +906,10 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         ws.cell(new_row_num, 5).value  = pos["price"]
         ws.cell(new_row_num, 11).value = pos.get("date_acquired") or today
         ws.cell(new_row_num, 12).value = pick.get("industry", "")
+        if _SL_STOP_COL and (pick.get("stop") or 0):
+            ws.cell(new_row_num, _SL_STOP_COL).value = pick["stop"]
+        if _SL_TARGET_COL and (pick.get("target") or 0):
+            ws.cell(new_row_num, _SL_TARGET_COL).value = pick["target"]
         sheet_t1_rows[sym] = new_row_num
 
     # Rebuild T2 map after T1 insertions may have shifted rows
@@ -913,6 +928,10 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         ws.cell(new_row_num, 5).value  = pos["price"]
         ws.cell(new_row_num, 11).value = pos.get("date_acquired") or today
         ws.cell(new_row_num, 12).value = pick.get("industry", "")
+        if _SL_STOP_COL and (pick.get("stop") or 0):
+            ws.cell(new_row_num, _SL_STOP_COL).value = pick["stop"]
+        if _SL_TARGET_COL and (pick.get("target") or 0):
+            ws.cell(new_row_num, _SL_TARGET_COL).value = pick["target"]
         sheet_t2_rows[sym] = new_row_num
 
     # ── 3b. Ensure exactly 3 blank separator rows between T1 and T2 ──────────
@@ -1042,6 +1061,207 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         else:
             c.value = None
         c.alignment = CTR
+
+        # Stop / Target — fill only if cell is currently blank or zero
+        stop_val   = pick.get("stop")   or 0
+        target_val = pick.get("target") or 0
+        if _SL_STOP_COL and stop_val:
+            c = ws.cell(rn, _SL_STOP_COL)
+            if not c.value:
+                c.value     = stop_val
+                c.alignment = CTR
+        if _SL_TARGET_COL and target_val:
+            c = ws.cell(rn, _SL_TARGET_COL)
+            if not c.value:
+                c.value     = target_val
+                c.alignment = CTR
+
+
+def update_replacements_sheet(wb, picks_data: list, run_date=None):
+    """Write/overwrite the 'Replacements' sheet with ranked sell→buy pairs.
+
+    Sell side  = current Short_Long holdings sorted by combined S10+L60 ascending.
+    Buy  side  = Research symbols not currently held, sorted by combined S10+L60 descending.
+    Pairs are matched rank-for-rank up to MAX_PAIRS rows.
+    """
+    import datetime as _dt
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+
+    MAX_PAIRS = 30
+
+    # ── Styles ───────────────────────────────────────────────────────────────
+    HDR_FILL  = PatternFill("solid", fgColor="2E4057")
+    TTL_FILL  = PatternFill("solid", fgColor="1F3864")
+    GRN_FILL  = PatternFill("solid", fgColor="C6EFCE")
+    LGN_FILL  = PatternFill("solid", fgColor="E2EFDA")
+    YEL_FILL  = PatternFill("solid", fgColor="FFEB9C")
+    ORG_FILL  = PatternFill("solid", fgColor="FFCC99")
+    RED_FILL  = PatternFill("solid", fgColor="FCE4D6")
+    BLU_FILL  = PatternFill("solid", fgColor="DEEAF1")
+    SEP_FILL  = PatternFill("solid", fgColor="4472C4")
+    WHT_BOLD  = Font(bold=True, color="FFFFFF")
+    BOLD      = Font(bold=True)
+    GRN_FONT  = Font(bold=True, color="375623")
+    RED_FONT  = Font(bold=True, color="9C0006")
+    CTR       = Alignment(horizontal="center", vertical="center")
+    LEFT      = Alignment(horizontal="left",   vertical="center")
+    THIN      = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"),  bottom=Side(style="thin"),
+    )
+
+    STATUS_FILL = {
+        "STRONG HOLD": GRN_FILL,
+        "HOLD":        LGN_FILL,
+        "WATCH":       YEL_FILL,
+        "REDUCE":      ORG_FILL,
+        "EXIT":        RED_FILL,
+    }
+
+    def _status(l60):
+        if l60 >= 4:  return "STRONG HOLD"
+        if l60 >= 2:  return "HOLD"
+        if l60 >= 0:  return "WATCH"
+        if l60 >= -2: return "REDUCE"
+        return "EXIT"
+
+    def _pgr_fill(pgr):
+        g = str(pgr or "")
+        if "Bu+" in g: return GRN_FILL, GRN_FONT
+        if g.startswith("Bu"): return LGN_FILL, BOLD
+        if "Be-" in g: return RED_FILL, RED_FONT
+        if g.startswith("Be"): return ORG_FILL, BOLD
+        return None, None
+
+    # ── Read Short_Long holdings ─────────────────────────────────────────────
+    held_symbols = set()
+    if "Short_Long" in wb.sheetnames:
+        ws_sl = wb["Short_Long"]
+        rows_sl = list(ws_sl.iter_rows(min_row=1, max_row=ws_sl.max_row, values_only=True))
+        # Header row has 'Symb'
+        hdr_sl = None
+        for i, row in enumerate(rows_sl):
+            vals = [str(v or "").strip().upper() for v in row]
+            if "SYMB" in vals or "SYMBOL" in vals:
+                hdr_sl = i
+                break
+        if hdr_sl is not None:
+            sym_col = next((j for j, v in enumerate(rows_sl[hdr_sl])
+                            if str(v or "").strip().upper() in ("SYMB", "SYMBOL")), None)
+            if sym_col is not None:
+                for row in rows_sl[hdr_sl + 1:]:
+                    v = str(row[sym_col] or "").strip().upper()
+                    if v:
+                        held_symbols.add(v)
+
+    # Build lookup: symbol → pick dict
+    lk = {p["symbol"].upper(): p for p in picks_data if p.get("symbol")}
+
+    # ── Sell list: held symbols sorted by combined S10+L60 ascending ─────────
+    sell_list = []
+    for sym in held_symbols:
+        p = lk.get(sym)
+        if p is None:
+            continue
+        s10  = float(p.get("short10") or 0)
+        l60  = float(p.get("long60")  or 0)
+        sell_list.append((sym, s10, l60, s10 + l60, _status(l60), str(p.get("pgr") or "")))
+    sell_list.sort(key=lambda x: x[3])
+
+    # ── Buy list: non-held, sorted by combined S10+L60 descending ────────────
+    buy_list = []
+    for sym, p in lk.items():
+        if sym in held_symbols:
+            continue
+        s10  = float(p.get("short10") or 0)
+        l60  = float(p.get("long60")  or 0)
+        setup = p.get("setup")
+        buy_list.append((sym, s10, l60, s10 + l60, str(p.get("pgr") or ""),
+                         "OK" if setup == 1 else ("--" if setup == 0 else "?")))
+    buy_list.sort(key=lambda x: x[3], reverse=True)
+
+    n_pairs = min(len(sell_list), len(buy_list), MAX_PAIRS)
+
+    # ── Build / clear sheet ──────────────────────────────────────────────────
+    if "Replacements" in wb.sheetnames:
+        del wb["Replacements"]
+    ws = wb.create_sheet("Replacements")
+
+    # Column widths: A=rank B=sell C=s10 D=l60 E=score F=status G=arrow H=buy I=s10 J=l60 K=score L=pgr M=setup
+    col_widths = [4, 11, 7, 7, 8, 14, 4, 11, 7, 7, 8, 7, 7]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[chr(64 + i)].width = w
+
+    date_str = (run_date or _dt.date.today()).strftime("%Y-%m-%d")
+
+    # Row 1: title
+    ws.row_dimensions[1].height = 22
+    c = ws.cell(1, 1, f"Replacement Pairs — {date_str}")
+    c.fill = TTL_FILL
+    c.font = Font(bold=True, color="FFFFFF", size=12)
+    c.alignment = LEFT
+    ws.merge_cells("A1:M1")
+
+    # Row 2: column headers
+    ws.row_dimensions[2].height = 18
+    headers = ["#", "SELL", "S10", "L60", "Score", "Status", "→",
+               "BUY",  "S10", "L60", "Score", "PGR", "Setup"]
+    for col, h in enumerate(headers, 1):
+        c = ws.cell(2, col, h)
+        c.fill      = HDR_FILL
+        c.font      = WHT_BOLD
+        c.alignment = CTR
+        c.border    = THIN
+
+    # Row 3+: data rows
+    for i in range(n_pairs):
+        rn = i + 3
+        ws.row_dimensions[rn].height = 16
+
+        sell = sell_list[i]   # (sym, s10, l60, combined, status, pgr)
+        buy  = buy_list[i]    # (sym, s10, l60, combined, pgr, setup)
+
+        sell_fill   = STATUS_FILL.get(sell[4], None)
+        buy_fill, buy_font = _pgr_fill(buy[4])
+
+        def _w(col, val, fill=None, font=None, align=CTR):
+            c = ws.cell(rn, col, val)
+            if fill: c.fill = fill
+            if font: c.font = font
+            c.alignment = align
+            c.border = THIN
+            return c
+
+        _w(1, i + 1)
+        _w(2, sell[0], fill=sell_fill, font=BOLD, align=LEFT)
+        _w(3, round(sell[1], 1), fill=sell_fill)
+        _w(4, round(sell[2], 1), fill=sell_fill)
+        _w(5, round(sell[3], 1), fill=sell_fill,
+           font=Font(bold=True, color="9C0006" if sell[3] < 0 else "375623"))
+        _w(6, sell[4], fill=sell_fill)
+
+        # separator arrow column
+        c = ws.cell(rn, 7, "→")
+        c.fill = SEP_FILL
+        c.font = WHT_BOLD
+        c.alignment = CTR
+
+        _w(8,  buy[0],         fill=buy_fill, font=buy_font or BOLD, align=LEFT)
+        _w(9,  round(buy[1], 1), fill=BLU_FILL)
+        _w(10, round(buy[2], 1), fill=BLU_FILL)
+        _w(11, round(buy[3], 1), fill=BLU_FILL,
+           font=Font(bold=True, color="375623"))
+        _w(12, buy[4],          fill=buy_fill, font=buy_font)
+        _w(13, buy[5],          fill=GRN_FILL if buy[5] == "OK" else None)
+
+    # Footer note
+    footer_row = n_pairs + 4
+    ws.cell(footer_row, 1,
+            "S10: 10-day entry score  |  L60: 60-day position score  |  Score = S10+L60"
+            ).font = Font(italic=True, color="595959")
+    ws.merge_cells(f"A{footer_row}:M{footer_row}")
+
+    print(f"Replacements sheet written: {n_pairs} pairs.")
 
 
 def backup_xlsx(xlsx_path: str) -> str | None:
