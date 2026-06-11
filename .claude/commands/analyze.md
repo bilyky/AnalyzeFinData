@@ -59,29 +59,34 @@ Keep each news summary to 1–2 sentences max.
 
 ## Step 4 — Output: WHAT and WHY
 
+For each symbol in the tables below, provide a high-signal "WHY" that synthesizes:
+1.  **Technical vs. Fundamental Gap:** Contrast the PGR (Fundamental) with the S10/L60 (Technical/Momentum).
+2.  **Specific Catalysts:** Mention specific news (earnings, leadership, product, IPOs) found in Step 3.
+3.  **Actionable Advice:** For held positions, explicitly state whether to "Add to winners," "Hold/Stay patient," or "Exit to protect capital."
+
 Format the output as three sections:
 
 ---
 
 ### ACTION REQUIRED
-One table per action (EXIT, REDUCE), ordered by urgency (worst score first):
+One table per action (EXIT, REDUCE), ordered by urgency (worst score first). Focus on the "Exit rationale."
 
-| Symbol | Score | Status | WHAT | WHY |
-|--------|-------|--------|------|-----|
-| BOX | -15.0 | EXIT | Sell full position | Weak on all dimensions; [news catalyst if any] |
+| Symbol | Score | Status | WHAT | WHY (Technical + Fundamental + News) |
+|--------|-------|--------|------|---------------------------------------|
+| BOX | -15.0 | EXIT | Sell full position | **Gap:** Technicals collapsed (L60 -6) vs Neutral PGR. **Why:** News shows AI pivot failing to capture hardware-level excitement; exit to protect capital. |
 
 ### WATCH LIST
-Positions to monitor but not act on today. One line each: symbol, score, reason.
+Positions to monitor but not act on today. One line each: symbol, score, reason (e.g., "S10 weakening; monitor for L60 decay").
 
 ### BUY CANDIDATES
-Top buy opportunities from the Replacements sheet, with news context:
+Top buy opportunities from the Replacements sheet, with news context and holding-specific advice.
 
-| Symbol | Score | PGR | Setup | WHAT | WHY |
-|--------|-------|-----|-------|------|-----|
-| TSLA | 18.4 | Be- | -- | Scale in cautiously | Dominant momentum; PGR risk: [news] |
+| Symbol | Score | PGR | Setup | WHAT | WHY (Technical + Fundamental + News) |
+|--------|-------|-----|-------|------|---------------------------------------|
+| HOOD | 18.5 | Be | -- | **Add to winners** | **Gap:** Massive momentum (S10+L60=18.5) vs Bearish PGR valuation. **Why:** Underwriting approval + Agentic AI pivot is a major catalyst. If held, add on strength. |
 
 ### SUMMARY
-3–5 bullet points: the most important moves to make today, in priority order, with a one-line rationale each.
+3–5 bullet points: the most important moves to make today, in priority order, with a one-line rationale each. Mention "Rotation" (e.g., "Sell X to fund Y").
 
 ---
 

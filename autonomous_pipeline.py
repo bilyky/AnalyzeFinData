@@ -1,0 +1,222 @@
+import os
+import sys
+import datetime
+import subprocess
+import openpyxl
+import notify
+import traceback
+from pathlib import Path
+
+# Custom modules
+import risk_utils
+import performance_tracker
+
+# --- CONFIGURATION ---
+XLSX_FILE = Path("Data/state_of_the_day.xlsx")
+ACCOUNT_RISK_USD = 500  # Amount to lose if stop is hit
+
+def log(msg):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {msg}")
+
+def verify_data_freshness():
+    if not XLSX_FILE.exists():
+        return False, "File does not exist."
+    
+    mtime = datetime.datetime.fromtimestamp(XLSX_FILE.stat().st_mtime)
+    today = datetime.date.today()
+    if mtime.date() < today:
+        return False, f"Data is stale. Last updated: {mtime.strftime('%Y-%m-%d %H:%M')}"
+    
+    return True, f"Data is fresh ({mtime.strftime('%Y-%m-%d %H:%M')})"
+
+def validate_sheets():
+    try:
+        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
+        required_sheets = ["Research", "Picks", "Replacements"]
+        for sheet in required_sheets:
+            if sheet not in wb.sheetnames:
+                return False, f"Missing sheet: {sheet}"
+            
+            ws = wb[sheet]
+            if ws.max_row < 2:
+                return False, f"Sheet {sheet} appears empty."
+        
+        return True, "All required sheets validated and rendered."
+    except Exception as e:
+        return False, f"Validation error: {e}"
+
+def get_top_5_picks():
+    try:
+        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
+        ws = wb["Research"]
+        
+        candidates = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            sym = row[3]
+            if not sym: continue
+            
+            pgr = str(row[6] or "")
+            price = row[10] or 0.0
+            stop = row[9] or 0.0
+            target = row[11] or 0.0
+            setup = str(row[20] or "") # Setup field uses 'OK'/'' strings (displayed as 1/0 in data_only load)
+            
+            # Openpyxl with data_only=True might return 1 for True and 0 for False if they were boolean
+            # or it might return the string '1'/'0'. Let's handle both.
+            is_setup_ok = (setup == "1" or setup == "OK" or setup == 1)
+            
+            win_pct = row[23] or 0.0
+            s10 = row[24] or 0.0
+            l60 = row[25] or 0.0
+            
+            if is_setup_ok:
+                # Calculate Risk Metrics
+                atr = risk_utils.calculate_atr(sym)
+                shares_atr = risk_utils.get_atr_position_size(price, atr, ACCOUNT_RISK_USD)
+                shares_stop = risk_utils.get_position_size(price, stop, ACCOUNT_RISK_USD)
+                
+                candidates.append({
+                    "Symbol": sym,
+                    "PGR": pgr,
+                    "Price": price,
+                    "Stop": stop,
+                    "Target": target,
+                    "S10": s10,
+                    "L60": l60,
+                    "WinPct": win_pct,
+                    "Total": s10 + l60,
+                    "ATR": atr,
+                    "Shares_ATR": shares_atr,
+                    "Shares_Stop": shares_stop
+                })
+        
+        candidates.sort(key=lambda x: x["Total"], reverse=True)
+        return candidates[:5]
+    except Exception as e:
+        log(f"Error computing picks: {e}")
+        traceback.print_exc()
+        return []
+
+def check_earnings(symbol):
+    """Placeholder for earnings check logic. In a real scenario, this would
+    query a local database or a specific API. For now, we flag it as 'Check Required'."""
+    return "Check Required"
+
+def format_html_report(status_msg, picks):
+    today = datetime.date.today()
+    picks_rows = ""
+    for i, p in enumerate(picks, 1):
+        win_display = f"{p['WinPct'] * 100:.1f}%"
+        earnings = check_earnings(p['Symbol'])
+        
+        picks_rows += f"""
+        <tr style="border-bottom: 1px solid #ddd;">
+            <td style="padding: 10px;">{i}</td>
+            <td style="padding: 10px;"><b>{p['Symbol']}</b></td>
+            <td style="padding: 10px;">{p['PGR']}</td>
+            <td style="padding: 10px;">{p['S10']:.1f} / {p['L60']:.1f}</td>
+            <td style="padding: 10px;"><b>{p['Total']:.1f}</b></td>
+            <td style="padding: 10px;">{win_display}</td>
+            <td style="padding: 10px;">Stop: ${p['Stop']}<br>Target: ${p['Target']}</td>
+            <td style="padding: 10px; background-color: #e8f4fd;">
+                ATR-based: <b>{p['Shares_ATR']}</b><br>
+                Stop-based: <b>{p['Shares_Stop']}</b>
+            </td>
+            <td style="padding: 10px;">{earnings}</td>
+        </tr>
+        """
+
+    html = f"""
+    <html>
+    <body style="font-family: sans-serif; color: #333; line-height: 1.6;">
+        <h2 style="color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px;">Daily Trading Intelligence: {today}</h2>
+        <p style="background-color: #f8f9fa; padding: 10px; border-left: 5px solid #2ecc71;">
+            <b>System Status:</b> {status_msg}
+        </p>
+        
+        <h3 style="color: #2c3e50; margin-top: 30px;">Top High-Probability Setups (Setup OK)</h3>
+        <p><small>Position sizing based on <b>${ACCOUNT_RISK_USD}</b> risk per trade.</small></p>
+        <table style="border-collapse: collapse; width: 100%; font-size: 13px;">
+            <thead>
+                <tr style="background-color: #34495e; color: white; text-align: left;">
+                    <th style="padding: 12px;">Rank</th>
+                    <th style="padding: 12px;">Symbol</th>
+                    <th style="padding: 12px;">PGR</th>
+                    <th style="padding: 12px;">S10/L60</th>
+                    <th style="padding: 12px;">Total</th>
+                    <th style="padding: 12px;">Win%</th>
+                    <th style="padding: 12px;">Levels</th>
+                    <th style="padding: 12px;">Shares</th>
+                    <th style="padding: 12px;">Earnings</th>
+                </tr>
+            </thead>
+            <tbody>
+                {picks_rows if picks else '<tr><td colspan="9">No candidates found today.</td></tr>'}
+            </tbody>
+        </table>
+        
+        <div style="margin-top: 40px; border-top: 1px solid #eee; padding-top: 20px; font-size: 12px; color: #7f8c8d;">
+            <p><b>Risk Management:</b> ATR-based sizing uses 2*ATR volatility risk. Stop-based uses Price-Stop gap.</p>
+            <p><b>Performance Tracking:</b> Today's picks have been logged for forward-testing verification.</p>
+            <p>Automated Pipeline Run at 5:30 AM PST | AnalyzeFinData Intelligence</p>
+        </div>
+    </body>
+    </html>
+    """
+    return html
+
+def main():
+    log("Starting Daily Trading Pipeline...")
+    
+    # 1. Sync history (Backfill cache for deltas)
+    log("Backfilling 5-day history (run_history.py)...")
+    try:
+        subprocess.run([sys.executable, "run_history.py", "5"], check=True, capture_output=True, text=True)
+        log("History backfilled.")
+    except subprocess.CalledProcessError as e:
+        log(f"Warning: run_history.py failed (will continue): {e.stderr}")
+
+    # 2. Execute main.py
+    log("Refreshing workbook (main.py)...")
+    try:
+        subprocess.run([sys.executable, "main.py"], check=True, capture_output=True, text=True)
+        log("Workbook regenerated.")
+    except subprocess.CalledProcessError as e:
+        error_msg = f"main.py failed: {e.stderr}"
+        log(error_msg)
+        notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline failed during main.py execution.\n\n{error_msg}")
+        return
+
+    # 2. Verify data freshness
+    fresh, msg = verify_data_freshness()
+    log(msg)
+    if not fresh:
+        notify.send_email("ALERT: Daily Pipeline Stale Data", msg)
+        return
+
+    # 3. Validate sheets
+    valid, v_msg = validate_sheets()
+    log(v_msg)
+    if not valid:
+        notify.send_email("ALERT: Daily Pipeline Validation Failed", v_msg)
+        return
+
+    # 4. Compute top-5 picks
+    log("Computing top-5 picks...")
+    picks = get_top_5_picks()
+
+    # 5. Log for performance tracking
+    if picks:
+        log("Logging picks for performance tracking...")
+        performance_tracker.log_picks(picks)
+
+    # 6. Send report
+    log("Drafting and sending HTML report...")
+    html = format_html_report(msg, picks)
+    notify.send_email(f"Daily Trade Report: {datetime.date.today()}", html, is_html=True)
+    log("Pipeline completed successfully.")
+
+if __name__ == "__main__":
+    main()
+
