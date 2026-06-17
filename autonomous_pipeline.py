@@ -12,6 +12,7 @@ import risk_utils
 import performance_tracker
 
 # --- CONFIGURATION ---
+SRC_XLSX  = Path("state_of_the_day.xlsx")
 XLSX_FILE = Path("Data/state_of_the_day.xlsx")
 ACCOUNT_RISK_USD = 500  # Amount to lose if stop is hit
 
@@ -103,7 +104,31 @@ def check_earnings(symbol):
     query a local database or a specific API. For now, we flag it as 'Check Required'."""
     return "Check Required"
 
-def format_html_report(status_msg, picks):
+def get_replacement_pairs():
+    try:
+        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
+        if "Replacements" not in wb.sheetnames:
+            return []
+        
+        ws = wb["Replacements"]
+        pairs = []
+        # Row 3 is first data row
+        for row in ws.iter_rows(min_row=3, max_row=13, values_only=True):
+            if row[1] and row[7]: # Sell Sym and Buy Sym
+                pairs.append({
+                    "Sell": row[1],
+                    "Sell_Score": row[4],
+                    "Sell_Status": row[5],
+                    "Buy": row[7],
+                    "Buy_Score": row[10],
+                    "Buy_PGR": row[11]
+                })
+        return pairs
+    except Exception as e:
+        log(f"Error reading replacements: {e}")
+        return []
+
+def format_html_report(status_msg, picks, replacements):
     today = datetime.date.today()
     picks_rows = ""
     for i, p in enumerate(picks, 1):
@@ -124,6 +149,16 @@ def format_html_report(status_msg, picks):
                 Stop-based: <b>{p['Shares_Stop']}</b>
             </td>
             <td style="padding: 10px;">{earnings}</td>
+        </tr>
+        """
+
+    replacement_rows = ""
+    for pair in replacements:
+        replacement_rows += f"""
+        <tr style="border-bottom: 1px solid #ddd; font-size: 12px;">
+            <td style="padding: 8px; color: #c0392b;"><b>{pair['Sell']}</b> ({pair['Sell_Score']:.1f})<br><small>{pair['Sell_Status']}</small></td>
+            <td style="padding: 8px; text-align: center;">➡️</td>
+            <td style="padding: 8px; color: #27ae60;"><b>{pair['Buy']}</b> ({pair['Buy_Score']:.1f})<br><small>PGR: {pair['Buy_PGR']}</small></td>
         </tr>
         """
 
@@ -154,6 +189,17 @@ def format_html_report(status_msg, picks):
             <tbody>
                 {picks_rows if picks else '<tr><td colspan="9">No candidates found today.</td></tr>'}
             </tbody>
+        </table>
+
+        <h3 style="color: #2c3e50; margin-top: 40px;">Recommended Portfolio Replacements</h3>
+        <p><small>Sell weak holdings to fund high-momentum buys.</small></p>
+        <table style="border-collapse: collapse; width: 60%; font-size: 13px;">
+            <tr style="background-color: #f2f2f2;">
+                <th style="padding: 10px; text-align: left;">SELL (Weakest)</th>
+                <th style="padding: 10px;"></th>
+                <th style="padding: 10px; text-align: left;">BUY (Strongest)</th>
+            </tr>
+            {replacement_rows if replacements else '<tr><td colspan="3">No replacement pairs identified.</td></tr>'}
         </table>
         
         <div style="margin-top: 40px; border-top: 1px solid #eee; padding-top: 20px; font-size: 12px; color: #7f8c8d;">
@@ -202,9 +248,10 @@ def main():
         notify.send_email("ALERT: Daily Pipeline Validation Failed", v_msg)
         return
 
-    # 4. Compute top-5 picks
-    log("Computing top-5 picks...")
+    # 4. Compute top-5 picks & replacements
+    log("Computing top-5 picks and replacements...")
     picks = get_top_5_picks()
+    replacements = get_replacement_pairs()
 
     # 5. Log for performance tracking
     if picks:
@@ -213,9 +260,10 @@ def main():
 
     # 6. Send report
     log("Drafting and sending HTML report...")
-    html = format_html_report(msg, picks)
+    html = format_html_report(msg, picks, replacements)
     notify.send_email(f"Daily Trade Report: {datetime.date.today()}", html, is_html=True)
     log("Pipeline completed successfully.")
+
 
 if __name__ == "__main__":
     main()

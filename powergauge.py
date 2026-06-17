@@ -89,6 +89,7 @@ def _get_http_session() -> requests.Session:
     return _http_session
 
 
+SRC_XLSX  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state_of_the_day.xlsx")
 XLSX_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "state_of_the_day.xlsx")
 XLSX_BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Backup")
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
@@ -801,12 +802,16 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     print(f"SESSION ID: {session_id}")
 
     try:
-        wb = openpyxl.load_workbook(XLSX_FILE)
+        # We read from the ROOT folder file
+        wb = openpyxl.load_workbook(SRC_XLSX)
     except Exception as e:
-        print(f"  [ERROR] Failed to load {XLSX_FILE} in write mode: {e}")
-        print(f"  [INFO] Attempting to load in read-only mode for analysis...")
-        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True)
-        # Note: we won't be able to save if we are in read-only mode
+        print(f"  [ERROR] Failed to load source {SRC_XLSX}: {e}")
+        print(f"  [INFO] Attempting to load existing output {XLSX_FILE} instead...")
+        try:
+            wb = openpyxl.load_workbook(XLSX_FILE)
+        except Exception as e2:
+            print(f"  [FATAL] Both source and output files missing or corrupt.")
+            return
     
     ws = wb['Research']
     _write_research_headers(ws)

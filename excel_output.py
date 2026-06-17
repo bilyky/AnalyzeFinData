@@ -1076,6 +1076,20 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
                 c.value     = target_val
                 c.alignment = CTR
 
+    # ── 7. Ensure T2 Header ──────────────────────────────────────────────────
+    # If T2 exists, ensure the row before the first T2 data row has headers.
+    if sheet_t2_rows:
+        t2_first_data = min(sheet_t2_rows.values())
+        t2_hdr_row = t2_first_data - 1
+        if ws.cell(t2_hdr_row, 2).value != "Symb":
+             ws.insert_rows(t2_hdr_row)
+             # Re-locate T1 header to copy
+             for row in ws.iter_rows(min_row=1, max_row=10):
+                 if row[1].value == "Symb":
+                     for col in range(1, 27):
+                         ws.cell(t2_hdr_row, col).value = ws.cell(row[0].row, col).value
+                     break
+
 
 def update_replacements_sheet(wb, picks_data: list, run_date=None):
     """Write/overwrite the 'Replacements' sheet with ranked sell→buy pairs.
@@ -1137,22 +1151,29 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
     held_symbols = set()
     if "Short_Long" in wb.sheetnames:
         ws_sl = wb["Short_Long"]
-        rows_sl = list(ws_sl.iter_rows(min_row=1, max_row=ws_sl.max_row, values_only=True))
-        # Header row has 'Symb'
+        rows_sl = list(ws_sl.iter_rows(min_row=1, max_row=min(ws_sl.max_row, 20), values_only=True))
+        
+        # Header row search
         hdr_sl = None
+        sym_col = 1  # Fallback to column B
         for i, row in enumerate(rows_sl):
+            if not row: continue
             vals = [str(v or "").strip().upper() for v in row]
             if "SYMB" in vals or "SYMBOL" in vals:
                 hdr_sl = i
+                sym_col = next(j for j, v in enumerate(row) 
+                             if str(v or "").strip().upper() in ("SYMB", "SYMBOL"))
                 break
-        if hdr_sl is not None:
-            sym_col = next((j for j, v in enumerate(rows_sl[hdr_sl])
-                            if str(v or "").strip().upper() in ("SYMB", "SYMBOL")), None)
-            if sym_col is not None:
-                for row in rows_sl[hdr_sl + 1:]:
-                    v = str(row[sym_col] or "").strip().upper()
-                    if v:
-                        held_symbols.add(v)
+        
+        # Data start row
+        data_start = (hdr_sl + 1) if hdr_sl is not None else 2 # Default to row 3 if row index 2 is data
+        
+        # Read symbols
+        for row in ws_sl.iter_rows(min_row=data_start + 1, values_only=True):
+            if len(row) > sym_col:
+                v = str(row[sym_col] or "").strip().upper()
+                if v and v != "SYMB" and v != "SYMBOL":
+                    held_symbols.add(v)
 
     # Build lookup: symbol → pick dict
     lk = {p["symbol"].upper(): p for p in picks_data if p.get("symbol")}

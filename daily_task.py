@@ -34,7 +34,8 @@ def run_command(command_list):
 
 def get_symbols_from_xls():
     try:
-        wb = openpyxl.load_workbook('Data/state_of_the_day.xlsx', data_only=True, read_only=True)
+        # We read from the ROOT folder file
+        wb = openpyxl.load_workbook('state_of_the_day.xlsx', data_only=True, read_only=True)
         ws = wb['Research']
         symbols = []
         for row in ws.iter_rows(min_row=2):

@@ -15,7 +15,7 @@ import openpyxl
 
 import etrade
 from excel_output import update_short_long_scores, fix_comment_shape_ids, backup_xlsx
-from powergauge import XLSX_FILE
+from powergauge import XLSX_FILE, SRC_XLSX
 
 
 def _read_picks_from_research(wb) -> dict:
@@ -69,7 +69,13 @@ def main():
     print(f"  {len(quotes)} live quotes fetched.")
 
     # ── Load workbook + build picks lookup from Research sheet ───────────────
-    wb = openpyxl.load_workbook(XLSX_FILE)
+    try:
+        wb = openpyxl.load_workbook(SRC_XLSX)
+    except Exception as e:
+        print(f"  [ERROR] Failed to load source {SRC_XLSX}: {e}")
+        print(f"  [INFO] Attempting to load existing output {XLSX_FILE} instead...")
+        wb = openpyxl.load_workbook(XLSX_FILE)
+
     picks_lookup = _read_picks_from_research(wb)
     print(f"  {len(picks_lookup)} symbols in Research sheet for score lookup.")
 
