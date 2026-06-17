@@ -25,6 +25,11 @@ from scoring import (
     rel_volume_bucket as _rel_vol_fn,
     market_regime as _market_regime,
 )
+from patterns import (
+    candlestick_score as _cs_score,
+    chart_pattern_score as _cp_score,
+    momentum_pattern_score as _mo_score,
+)
 
 SYM_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
@@ -187,6 +192,11 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     br += seasonality
     br = round(max(-10.0, min(10.0, br)), 1)
 
+    # Pattern scores (Phase A calibration)
+    cs_val       = _cs_score(ohlcv_ts, date_str)
+    cps_val, _   = _cp_score(ohlcv_ts, date_str)
+    ms_val, _    = _mo_score(ohlcv_ts, date_str)
+
     # Short/Long scores
     fields = {
         'rel_vol': _rel_vol_fn(ohlcv_ts, date_str),
@@ -198,6 +208,9 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
         'market_regime': _market_regime(date_str),
         'fibonacci': _fib_score(ohlcv_ts, date_str),
         'rsi_divergence': _rsi_div_score(ohlcv_ts, date_str),
+        'candlestick_score': cs_val,
+        'chart_score': cps_val,
+        'momentum_score': ms_val,
     }
     short = _short_score_fn(fields)
     long = _long_score_fn(fields)
@@ -216,11 +229,11 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     short_no_div = _short_score_fn(f_no_div)
     long_no_div  = _long_score_fn(f_no_div)
 
-    return br, short, long, short_no_fib, long_no_fib, rsi_div, short_no_div, long_no_div
+    return br, short, long, short_no_fib, long_no_fib, rsi_div, short_no_div, long_no_div, cs_val, cps_val, ms_val
 
 
 def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
-    """Returns list of (br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, fwd_5, fwd_10, fwd_20) tuples."""
+    """Returns list of (br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms, fwd_5, fwd_10, fwd_20) tuples."""
     seasonality_map = precompute_seasonality(ohlcv_ts)
     ohlcv_date_set = set(all_dates)
 
@@ -288,7 +301,7 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
             prev_data, prev_date = data, date_str
             continue
 
-        br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd = compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map)
+        br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms = compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map)
 
         # Forward returns from OHLCV
         fwd = []
@@ -299,8 +312,8 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
                 fwd.append((fwd_close - price) / price * 100 if fwd_close > 0 else None)
             else:
                 fwd.append(None)
-        
-        results.append((br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, fwd[0], fwd[1], fwd[2]))
+
+        results.append((br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms, fwd[0], fwd[1], fwd[2]))
         prev_data, prev_date = data, date_str
 
     return results
@@ -338,6 +351,19 @@ def run(min_year=2023, max_symbols=None):
     s_buckets_nd = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
     l_buckets_nd = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
 
+    # Pattern Phase A: raw spread per score value
+    PAT_BUCKETS = [
+        ("score <= -1", lambda s: s <= -1.0),
+        ("-1 to -0.5",  lambda s: -1.0 < s <= -0.5),
+        ("-0.5 to 0",   lambda s: -0.5 < s <= 0.0),
+        (" 0 to 0.5",   lambda s: 0.0  < s <= 0.5),
+        ("0.5 to 1",    lambda s: 0.5  < s <= 1.0),
+        ("score >= 1",  lambda s: s > 1.0),
+    ]
+    cs_buckets  = {label: {w: [] for w in FWD_WINDOWS} for label, _ in PAT_BUCKETS}
+    cps_buckets = {label: {w: [] for w in FWD_WINDOWS} for label, _ in PAT_BUCKETS}
+    ms_buckets  = {label: {w: [] for w in FWD_WINDOWS} for label, _ in PAT_BUCKETS}
+
     total_obs = 0
 
     for i, sym in enumerate(symbols, 1):
@@ -346,7 +372,7 @@ def run(min_year=2023, max_symbols=None):
             continue
         all_dates = sorted(ohlcv_ts.keys())
         rows = process_symbol(sym, str(min_year), ohlcv_ts, all_dates)
-        for br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, f5, f10, f20 in rows:
+        for br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms, f5, f10, f20 in rows:
             total_obs += 1
             fwds = {5: f5, 10: f10, 20: f20}
 
@@ -399,6 +425,21 @@ def run(min_year=2023, max_symbols=None):
                     for w in FWD_WINDOWS:
                         if fwds[w] is not None:
                             l_buckets_nd[label][w].append(fwds[w])
+
+            # Pattern Phase A: bucket each pattern score
+            for label, test in PAT_BUCKETS:
+                if test(cs):
+                    for w in FWD_WINDOWS:
+                        if fwds[w] is not None:
+                            cs_buckets[label][w].append(fwds[w])
+                if test(cps):
+                    for w in FWD_WINDOWS:
+                        if fwds[w] is not None:
+                            cps_buckets[label][w].append(fwds[w])
+                if test(ms):
+                    for w in FWD_WINDOWS:
+                        if fwds[w] is not None:
+                            ms_buckets[label][w].append(fwds[w])
 
         if i % 50 == 0:
             print(f"  ... {i}/{len(symbols)} symbols processed")
@@ -472,6 +513,44 @@ def run(min_year=2023, max_symbols=None):
             print("  -> Suggested weight: +/-0.5 in short_score, +/-0.25 in long_score")
         else:
             print("  -> Spread < 1% - consider dropping this factor")
+
+    def _pat_spread_summary(title, buckets):
+        print(f"\n--- {title} (Phase A) ---")
+        print("  (spread = high bucket avg 10d minus low bucket avg 10d; use to calibrate weight)")
+        hdr = f"  {'Bucket':<14}  {'Count':>6}  " + \
+              "  ".join(f"{'Avg '+str(w)+'d':>8}  {'Win%'+str(w)+'d':>8}" for w in FWD_WINDOWS)
+        print(hdr)
+        print("-" * len(hdr))
+        avgs10 = []
+        for label, _ in PAT_BUCKETS:
+            data = buckets[label]
+            count = len(data[10]) if data[10] else 0
+            cols = []
+            for w in FWD_WINDOWS:
+                rets = data[w]
+                if not rets:
+                    cols.extend(["     N/A", "     N/A"])
+                else:
+                    avg = sum(rets) / len(rets)
+                    win = len([r for r in rets if r > 0]) / len(rets) * 100
+                    avgs10.append(avg)
+                    cols.extend([f"{avg:>8.2f}%", f"{win:>8.1f}%"])
+            print(f"  {label:<14}  {count:>6}  " + "  ".join(cols))
+        if len(avgs10) >= 2:
+            spread10 = max(avgs10) - min(avgs10)
+            print(f"\n  10d spread (high vs low bucket): {spread10:.2f}%")
+            if spread10 >= 3.0:
+                print("  -> Suggested weight: +-1.5 in short_score, +-0.75 in long_score")
+            elif spread10 >= 2.0:
+                print("  -> Suggested weight: +-1.0 in short_score, +-0.5 in long_score")
+            elif spread10 >= 1.0:
+                print("  -> Suggested weight: +-0.5 in short_score, +-0.25 in long_score")
+            else:
+                print("  -> Spread < 1% - consider dropping this factor")
+
+    _pat_spread_summary("CANDLESTICK SCORE - Raw Factor Spread", cs_buckets)
+    _pat_spread_summary("CHART PATTERN SCORE - Raw Factor Spread", cps_buckets)
+    _pat_spread_summary("MOMENTUM SCORE - Raw Factor Spread", ms_buckets)
 
 
 if __name__ == "__main__":

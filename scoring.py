@@ -357,6 +357,9 @@ def short_score(pg_fields: dict) -> float:
       Regime         +-1.0
       Fibonacci      +-1.0
       RSI Divergence 1.85% spread: +/-0.5 (calibrated Phase A backtest)
+      Candlestick    3.49% spread: contrarian, weight -0.75 (high score = bearish signal)
+      Chart Pattern  11.83% spread: contrarian, weight -0.75 (bearish patterns = recovery)
+      Momentum       5.76% spread: contrarian, weight -0.75 (bearish momentum = reversal)
     """
     score = 0.0
     rv = pg_fields.get('rel_vol')
@@ -369,6 +372,9 @@ def short_score(pg_fields: dict) -> float:
     score += {'Bull': 1.0, 'Neutral': 0.0, 'Bear': -1.0}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)
     score += pg_fields.get('fibonacci', 0.0)
     score += pg_fields.get('rsi_divergence', 0.0) * 0.5
+    score += pg_fields.get('candlestick_score', 0.0) * -0.15
+    score += pg_fields.get('chart_score', 0.0)        * -0.15
+    score += pg_fields.get('momentum_score', 0.0)     * -0.15
     return round(max(-10.0, min(10.0, score)), 1)
 
 
@@ -386,6 +392,9 @@ def long_score(pg_fields: dict) -> float:
       Regime         +-1.5
       Fibonacci      +-0.5
       RSI Divergence 1.85% spread: +/-0.25 (calibrated Phase A backtest)
+      Candlestick    3.49% spread: contrarian, weight -0.375
+      Chart Pattern  11.83% spread: contrarian, weight -0.375
+      Momentum       5.76% spread: contrarian, weight -0.375
     """
     score = 0.0
     score += {'Weak': 4.0, 'Neutral': 0.0, 'Strong': -3.0}.get(pg_fields.get('lt_trend', ''), 0.0)
@@ -398,5 +407,8 @@ def long_score(pg_fields: dict) -> float:
     score += {'Bull': 1.5, 'Neutral': 0.0, 'Bear': -1.5}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)
     score += pg_fields.get('fibonacci', 0.0) * 0.5
     score += pg_fields.get('rsi_divergence', 0.0) * 0.25
+    score += pg_fields.get('candlestick_score', 0.0) * -0.075
+    score += pg_fields.get('chart_score', 0.0)        * -0.075
+    score += pg_fields.get('momentum_score', 0.0)     * -0.075
     return round(max(-10.0, min(10.0, score)), 1)
 

@@ -32,6 +32,12 @@ from scoring import (
     short_score          as _short_score_fn,
     long_score           as _long_score_fn,
 )
+from patterns import (
+    candlestick_score    as _cs_score,
+    chart_pattern_score  as _cp_score,
+    momentum_pattern_score as _mo_score,
+    pattern_summary      as _pattern_summary,
+)
 
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
 
@@ -757,6 +763,12 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
             dir_ok = power_g.price > _to_float(ohlcv_ts[all_dates[idx - _DIR_CHECK_DAYS]].get('4. close'), 0) if idx >= _DIR_CHECK_DAYS else False
             setup_ok = trend_ok and dir_ok
 
+    _date_str = str(power_g.date)
+    _pattern_score, _pattern_text = _pattern_summary(ohlcv_ts, _date_str)
+    _cs  = _cs_score(ohlcv_ts, _date_str) if ohlcv_ts else 0.0
+    _cps, _ = _cp_score(ohlcv_ts, _date_str) if ohlcv_ts else (0.0, [])
+    _ms,  _ = _mo_score(ohlcv_ts, _date_str) if ohlcv_ts else (0.0, [])
+
     fields = {
         'pgr': pgr,
         'prev_pgr': prev_pgr,
@@ -768,15 +780,21 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
         'risk_ratio': risk_ratio,
         'setup_ok': setup_ok,      # True/False/None
         'seasonality':    _compute_seasonality(ohlcv_ts, power_g.date.month, power_g.date.day),
-        'rel_vol':        _rel_volume_bucket(ohlcv_ts, str(power_g.date)),
-        'market_regime':  _market_regime(str(power_g.date)),
-        'fibonacci':      _fib_score(ohlcv_ts, str(power_g.date)),
-        'rsi_divergence': _rsi_div_score(ohlcv_ts, str(power_g.date)),
+        'rel_vol':        _rel_volume_bucket(ohlcv_ts, _date_str),
+        'market_regime':  _market_regime(_date_str),
+        'fibonacci':      _fib_score(ohlcv_ts, _date_str),
+        'rsi_divergence': _rsi_div_score(ohlcv_ts, _date_str),
         # Chaikin signal fields needed by scoring.py functions
         'ob_os':           str(power_g.over_bt_sl      or '').strip(),
         'money_flow':      str(power_g.money_flow       or '').strip(),
         'lt_trend':        str(power_g.lt_trend         or '').strip(),
         'industry_strength': str(power_g.industry_strength or '').strip(),
+        # Pattern recognition fields
+        'candlestick_score': _cs,
+        'chart_score':       _cps,
+        'momentum_score':    _ms,
+        'pattern_score':     _pattern_score,
+        'pattern_text':      _pattern_text,
     }
     fields['buying_ratio'] = _buying_ratio(power_g, fields)
     fields['short_score']  = _short_score_fn(fields)
@@ -920,6 +938,8 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         row[24].value = f['short_score']
         # col Z: long-term 60d position score
         row[25].value = f['long_score']
+        # col AA: pattern recognition summary text
+        ws.cell(row[0].row, 27).value = f.get('pattern_text') or None
 
         picks_data.append({
             'symbol':   symbol,

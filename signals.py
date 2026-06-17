@@ -16,9 +16,6 @@ def tasuki_signal(data, open_column, close_column, buy_column, sell_column):
                     data[i - 1, close_column] > data[i - 1, open_column] and \
                     data[i - 1, open_column] > data[i - 2, close_column] and \
                     data[i - 2, close_column] > data[i - 2, open_column]:
-                print(f"----- {data[i - 2]}")
-                print(f"----- {data[i - 1]}")
-                print(f"----- {data[i]}")
                 data[i + 1, buy_column] = 1
             # Bearish pattern
             elif data[i, close_column] > data[i, open_column] and \
