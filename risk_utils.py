@@ -3,7 +3,8 @@ import json
 import pandas as pd
 from pathlib import Path
 
-OHLCV_DIR = Path("Data/Symbol_full")
+BASE_DIR = Path(__file__).resolve().parent
+OHLCV_DIR = BASE_DIR / "Data" / "Symbol_full"
 
 def calculate_atr(symbol, period=14):
     """Calculate the Average True Range (ATR) from local daily OHLCV files."""

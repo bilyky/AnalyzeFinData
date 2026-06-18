@@ -3,7 +3,8 @@ import datetime
 import os
 from pathlib import Path
 
-LOG_FILE = Path("Data/performance_log.json")
+BASE_DIR = Path(__file__).resolve().parent
+LOG_FILE = BASE_DIR / "Data" / "performance_log.json"
 
 def log_picks(picks):
     """Log daily picks to a JSON file for future verification."""
