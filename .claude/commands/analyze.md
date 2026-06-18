@@ -31,8 +31,9 @@ Read the workbook. Extract:
 **From Replacements sheet** (header row 2, columns A–M):
 - Top sell→buy pairs already ranked by score
 
-**From Research sheet** (cols D=symbol, G=pgr, Y=short10, Z=long60, U=setup):
+**From Research sheet** (cols D=symbol, G=pgr, Y=short10, Z=long60, U=setup, AA=patterns):
 - Confirm scores for any symbols you'll mention
+- Read col AA (patterns) — if non-blank, this is the detected pattern label (e.g. "Cup&H↑ GoldX↑", "H&S↓ MACD↓")
 
 Use the actual file data — do not rely on memory or prior conversation scores.
 
@@ -61,8 +62,9 @@ Keep each news summary to 1–2 sentences max.
 
 For each symbol in the tables below, provide a high-signal "WHY" that synthesizes:
 1.  **Technical vs. Fundamental Gap:** Contrast the PGR (Fundamental) with the S10/L60 (Technical/Momentum).
-2.  **Specific Catalysts:** Mention specific news (earnings, leadership, product, IPOs) found in Step 3.
-3.  **Actionable Advice:** For held positions, explicitly state whether to "Add to winners," "Hold/Stay patient," or "Exit to protect capital."
+2.  **Pattern Evidence:** If col AA is non-blank, cite it explicitly — e.g. "Cup&Handle breakout confirmed" or "Head & Shoulders breakdown in progress." If blank, omit.
+3.  **Specific Catalysts:** Mention specific news (earnings, leadership, product, IPOs) found in Step 3.
+4.  **Actionable Advice:** For held positions, explicitly state whether to "Add to winners," "Hold/Stay patient," or "Exit to protect capital."
 
 Format the output as three sections:
 
@@ -71,19 +73,19 @@ Format the output as three sections:
 ### ACTION REQUIRED
 One table per action (EXIT, REDUCE), ordered by urgency (worst score first). Focus on the "Exit rationale."
 
-| Symbol | Score | Status | WHAT | WHY (Technical + Fundamental + News) |
-|--------|-------|--------|------|---------------------------------------|
-| BOX | -15.0 | EXIT | Sell full position | **Gap:** Technicals collapsed (L60 -6) vs Neutral PGR. **Why:** News shows AI pivot failing to capture hardware-level excitement; exit to protect capital. |
+| Symbol | Score | Status | Patterns | WHAT | WHY (Technical + Fundamental + News) |
+|--------|-------|--------|----------|------|---------------------------------------|
+| BOX | -15.0 | EXIT | H&S↓ MACD↓ | Sell full position | **Gap:** Technicals collapsed (L60 -6) vs Neutral PGR. **Pattern:** Head & Shoulders breakdown + bearish MACD cross confirm deterioration. **Why:** News shows AI pivot failing; exit to protect capital. |
 
 ### WATCH LIST
-Positions to monitor but not act on today. One line each: symbol, score, reason (e.g., "S10 weakening; monitor for L60 decay").
+Positions to monitor but not act on today. One line each: symbol, score, patterns (if any), reason.
 
 ### BUY CANDIDATES
 Top buy opportunities from the Replacements sheet, with news context and holding-specific advice.
 
-| Symbol | Score | PGR | Setup | WHAT | WHY (Technical + Fundamental + News) |
-|--------|-------|-----|-------|------|---------------------------------------|
-| HOOD | 18.5 | Be | -- | **Add to winners** | **Gap:** Massive momentum (S10+L60=18.5) vs Bearish PGR valuation. **Why:** Underwriting approval + Agentic AI pivot is a major catalyst. If held, add on strength. |
+| Symbol | Score | PGR | Setup | Patterns | WHAT | WHY (Technical + Fundamental + News) |
+|--------|-------|-----|-------|----------|------|---------------------------------------|
+| HOOD | 18.5 | Be | -- | Cup&H↑ GoldX↑ | **Add to winners** | **Gap:** Massive momentum (S10+L60=18.5) vs Bearish PGR valuation. **Pattern:** Cup & Handle breakout + Golden Cross — structural confirmation of momentum. **Why:** Underwriting approval + Agentic AI pivot is a major catalyst. |
 
 ### SUMMARY
 3–5 bullet points: the most important moves to make today, in priority order, with a one-line rationale each. Mention "Rotation" (e.g., "Sell X to fund Y").

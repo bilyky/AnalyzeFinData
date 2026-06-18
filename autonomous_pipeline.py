@@ -70,13 +70,14 @@ def get_top_5_picks():
             win_pct = row[23] or 0.0
             s10 = row[24] or 0.0
             l60 = row[25] or 0.0
-            
+            pattern_text = str(row[26] or "").strip() if len(row) > 26 else ""
+
             if is_setup_ok:
                 # Calculate Risk Metrics
                 atr = risk_utils.calculate_atr(sym)
                 shares_atr = risk_utils.get_atr_position_size(price, atr, ACCOUNT_RISK_USD)
                 shares_stop = risk_utils.get_position_size(price, stop, ACCOUNT_RISK_USD)
-                
+
                 candidates.append({
                     "Symbol": sym,
                     "PGR": pgr,
@@ -89,7 +90,8 @@ def get_top_5_picks():
                     "Total": s10 + l60,
                     "ATR": atr,
                     "Shares_ATR": shares_atr,
-                    "Shares_Stop": shares_stop
+                    "Shares_Stop": shares_stop,
+                    "Patterns": pattern_text,
                 })
         
         candidates.sort(key=lambda x: x["Total"], reverse=True)
@@ -135,6 +137,9 @@ def format_html_report(status_msg, picks, replacements):
         win_display = f"{p['WinPct'] * 100:.1f}%"
         earnings = check_earnings(p['Symbol'])
         
+        pattern_display = p.get('Patterns') or ''
+        pattern_cell = (f'<span style="font-size:12px; color:#8e44ad; font-weight:bold;">{pattern_display}</span>'
+                        if pattern_display else '<span style="color:#aaa; font-size:11px;">—</span>')
         picks_rows += f"""
         <tr style="border-bottom: 1px solid #ddd;">
             <td style="padding: 10px;">{i}</td>
@@ -148,6 +153,7 @@ def format_html_report(status_msg, picks, replacements):
                 ATR-based: <b>{p['Shares_ATR']}</b><br>
                 Stop-based: <b>{p['Shares_Stop']}</b>
             </td>
+            <td style="padding: 10px;">{pattern_cell}</td>
             <td style="padding: 10px;">{earnings}</td>
         </tr>
         """
@@ -183,11 +189,12 @@ def format_html_report(status_msg, picks, replacements):
                     <th style="padding: 12px;">Win%</th>
                     <th style="padding: 12px;">Levels</th>
                     <th style="padding: 12px;">Shares</th>
+                    <th style="padding: 12px;">Patterns</th>
                     <th style="padding: 12px;">Earnings</th>
                 </tr>
             </thead>
             <tbody>
-                {picks_rows if picks else '<tr><td colspan="9">No candidates found today.</td></tr>'}
+                {picks_rows if picks else '<tr><td colspan="10">No candidates found today.</td></tr>'}
             </tbody>
         </table>
 
