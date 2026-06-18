@@ -150,8 +150,33 @@ def get_reasoning(symbol, pgr, s10, l60):
     # But since I am currently 'the analyst', I will populate this for today's run.
     return f"{gap_desc}<br><i>Status: Verified June 17 catalysts.</i>"
 
+def get_market_regime():
+    """Detect current market regime based on SPY momentum."""
+    try:
+        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
+        ws = wb["Research"]
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row[3] == "SPY":
+                s10, l60 = row[24] or 0, row[25] or 0
+                if l60 > 2: return "🚀 BULLISH (Risk-On)", "#2ecc71"
+                if l60 < -2: return "⚠️ BEARISH (Risk-Off / Defensive)", "#e74c3c"
+                return "⚖️ NEUTRAL (Consolidation)", "#f39c12"
+    except:
+        pass
+    return "Unknown", "#7f8c8d"
+
+def cleanup_orphaned_processes():
+    """Ensure no Excel-locking processes are hung."""
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["powershell", "Get-Process | Where-Object { $_.Name -match 'excel|python' -and $_.CommandLine -match 'main.py|daily_task.py' } | Stop-Process -Force"], capture_output=True)
+    except:
+        pass
+
 def format_html_report(status_msg, picks, replacements):
     today = datetime.date.today()
+    regime, color = get_market_regime()
+    
     picks_rows = ""
     for i, p in enumerate(picks, 1):
         win_display = f"{p['WinPct'] * 100:.1f}%"
@@ -171,17 +196,15 @@ def format_html_report(status_msg, picks, replacements):
             <td style="padding: 10px; font-size: 11px;">{reasoning}</td>
             <td style="padding: 10px;">Stop: ${p['Stop']}<br>Target: ${p['Target']}</td>
             <td style="padding: 10px; background-color: #e8f4fd;">
-                ATR-based: <b>{p['Shares_ATR']}</b><br>
-                Stop-based: <b>{p['Shares_Stop']}</b>
+                ATR: <b>{p['Shares_ATR']}</b> | Stop: <b>{p['Shares_Stop']}</b>
             </td>
             <td style="padding: 10px;">{pattern_cell}</td>
-            <td style="padding: 10px;">{earnings}</td>
+            <td style="padding: 10px; color: {'#e74c3c' if 'Required' in earnings else '#333'};">{earnings}</td>
         </tr>
         """
 
     replacement_rows = ""
     for pair in replacements:
-        # Match reasoning for replacements
         reasoning = f"Rotating from {pair['Sell']} (Weakest) to {pair['Buy']} (Strongest institutional accumulation)."
         replacement_rows += f"""
         <tr style="border-bottom: 1px solid #ddd; font-size: 12px;">
@@ -194,50 +217,50 @@ def format_html_report(status_msg, picks, replacements):
 
     html = f"""
     <html>
-    <body style="font-family: sans-serif; color: #333; line-height: 1.6;">
-        <h2 style="color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px;">Daily Trading Intelligence: {today}</h2>
-        <p style="background-color: #f8f9fa; padding: 10px; border-left: 5px solid #2ecc71;">
-            <b>System Status:</b> {status_msg}
-        </p>
-        
-        <h3 style="color: #2c3e50; margin-top: 30px;">Top High-Probability Setups (Setup OK)</h3>
-        <p><small>Position sizing based on <b>${ACCOUNT_RISK_USD}</b> risk per trade.</small></p>
-        <table style="border-collapse: collapse; width: 100%; font-size: 13px;">
-            <thead>
-                <tr style="background-color: #34495e; color: white; text-align: left;">
-                    <th style="padding: 12px;">Rank</th>
-                    <th style="padding: 12px;">Symbol</th>
-                    <th style="padding: 12px;">PGR</th>
-                    <th style="padding: 12px;">S10/L60</th>
-                    <th style="padding: 12px;">Total</th>
-                    <th style="padding: 12px;">Reasoning & Gap Analysis</th>
-                    <th style="padding: 12px;">Levels</th>
-                    <th style="padding: 12px;">Shares</th>
-                    <th style="padding: 12px;">Patterns</th>
-                    <th style="padding: 12px;">Earnings</th>
-                </tr>
-            </thead>
-            <tbody>
-                {picks_rows if picks else '<tr><td colspan="10">No candidates found today.</td></tr>'}
-            </tbody>
-        </table>
+    <body style="font-family: 'Segoe UI', Tahoma, sans-serif; color: #333; line-height: 1.6; max-width: 1000px; margin: auto;">
+        <div style="background: #2c3e50; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+            <h1 style="margin: 0; font-size: 24px;">Daily Trading Intelligence</h1>
+            <p style="margin: 5px 0 0 0; opacity: 0.8;">Autonomous Market Analysis | {today}</p>
+        </div>
 
-        <h3 style="color: #2c3e50; margin-top: 40px;">Recommended Portfolio Replacements</h3>
-        <p><small>Sell weak holdings to fund high-momentum buys.</small></p>
-        <table style="border-collapse: collapse; width: 80%; font-size: 13px;">
-            <tr style="background-color: #f2f2f2;">
-                <th style="padding: 10px; text-align: left;">SELL (Weakest)</th>
-                <th style="padding: 10px;"></th>
-                <th style="padding: 10px; text-align: left;">BUY (Strongest)</th>
-                <th style="padding: 10px; text-align: left;">Rotation Rationale</th>
-            </tr>
-            {replacement_rows if replacements else '<tr><td colspan="4">No replacement pairs identified.</td></tr>'}
-        </table>
-        
-        <div style="margin-top: 40px; border-top: 1px solid #eee; padding-top: 20px; font-size: 12px; color: #7f8c8d;">
-            <p><b>Risk Management:</b> ATR-based sizing uses 2*ATR volatility risk. Stop-based uses Price-Stop gap.</p>
-            <p><b>Gap Analysis:</b> Contrasts Chaikin Fundamentals (PGR) with Momentum Lead Signals (S10/L60).</p>
-            <p>Automated Pipeline Run at 5:30 AM PST | AnalyzeFinData Professional Desk</p>
+        <div style="padding: 20px; border: 1px solid #eee; border-top: none;">
+            <div style="display: flex; gap: 20px; margin-bottom: 30px;">
+                <div style="flex: 1; background: #f8f9fa; padding: 15px; border-left: 5px solid {color};">
+                    <h4 style="margin: 0; color: #7f8c8d; text-transform: uppercase; font-size: 11px;">Market Regime</h4>
+                    <p style="margin: 5px 0 0 0; font-weight: bold; font-size: 18px; color: {color};">{regime}</p>
+                </div>
+                <div style="flex: 1; background: #f8f9fa; padding: 15px; border-left: 5px solid #3498db;">
+                    <h4 style="margin: 0; color: #7f8c8d; text-transform: uppercase; font-size: 11px;">System Health</h4>
+                    <p style="margin: 5px 0 0 0; font-weight: bold;">{status_msg}</p>
+                </div>
+            </div>
+            
+            <h3 style="color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 5px;">Top High-Probability Setups</h3>
+            <table style="border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 40px;">
+                <thead>
+                    <tr style="background-color: #34495e; color: white; text-align: left;">
+                        <th style="padding: 12px;">Rank</th><th style="padding: 12px;">Symbol</th><th style="padding: 12px;">PGR</th>
+                        <th style="padding: 12px;">S10/L60</th><th style="padding: 12px;">Total</th><th style="padding: 12px;">Reasoning & Gap Analysis</th>
+                        <th style="padding: 12px;">Levels</th><th style="padding: 12px;">Shares</th><th style="padding: 12px;">Patterns</th><th style="padding: 12px;">Earnings</th>
+                    </tr>
+                </thead>
+                <tbody>{picks_rows if picks else '<tr><td colspan="10">No candidates found today.</td></tr>'}</tbody>
+            </table>
+
+            <h3 style="color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 5px;">Portfolio Rotation Strategy</h3>
+            <table style="border-collapse: collapse; width: 100%; font-size: 13px;">
+                <thead>
+                    <tr style="background-color: #f2f2f2; text-align: left;">
+                        <th style="padding: 10px;">SELL (Weakest)</th><th style="padding: 10px;"></th><th style="padding: 10px;">BUY (Strongest)</th><th style="padding: 10px;">Rotation Rationale</th>
+                    </tr>
+                </thead>
+                <tbody>{replacement_rows if replacements else '<tr><td colspan="4">No replacement pairs identified.</td></tr>'}</tbody>
+            </table>
+            
+            <div style="margin-top: 40px; border-top: 1px solid #eee; padding-top: 20px; font-size: 11px; color: #95a5a6; text-align: center;">
+                <p><b>Risk Management:</b> ATR-based sizing (2*ATR volatility) vs. Stop-based gap. <b>AI Manager:</b> Live tracking at Data/ai_portfolio_performance.xlsx</p>
+                <p>Generated by AnalyzeFinData Professional Desk | 5:30 AM PST Execution</p>
+            </div>
         </div>
     </body>
     </html>
@@ -245,6 +268,7 @@ def format_html_report(status_msg, picks, replacements):
     return html
 
 def main():
+    cleanup_orphaned_processes()
     log("Starting Daily Trading Pipeline...")
     
     # 1. Sync history (Backfill cache for deltas)
@@ -294,6 +318,16 @@ def main():
     log("Drafting and sending HTML report...")
     html = format_html_report(msg, picks, replacements)
     notify.send_email(f"Daily Trade Report: {datetime.date.today()}", html, is_html=True)
+    
+    # 7. Run AI Game Routine
+    log("Executing AI Portfolio Manager routine...")
+    try:
+        # Use absolute path for robustness
+        subprocess.run([sys.executable, str(BASE_DIR / "ai_portfolio_game.py"), "--run"], check=True, capture_output=True, text=True)
+        log("AI Game Routine complete.")
+    except Exception as e:
+        log(f"AI Game failed: {e}")
+
     log("Pipeline completed successfully.")
 
 
