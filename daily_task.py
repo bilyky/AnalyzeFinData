@@ -5,15 +5,11 @@ import subprocess
 import notify
 import openpyxl
 import traceback
+from pathlib import Path
 
 # --- CONFIGURATION ---
-# Ensure these are set in your environment or update them here
-# os.environ['CHAIKIN_EMAIL'] = '...'
-# os.environ['CHAIKIN_PASSWORD'] = '...'
-# os.environ['SMTP_PASSWORD'] = '...'
-
-LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "daily_task.log")
-
+BASE_DIR = Path(__file__).resolve().parent
+LOG_FILE = BASE_DIR / "daily_task.log"
 
 def log(msg):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -21,9 +17,12 @@ def log(msg):
         f.write(f"[{timestamp}] {msg}\n")
     print(msg)
 
-
 def run_command(command_list):
     log(f"Running: {' '.join(command_list)}")
+    # Use BASE_DIR for the script if it's a local script
+    if len(command_list) > 1 and command_list[1].endswith(".py"):
+        command_list[1] = str(BASE_DIR / command_list[1])
+    
     result = subprocess.run(command_list, capture_output=True, text=True)
     if result.returncode != 0:
         log(f"Error (exit code {result.returncode}): {result.stderr}")
@@ -31,11 +30,11 @@ def run_command(command_list):
         log("Command completed successfully.")
     return result.stdout
 
-
 def get_symbols_from_xls():
     try:
         # We read from the ROOT folder file
-        wb = openpyxl.load_workbook('state_of_the_day.xlsx', data_only=True, read_only=True)
+        src_path = BASE_DIR / "state_of_the_day.xlsx"
+        wb = openpyxl.load_workbook(src_path, data_only=True, read_only=True)
         ws = wb['Research']
         symbols = []
         for row in ws.iter_rows(min_row=2):
@@ -47,10 +46,9 @@ def get_symbols_from_xls():
         print(f"Error reading symbols from XLS: {e}")
         return []
 
-
 def get_all_data(date):
     # Dynamic import to use existing logic
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, str(BASE_DIR))
     import powergauge
     import json
 
@@ -60,12 +58,13 @@ def get_all_data(date):
     research_symbols = get_symbols_from_xls()
     if not research_symbols:
         log("Warning: No symbols found in Research sheet. Falling back to all cached symbols.")
-        symbol_dir = os.path.join("Data", "Symbol")
+        symbol_dir = BASE_DIR / "Data" / "Symbol"
         cached_symbols = []
-        for root, dirs, files in os.walk(symbol_dir):
-            for f in files:
-                if f.endswith(f"_{date}.json"):
-                    cached_symbols.append(f.rsplit('_', 1)[0])
+        if symbol_dir.exists():
+            for root, dirs, files in os.walk(symbol_dir):
+                for f in files:
+                    if f.endswith(f"_{date}.json"):
+                        cached_symbols.append(f.rsplit('_', 1)[0])
         research_symbols = list(set(cached_symbols))
 
     results = []
@@ -75,9 +74,9 @@ def get_all_data(date):
             if pg.price == -1:
                 continue
 
-            ohlcv_path = os.path.join("Data", "Symbol_full", f"{symbol}_daily.json")
+            ohlcv_path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
             ohlcv_ts = None
-            if os.path.exists(ohlcv_path):
+            if ohlcv_path.exists():
                 with open(ohlcv_path) as _f:
                     ohlcv_ts = json.load(_f).get('Time Series (Daily)')
 

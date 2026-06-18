@@ -274,7 +274,9 @@ def main():
     # 1. Sync history (Backfill cache for deltas)
     log("Backfilling 5-day history (run_history.py)...")
     try:
-        subprocess.run([sys.executable, "run_history.py", "5"], check=True, capture_output=True, text=True)
+        # Use absolute path for the script
+        script_path = str(BASE_DIR / "run_history.py")
+        subprocess.run([sys.executable, script_path, "5"], check=True, capture_output=True, text=True)
         log("History backfilled.")
     except subprocess.CalledProcessError as e:
         log(f"Warning: run_history.py failed (will continue): {e.stderr}")
@@ -282,7 +284,9 @@ def main():
     # 2. Execute main.py
     log("Refreshing workbook (main.py)...")
     try:
-        subprocess.run([sys.executable, "main.py"], check=True, capture_output=True, text=True)
+        # Use absolute path for the script
+        script_path = str(BASE_DIR / "main.py")
+        subprocess.run([sys.executable, script_path], check=True, capture_output=True, text=True)
         log("Workbook regenerated.")
     except subprocess.CalledProcessError as e:
         error_msg = f"main.py failed: {e.stderr}"
@@ -290,40 +294,41 @@ def main():
         notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline failed during main.py execution.\n\n{error_msg}")
         return
 
-    # 2. Verify data freshness
+    # 3. Verify data freshness
     fresh, msg = verify_data_freshness()
     log(msg)
     if not fresh:
         notify.send_email("ALERT: Daily Pipeline Stale Data", msg)
         return
 
-    # 3. Validate sheets
+    # 4. Validate sheets
     valid, v_msg = validate_sheets()
     log(v_msg)
     if not valid:
         notify.send_email("ALERT: Daily Pipeline Validation Failed", v_msg)
         return
 
-    # 4. Compute top-5 picks & replacements
+    # 5. Compute top-5 picks & replacements
     log("Computing top-5 picks and replacements...")
     picks = get_top_5_picks()
     replacements = get_replacement_pairs()
 
-    # 5. Log for performance tracking
+    # 6. Log for performance tracking
     if picks:
         log("Logging picks for performance tracking...")
         performance_tracker.log_picks(picks)
 
-    # 6. Send report
+    # 7. Send report
     log("Drafting and sending HTML report...")
     html = format_html_report(msg, picks, replacements)
     notify.send_email(f"Daily Trade Report: {datetime.date.today()}", html, is_html=True)
     
-    # 7. Run AI Game Routine
+    # 8. Run AI Game Routine
     log("Executing AI Portfolio Manager routine...")
     try:
         # Use absolute path for robustness
-        subprocess.run([sys.executable, str(BASE_DIR / "ai_portfolio_game.py"), "--run"], check=True, capture_output=True, text=True)
+        game_script = str(BASE_DIR / "ai_portfolio_game.py")
+        subprocess.run([sys.executable, game_script, "--run"], check=True, capture_output=True, text=True)
         log("AI Game Routine complete.")
     except Exception as e:
         log(f"AI Game failed: {e}")
@@ -333,4 +338,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

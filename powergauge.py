@@ -909,6 +909,20 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         f = _compute_pgr_fields(power_g, ohlcv_ts=ohlcv_ts)
         setup_ok = f['setup_ok']   # True / False / None
 
+        # --- Closing Price Override ---
+        # If we have an official OHLCV bar for today, use its 'close' as the absolute truth.
+        # This overrides potentially delayed or intraday live API prices.
+        today_str = date.strftime("%Y-%m-%d")
+        final_price = power_g.price
+        if ohlcv_ts and today_str in ohlcv_ts:
+            try:
+                official_close = float(ohlcv_ts[today_str]['4. close'])
+                if abs(official_close - power_g.price) > 0.001:
+                    # print(f"  [OVERRIDE] {symbol} live price {power_g.price} -> final close {official_close}")
+                    final_price = official_close
+            except (ValueError, KeyError):
+                pass
+
         row[4].value = power_g.industry_name
         row[5].value = f['prev_pgr']
         row[6].value = f['pgr']
@@ -916,7 +930,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         # row[8] col I: manual price level - preserved
         # J=stop, L=target: zero out when filter fails (setup_ok=False)
         row[9].value  = f['stop_price']       if setup_ok is not False else 0  # col J
-        row[10].value = power_g.price                                           # col K
+        row[10].value = final_price                                             # col K (Overridden)
         row[11].value = f['prev_move_price']  if setup_ok is not False else 0  # col L
         row[12].value = f['risk_ratio']       if setup_ok is not False else 0  # col M
         row[13].value = f['prev_move_perc']
