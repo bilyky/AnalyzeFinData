@@ -130,16 +130,18 @@ class TestRelVolumeBucket(unittest.TestCase):
         ohlcv = make_ohlcv([100.0] * 21, volumes=vols)
         return ohlcv, sorted(ohlcv.keys())[-1]
 
-    def test_very_high(self):   self.assertEqual(rel_volume_bucket(*self._make(2.5)), "Very High")
-    def test_high(self):        self.assertEqual(rel_volume_bucket(*self._make(1.7)), "High")
-    def test_normal(self):      self.assertEqual(rel_volume_bucket(*self._make(1.0)), "Normal")
-    def test_low(self):         self.assertEqual(rel_volume_bucket(*self._make(0.5)), "Low")
-
-    def test_at_boundary_2x_is_very_high(self):
-        self.assertEqual(rel_volume_bucket(*self._make(2.0)), "Very High")
-
-    def test_at_boundary_1_5x_is_high(self):
-        self.assertEqual(rel_volume_bucket(*self._make(1.5)), "High")
+    def test_all_buckets(self):
+        cases = [
+            (2.5, "Very High"),
+            (2.0, "Very High"),  # boundary
+            (1.7, "High"),
+            (1.5, "High"),       # boundary
+            (1.0, "Normal"),
+            (0.5, "Low"),
+        ]
+        for mult, expected in cases:
+            with self.subTest(mult=mult):
+                self.assertEqual(rel_volume_bucket(*self._make(mult)), expected)
 
     def test_insufficient_data_returns_none(self):
         ohlcv = make_ohlcv([100.0] * 5)

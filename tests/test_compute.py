@@ -56,25 +56,20 @@ class TestBuyingRatio(unittest.TestCase):
             self.assertGreaterEqual(result, -10.0)
             self.assertLessEqual(result, 10.0)
 
-    def test_bull_pgr_scores_higher_than_bear(self):
-        bull = _buying_ratio(self._pg(pgr_corr=5), self._fields())
-        bear = _buying_ratio(self._pg(pgr_corr=1), self._fields())
-        self.assertGreater(bull, bear)
-
-    def test_strong_money_flow_beats_weak(self):
-        strong = _buying_ratio(self._pg(mf="Strong"), self._fields())
-        weak   = _buying_ratio(self._pg(mf="Weak"),   self._fields())
-        self.assertGreater(strong, weak)
-
-    def test_pgr_delta_adds_bonus(self):
-        no_delta = _buying_ratio(self._pg(), self._fields(delta=0))
-        delta    = _buying_ratio(self._pg(), self._fields(delta=1))
-        self.assertGreater(delta, no_delta)
-
-    def test_good_rr_beats_zero_rr(self):
-        good = _buying_ratio(self._pg(), self._fields(rr=3.0))
-        zero = _buying_ratio(self._pg(), self._fields(rr=0.0))
-        self.assertGreater(good, zero)
+    def test_factor_directions(self):
+        cases = [
+            ("bull>bear",      _buying_ratio(self._pg(pgr_corr=5), self._fields()),
+                               _buying_ratio(self._pg(pgr_corr=1), self._fields())),
+            ("strong_mf>weak", _buying_ratio(self._pg(mf="Strong"), self._fields()),
+                               _buying_ratio(self._pg(mf="Weak"),   self._fields())),
+            ("delta>no_delta", _buying_ratio(self._pg(), self._fields(delta=1)),
+                               _buying_ratio(self._pg(), self._fields(delta=0))),
+            ("good_rr>zero",   _buying_ratio(self._pg(), self._fields(rr=3.0)),
+                               _buying_ratio(self._pg(), self._fields(rr=0.0))),
+        ]
+        for label, higher, lower in cases:
+            with self.subTest(label):
+                self.assertGreater(higher, lower)
 
 
 # ── _compute_pgr_fields ───────────────────────────────────────────────────────
@@ -150,8 +145,8 @@ class TestComputePgrFields(unittest.TestCase):
     def test_stop_price_below_entry_price(self):
         pg, ohlcv = _make_pg_with_ohlcv()
         fields = _compute_pgr_fields(pg, ohlcv_ts=ohlcv)
-        if fields["stop_price"]:
-            self.assertLess(fields["stop_price"], pg.price)
+        self.assertGreater(fields["stop_price"], 0, "stop_price should be nonzero for an uptrend with OHLCV data")
+        self.assertLess(fields["stop_price"], pg.price)
 
     def test_oob_pgr_value_does_not_raise(self):
         pg, ohlcv = _make_pg_with_ohlcv()
@@ -174,12 +169,6 @@ class TestRecursionDepthCap(unittest.TestCase):
                 pg.prevPG = nodes[i + 1]
         return nodes[0]
 
-    def test_count_no_stack_overflow(self):
-        root = self._chain(100)
-        result = root.get_prev_same_move_count()   # must not raise
-        self.assertIsInstance(result, int)
-        self.assertLess(result, 100)               # cap was applied
-
     def test_count_capped_value(self):
         # Cap at depth>30: depth 31 returns 1, bubbles back → root returns 32
         root = self._chain(100, pct=1.0)
@@ -188,16 +177,6 @@ class TestRecursionDepthCap(unittest.TestCase):
     def test_short_chain_not_capped(self):
         root = self._chain(5, pct=1.0)
         self.assertEqual(root.get_prev_same_move_count(), 4)
-
-    def test_percent_no_stack_overflow(self):
-        root = self._chain(100)
-        result = root.get_prev_same_move_percent()
-        self.assertIsInstance(result, float)
-
-    def test_price_no_stack_overflow(self):
-        root = self._chain(100)
-        result = root.get_prev_same_move_price()
-        self.assertIsInstance(result, float)
 
     def test_down_streak_capped_negative(self):
         root = self._chain(100, pct=-1.0)

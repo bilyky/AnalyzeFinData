@@ -650,8 +650,9 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
       PGR delta            +0.25  (any change vs yesterday = interesting)
       Seasonality          ±1.0   (week-of-month 10d avg return buckets)
 
-    setup_ok (col U) is display-only: backtesting showed it is a contrarian indicator
-    for raw 10d returns (False=+1.36%, True=+0.48%) so it is excluded from the score.
+    setup_ok (col U) gates Stop/Target/R-R writes and flows into the Picks sheet;
+    excluded from this score because backtesting showed it is a contrarian indicator
+    for raw 10d returns (False=+1.36%, True=+0.48%).
     """
     score = 0.0
 
@@ -928,11 +929,11 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         row[6].value = f['pgr']
         row[7].value = power_g.industry_strength
         # row[8] col I: manual price level - preserved
-        # J=stop, L=target: zero out when filter fails (setup_ok=False)
-        row[9].value  = f['stop_price']       if setup_ok is not False else 0  # col J
-        row[10].value = final_price                                             # col K (Overridden)
-        row[11].value = f['prev_move_price']  if setup_ok is not False else 0  # col L
-        row[12].value = f['risk_ratio']       if setup_ok is not False else 0  # col M
+        # J=stop, L=target: write only when OHLCV data exists; zero when unavailable (setup_ok=None)
+        row[9].value  = f['stop_price']       if setup_ok is not None else 0  # col J
+        row[10].value = final_price                                            # col K (Overridden)
+        row[11].value = f['prev_move_price']  if setup_ok is not None else 0  # col L
+        row[12].value = f['risk_ratio']       if setup_ok is not None else 0  # col M
         row[13].value = f['prev_move_perc']
         row[14].value = f['prev_percentage']
         row[15].value = power_g.percentage
@@ -991,7 +992,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
             _pos  = _et.fetch_positions(_tok, "production")
             _syms = list({p["symbol"] for p in _pos})
             _qts  = _et.fetch_quotes(_tok, _syms, "production")
-            _update_short_long_scores(wb, _lk, _qts, _pos)
+            _update_short_long_scores(wb, _lk, _qts, _pos, ohlcv_cache)
             _touched_sheets.add("Short_Long")
             print(f"Short_Long sheet synced: {len(_pos)} positions.")
     except Exception as _e:

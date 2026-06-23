@@ -616,7 +616,29 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
             patched = re.sub(r'shapeId="\d+"', lambda _: f'shapeId="{next(it)}"', comments)
             modified[cf] = patched.encode('utf-8')
 
-        # ── 2. External-link strip ──────────────────────────────────────────
+        # ── 2. Content-Types: ensure comment + VML drawing have explicit Overrides ──
+        CT_NAME = '[Content_Types].xml'
+        if CT_NAME in names:
+            ct_text = (modified.get(CT_NAME) or zin.read(CT_NAME)).decode('utf-8')
+            ct_changed = False
+            for cm in comment_files:
+                part = '/' + cm
+                ct_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml'
+                override = f'<Override PartName="{part}" ContentType="{ct_type}"/>'
+                if part not in ct_text:
+                    ct_text = ct_text.replace('</Types>', override + '</Types>')
+                    ct_changed = True
+            for vf in vml_files:
+                part = '/' + vf
+                ct_type = 'application/vnd.openxmlformats-officedocument.vmlDrawing'
+                override = f'<Override PartName="{part}" ContentType="{ct_type}"/>'
+                if part not in ct_text:
+                    ct_text = ct_text.replace('</Types>', override + '</Types>')
+                    ct_changed = True
+            if ct_changed:
+                modified[CT_NAME] = ct_text.encode('utf-8')
+
+        # ── 3. External-link strip ──────────────────────────────────────────
         ext_link_files = {n for n in names if n.startswith('xl/externalLinks/')}
 
         if ext_link_files:
@@ -684,7 +706,7 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
         f.write(buf.getvalue())
 
 
-def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: list[dict]):
+def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: list[dict], ohlcv_cache: dict = None):
     """Sync the Short_Long sheet with E*TRADE positions and write score columns Q-W.
 
     Two account-based tables separated by exactly 3 blank rows:
@@ -1013,6 +1035,40 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
 
         days_green = days if in_profit else 0
         days_red   = days if (in_profit is False) else 0
+
+        # N=R (red streak), O=G (green streak): consecutive closing-down/up days
+        streak = None
+        ohlcv_ts = (ohlcv_cache or {}).get(sym)
+        if ohlcv_ts:
+            from scoring import ohlcv_streak_count as _streak_count
+            all_dates = sorted(ohlcv_ts.keys())
+            date_str  = str(today)
+            past = [d for d in all_dates if d <= date_str]
+            if past:
+                idx = all_dates.index(past[-1])
+                last_close = float(ohlcv_ts[all_dates[idx]].get('4. close') or 0)
+                prev_close = float(ohlcv_ts[all_dates[idx - 1]].get('4. close') or 0) if idx >= 1 else last_close
+                day_pct = ((last_close - prev_close) / prev_close * 100) if prev_close else 0
+                streak = _streak_count(ohlcv_ts, all_dates, idx, day_pct)
+        c = ws.cell(rn, 14)   # col N = R (red streak)
+        new_r = abs(streak) if (streak is not None and streak < 0) else None
+        old_r = c.value if isinstance(c.value, (int, float)) else None
+        c.value = new_r
+        c.alignment = CTR
+        if new_r is not None and old_r is not None:
+            c.fill = RED_FILL if new_r > old_r else (GRN_FILL if new_r < old_r else GRY_FILL)
+        else:
+            c.fill = GRY_FILL
+
+        c = ws.cell(rn, 15)   # col O = G (green streak)
+        new_g = streak if (streak is not None and streak > 0) else None
+        old_g = c.value if isinstance(c.value, (int, float)) else None
+        c.value = new_g
+        c.alignment = CTR
+        if new_g is not None and old_g is not None:
+            c.fill = GRN_FILL if new_g > old_g else (RED_FILL if new_g < old_g else GRY_FILL)
+        else:
+            c.fill = GRY_FILL
 
         # Q: Short10
         c = ws.cell(rn, 17)
