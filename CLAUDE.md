@@ -2,7 +2,9 @@
 
 ## General Principles
 
-Before questioning data freshness or correctness, ALWAYS verify by checking file timestamps, reading the actual file contents, or running the relevant script first. Do not raise doubts based on assumptions.
+*   **Rule of Zero Trust:** NEVER trust an initial data point or assumption. ALWAYS verify by checking file timestamps, reading raw JSON cache, or cross-referencing E*TRADE quotes before raising doubts or making moves.
+*   **Empirical Verification:** Before recommending an action (EXIT/BUY), the system must backtrack: check the last 3 times a similar technical setup occurred for that symbol in the local cache to verify its historical hit rate.
+*   **Self-Correction:** If the system identifies a discrepancy (e.g., live price vs. OHLCV close), it must automatically log the correction and re-calculate dependent scores.
 
 ## Workflow Conventions
 
