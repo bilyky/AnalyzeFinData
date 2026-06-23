@@ -175,18 +175,21 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
     if intel_ideas:
         idea_list = ""
         for i in intel_ideas:
-            tickers_found = f"<br>🎯 <b>Tickers mentioned:</b> {', '.join(i['tickers'])}" if i.get('tickers') else ""
+            color = "#27ae60" if i["sentiment"] == "BUY" else ("#c0392b" if i["sentiment"] == "SELL" else "#f39c12")
+            sentiment_badge = f'<span style="background: {color}; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 11px;">{i["sentiment"]}</span>'
+            
             idea_list += f"""
-            <li style="margin-bottom: 15px;">
-                <b>{i['from']}</b>: {i['subject']}<br>
-                <small style="color: #666;">{i['body']}</small>
-                {tickers_found}
+            <li style="margin-bottom: 15px; border-bottom: 1px dashed #eee; padding-bottom: 10px;">
+                <b>Source:</b> {i['from']}<br>
+                <b>Topic:</b> {i['subject']}<br>
+                <b>Decision:</b> {sentiment_badge} <b>{i['symbol']}</b><br>
+                <b>AI Semantic Summary:</b> <span style="color: #555; font-style: italic;">"{i['thesis']}"</span>
             </li>"""
         
         intel_section = f"""
         <div style="background: #fff8e1; border-left: 5px solid #ffc107; padding: 15px; margin-bottom: 30px; border-radius: 4px;">
-            <h4 style="margin: 0; color: #ffa000; text-transform: uppercase; font-size: 11px;">💡 External Intelligence (Newsletters & Feedback)</h4>
-            <ul style="margin: 10px 0 0 0; font-size: 13px; padding-left: 20px;">{idea_list}</ul>
+            <h4 style="margin: 0; color: #ffa000; text-transform: uppercase; font-size: 11px; padding-bottom: 5px; border-bottom: 1px solid #ffe082;">💡 Semantic Newsletter Scraper (External Intelligence)</h4>
+            <ul style="margin: 10px 0 0 0; font-size: 13px; padding-left: 20px; list-style-type: none;">{idea_list}</ul>
         </div>
         """
     

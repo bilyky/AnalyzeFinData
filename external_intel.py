@@ -108,8 +108,70 @@ def extract_tickers(text):
                 
     return list(set(valid_tickers))
 
+def analyze_email_content(subject, body):
+    """Use GPT-4o-mini to semantically analyze the email content and extract structured trade ideas."""
+    token = None
+    env_path = BASE_DIR / ".env"
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                if line.startswith("GITHUB_TOKEN="):
+                    token = line.split("=", 1)[1].strip().strip('"')
+
+    if not token:
+        return None
+
+    url = "https://models.inference.ai.azure.com/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    # Fetch existing symbols to help the LLM filter out false tickers
+    universe = list(get_existing_symbols())[:150] # Sample to fit prompt limits comfortably
+
+    prompt = f"""
+    You are Project AETHER, an elite AI hedge fund analyst. Read this financial email and extract concrete stock recommendations.
+    
+    Email Subject: {subject}
+    Email Body: {body[:1500]}
+    
+    Instructions:
+    1. Extract the specific stock tickers being recommended.
+    2. Cross-reference with this list of valid tickers if possible: {', '.join(universe)}.
+    3. Determine the exact sentiment: BUY, SELL, or HOLD.
+    4. Summarize the core thesis in one short sentence.
+    
+    Output strictly as a JSON list of objects, or an empty list [] if no concrete recommendations exist.
+    Example:
+    [
+        {{"symbol": "AAPL", "sentiment": "BUY", "thesis": "Strong iPhone sales in China driving immediate momentum."}}
+    ]
+    """
+
+    data = {
+        "messages": [
+            {"role": "system", "content": "You are a precise financial data extractor. You only output valid JSON. No markdown wrappers like ```json."},
+            {"role": "user", "content": prompt}
+        ],
+        "model": "gpt-4o-mini",
+        "max_tokens": 300,
+        "temperature": 0.1
+    }
+
+    try:
+        r = requests.post(url, json=data, headers=headers)
+        if r.status_code == 200:
+            content = r.json()["choices"][0]["message"]["content"].strip()
+            # Handle potential markdown wrappers if any
+            content = content.replace("```json", "").replace("```", "").strip()
+            return json.loads(content)
+    except Exception as e:
+        print(f"Semantic email analysis failed: {e}")
+    return []
+
 def fetch_idea_emails():
-    """Check inbox for all stock-oriented emails from the last 24h."""
+    """Check inbox for all stock-oriented emails from the last 24h and analyze their content."""
     if not EMAIL_PASS:
         print("Error: SMTP_PASSWORD not set. Cannot check emails.")
         return []
@@ -130,7 +192,7 @@ def fetch_idea_emails():
                     raw_email = data[0][1]
                     msg = email.message_from_bytes(raw_email)
                     
-                    subject = str(msg["subject"] or "").upper()
+                    subject = str(msg["subject"] or "")
                     
                     body = ""
                     if msg.is_multipart():
@@ -141,15 +203,18 @@ def fetch_idea_emails():
                     else:
                         body = msg.get_payload(decode=True).decode(errors='ignore')
                     
+                    # Perform deep semantic analysis instead of primitive regex matching
                     content_to_check = (subject + " " + body).upper()
                     if any(k in content_to_check for k in STOCK_KEYWORDS) or "$" in content_to_check:
-                        tickers = extract_tickers(content_to_check)
-                        ideas.append({
-                            "subject": msg["subject"],
-                            "from": msg["from"],
-                            "body": body[:500].strip() + "...",
-                            "tickers": tickers
-                        })
+                        parsed_ideas = analyze_email_content(subject, body)
+                        for idea in parsed_ideas:
+                            ideas.append({
+                                "from": msg["from"],
+                                "subject": msg["subject"],
+                                "symbol": idea["symbol"],
+                                "sentiment": idea["sentiment"],
+                                "thesis": idea["thesis"]
+                            })
 
         mail.logout()
     except Exception as e:
