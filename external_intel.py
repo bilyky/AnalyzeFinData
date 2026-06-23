@@ -1,19 +1,13 @@
-import imaplib
-import email
 import os
+import sys
 import datetime
-from email.header import decode_header
-from pathlib import Path
-
-import re
-
 import re
 import requests
 import json
 import imaplib
 import email
-import os
-import datetime
+import openpyxl
+from email.header import decode_header
 from pathlib import Path
 
 # --- CONFIGURATION ---
@@ -36,7 +30,6 @@ def get_ai_reasoning(symbol, industry, pgr, s10, l60):
                     token = line.split("=", 1)[1].strip().strip('"')
 
     if not token:
-        # Fallback to local heuristics if token is missing
         return f"<b>Standard Audit:</b> Technicals and Fundamentals aligned ({pgr})."
 
     url = "https://models.inference.ai.azure.com/chat/completions"
@@ -67,7 +60,6 @@ def get_ai_reasoning(symbol, industry, pgr, s10, l60):
         r = requests.post(url, json=data, headers=headers)
         if r.status_code == 200:
             content = r.json()["choices"][0]["message"]["content"].strip()
-            # Split sentences for formatting
             sentences = content.split(". ")
             devils_advocate = sentences[0] + "." if len(sentences) > 0 else ""
             catalyst = ". ".join(sentences[1:]) if len(sentences) > 1 else ""
@@ -78,11 +70,43 @@ def get_ai_reasoning(symbol, industry, pgr, s10, l60):
     except Exception as e:
         return f"<b>Verification failed:</b> {e}"
 
+def get_existing_symbols():
+    """Load the valid symbols from the root Research sheet to prevent false positives."""
+    try:
+        root_path = BASE_DIR / "state_of_the_day.xlsx"
+        wb = openpyxl.load_workbook(root_path, data_only=True, read_only=True)
+        ws = wb["Research"]
+        return {str(row[3]).strip().upper() for row in ws.iter_rows(min_row=2, values_only=True) if row[3]}
+    except Exception as e:
+        print(f"Failed to load symbols for verification: {e}")
+        return set()
+
+# Common English words that are also valid stock tickers. 
+# We ignore these unless they are explicitly prefixed with a '$' (e.g., $ALL vs. 'all').
+TICKER_BLACKLIST = {"ALL", "IT", "ME", "SO", "OR", "GO", "AM", "ON", "HE", "WE", "DO"}
+
 def extract_tickers(text):
-    """Regex to find likely stock tickers (2-5 uppercase letters)."""
-    # Matches $ABC or standalone ABC in a financial context
-    found = re.findall(r'\$?([A-Z]{2,5})\b', text)
-    return list(set(found))
+    """Extract and verify stock tickers using the Research Universe."""
+    # Find words with leading '$' (e.g., $ALL)
+    dollar_tickers = set(re.findall(r'\$([A-Z]{2,5})\b', text.upper()))
+    
+    # Find standalone uppercase words (e.g., AAPL)
+    words = set(re.findall(r'\b([A-Z]{2,5})\b', text.upper()))
+    
+    # Cross-reference with our Research Universe to eliminate false positives
+    universe = get_existing_symbols()
+    
+    valid_tickers = []
+    for w in words:
+        if w in universe:
+            # If it's a common word, only allow it if it had a '$' prefix
+            if w in TICKER_BLACKLIST:
+                if w in dollar_tickers:
+                    valid_tickers.append(w)
+            else:
+                valid_tickers.append(w)
+                
+    return list(set(valid_tickers))
 
 def fetch_idea_emails():
     """Check inbox for all stock-oriented emails from the last 24h."""
@@ -96,10 +120,7 @@ def fetch_idea_emails():
         mail.login(EMAIL_USER, EMAIL_PASS)
         mail.select("inbox")
 
-        # Search for emails from the last 24h
         date = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%d-%b-%Y")
-        
-        # Broad search: Check all emails since yesterday
         status, messages = mail.search(None, f'(SINCE "{date}")')
 
         if status == "OK":
@@ -110,10 +131,7 @@ def fetch_idea_emails():
                     msg = email.message_from_bytes(raw_email)
                     
                     subject = str(msg["subject"] or "").upper()
-                    sender = str(msg["from"] or "").lower()
                     
-                    # 1. Filter: Does the subject or body look stock-oriented?
-                    # 2. Extract Body
                     body = ""
                     if msg.is_multipart():
                         for part in msg.walk():
@@ -123,14 +141,13 @@ def fetch_idea_emails():
                     else:
                         body = msg.get_payload(decode=True).decode(errors='ignore')
                     
-                    # 3. Decision Logic: Is this high-signal?
                     content_to_check = (subject + " " + body).upper()
                     if any(k in content_to_check for k in STOCK_KEYWORDS) or "$" in content_to_check:
                         tickers = extract_tickers(content_to_check)
                         ideas.append({
                             "subject": msg["subject"],
                             "from": msg["from"],
-                            "body": body[:500].strip() + "...", # Truncate for report
+                            "body": body[:500].strip() + "...",
                             "tickers": tickers
                         })
 
@@ -141,14 +158,10 @@ def fetch_idea_emails():
     return ideas
 
 def get_market_news(symbols):
-    """Fetch top news summaries for specific symbols or sectors."""
-    # This will be integrated with the system's search tool capabilities
-    # For the autonomous script, we'll log that news needs to be pulled.
     print(f"Hiring AETHER news bots to scan for: {', '.join(symbols)}")
     return []
 
 if __name__ == "__main__":
-    # Test
     print("Checking for new AETHER ideas...")
     new_ideas = fetch_idea_emails()
     for idea in new_ideas:
