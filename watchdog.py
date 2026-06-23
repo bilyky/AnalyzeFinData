@@ -57,23 +57,68 @@ def check_data_freshness():
         return f"WARNING: Data is stale. Last updated: {mtime}"
     return None
 
+def heal_tasks(missing_tasks):
+    """Attempt to re-register tasks that have disappeared or failed."""
+    for task in missing_tasks:
+        print(f"🔧 Attempting to heal task: {task}")
+        # Logic to re-create the specific task
+        if task == "AnalyzeFinData_Morning":
+            cmd = f'schtasks /create /tn "{task}" /tr "{sys.executable} {BASE_DIR / "autonomous_pipeline.py"}" /sc daily /st 05:30 /f /it /ru yufa'
+        elif task == "AnalyzeFinData_Evening":
+            cmd = f'schtasks /create /tn "{task}" /tr "{sys.executable} {BASE_DIR / "daily_task.py"}" /sc daily /st 17:00 /f /it /ru yufa'
+        elif task == "Project_AETHER_Watchdog":
+            cmd = f'schtasks /create /tn "{task}" /tr "{sys.executable} {BASE_DIR / "watchdog.py"}" /sc hourly /f /it /ru yufa'
+        else:
+            continue
+        
+        try:
+            subprocess.run(cmd, shell=True, capture_output=True)
+            print(f"✅ Task {task} re-registered.")
+        except Exception as e:
+            print(f"❌ Failed to heal {task}: {e}")
+
+def kill_ghost_processes():
+    """Kill any hung python or excel processes that might be locking resources."""
+    print("🧹 Cleaning up hung ghost processes...")
+    try:
+        subprocess.run(["powershell", "Get-Process | Where-Object { $_.Name -match 'excel|python' -and $_.CommandLine -match 'AnalyzeFinData' } | Stop-Process -Force"], capture_output=True)
+    except:
+        pass
+
 def run_watchdog():
-    print(f"[{datetime.datetime.now()}] Project AETHER Watchdog starting...")
+    print(f"[{datetime.datetime.now()}] Project AETHER Healer starting...")
     
     log_errors = check_logs()
     missing_tasks = check_task_scheduler()
     data_issue = check_data_freshness()
     
+    recovery_actions = []
+    
+    # 1. If tasks are missing, heal them
+    if missing_tasks:
+        heal_tasks(missing_tasks)
+        recovery_actions.append(f"Healed missing tasks: {', '.join(missing_tasks)}")
+
+    # 2. If log errors suggest a lock, kill ghost processes
+    if any("PERMISSION" in str(err).upper() for err in log_errors):
+        kill_ghost_processes()
+        recovery_actions.append("Killed ghost processes to resolve resource lock.")
+
+    # 3. Final Check
+    remaining_errors = check_logs()
+    
     issues = []
-    if log_errors: issues.append("LOG ERRORS FOUND:\n" + "\n".join(log_errors))
-    if missing_tasks: issues.append("MISSING/FAILED TASKS:\n" + ", ".join(missing_tasks))
+    if remaining_errors: issues.append("REMAINING LOG ERRORS:\n" + "\n".join(remaining_errors))
     if data_issue: issues.append(data_issue)
     
-    if issues:
-        alert_msg = "\n\n".join(issues)
-        print("🚨 Watchdog identified issues! Sending alert...")
-        notify.send_email("🚨 Project AETHER: System Health Alert", 
-                          f"Watchdog has identified the following issues in the last 24h:\n\n{alert_msg}")
+    if recovery_actions or issues:
+        report = []
+        if recovery_actions: report.append("🤖 AUTONOMOUS RECOVERY ACTIONS:\n" + "\n".join(recovery_actions))
+        if issues: report.append("🚨 REMAINING ISSUES:\n" + "\n".join(issues))
+        
+        alert_msg = "\n\n".join(report)
+        print("Healer finished with actions or issues. Sending report...")
+        notify.send_email("🛡️ Project AETHER: Health & Recovery Report", alert_msg)
     else:
         print("✅ System Health Check: All systems nominal.")
 

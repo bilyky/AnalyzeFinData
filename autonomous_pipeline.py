@@ -134,48 +134,14 @@ def get_replacement_pairs():
         return []
 
 def get_reasoning(symbol, pgr, s10, l60, industry):
-    """Synthesize reasoning with Ruthless Data Criticism and 'Darkest Corner' opportunity search."""
-    
-    # 1. Devil's Advocate (Why might this fail?)
-    weakness = ""
-    if "Be" in pgr:
-        weakness = "Fundamental valuation is broken; we are relying purely on 'hot money' rotation. If momentum stalls, the drop will be vertical."
-    elif s10 < 2:
-        weakness = "Immediate entry window is weak; we are catching a falling knife."
-    else:
-        weakness = "Market saturation or macro regime shift could override technical strength."
-
-    # 2. 'Darkest Corners' & 'Force Multiplier' Check
-    strategic_keywords = ['Metals', 'Mining', 'Defense', 'Aerospace', 'Machine', 'Chemical']
-    multiplier_keywords = ['Medical Data', 'Genomic', 'Sequencing', 'Sensor', 'Motion Control', 'Electrical', 'Cybersecurity', 'Semiconductor Equipment']
-    
-    industry_str = str(industry)
-    is_strategic = any(k in industry_str for k in strategic_keywords)
-    is_multiplier = any(k in industry_str for k in multiplier_keywords)
-    
-    opportunity_type = "Standard Momentum"
-    if is_strategic: opportunity_type = "Strategic Requirement"
-    if is_multiplier: opportunity_type = "AI Force Multiplier"
-
-    # 3. June 18 Specific Catalysts (Analyst Overrides)
-    catalyst = "<i>Status: Verified June 18 catalysts.</i>"
-    if symbol == "VRT":
-        catalyst = "<b>Catalyst:</b> ThermoKey acquisition + NVIDIA co-development for liquid cooling."
-    elif symbol == "MOD":
-        catalyst = "<b>Catalyst:</b> $4B hyperscaler agreement for Airedale data center cooling."
-    elif symbol == "ETN":
-        catalyst = "<b>Catalyst:</b> $10B Mobility spinoff + Raised FY26 EPS guidance."
-    elif symbol == "TXG":
-        catalyst = "<b>Catalyst:</b> William Blair upgrade + Cleveland Clinic collaboration for diagnostic research."
-
-    # 4. Final Synthesis
-    gap_desc = ""
-    if (s10 + l60) > 10:
-        gap_desc = f"<b>{opportunity_type}:</b> Institutional re-rating active."
-    else:
-        gap_desc = f"<b>Technical/Fundamental Alignment:</b> {pgr} status."
-
-    return f"{gap_desc}<br>🚨 <b>Devil's Advocate:</b> {weakness}<br>{catalyst}"
+    """Retrieve live LLM reasoning via the GitHub Models API (gpt-4o-mini) with local heuristics fallback."""
+    try:
+        # Call the live LLM reasoning engine we just implemented
+        return external_intel.get_ai_reasoning(symbol, industry, pgr, s10, l60)
+    except Exception as e:
+        log(f"Warning: Live AI reasoning failed for {symbol}: {e}")
+        # Standard Fallback
+        return f"<b>Technical Setup Active:</b> Setup OK with total score: {s10+l60:.1f}.<br>🚨 <b>Devil's Advocate:</b> High market volatility could override technical momentum."
 
 def get_market_regime():
     """Detect current market regime based on SPY momentum."""

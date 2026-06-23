@@ -7,13 +7,76 @@ from pathlib import Path
 
 import re
 
+import re
+import requests
+import json
+import imaplib
+import email
+import os
+import datetime
+from pathlib import Path
+
 # --- CONFIGURATION ---
 IMAP_SERVER = "imap.gmail.com"
 EMAIL_USER = "bilyky@gmail.com"
 EMAIL_PASS = os.environ.get("SMTP_PASSWORD")
+BASE_DIR = Path(__file__).resolve().parent
 
 # Keywords that signal a stock-oriented email
 STOCK_KEYWORDS = ["BUY", "SELL", "STOCK", "TICKER", "NEWSLETTER", "PICK", "ALPHA", "PORTFOLIO", "EARNINGS"]
+
+def get_ai_reasoning(symbol, industry, pgr, s10, l60):
+    """Call the GitHub Models API (gpt-4o-mini) to generate a live, ruthless risk audit."""
+    token = None
+    env_path = BASE_DIR / ".env"
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                if line.startswith("GITHUB_TOKEN="):
+                    token = line.split("=", 1)[1].strip().strip('"')
+
+    if not token:
+        # Fallback to local heuristics if token is missing
+        return f"<b>Standard Audit:</b> Technicals and Fundamentals aligned ({pgr})."
+
+    url = "https://models.inference.ai.azure.com/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    prompt = f"""
+    Analyze stock {symbol} (Industry: {industry}, Chaikin Rating: {pgr}, Short10 Score: {s10}, Long60 Score: {l60}).
+    Generate a 2-sentence analysis:
+    Sentence 1: (Devil's Advocate) Ruthlessly criticize why this trade might fail. Be highly skeptical.
+    Sentence 2: (Strategic Catalyst) Identify the 'Strategic Requirement' or 'AI Force Multiplier' if it exists, or the primary momentum driver.
+    Keep the output extremely tight, professional, and under 50 words. Do not use prefixes like 'Devil's Advocate:'.
+    """
+
+    data = {
+        "messages": [
+            {"role": "system", "content": "You are Project AETHER, an elite, highly skeptical hedge fund risk manager. Your tone is professional, concise, and critical."},
+            {"role": "user", "content": prompt}
+        ],
+        "model": "gpt-4o-mini",
+        "max_tokens": 100,
+        "temperature": 0.3
+    }
+
+    try:
+        r = requests.post(url, json=data, headers=headers)
+        if r.status_code == 200:
+            content = r.json()["choices"][0]["message"]["content"].strip()
+            # Split sentences for formatting
+            sentences = content.split(". ")
+            devils_advocate = sentences[0] + "." if len(sentences) > 0 else ""
+            catalyst = ". ".join(sentences[1:]) if len(sentences) > 1 else ""
+            
+            return f"🚨 <b>Devil's Advocate:</b> {devils_advocate}<br>💡 <b>Catalyst:</b> {catalyst}"
+        else:
+            return f"<b>API Error ({r.status_code}):</b> Fallback to technical alignment."
+    except Exception as e:
+        return f"<b>Verification failed:</b> {e}"
 
 def extract_tickers(text):
     """Regex to find likely stock tickers (2-5 uppercase letters)."""
