@@ -141,11 +141,24 @@ def update_excel_log(state, new_transactions):
         print(f"Failed to update Excel log: {e}")
 
 def get_live_prices(symbols):
+    """Fetch real-time market prices via E*TRADE safely (no interactive prompts)."""
     try:
-        tokens = etrade.get_tokens(env="production")
-        if not tokens: return {}
-        return etrade.fetch_quotes(tokens, symbols, env="production")
-    except:
+        # Load cached tokens directly to avoid Playwright/MFA interactive prompts
+        cached = etrade._load_tokens("production")
+        if not cached:
+            print("  [AETHER] No cached E*TRADE tokens found. Falling back to workbook prices.")
+            return {}
+            
+        # Try to renew them silently
+        tokens = etrade.renew_tokens(cached, "production")
+        if not tokens:
+            print("  [AETHER] E*TRADE token renewal failed. Falling back to workbook prices.")
+            return {}
+            
+        quotes = etrade.fetch_quotes(tokens, symbols, env="production")
+        return quotes
+    except Exception as e:
+        print(f"Live price fetch failed: {e}")
         return {}
 
 def send_daily_summary():
