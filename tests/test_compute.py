@@ -184,6 +184,18 @@ class TestRecursionDepthCap(unittest.TestCase):
         self.assertLess(result, 0)
         self.assertGreater(result, -100)
 
+    def test_percent_no_stack_overflow(self):
+        root = self._chain(100)
+        result = root.get_prev_same_move_percent()
+        self.assertIsInstance(result, float)
+        self.assertLess(abs(result), 1000)
+
+    def test_price_no_stack_overflow(self):
+        root = self._chain(100)
+        result = root.get_prev_same_move_price()
+        self.assertIsInstance(result, float)
+        self.assertGreater(result, 0)
+
 
 # ── Symbol path validation ────────────────────────────────────────────────────
 

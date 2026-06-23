@@ -508,8 +508,8 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
         names = zin.namelist()
 
         # ── 1. shapeId patch (only for comment XMLs not restored from original) ──
-        comment_files = sorted(n for n in names if re.match(r'xl/comments/comment\d+\.xml', n))
-        vml_files     = sorted(n for n in names if re.match(r'xl/drawings/commentsDrawing\d+\.vml', n))
+        comment_files = sorted(n for n in names if re.fullmatch(r'xl/comments/comment\d+\.xml', n))
+        vml_files     = sorted(n for n in names if re.fullmatch(r'xl/drawings/commentsDrawing\d+\.vml', n))
 
         modified: dict[str, bytes] = {}
 
@@ -625,15 +625,15 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
                 part = '/' + cm
                 ct_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml'
                 override = f'<Override PartName="{part}" ContentType="{ct_type}"/>'
-                if part not in ct_text:
-                    ct_text = ct_text.replace('</Types>', override + '</Types>')
+                if f'PartName="{part}"' not in ct_text:
+                    ct_text = ct_text.replace('</Types>', override + '</Types>', 1)
                     ct_changed = True
             for vf in vml_files:
                 part = '/' + vf
                 ct_type = 'application/vnd.openxmlformats-officedocument.vmlDrawing'
                 override = f'<Override PartName="{part}" ContentType="{ct_type}"/>'
-                if part not in ct_text:
-                    ct_text = ct_text.replace('</Types>', override + '</Types>')
+                if f'PartName="{part}"' not in ct_text:
+                    ct_text = ct_text.replace('</Types>', override + '</Types>', 1)
                     ct_changed = True
             if ct_changed:
                 modified[CT_NAME] = ct_text.encode('utf-8')
@@ -714,9 +714,10 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
     - Account 1315 (ACCT_T2) → bottom table
     - User notes below T2 are never touched.
     """
+    import bisect
     import datetime
     from openpyxl.styles import PatternFill, Font, Alignment
-    from scoring import predicted_win_pct as _pwp
+    from scoring import predicted_win_pct as _pwp, ohlcv_streak_count as _streak_count
 
     if "Short_Long" not in wb.sheetnames:
         return
@@ -1040,35 +1041,25 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         streak = None
         ohlcv_ts = (ohlcv_cache or {}).get(sym)
         if ohlcv_ts:
-            from scoring import ohlcv_streak_count as _streak_count
             all_dates = sorted(ohlcv_ts.keys())
             date_str  = str(today)
-            past = [d for d in all_dates if d <= date_str]
-            if past:
-                idx = all_dates.index(past[-1])
+            idx = bisect.bisect_right(all_dates, date_str) - 1
+            if idx >= 0:
                 last_close = float(ohlcv_ts[all_dates[idx]].get('4. close') or 0)
                 prev_close = float(ohlcv_ts[all_dates[idx - 1]].get('4. close') or 0) if idx >= 1 else last_close
                 day_pct = ((last_close - prev_close) / prev_close * 100) if prev_close else 0
                 streak = _streak_count(ohlcv_ts, all_dates, idx, day_pct)
-        c = ws.cell(rn, 14)   # col N = R (red streak)
-        new_r = abs(streak) if (streak is not None and streak < 0) else None
-        old_r = c.value if isinstance(c.value, (int, float)) else None
-        c.value = new_r
-        c.alignment = CTR
-        if new_r is not None and old_r is not None:
-            c.fill = RED_FILL if new_r > old_r else (GRN_FILL if new_r < old_r else GRY_FILL)
-        else:
-            c.fill = GRY_FILL
 
-        c = ws.cell(rn, 15)   # col O = G (green streak)
-        new_g = streak if (streak is not None and streak > 0) else None
-        old_g = c.value if isinstance(c.value, (int, float)) else None
-        c.value = new_g
-        c.alignment = CTR
-        if new_g is not None and old_g is not None:
-            c.fill = GRN_FILL if new_g > old_g else (RED_FILL if new_g < old_g else GRY_FILL)
-        else:
-            c.fill = GRY_FILL
+        def _write_streak(col, value, worse_fill, better_fill):
+            c = ws.cell(rn, col)
+            old = c.value if isinstance(c.value, (int, float)) else None
+            c.value = value
+            c.alignment = CTR
+            c.fill = (worse_fill if value > old else (better_fill if value < old else GRY_FILL)) \
+                     if (value is not None and old is not None) else GRY_FILL
+
+        _write_streak(14, abs(streak) if (streak is not None and streak < 0) else None, RED_FILL, GRN_FILL)
+        _write_streak(15, streak       if (streak is not None and streak > 0) else None, RED_FILL, GRN_FILL)
 
         # Q: Short10
         c = ws.cell(rn, 17)

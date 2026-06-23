@@ -88,7 +88,7 @@ def main():
         try:
             with open(path) as f:
                 ohlcv_cache[sym] = json.load(f).get('Time Series (Daily)')
-        except FileNotFoundError:
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
             pass
 
     # ── Sync Short_Long sheet ────────────────────────────────────────────────
