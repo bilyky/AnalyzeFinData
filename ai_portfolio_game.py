@@ -13,6 +13,9 @@ XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 AI_PERF_XLSX = BASE_DIR / "Data" / "ai_portfolio_performance.xlsx"
 INITIAL_BALANCE = 10000.0
 
+# Import risk utils safely
+import risk_utils
+
 def is_market_open():
     """Check if current time is within US Market hours (9:30 AM - 4:00 PM EST)."""
     tz = pytz.timezone("America/New_York")
@@ -29,6 +32,49 @@ def is_market_open():
     else:
         return False, f"Market is Closed. (Current EST: {now.strftime('%H:%M')})"
 
+def get_market_regime():
+    """Query SPY momentum to dynamically determine the best strategy profile."""
+    try:
+        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
+        ws = wb["Research"]
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row[3] == "SPY":
+                l60 = row[25] or 0
+                if l60 > 2: return "AGGRESSIVE" # Strong bull market
+                if l60 < -2: return "DEFENSIVE" # Bear market
+                return "BALANCED" # Consolidation
+    except:
+        pass
+    return "BALANCED"
+
+def get_strategy_rules(profile):
+    """Define risk and size rules based on the chosen strategy profile."""
+    # Profile options: BALANCED, AGGRESSIVE, DEFENSIVE
+    if profile == "AGGRESSIVE":
+        return {
+            "max_positions": 6,
+            "max_allocation_pct": 0.25, # Deeper allocation per trade
+            "atr_multiplier": 3.5,       # Loose stop to avoid shakeouts in high-beta stocks
+            "min_score_threshold": 2.0,  # Willing to buy slightly lower momentum for higher beta
+            "cash_buffer_pct": 0.10      # Aggressive deployment
+        }
+    elif profile == "DEFENSIVE":
+        return {
+            "max_positions": 3,          # Restrict to top 3 ultra-conviction plays
+            "max_allocation_pct": 0.15, # Lower risk per trade
+            "atr_multiplier": 1.5,       # Tight stop-loss to preserve capital
+            "min_score_threshold": 10.0, # Only buy elite setups
+            "cash_buffer_pct": 0.50      # Keep 50% in cash
+        }
+    else: # BALANCED (Default)
+        return {
+            "max_positions": 5,
+            "max_allocation_pct": 0.20,
+            "atr_multiplier": 2.5,
+            "min_score_threshold": 5.0,
+            "cash_buffer_pct": 0.20
+        }
+
 def load_game():
     if not AI_GAME_FILE.exists():
         return {
@@ -36,20 +82,21 @@ def load_game():
             "equity": INITIAL_BALANCE,
             "positions": {},
             "history": [],
-            "start_date": str(datetime.date.today())
+            "start_date": str(datetime.date.today()),
+            "profile": "BALANCED"
         }
     with open(AI_GAME_FILE, "r") as f:
         try:
             return json.load(f)
         except:
-            return {"balance": INITIAL_BALANCE, "equity": INITIAL_BALANCE, "positions": {}, "history": [], "start_date": str(datetime.date.today())}
+            return {"balance": INITIAL_BALANCE, "equity": INITIAL_BALANCE, "positions": {}, "history": [], "start_date": str(datetime.date.today()), "profile": "BALANCED"}
 
 def save_game(state):
     with open(AI_GAME_FILE, "w") as f:
         json.dump(state, f, indent=4)
 
 def backtrack_verify(symbol):
-    """Verify the consistency of a technical setup over the last 3 trading days."""
+    """Verify setup consistency over the last 3 days."""
     try:
         base = BASE_DIR / "Data" / "Symbol" / symbol
         if not base.exists():
@@ -69,14 +116,12 @@ def backtrack_verify(symbol):
                 trend.append(s10 + l60)
         
         avg_score = sum(trend) / 3
-        # Rule: Setup must be stable (Average positive) AND improving/holding (Today >= Yesterday)
         if avg_score > 0 and trend[0] >= trend[1]:
             return True, f"Verified trend stability: {trend}"
         else:
             return False, f"Failed backtracking check. Trend: {trend}"
-            
-    except Exception as e:
-        return False, f"Verification error: {e}"
+    except:
+        return False, "Verification error."
 
 def update_excel_log(state, new_transactions):
     if not AI_PERF_XLSX.exists():
@@ -96,19 +141,14 @@ def update_excel_log(state, new_transactions):
         print(f"Failed to update Excel log: {e}")
 
 def get_live_prices(symbols):
-    """Fetch real-time market prices via E*TRADE."""
     try:
         tokens = etrade.get_tokens(env="production")
-        if not tokens:
-            return {}
-        quotes = etrade.fetch_quotes(tokens, symbols, env="production")
-        return quotes
-    except Exception as e:
-        print(f"Live price fetch failed: {e}")
+        if not tokens: return {}
+        return etrade.fetch_quotes(tokens, symbols, env="production")
+    except:
         return {}
 
 def send_daily_summary():
-    """Send an HTML summary of the AI's day."""
     state = load_game()
     today = str(datetime.date.today())
     today_tx = [tx for tx in state.get("history", []) if tx["date"] == today]
@@ -121,7 +161,7 @@ def send_daily_summary():
     <html>
     <body style="font-family: sans-serif; color: #333;">
         <h2 style="color: #2c3e50;">🤖 AI Portfolio: Daily Performance Summary</h2>
-        <p><b>Date:</b> {today}</p>
+        <p><b>Date:</b> {today} | <b>Active Strategy:</b> {state.get('profile', 'BALANCED')}</p>
         <hr>
         <h3>Market Action Today:</h3>
         <ul>{tx_rows if today_tx else "<li>No transactions executed today.</li>"}</ul>
@@ -139,7 +179,7 @@ def send_daily_summary():
     notify.send_email(f"AI Portfolio Summary: {today}", html, is_html=True)
     print(f"Summary email sent for {today}.")
 
-def run_daily_ai_management(force=False):
+def run_daily_ai_management(force=False, manual_profile=None):
     try:
         open_status, msg = is_market_open()
         if not open_status and not force:
@@ -151,6 +191,12 @@ def run_daily_ai_management(force=False):
         now_time = datetime.datetime.now().strftime("%H:%M:%S")
         new_transactions = []
         
+        # Determine strategy profile (Adaptive vs. Manual Override)
+        profile = manual_profile or get_market_regime()
+        rules = get_strategy_rules(profile)
+        state["profile"] = profile
+        print(f"🤖 AI ACTIVE STRATEGY: {profile} ({'Manual' if manual_profile else 'Adaptive'})")
+
         if not XLSX_FILE.exists():
             print("Workbook not found. AI Management deferred.")
             return
@@ -163,7 +209,6 @@ def run_daily_ai_management(force=False):
         for row in ws.iter_rows(min_row=2, values_only=True):
             if row[3]: research_symbols.append(row[3])
             
-        # Add queued symbols to fetch list
         queued = state.get("queued_orders", [])
         queued_syms = [q["symbol"] for q in queued]
         
@@ -180,7 +225,7 @@ def run_daily_ai_management(force=False):
             current_equity += pos["qty"] * price
         state["equity"] = round(current_equity, 0)
 
-        # 0. Execute QUEUED ORDERS (Strategic Overrides with Risk Sizing)
+        # 0. Execute QUEUED ORDERS (Strategic Overrides with Volatility Sizing)
         if queued:
             print("🤖 AI EXECUTING QUEUED STRATEGIC ORDERS...")
             for order in queued:
@@ -203,27 +248,35 @@ def run_daily_ai_management(force=False):
                     print(f"🤖 AI QUEUED SELL EXECUTED: {sym} at ${price} (PnL: ${tx['pnl']})")
                     
                 elif order["type"] == "BUY" and sym not in state["positions"]:
-                    # Strict Risk Sizing: Max 20% portfolio allocation per trade to minimize loss
-                    max_positions = 5
+                    max_positions = rules["max_positions"]
                     available_slots = max_positions - len(state["positions"])
-                    if state["balance"] > 500:
-                        # Defensive: Cash buffer maintained
-                        max_allocation = state["equity"] * 0.20
-                        cash_to_use = min(state["balance"] / (available_slots if available_slots > 0 else 1), max_allocation)
+                    if state["balance"] > 500 and available_slots > 0:
+                        max_allocation = state["equity"] * rules["max_allocation_pct"]
+                        cash_to_use = min(state["balance"] / available_slots, max_allocation)
                         
                         qty = int(cash_to_use // price)
                         if qty > 0:
                             cost = qty * price
                             state["balance"] -= cost
-                            state["positions"][sym] = {"qty": qty, "cost": price, "stop_loss": round(price * 0.95, 2)} # Strict 5% Stop-loss
+                            
+                            # Volatility-Based Stop Loss customized by profile
+                            atr = risk_utils.calculate_atr(sym)
+                            if atr and atr > 0:
+                                stop_loss = round(price - (rules["atr_multiplier"] * atr), 2)
+                                stop_desc = f"ATR-based Stop: ${stop_loss} ({rules['atr_multiplier']} * ATR)"
+                            else:
+                                stop_loss = round(price * 0.92, 2)
+                                stop_desc = f"8% Fallback Stop: ${stop_loss}"
+                                
+                            state["positions"][sym] = {"qty": qty, "cost": price, "stop_loss": stop_loss}
                             tx = {
                                 "date": today, "time": now_time, "type": "BUY", 
                                 "symbol": sym, "price": price, "qty": qty,
-                                "details": f"Queued Buy: {order['reason']} (Stop-loss set at 5%)"
+                                "details": f"Queued Buy: {order['reason']} ({stop_desc})"
                             }
                             state["history"].append(tx)
                             new_transactions.append(tx)
-                            print(f"🤖 AI QUEUED BUY EXECUTED: {qty} shares of {sym} at ${price} (Strict Stop: ${price * 0.95:.2f})")
+                            print(f"🤖 AI QUEUED BUY EXECUTED: {qty} shares of {sym} at ${price} ({stop_desc})")
             
             state["queued_orders"] = []
 
@@ -248,59 +301,73 @@ def run_daily_ai_management(force=False):
             new_transactions.append(tx)
             print(f"🤖 AI LIVE SELL: {sym} at ${price} (Time: {now_time})")
 
-        # BUY logic
-        max_positions = 5
+        # BUY logic (filtered by profile momentum threshold)
+        max_positions = rules["max_positions"]
         available_slots = max_positions - len(state["positions"])
         
-        if available_slots > 0:
+        # Enforce defensive cash buffer
+        min_cash_required = state["equity"] * rules["cash_buffer_pct"]
+        
+        if available_slots > 0 and state["balance"] > min_cash_required:
             top_buys = []
             for row in ws.iter_rows(min_row=2, values_only=True):
                 sym = row[3]
                 if not sym: continue
                 setup = str(row[20] or '')
                 price = prices.get(sym, 0)
+                total_score = (row[24] or 0) + (row[25] or 0)
+                
+                # Filter by strategy profile threshold
                 if (setup in ('1', 'OK', 1)) and sym not in state["positions"] and price > 0:
-                    top_buys.append({
-                        "sym": sym,
-                        "price": price,
-                        "total": (row[24] or 0) + (row[25] or 0)
-                    })
+                    if total_score >= rules["min_score_threshold"]:
+                        top_buys.append({
+                            "sym": sym,
+                            "price": price,
+                            "total": total_score
+                        })
             
             top_buys.sort(key=lambda x: x["total"], reverse=True)
             
             for buy in top_buys[:available_slots]:
-                if state["balance"] > 500:
-                    # MANDATORY: Backtracking Verification
+                # Re-check cash buffer before buying
+                if state["balance"] - (int((state["balance"] / available_slots) // buy["price"]) * buy["price"]) >= min_cash_required:
                     is_verified, v_msg = backtrack_verify(buy["sym"])
                     if not is_verified:
                         print(f"🛑 AI BUY REJECTED: {buy['sym']} - {v_msg}")
                         continue
 
-                    cash_per_buy = state["balance"] / (available_slots if available_slots > 0 else 1)
+                    cash_per_buy = (state["balance"] - min_cash_required) / available_slots
                     qty = int(cash_per_buy // buy["price"])
                     if qty > 0:
                         cost = qty * buy["price"]
                         state["balance"] -= cost
-                        state["positions"][buy["sym"]] = {"qty": qty, "cost": buy["price"]}
+                        
+                        atr = risk_utils.calculate_atr(buy["sym"])
+                        if atr and atr > 0:
+                            stop_loss = round(buy["price"] - (rules["atr_multiplier"] * atr), 2)
+                            stop_desc = f"ATR-based Stop: ${stop_loss}"
+                        else:
+                            stop_loss = round(buy["price"] * 0.92, 2)
+                            stop_desc = "8% Fallback"
+                            
+                        state["positions"][buy["sym"]] = {"qty": qty, "cost": buy["price"], "stop_loss": stop_loss}
                         tx = {"date": today, "time": now_time, "type": "BUY", "symbol": buy["sym"], "price": buy["price"], "qty": qty}
                         state["history"].append(tx)
                         new_transactions.append(tx)
-                        print(f"🤖 AI LIVE BUY: {qty} shares of {buy['sym']} at ${buy['price']} (Time: {now_time})")
+                        print(f"🤖 AI LIVE BUY: {qty} shares of {buy['sym']} at ${buy['price']} ({stop_desc})")
 
-        save_game(state)
-        update_excel_log(state, new_transactions)
-        print(f"🤖 AI Portfolio Value: ${state['equity']} (Cash: ${round(state['balance'], 2)})")
-    
     except Exception as e:
         print(f"⚠️ SCRIPT ERROR: {e}")
         pass
+    finally:
+        save_game(state)
+        update_excel_log(state, new_transactions)
+        print(f"🤖 AI Portfolio Value: ${state['equity']} (Cash: ${round(state['balance'], 2)})")
 
 def deduct_operational_costs(amount):
-    """Subtract operational costs (tokens, fees) from the virtual cash balance."""
     if amount <= 0: return
     state = load_game()
     state["balance"] -= amount
-    # Track cumulative costs
     state["total_ops_cost"] = round(state.get("total_ops_cost", 0) + amount, 4)
     state["history"].append({
         "date": str(datetime.date.today()),
@@ -315,33 +382,33 @@ def deduct_operational_costs(amount):
 def show_report():
     state = load_game()
     print("--- 🤖 AI PORTFOLIO MANAGER REPORT ---")
-    print(f"Current Equity: ${state['equity']}")
-    print(f"Cash Balance:   ${round(state['balance'], 2)}")
-    print(f"Total Ops Cost: ${state.get('total_ops_cost', 0)}")
-    print(f"Open Positions: {len(state['positions'])}")
+    print(f"Active Strategy: {state.get('profile', 'BALANCED')}")
+    print(f"Current Equity:  ${state['equity']}")
+    print(f"Cash Balance:    ${round(state['balance'], 2)}")
+    print(f"Total Ops Cost:  ${state.get('total_ops_cost', 0)}")
+    print(f"Open Positions:  {len(state['positions'])}")
     for sym, pos in state["positions"].items():
-        print(f"  - {sym}: {pos['qty']} @ ${pos['cost']}")
+        print(f"  - {sym}: {pos['qty']} @ ${pos['cost']} (Stop: ${pos.get('stop_loss', 'N/A')})")
     
-    # Net Profit = Current Equity - Initial Balance
     profit = state['equity'] - INITIAL_BALANCE
-    print(f"Net Profit:     ${round(profit, 2)} ({round((profit/INITIAL_BALANCE)*100, 2)}%)")
-    
+    print(f"Net Profit:      ${round(profit, 2)} ({round((profit/INITIAL_BALANCE)*100, 2)}%)")
     target = INITIAL_BALANCE * 2
     days_elapsed = (datetime.date.today() - datetime.datetime.strptime(state["start_date"], "%Y-%m-%d").date()).days
-    print(f"Goal Progress:  {round((profit/INITIAL_BALANCE)*100, 1)}% of 100% (Target: ${target})")
-    print(f"Days Active:    {days_elapsed} / 90")
+    print(f"Goal Progress:   {round((profit/INITIAL_BALANCE)*100, 1)}% of 100% (Target: ${target})")
+    print(f"Days Active:     {days_elapsed} / 90")
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", action="store_true", help="Execute AI daily moves")
+    parser.add_argument("--profile", type=str, help="Manually override strategy profile (AGGRESSIVE, DEFENSIVE, BALANCED)")
     parser.add_argument("--force", action="store_true", help="Force run outside market hours")
     parser.add_argument("--report", action="store_true", help="Show CLI performance report")
     parser.add_argument("--summary", action="store_true", help="Send daily email summary")
     args = parser.parse_args()
 
     if args.run:
-        run_daily_ai_management(force=args.force)
+        run_daily_ai_management(force=args.force, manual_profile=args.profile)
     elif args.summary:
         send_daily_summary()
     else:
