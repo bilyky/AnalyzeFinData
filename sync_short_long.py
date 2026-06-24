@@ -11,11 +11,13 @@ Research sheet data already in the workbook.
 
 import argparse
 import datetime
+import json
+import os
 import openpyxl
 
 import etrade
 from excel_output import update_short_long_scores, fix_comment_shape_ids, backup_xlsx
-from powergauge import XLSX_FILE, SRC_XLSX
+from powergauge import XLSX_FILE, SRC_XLSX, OHLCV_DIR
 
 
 def _read_picks_from_research(wb) -> dict:
@@ -79,9 +81,19 @@ def main():
     picks_lookup = _read_picks_from_research(wb)
     print(f"  {len(picks_lookup)} symbols in Research sheet for score lookup.")
 
+    # ── Load OHLCV for streak computation ────────────────────────────────────
+    ohlcv_cache = {}
+    for sym in syms:
+        path = os.path.join(OHLCV_DIR, f"{sym}_daily.json")
+        try:
+            with open(path) as f:
+                ohlcv_cache[sym] = json.load(f).get('Time Series (Daily)')
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            pass
+
     # ── Sync Short_Long sheet ────────────────────────────────────────────────
     orig_backup = backup_xlsx(XLSX_FILE)
-    update_short_long_scores(wb, picks_lookup, quotes, positions)
+    update_short_long_scores(wb, picks_lookup, quotes, positions, ohlcv_cache)
 
     while True:
         try:
