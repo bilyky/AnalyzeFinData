@@ -96,32 +96,33 @@ def save_game(state):
         json.dump(state, f, indent=4)
 
 def backtrack_verify(symbol):
-    """Verify setup consistency over the last 3 days."""
+    """Verify the consistency of a price trend over the last 3 trading days using local daily history."""
     try:
-        base = BASE_DIR / "Data" / "Symbol" / symbol
-        if not base.exists():
-            return False, "No local cache found for backtracking."
+        path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+        if not path.exists():
+            return False, "No local daily history found."
         
-        cache_files = sorted(list(base.glob(f"{symbol}_*.json")), reverse=True)
-        if len(cache_files) < 3:
-            return False, f"Insufficient history (found {len(cache_files)}/3 days) for verification."
+        with open(path) as f:
+            data = json.load(f)
+            
+        ts = data.get("Time Series (Daily)", {})
+        sorted_dates = sorted(list(ts.keys()), reverse=True)
+        if len(sorted_dates) < 3:
+            return False, f"Insufficient history (found {len(sorted_dates)}/3 days) for verification."
         
-        trend = []
-        for cf in cache_files[:3]:
-            with open(cf, "r") as f:
-                data = json.load(f)
-                cl = data.get("checklist_stocks", {})
-                s10 = float(cl.get("shortTermTechnical", 0) or 0)
-                l60 = float(cl.get("longTermTechnical", 0) or 0)
-                trend.append(s10 + l60)
+        prices = [float(ts[d]["4. close"]) for d in sorted_dates[:3]]
         
-        avg_score = sum(trend) / 3
-        if avg_score > 0 and trend[0] >= trend[1]:
-            return True, f"Verified trend stability: {trend}"
+        # Rule: Today's price (prices[0]) must not be in a vertical collapse 
+        # (e.g. no day-over-day drop greater than 2% in the last 2 days)
+        day1_change = (prices[0] - prices[1]) / prices[1]
+        day2_change = (prices[1] - prices[2]) / prices[2]
+        
+        if day1_change >= -0.02 and day2_change >= -0.02:
+            return True, f"Verified price trend stability: {[round(p, 2) for p in prices]}"
         else:
-            return False, f"Failed backtracking check. Trend: {trend}"
-    except:
-        return False, "Verification error."
+            return False, f"Failed backtracking check (vertical drop detected). Changes: {round(day1_change*100, 1)}%, {round(day2_change*100, 1)}%"
+    except Exception as e:
+        return False, f"Verification error: {e}"
 
 def update_excel_log(state, new_transactions):
     if not AI_PERF_XLSX.exists():
@@ -193,6 +194,7 @@ def send_daily_summary():
     print(f"Summary email sent for {today}.")
 
 def run_daily_ai_management(force=False, manual_profile=None):
+    state = None
     try:
         open_status, msg = is_market_open()
         if not open_status and not force:
