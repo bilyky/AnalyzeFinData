@@ -375,9 +375,12 @@ def run_daily_ai_management(force=False, manual_profile=None):
         print(f"⚠️ SCRIPT ERROR: {e}")
         pass
     finally:
-        save_game(state)
-        update_excel_log(state, new_transactions)
-        print(f"🤖 AI Portfolio Value: ${state['equity']} (Cash: ${round(state['balance'], 2)})")
+        if state is not None:
+            save_game(state)
+            update_excel_log(state, new_transactions)
+            print(f"🤖 AI Portfolio Value: ${state['equity']} (Cash: ${round(state['balance'], 2)})")
+        else:
+            print("🤖 AI Management aborted before state initialization. Game state preserved.")
 
 def deduct_operational_costs(amount):
     if amount <= 0: return
