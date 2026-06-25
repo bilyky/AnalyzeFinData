@@ -7,6 +7,30 @@ import notify
 import traceback
 from pathlib import Path
 
+# --- Windows UTF-8 Hardening ---
+# Prevents UnicodeEncodeError when printing emojis (🤖, 🚨) in headless environments
+class SafeStreamWrapper:
+    def __init__(self, stream):
+        self._stream = stream
+    def write(self, s):
+        try:
+            return self._stream.write(s)
+        except UnicodeEncodeError:
+            encoding = getattr(self._stream, 'encoding', 'cp1252') or 'cp1252'
+            safe_s = s.encode(encoding, errors='replace').decode(encoding)
+            return self._stream.write(safe_s)
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    sys.stdout = SafeStreamWrapper(sys.stdout)
+    sys.stderr = SafeStreamWrapper(sys.stderr)
+
 import external_intel
 
 # Custom modules
@@ -24,8 +48,11 @@ def log(msg):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     formatted_msg = f"[{timestamp}] {msg}"
     print(formatted_msg)
-    with open(LOG_FILE_PATH, "a") as f:
-        f.write(formatted_msg + "\n")
+    try:
+        with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
+            f.write(formatted_msg + "\n")
+    except Exception as e:
+        print(f"Failed to write to log file: {e}")
 
 def verify_data_freshness():
     if not XLSX_FILE.exists():
@@ -301,7 +328,7 @@ def main():
     log("Backfilling 5-day history (run_history.py)...")
     try:
         script_path = str(BASE_DIR / "run_history.py")
-        subprocess.run([sys.executable, script_path, "5"], check=True, capture_output=True, text=True)
+        subprocess.run([sys.executable, script_path, "5"], check=True, capture_output=True, encoding="utf-8", errors="replace")
         log("History backfilled.")
     except subprocess.CalledProcessError as e:
         log(f"Warning: run_history.py failed (will continue): {e.stderr}")
@@ -310,7 +337,7 @@ def main():
     log("Refreshing workbook (main.py)...")
     try:
         script_path = str(BASE_DIR / "main.py")
-        subprocess.run([sys.executable, script_path], check=True, capture_output=True, text=True)
+        subprocess.run([sys.executable, script_path], check=True, capture_output=True, encoding="utf-8", errors="replace")
         log("Workbook regenerated.")
     except subprocess.CalledProcessError as e:
         error_msg = f"main.py failed: {e.stderr}"
@@ -350,7 +377,7 @@ def main():
     log("Executing AI Portfolio Manager routine...")
     try:
         game_script = str(BASE_DIR / "ai_portfolio_game.py")
-        result = subprocess.run([sys.executable, game_script, "--run"], check=True, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, game_script, "--run"], check=True, capture_output=True, encoding="utf-8", errors="replace")
         log("AI Game Routine complete.")
     except subprocess.CalledProcessError as e:
         log(f"AI Game failed (Exit {e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}")

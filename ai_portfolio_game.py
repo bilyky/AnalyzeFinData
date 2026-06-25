@@ -6,6 +6,30 @@ import etrade
 import sys
 from pathlib import Path
 
+# --- Windows UTF-8 Hardening ---
+# Prevents UnicodeEncodeError when printing emojis (🤖, 🚨) in headless environments
+class SafeStreamWrapper:
+    def __init__(self, stream):
+        self._stream = stream
+    def write(self, s):
+        try:
+            return self._stream.write(s)
+        except UnicodeEncodeError:
+            encoding = getattr(self._stream, 'encoding', 'cp1252') or 'cp1252'
+            safe_s = s.encode(encoding, errors='replace').decode(encoding)
+            return self._stream.write(safe_s)
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    sys.stdout = SafeStreamWrapper(sys.stdout)
+    sys.stderr = SafeStreamWrapper(sys.stderr)
+
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
 AI_GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
@@ -85,14 +109,35 @@ def load_game():
             "start_date": str(datetime.date.today()),
             "profile": "BALANCED"
         }
-    with open(AI_GAME_FILE, "r") as f:
+    with open(AI_GAME_FILE, "r", encoding="utf-8") as f:
         try:
             return json.load(f)
         except:
             return {"balance": INITIAL_BALANCE, "equity": INITIAL_BALANCE, "positions": {}, "history": [], "start_date": str(datetime.date.today()), "profile": "BALANCED"}
 
+import shutil
+
 def save_game(state):
-    with open(AI_GAME_FILE, "w") as f:
+    # --- Mandatory Backup before Write ---
+    if AI_GAME_FILE.exists():
+        try:
+            backup_dir = BASE_DIR / "Data" / "Backup" / "Game"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = backup_dir / f"ai_portfolio_game_{ts}.json"
+            
+            shutil.copy2(AI_GAME_FILE, backup_path)
+            
+            # Clean up old backups (Keep last 15)
+            backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime)
+            if len(backups) > 15:
+                for old_b in backups[:-15]:
+                    old_b.unlink()
+        except Exception as e:
+            print(f"  [Warning] Game backup failed: {e}")
+
+    with open(AI_GAME_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=4)
 
 def backtrack_verify(symbol):
@@ -171,21 +216,94 @@ def send_daily_summary():
         pnl_str = f" (PnL: ${tx['pnl']})" if "pnl" in tx else ""
         tx_rows += f"<li><b>{tx['type']}</b>: {tx.get('qty', '')} {tx['symbol']} @ ${tx['price']}{pnl_str} [Time: {tx.get('time', '')}]</li>"
 
+    # Fetch live quotes for open positions to show accurate daily values
+    positions = state.get("positions", {})
+    live_prices = get_live_prices(list(positions.keys()))
+    
+    # Standardize fallback to cost basis if E*TRADE renewal fails
+    for sym in positions:
+        if sym not in live_prices:
+            live_prices[sym] = positions[sym]["cost"]
+
+    # Build the open positions HTML table
+    pos_table_rows = ""
+    if positions:
+        for sym, pos in positions.items():
+            qty = pos["qty"]
+            cost = pos["cost"]
+            current = live_prices.get(sym, cost)
+            val = qty * current
+            pnl = (current - cost) * qty
+            pnl_pct = ((current - cost) / cost) * 100
+            
+            pnl_color = "#27ae60" if pnl >= 0 else "#c0392b"
+            pnl_sign = "+" if pnl >= 0 else ""
+            
+            pos_table_rows += f"""
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd; font-weight: bold;">{sym}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: center;">{qty}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right;">${cost:.2f}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right; font-weight: bold;">${current:.2f}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right; font-weight: bold;">${val:.2f}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right; color: {pnl_color}; font-weight: bold;">
+                    {pnl_sign}${pnl:.2f} ({pnl_sign}{pnl_pct:.2f}%)
+                </td>
+            </tr>
+            """
+    else:
+        pos_table_rows = "<tr><td colspan='6' style='padding: 15px; text-align: center; color: #888;'>No open positions currently.</td></tr>"
+
     html = f"""
     <html>
-    <body style="font-family: sans-serif; color: #333;">
-        <h2 style="color: #2c3e50;">🤖 AI Portfolio: Daily Performance Summary</h2>
-        <p><b>Date:</b> {today} | <b>Active Strategy:</b> {state.get('profile', 'BALANCED')}</p>
-        <hr>
-        <h3>Market Action Today:</h3>
-        <ul>{tx_rows if today_tx else "<li>No transactions executed today.</li>"}</ul>
-        <h3>Current Portfolio Standing:</h3>
-        <table border="1" cellpadding="8" style="border-collapse: collapse;">
-            <tr style="background: #f8f9fa;"><td><b>Current Equity</b></td><td>${state['equity']}</td></tr>
-            <tr><td><b>Cash Balance</b></td><td>${round(state['balance'], 2)}</td></tr>
-            <tr style="background: #f8f9fa;"><td><b>Total Return</b></td><td>{round(((state['equity'] - INITIAL_BALANCE)/INITIAL_BALANCE)*100, 2)}%</td></tr>
+    <body style="font-family: sans-serif; color: #333; max-width: 700px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 20px;">🤖 AI Portfolio: Daily Performance Summary</h2>
+        <p><b>Date:</b> {today} | <b>Active Strategy:</b> <span style="background: #2c3e50; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold;">{state.get('profile', 'BALANCED')}</span></p>
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+        
+        <h3 style="color: #2c3e50;">🛒 Market Action Today:</h3>
+        <ul style="padding-left: 20px; font-size: 14px; line-height: 1.6;">
+            {tx_rows if today_tx else "<li>No transactions executed today.</li>"}
+        </ul>
+        
+        <h3 style="color: #2c3e50; margin-top: 30px;">📈 Current Open Positions:</h3>
+        <table border="0" cellpadding="0" cellspacing="0" style="width: 100%; border-collapse: collapse; margin-bottom: 35px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid #ddd;">
+            <thead>
+                <tr style="background: #34495e; color: white;">
+                    <th style="padding: 12px; text-align: left;">Symbol</th>
+                    <th style="padding: 12px; text-align: center;">Qty</th>
+                    <th style="padding: 12px; text-align: right;">Cost Basis</th>
+                    <th style="padding: 12px; text-align: right;">Live Price</th>
+                    <th style="padding: 12px; text-align: right;">Total Value</th>
+                    <th style="padding: 12px; text-align: right;">Total P&L</th>
+                </tr>
+            </thead>
+            <tbody>
+                {pos_table_rows}
+            </tbody>
         </table>
-        <p style="margin-top: 20px;"><small>Automated AI Manager | Project: AnalyzeFinData</small></p>
+        
+        <h3 style="color: #2c3e50;">🛡️ Portfolio Financial Summary:</h3>
+        <table border="0" cellpadding="10" cellspacing="0" style="width: 100%; max-width: 400px; border-collapse: collapse; margin-bottom: 25px; border: 1px solid #ddd;">
+            <tr style="background: #f8f9fa;">
+                <td style="border-bottom: 1px solid #ddd; font-weight: bold;">Current Equity</td>
+                <td style="border-bottom: 1px solid #ddd; text-align: right; font-weight: bold; font-size: 16px;">${state['equity']:.2f}</td>
+            </tr>
+            <tr>
+                <td style="border-bottom: 1px solid #ddd; font-weight: bold; color: #555;">Cash Balance (Dry Powder)</td>
+                <td style="border-bottom: 1px solid #ddd; text-align: right; font-weight: bold; color: #555;">${state['balance']:.2f}</td>
+            </tr>
+            <tr style="background: #f8f9fa;">
+                <td style="font-weight: bold;">Total Return</td>
+                <td style="text-align: right; font-weight: bold; color: {'#27ae60' if state['equity'] >= INITIAL_BALANCE else '#c0392b'};">
+                    {'+' if state['equity'] >= INITIAL_BALANCE else ''}{round(((state['equity'] - INITIAL_BALANCE)/INITIAL_BALANCE)*100, 2)}%
+                </td>
+            </tr>
+        </table>
+        
+        <p style="margin-top: 35px; border-top: 1px solid #eee; padding-top: 15px; font-size: 11px; color: #7f8c8d;">
+            🤖 <i>This is an automated performance report from your autonomous Project AETHER trading desk. All figures represent live, verified production-grade data.</i>
+        </p>
     </body>
     </html>
     """

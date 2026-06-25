@@ -6,6 +6,30 @@ import notify
 import json
 from pathlib import Path
 
+# --- Windows UTF-8 Hardening ---
+# Prevents UnicodeEncodeError when printing emojis (🤖, 🚨, 🧠) in headless environments
+class SafeStreamWrapper:
+    def __init__(self, stream):
+        self._stream = stream
+    def write(self, s):
+        try:
+            return self._stream.write(s)
+        except UnicodeEncodeError:
+            encoding = getattr(self._stream, 'encoding', 'cp1252') or 'cp1252'
+            safe_s = s.encode(encoding, errors='replace').decode(encoding)
+            return self._stream.write(safe_s)
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    sys.stdout = SafeStreamWrapper(sys.stdout)
+    sys.stderr = SafeStreamWrapper(sys.stderr)
+
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
 LOG_FILES = [
