@@ -983,7 +983,12 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     _touched_sheets = {"Research", "Picks"}
     try:
         import etrade as _et
-        _tok = _et.get_tokens("production")
+        # Load cached tokens directly to avoid Playwright/MFA interactive prompts
+        _cached = _et._load_tokens("production")
+        _tok = None
+        if _cached:
+            _tok = _et.renew_tokens(_cached, "production")
+            
         if _tok:
             _lk   = {p["symbol"]: p for p in picks_data}
             _pos  = _et.fetch_positions(_tok, "production")
@@ -992,6 +997,8 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
             _update_short_long_scores(wb, _lk, _qts, _pos, ohlcv_cache)
             _touched_sheets.add("Short_Long")
             print(f"Short_Long sheet synced: {len(_pos)} positions.")
+        else:
+            print("[E*TRADE] Short_Long skipped (no valid silent token session available).")
     except Exception as _e:
         print(f"[E*TRADE] Short_Long skipped: {_e}")
 
