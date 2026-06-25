@@ -187,7 +187,9 @@ def fetch_idea_emails():
 
         if status == "OK":
             for num in messages[0].split():
-                status, data = mail.fetch(num, "(RFC822)")
+                # Use BODY.PEEK[] instead of RFC822 to fetch the email content 
+                # WITHOUT marking the email as SEEN (read) in the inbox.
+                status, data = mail.fetch(num, "(BODY.PEEK[])")
                 if status == "OK":
                     raw_email = data[0][1]
                     msg = email.message_from_bytes(raw_email)
