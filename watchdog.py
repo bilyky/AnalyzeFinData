@@ -15,6 +15,16 @@ LOG_FILES = [
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 TASKS = ["AnalyzeFinData_Morning", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_Summary", "AnalyzeFinData_Evening"]
 SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
+SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
+
+# --- Agnostic AI Self-Healing Tool Configuration ---
+# Supports any AI CLI or custom scripts (Gemini CLI, Claude, local Codex, custom wrappers).
+# Defaults to npx @google/gemini-cli but can be overridden globally via environment variables.
+# Placeholders: {prompt} (inline text) or {prompt_file} (safe text file path, highly recommended for Windows).
+HEALER_CMD_TEMPLATE = os.environ.get(
+    "AETHER_HEALER_CMD",
+    'npx @google/gemini-cli --approval-mode auto_edit -p "{prompt_file}"'
+)
 
 def check_logs():
     """Audit logs for 'Error', 'Failed', or 'Fatal' entries in the last 24h."""
@@ -56,42 +66,52 @@ def extract_latest_traceback():
     return ""
 
 def trigger_ai_self_healing(traceback):
-    """Headlessly trigger the Gemini CLI Agent to self-heal the python codebase on the fly."""
+    """Headlessly trigger any configured AI CLI Agent to self-heal the python codebase on the fly."""
     if SELF_HEAL_LOCK.exists():
         print("  [Healer] Circuit breaker active (self_healing.lock found). Skipping AI trigger to prevent loops.")
         return False, "Circuit breaker active. Code needs manual review."
     
     # Create the lock to prevent recursive self-healing loops
-    with open(SELF_HEAL_LOCK, "w") as f:
+    with open(SELF_HEAL_LOCK, "w", encoding="utf-8") as f:
         f.write(f"Active since: {datetime.datetime.now()}\nTraceback: {traceback[:200]}\n")
         
     print("🧠 [AETHER BRAIN] CRITICAL ERROR DETECTED. ACTIVATING AUTONOMOUS SELF-HEALER...")
     
-    prompt = f"""
-    [CRITICAL AUTONOMOUS RECOVERY COMMAND]
-    Our background AETHER trading pipeline has crashed. 
-    You are operating in headless self-healing mode. Your goal is to:
-    1. Analyze this traceback.
-    2. Identify the bug in our codebase (likely ai_portfolio_game.py or autonomous_pipeline.py).
-    3. Modify the files surgically to fix the bug permanently (especially handle platform/Windows/encoding quirks).
-    4. Run 'ai_portfolio_game.py --report' or standard commands to verify compilation.
-    5. Commit the fix with a commit message starting with '[AI Self-Healed]'.
-    
-    Here is the exact traceback:
-    {traceback}
-    """
-    
-    # We invoke @google/gemini-cli headlessly in auto-approve (auto_edit) mode!
-    # This allows it to rewrite files without user prompt!
-    cmd = f'npx @google/gemini-cli --approval-mode auto_edit -p "{prompt}"'
+    prompt = f"""[CRITICAL AUTONOMOUS RECOVERY COMMAND]
+Our background AETHER trading pipeline has crashed. 
+You are operating in headless self-healing mode. Your goal is to:
+1. Analyze this traceback.
+2. Identify the bug in our codebase (likely ai_portfolio_game.py or autonomous_pipeline.py).
+3. Modify the files surgically to fix the bug permanently (especially handle platform/Windows/encoding quirks).
+4. Run 'ai_portfolio_game.py --report' or standard commands to verify compilation.
+5. Commit the fix with a commit message starting with '[AI Self-Healed]'.
+
+Here is the exact traceback:
+{traceback}
+"""
     
     try:
+        # Write the prompt to a safe text file to avoid any terminal command-line escaping bugs on Windows
+        with open(SELF_HEAL_PROMPT_FILE, "w", encoding="utf-8") as f:
+            f.write(prompt)
+            
+        # Dynamically build the command from the template
+        # Support both inline {prompt} and the highly secure {prompt_file}
+        cmd = HEALER_CMD_TEMPLATE.format(
+            prompt=prompt.replace('"', '\\"').replace('\n', ' '),
+            prompt_file=str(SELF_HEAL_PROMPT_FILE)
+        )
+        
+        print(f"🚀 [AETHER BRAIN] Dispatching self-healing command: {cmd}")
+        
         # Run in background to let the watchdog finish, but allow it to run autonomously
         subprocess.Popen(cmd, shell=True, cwd=str(BASE_DIR))
-        print("🚀 [AETHER BRAIN] Gemini CLI Self-Healing session spawned successfully in the background!")
-        return True, "AETHER Self-Healing session spawned in background. Reviewing code now."
+        return True, "AETHER Self-Healing session spawned in the background."
     except Exception as e:
         print(f"❌ Failed to spawn Self-Healer: {e}")
+        # Clean up files if we fail to spawn
+        if SELF_HEAL_LOCK.exists(): SELF_HEAL_LOCK.unlink()
+        if SELF_HEAL_PROMPT_FILE.exists(): SELF_HEAL_PROMPT_FILE.unlink()
         return False, f"Spawn failure: {e}"
 
 def check_task_scheduler():
