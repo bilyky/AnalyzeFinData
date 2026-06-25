@@ -1,7 +1,9 @@
 import os
+import sys
 import datetime
 import subprocess
 import notify
+import json
 from pathlib import Path
 
 # --- CONFIGURATION ---
@@ -12,6 +14,7 @@ LOG_FILES = [
 ]
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 TASKS = ["AnalyzeFinData_Morning", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_Summary", "AnalyzeFinData_Evening"]
+SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
 
 def check_logs():
     """Audit logs for 'Error', 'Failed', or 'Fatal' entries in the last 24h."""
@@ -20,20 +23,76 @@ def check_logs():
     for log_path in LOG_FILES:
         if not log_path.exists():
             continue
-        with open(log_path, "r") as f:
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
             for line in lines[-50:]: # Check last 50 lines
-                if any(word in line.upper() for word in ["ERROR", "FAILED", "FATAL", "CRASH"]):
-                    # Basic date extraction from [YYYY-MM-DD HH:MM:SS]
+                if any(word in line.upper() for word in ["ERROR", "FAILED", "FATAL", "CRASH", "TRACEBACK", "UNBOUNDLOCALERROR", "UNICODEENCODEERROR"]):
                     try:
                         log_date_str = line.split("]")[0].strip("[")
                         log_date = datetime.datetime.strptime(log_date_str, "%Y-%m-%d %H:%M:%S")
                         if (now - log_date).total_seconds() < 86400:
                             errors.append(f"[{log_path.name}] {line.strip()}")
                     except:
-                        # If no timestamp, just include if recent
                         errors.append(f"[{log_path.name}] {line.strip()}")
     return errors
+
+def extract_latest_traceback():
+    """Extract the most recent multi-line traceback from the autonomous log."""
+    log_path = BASE_DIR / "Data" / "autonomous_run.log"
+    if not log_path.exists():
+        return ""
+    
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        
+        # Look for the last "failed (Exit 1):" block
+        parts = content.split("failed (Exit ")
+        if len(parts) > 1:
+            last_failure = parts[-1]
+            return "AI Game failed (Exit " + last_failure[:1500] # Limit size safely
+    except Exception as e:
+        print(f"Failed to extract traceback: {e}")
+    return ""
+
+def trigger_ai_self_healing(traceback):
+    """Headlessly trigger the Gemini CLI Agent to self-heal the python codebase on the fly."""
+    if SELF_HEAL_LOCK.exists():
+        print("  [Healer] Circuit breaker active (self_healing.lock found). Skipping AI trigger to prevent loops.")
+        return False, "Circuit breaker active. Code needs manual review."
+    
+    # Create the lock to prevent recursive self-healing loops
+    with open(SELF_HEAL_LOCK, "w") as f:
+        f.write(f"Active since: {datetime.datetime.now()}\nTraceback: {traceback[:200]}\n")
+        
+    print("🧠 [AETHER BRAIN] CRITICAL ERROR DETECTED. ACTIVATING AUTONOMOUS SELF-HEALER...")
+    
+    prompt = f"""
+    [CRITICAL AUTONOMOUS RECOVERY COMMAND]
+    Our background AETHER trading pipeline has crashed. 
+    You are operating in headless self-healing mode. Your goal is to:
+    1. Analyze this traceback.
+    2. Identify the bug in our codebase (likely ai_portfolio_game.py or autonomous_pipeline.py).
+    3. Modify the files surgically to fix the bug permanently (especially handle platform/Windows/encoding quirks).
+    4. Run 'ai_portfolio_game.py --report' or standard commands to verify compilation.
+    5. Commit the fix with a commit message starting with '[AI Self-Healed]'.
+    
+    Here is the exact traceback:
+    {traceback}
+    """
+    
+    # We invoke @google/gemini-cli headlessly in auto-approve (auto_edit) mode!
+    # This allows it to rewrite files without user prompt!
+    cmd = f'npx @google/gemini-cli --approval-mode auto_edit -p "{prompt}"'
+    
+    try:
+        # Run in background to let the watchdog finish, but allow it to run autonomously
+        subprocess.Popen(cmd, shell=True, cwd=str(BASE_DIR))
+        print("🚀 [AETHER BRAIN] Gemini CLI Self-Healing session spawned successfully in the background!")
+        return True, "AETHER Self-Healing session spawned in background. Reviewing code now."
+    except Exception as e:
+        print(f"❌ Failed to spawn Self-Healer: {e}")
+        return False, f"Spawn failure: {e}"
 
 def check_task_scheduler():
     """Verify all AETHER tasks are present and active."""
@@ -61,7 +120,6 @@ def heal_tasks(missing_tasks):
     """Attempt to re-register tasks that have disappeared or failed."""
     for task in missing_tasks:
         print(f"🔧 Attempting to heal task: {task}")
-        # Logic to re-create the specific task
         if task == "AnalyzeFinData_Morning":
             cmd = f'schtasks /create /tn "{task}" /tr "{sys.executable} {BASE_DIR / "autonomous_pipeline.py"}" /sc daily /st 05:30 /f /it /ru yufa'
         elif task == "AnalyzeFinData_Evening":
@@ -104,7 +162,17 @@ def run_watchdog():
         kill_ghost_processes()
         recovery_actions.append("Killed ghost processes to resolve resource lock.")
 
-    # 3. Final Check
+    # 3. Autonomous AI Self-Healing Trigger
+    ai_triggered = False
+    ai_status = ""
+    tb = extract_latest_traceback()
+    if tb and any(word in tb.upper() for word in ["TRACEBACK", "ERROR", "EXCEPTION"]):
+        # A Python crash traceback was detected in the logs!
+        ai_triggered, ai_status = trigger_ai_self_healing(tb)
+        if ai_triggered:
+            recovery_actions.append(f"AI Self-Healer deployed: {ai_status}")
+
+    # 4. Final Audit
     remaining_errors = check_logs()
     
     issues = []
@@ -113,7 +181,7 @@ def run_watchdog():
     
     if recovery_actions or issues:
         report = []
-        if recovery_actions: report.append("🤖 AUTONOMOUS RECOVERY ACTIONS:\n" + "\n".join(recovery_actions))
+        if recovery_actions: report.append("🛡️ AUTONOMOUS RECOVERY ACTIONS:\n" + "\n".join(recovery_actions))
         if issues: report.append("🚨 REMAINING ISSUES:\n" + "\n".join(issues))
         
         alert_msg = "\n\n".join(report)
