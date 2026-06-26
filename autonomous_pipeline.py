@@ -5,6 +5,7 @@ import subprocess
 import openpyxl
 import notify
 import traceback
+import json
 from pathlib import Path
 
 # --- Windows UTF-8 Hardening ---
