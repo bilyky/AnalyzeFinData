@@ -160,6 +160,31 @@ def get_replacement_pairs():
         log(f"Error reading replacements: {e}")
         return []
 
+def get_reserves_data():
+    """Extract today's scores for our designated A-Reserves (Backup Players) list."""
+    reserves_syms = ['EIX', 'AMAT', 'URI', 'VLO', 'RS']
+    reserves_data = []
+    try:
+        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
+        ws = wb["Research"]
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            sym = row[3]
+            if sym in reserves_syms:
+                reserves_data.append({
+                    "Symbol": sym,
+                    "Industry": row[4],
+                    "PGR": row[6],
+                    "S10": row[24] or 0,
+                    "L60": row[25] or 0,
+                    "Total": (row[24] or 0) + (row[25] or 0),
+                    "Price": row[10] or 0
+                })
+        # Sort to preserve priority order
+        reserves_data.sort(key=lambda x: reserves_syms.index(x["Symbol"]))
+    except Exception as e:
+        log(f"Error loading reserves data: {e}")
+    return reserves_data
+
 def get_reasoning(symbol, pgr, s10, l60, industry):
     """Retrieve live LLM reasoning via the GitHub Models API (gpt-4o-mini) with local heuristics fallback."""
     try:
@@ -258,6 +283,23 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
         </tr>
         """
 
+    # 0.5. Format A-Reserves Audit
+    reserves_data = get_reserves_data()
+    reserves_rows = ""
+    for r in reserves_data:
+        reasoning = get_reasoning(r['Symbol'], r['PGR'], r['S10'], r['L60'], r['Industry'])
+        color_total = '#27ae60' if r['Total'] >= 0 else '#c0392b'
+        reserves_rows += f"""
+        <tr style="border-bottom: 1px solid #ddd; font-size: 13px;">
+            <td style="padding: 10px; font-weight: bold; color: #2c3e50;">{r['Symbol']}</td>
+            <td style="padding: 10px;">{r['Industry']}</td>
+            <td style="padding: 10px; font-weight: bold;">{r['PGR']}</td>
+            <td style="padding: 10px;">{r['S10']:.1f} / {r['L60']:.1f}</td>
+            <td style="padding: 10px; font-weight: bold; color: {color_total};">{r['Total']:.1f}</td>
+            <td style="padding: 10px; font-size: 11px;">{reasoning}</td>
+        </tr>
+        """
+
     html = f"""
     <html>
     <body style="font-family: 'Segoe UI', Tahoma, sans-serif; color: #333; line-height: 1.6; max-width: 1100px; margin: auto;">
@@ -292,13 +334,24 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
             </table>
 
             <h3 style="color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 5px;">Portfolio Rotation Strategy</h3>
-            <table style="border-collapse: collapse; width: 80%; font-size: 13px;">
+            <table style="border-collapse: collapse; width: 80%; font-size: 13px; margin-bottom: 40px;">
                 <thead>
                     <tr style="background-color: #f2f2f2; text-align: left;">
                         <th style="padding: 10px;">SELL (Weakest)</th><th style="padding: 10px;"></th><th style="padding: 10px;">BUY (Strongest)</th><th style="padding: 10px;">Rotation Rationale</th>
                     </tr>
                 </thead>
                 <tbody>{replacement_rows if replacements else '<tr><td colspan="4">No replacement pairs identified.</td></tr>'}</tbody>
+            </table>
+
+            <h3 style="color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 5px; margin-top: 45px;">🛡️ A-Reserves Sentinel & AI Risk Audit</h3>
+            <table style="border-collapse: collapse; width: 100%; font-size: 13px;">
+                <thead>
+                    <tr style="background-color: #2c3e50; color: white; text-align: left;">
+                        <th style="padding: 10px;">Symbol</th><th style="padding: 10px;">Industry / Theme</th><th style="padding: 10px;">PGR</th>
+                        <th style="padding: 10px;">S10/L60</th><th style="padding: 10px;">Total Score</th><th style="padding: 10px;">AI Ruthless Audit & Strategic Catalyst</th>
+                    </tr>
+                </thead>
+                <tbody>{reserves_rows}</tbody>
             </table>
             
             <div style="margin-top: 40px; border-top: 1px solid #eee; padding-top: 20px; font-size: 11px; color: #95a5a6; text-align: center;">
