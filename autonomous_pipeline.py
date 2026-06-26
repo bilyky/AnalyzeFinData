@@ -161,8 +161,17 @@ def get_replacement_pairs():
         return []
 
 def get_reserves_data():
-    """Extract today's scores for our designated A-Reserves (Backup Players) list."""
-    reserves_syms = ['EIX', 'AMAT', 'URI', 'VLO', 'RS']
+    """Extract today's scores for our dynamic A-Reserves (Backup Players) list loaded from the central JSON."""
+    reserves_syms = ['EIX', 'AMAT', 'URI', 'VLO', 'RS'] # Standard Fallback
+    try:
+        game_file = BASE_DIR / "Data" / "ai_portfolio_game.json"
+        if game_file.exists():
+            with open(game_file, "r", encoding="utf-8") as f:
+                state = json.load(f)
+                reserves_syms = state.get("reserves", reserves_syms)
+    except Exception as e:
+        log(f"Warning: Could not load dynamic reserves from JSON (using fallback): {e}")
+
     reserves_data = []
     try:
         wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
