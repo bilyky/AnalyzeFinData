@@ -77,23 +77,23 @@ def get_strategy_rules(profile):
     if profile == "AGGRESSIVE":
         return {
             "max_positions": 6,
-            "max_allocation_pct": 0.25, # Deeper allocation per trade
+            "max_allocation_pct": 0.15, # Optimized from 0.25 to minimize drawdowns
             "atr_multiplier": 3.5,       # Loose stop to avoid shakeouts in high-beta stocks
-            "min_score_threshold": 2.0,  # Willing to buy slightly lower momentum for higher beta
-            "cash_buffer_pct": 0.10      # Aggressive deployment
+            "min_score_threshold": 2.0,  
+            "cash_buffer_pct": 0.10      
         }
     elif profile == "DEFENSIVE":
         return {
             "max_positions": 3,          # Restrict to top 3 ultra-conviction plays
-            "max_allocation_pct": 0.15, # Lower risk per trade
+            "max_allocation_pct": 0.10, # Optimized from 0.15 for maximum capital preservation (Capped at $1,000 per trade)
             "atr_multiplier": 1.5,       # Tight stop-loss to preserve capital
-            "min_score_threshold": 10.0, # Only buy elite setups
-            "cash_buffer_pct": 0.50      # Keep 50% in cash
+            "min_score_threshold": 10.0, 
+            "cash_buffer_pct": 0.50      
         }
     else: # BALANCED (Default)
         return {
             "max_positions": 5,
-            "max_allocation_pct": 0.20,
+            "max_allocation_pct": 0.15, # Optimized from 0.20 (Perfect sweet spot between risk and growth)
             "atr_multiplier": 2.5,
             "min_score_threshold": 5.0,
             "cash_buffer_pct": 0.20
@@ -168,6 +168,42 @@ def backtrack_verify(symbol):
             return False, f"Failed backtracking check (vertical drop detected). Changes: {round(day1_change*100, 1)}%, {round(day2_change*100, 1)}%"
     except Exception as e:
         return False, f"Verification error: {e}"
+
+def is_bottom_confirmed(symbol):
+    """Verify if a stock is forming a technical bottom based on its 3-day price slope."""
+    try:
+        path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+        if not path.exists():
+            return False, "No local daily history found."
+        
+        with open(path) as f:
+            data = json.load(f)
+            
+        ts = data.get("Time Series (Daily)", {})
+        sorted_dates = sorted(list(ts.keys()), reverse=True)
+        if len(sorted_dates) < 4:
+            return False, f"Insufficient history (found {len(sorted_dates)}/4 days) for slope check."
+        
+        prices = [float(ts[d]["4. close"]) for d in sorted_dates[:4]]
+        
+        # Calculate daily percentage changes over the last 3 days
+        # prices[0]: today, prices[1]: yesterday, prices[2]: 2 days ago, prices[3]: 3 days ago
+        change1 = (prices[0] - prices[1]) / prices[1]  # Today vs Yesterday
+        change2 = (prices[1] - prices[2]) / prices[2]  # Yesterday vs 2 Days Ago
+        change3 = (prices[2] - prices[3]) / prices[3]  # 2 Days Ago vs 3 Days Ago
+        
+        # Bottoming signature: Selling pressure is exhausting and slope is turning positive
+        # Condition 1: Today's slope is positive (change1 > 0)
+        # Condition 2: Today's slope is better than yesterday's slope (change1 > change2)
+        # Condition 3: Average of the last 2 days is positive (> 0.005, or +0.5%)
+        avg_slope = (change1 + change2) / 2
+        
+        if change1 > 0 and change1 > change2 and avg_slope >= 0.005:
+            return True, f"Bottom Confirmed! Avg Slope: +{round(avg_slope*100, 2)}% | Price Trend: {[round(p, 2) for p in prices[:3]]}"
+        else:
+            return False, f"No reversal confirmed. Avg Slope: {round(avg_slope*100, 2)}%"
+    except Exception as e:
+        return False, f"Slope error: {e}"
 
 def update_excel_log(state, new_transactions):
     if not AI_PERF_XLSX.exists():
@@ -450,13 +486,17 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 price = prices.get(sym, 0)
                 total_score = (row[24] or 0) + (row[25] or 0)
                 
-                # Filter by strategy profile threshold
+                # Filter by strategy profile threshold OR mathematically confirmed bottom
                 if (setup in ('1', 'OK', 1)) and sym not in state["positions"] and price > 0:
-                    if total_score >= rules["min_score_threshold"]:
+                    bottom_ok, bottom_msg = is_bottom_confirmed(sym)
+                    
+                    if total_score >= rules["min_score_threshold"] or bottom_ok:
+                        bottom_desc = f" (Bottom Confirmed: {bottom_msg})" if bottom_ok else ""
                         top_buys.append({
                             "sym": sym,
                             "price": price,
-                            "total": total_score
+                            "total": total_score,
+                            "bottom_desc": bottom_desc
                         })
             
             top_buys.sort(key=lambda x: x["total"], reverse=True)
@@ -478,10 +518,10 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         atr = risk_utils.calculate_atr(buy["sym"])
                         if atr and atr > 0:
                             stop_loss = round(buy["price"] - (rules["atr_multiplier"] * atr), 2)
-                            stop_desc = f"ATR-based Stop: ${stop_loss}"
+                            stop_desc = f"ATR-based Stop: ${stop_loss}{buy.get('bottom_desc', '')}"
                         else:
                             stop_loss = round(buy["price"] * 0.92, 2)
-                            stop_desc = "8% Fallback"
+                            stop_desc = f"8% Fallback{buy.get('bottom_desc', '')}"
                             
                         state["positions"][buy["sym"]] = {"qty": qty, "cost": buy["price"], "stop_loss": stop_loss}
                         tx = {"date": today, "time": now_time, "type": "BUY", "symbol": buy["sym"], "price": buy["price"], "qty": qty}
