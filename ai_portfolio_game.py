@@ -396,10 +396,23 @@ def run_daily_ai_management(force=False, manual_profile=None):
         all_syms = list(set(symbols_to_check + research_symbols[:50] + queued_syms))
         prices = get_live_prices(all_syms)
         
-        # Validate that we have a valid price for all checked symbols.
-        # If we have NO prices from E*TRADE AND cannot load them from our secondary source of truth (workbook),
-        # we MUST error out to protect data integrity and alert the Watchdog!
+        # --- Strict Active-Market E*TRADE Connection Gate ---
+        # If the market is actively open, we MUST have a live connection to E*TRADE.
+        # It is strictly forbidden to fall back to stale/morning workbook prices during open hours.
+        # If the connection is offline during active hours, we must raise a fatal error and crash!
+        market_is_active, _ = is_market_open()
+        if market_is_active and not prices:
+            raise RuntimeError("Critical Data Failure: Market is actively open, but E*TRADE is offline. No live source of truth available!")
+            
+        # If the market is closed, we fall back to the master workbook close prices as our source of truth.
         if not prices:
+            # Check workbook freshness
+            mtime = datetime.datetime.fromtimestamp(XLSX_FILE.stat().st_mtime)
+            age_hours = (datetime.datetime.now() - mtime).total_seconds() / 3600
+            if age_hours > 24:
+                raise RuntimeError(f"Data Integrity Failure: E*TRADE is offline and Workbook is stale (Age: {round(age_hours, 1)} hours). No valid source of truth available!")
+                
+            print(f"  [AETHER] Market closed and E*TRADE offline. Falling back to fresh Workbook close prices (Age: {round(age_hours, 1)} hours).")
             for row in ws.iter_rows(min_row=2, values_only=True):
                 if row[3]: prices[row[3]] = row[10]
                 
