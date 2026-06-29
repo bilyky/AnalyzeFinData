@@ -7,6 +7,14 @@
 *   **Mandatory Backup Policy:** NEVER run a script or modify a file without a verified backup. All core state files (`ai_portfolio_game.json`, `state_of_the_day.xlsx`, `ops_and_rd_tracker.xlsx`) must be cloned to a timestamped backup directory (`Data/Backup/`) before any write is executed.
 *   **Empirical Verification:** Before recommending an action (EXIT/BUY), the system must backtrack: check the last 3 times a similar technical setup occurred for that symbol in the local cache to verify its historical hit rate.
 *   **Self-Correction:** If the system identifies a discrepancy (e.g., live price vs. OHLCV close), it must automatically log the correction and re-calculate dependent scores.
+*   **Rule of Loss Minimization:** NEVER prioritize returns over risk. Capital preservation is the absolute priority. The downside on any single trade must be strictly capped using dynamic ATR stop-losses, and the portfolio must maintain a high defensive cash cushion (at least 50%) during broad market corrections (SPY L60 < -2).
+
+## Saturday R&D Roadmap (Next Sessions)
+
+*   **Session: Saturday, July 4, 2026 (10:00 AM PST) — Jeremy Grantham & Mean-Reversion:**
+    1.  *The 2.5-Sigma Bubble Detector:* Build a technical filter that calculates how far SPY or sector ETFs are trading relative to their 500-day mean, blacklisting any asset class in the "Super-Bubble" zone (> 2.5 standard deviations above mean).
+    2.  *Structural Scarcity Core:* Formalize Grantham's thesis on resource depletion by creating a dedicated, long-term 20% portfolio allocation cap reserved strictly for metals, agriculture, and grid utility assets (e.g., FCX, RS, EIX) to ride the "Hard Asset Supercycle."
+    3.  *Margin Reversion Check:* Integrate a fundamental filter to penalize companies with peak, unsustainable profit margins and reward those with depressed margins forming a technical bottom.
 
 ## Workflow Conventions
 
