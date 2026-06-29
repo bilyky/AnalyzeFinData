@@ -430,12 +430,10 @@ def get_tokens(env="sandbox"):
 
     Priority order:
     1. Cached tokens from today ET → try renewal (no browser at all).
-    2. Cached tokens from today ET but renewal failed → full browser login.
-    3. No cached tokens → full browser login.
-
-    On browser login, saved Playwright browser state (trusted-device cookies)
-    is restored so E*TRADE skips the MFA step on machines already trusted.
+    2. Cached tokens from today ET but renewal failed → full browser login (only if interactive).
+    3. No cached tokens → full browser login (only if interactive).
     """
+    import sys
     ck, cs, username, password = _load_config(env)
 
     cached = _load_tokens(env)
@@ -443,7 +441,18 @@ def get_tokens(env="sandbox"):
         renewed = renew_tokens(cached, env)
         if renewed:
             return renewed
-        print("Token renewal failed — re-authenticating with browser...")
+        print("Token renewal failed.")
+        
+        # Headless safety gate: If running in background/scheduler and renewal fails,
+        # we MUST error out immediately instead of spawning Playwright/input() which hangs.
+        if not sys.stdin.isatty():
+            raise RuntimeError("Critical E*TRADE Failure: Silent token renewal failed in a headless environment. Cannot re-authenticate interactively!")
+            
+        print("Re-authenticating with browser...")
+
+    # Headless safety gate: If no cached tokens exist and we are headless, error out!
+    if not sys.stdin.isatty():
+        raise RuntimeError("Critical E*TRADE Failure: No cached tokens available in a headless environment. Cannot authenticate interactively!")
 
     oauth = pyetrade.ETradeOAuth(ck, cs)
     auth_url = oauth.get_request_token()
