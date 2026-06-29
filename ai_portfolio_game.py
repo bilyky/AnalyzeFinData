@@ -256,7 +256,19 @@ def send_daily_summary():
     positions = state.get("positions", {})
     live_prices = get_live_prices(list(positions.keys()))
     
-    # Standardize fallback to cost basis if E*TRADE renewal fails
+    # Standardize fallback to workbook close prices if E*TRADE renewal fails (e.g. on weekends)
+    if not live_prices or any(sym not in live_prices for sym in positions):
+        try:
+            wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
+            ws = wb["Research"]
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                sym = row[3]
+                if sym in positions and sym not in live_prices:
+                    live_prices[sym] = row[10] or positions[sym]["cost"]
+        except Exception as e:
+            print(f"Workbook fallback failed inside summary: {e}")
+
+    # Final safety fallback to cost basis if both API and workbook are empty
     for sym in positions:
         if sym not in live_prices:
             live_prices[sym] = positions[sym]["cost"]
@@ -384,13 +396,22 @@ def run_daily_ai_management(force=False, manual_profile=None):
         all_syms = list(set(symbols_to_check + research_symbols[:50] + queued_syms))
         prices = get_live_prices(all_syms)
         
+        # Validate that we have a valid price for all checked symbols.
+        # If we have NO prices from E*TRADE AND cannot load them from our secondary source of truth (workbook),
+        # we MUST error out to protect data integrity and alert the Watchdog!
         if not prices:
             for row in ws.iter_rows(min_row=2, values_only=True):
                 if row[3]: prices[row[3]] = row[10]
+                
+        # Zero-Trust Verification: Ensure every active position has a valid, non-zero price.
+        # If we have no prices in either E*TRADE or Workbook, we raise a fatal RuntimeError!
+        missing_prices = [sym for sym in symbols_to_check if sym not in prices or not prices[sym] or prices[sym] <= 0]
+        if missing_prices:
+            raise RuntimeError(f"Data Integrity Failure: No valid source of truth prices found for active positions: {missing_prices}")
             
         current_equity = state["balance"]
         for sym, pos in state["positions"].items():
-            price = prices.get(sym, pos["cost"])
+            price = prices[sym] # Access directly, no fallback to cost basis to enforce strict data accuracy
             current_equity += pos["qty"] * price
         state["equity"] = round(current_equity, 0)
 
