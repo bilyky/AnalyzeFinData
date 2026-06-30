@@ -11,10 +11,11 @@
 
 ## Saturday R&D Roadmap (Next Sessions)
 
-*   **Session: Saturday, July 4, 2026 (10:00 AM PST) — Jeremy Grantham & Mean-Reversion:**
+*   **Session: Saturday, July 4, 2026 (10:00 AM PST) — Jeremy Grantham & E*TRADE Alerts API:**
     1.  *The 2.5-Sigma Bubble Detector:* Build a technical filter that calculates how far SPY or sector ETFs are trading relative to their 500-day mean, blacklisting any asset class in the "Super-Bubble" zone (> 2.5 standard deviations above mean).
-    2.  *Structural Scarcity Core:* Formalize Grantham's thesis on resource depletion by creating a dedicated, long-term 20% portfolio allocation cap reserved strictly for metals, agriculture, and grid utility assets (e.g., FCX, RS, EIX) to ride the "Hard Asset Supercycle."
-    3.  *Margin Reversion Check:* Integrate a fundamental filter to penalize companies with peak, unsustainable profit margins and reward those with depressed margins forming a technical bottom.
+    2.  *Structural Scarcity Core:* Create a dedicated, long-term 20% portfolio allocation cap reserved strictly for metals, agriculture, and grid utility assets (e.g., FCX, RS, EIX) to ride Grantham's secular "Hard Asset Supercycle."
+    3.  *E*TRADE Alerts API Integration:* Research and prototype a headless client for E*TRADE's native Alerts API (`GET /v1/user/alerts`) to dynamically capture "Power Inflow" and broker order-flow events (like today's INTC alert) directly from the broker in real-time.
+    4.  *The Intraday Sentinel Trigger:* Code the real-time event-driven loop to parse these broker alerts every 15 minutes, run technical bottom checks, and instantly execute buy orders inside the active session.
 
 ## Workflow Conventions
 
