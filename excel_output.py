@@ -1065,12 +1065,14 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         c = ws.cell(rn, 17)
         c.value = s10
         c.font  = GRN_FONT if (s10 or 0) >= 0 else RED_FONT
+        c.fill  = PatternFill("none")
         c.alignment = CTR
 
         # R: Long60
         c = ws.cell(rn, 18)
         c.value = l60
         c.font  = GRN_FONT if (l60 or 0) >= 0 else RED_FONT
+        c.fill  = PatternFill("none")
         c.alignment = CTR
 
         # S: Win%
