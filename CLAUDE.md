@@ -18,6 +18,11 @@
     4.  *The Intraday Sentinel Trigger:* Code the real-time event-driven loop to parse these broker alerts every 15 minutes, run technical bottom checks, and instantly execute buy orders inside the active session.
     5.  *The Real-Account Shadow Copilot:* Design an automated, isolated daily risk-auditor (`real_copilot.py`). It will headlessly scan the user's 44 actual E*TRADE holdings every evening, cross-reference our fresh technical sheets, and automatically email precise "Actionable Trade Tickets" (BUY/SELL recommendations with ATR stop levels) to their inbox, keeping real-money risk perfectly optimized without giving the AI raw trade execution access.
 
+*   **Session: Saturday, July 11, 2026 (10:00 AM PST) — Peter Lynch & Portfolio Gardening:**
+    1.  *The "Flower Protection" Trailing Stop:* Research dynamic trailing stops to let our winning "flowers" run. Instead of selling immediately on a short-term score drop, allow high-conviction positions (with Bullish/Very Bullish PGR) to be held as long as they remain above their 50-day moving average.
+    2.  *The "Weed Cutter" (Breaking the Disposition Effect):* Code strict, non-negotiable risk rules that force the immediate liquidation of any losing "weed" position that breaches support, completely eliminating the human emotional trap of "waiting to get back to even."
+    3.  *The "Lynch Local Edge" Filter:* Integrate fundamental metrics that track consumer-footprint strength, transaction growth, and operational inventory cycles to identify undervalued consumer/retail companies before Wall Street notices them.
+
 ## Workflow Conventions
 
 When the user asks to "send", "push", "create", or "save" something (e.g., Gmail draft, commit, file), execute the full action — do not just preview or show content for review unless explicitly asked.
