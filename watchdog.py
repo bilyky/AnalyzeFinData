@@ -179,22 +179,26 @@ def check_data_freshness():
         return f"WARNING: Data is stale. Last updated: {mtime}"
     return None
 
-def heal_tasks(missing_tasks):
-    """Attempt to re-register tasks that have disappeared or failed."""
-    for task in missing_tasks:
-        print(f"🔧 Attempting to heal task: {task}")
+def heal_tasks(missing_tasks, force=False):
+    """Attempt to re-register tasks that have disappeared, failed, or need environment upgrades."""
+    for task in missing_tasks if not force else TASKS:
+        print(f"🔧 Healing/Upgrading scheduled task: {task}")
+        # Run tasks with native OS-level UTF-8 encoding environment to prevent CP1252/Charmap bugs
+        python_exe = sys.executable
         if task == "AnalyzeFinData_Morning":
-            cmd = f'schtasks /create /tn "{task}" /tr "{sys.executable} {BASE_DIR / "autonomous_pipeline.py"}" /sc daily /st 05:30 /f /it /ru yufa'
+            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "autonomous_pipeline.py"}" /sc daily /st 05:30 /f /it /ru yufa'
         elif task == "AnalyzeFinData_Evening":
-            cmd = f'schtasks /create /tn "{task}" /tr "{sys.executable} {BASE_DIR / "daily_task.py"}" /sc daily /st 17:00 /f /it /ru yufa'
+            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "daily_task.py"}" /sc daily /st 17:00 /f /it /ru yufa'
+        elif task == "AnalyzeFinData_AI_Game":
+            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "ai_portfolio_game.py"} --run" /sc daily /st 07:00 /f /it /ru yufa'
         elif task == "Project_AETHER_Watchdog":
-            cmd = f'schtasks /create /tn "{task}" /tr "{sys.executable} {BASE_DIR / "watchdog.py"}" /sc hourly /f /it /ru yufa'
+            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "watchdog.py"}" /sc hourly /f /it /ru yufa'
         else:
             continue
         
         try:
             subprocess.run(cmd, shell=True, capture_output=True)
-            print(f"✅ Task {task} re-registered.")
+            print(f"✅ Task {task} successfully registered with native UTF-8 environment.")
         except Exception as e:
             print(f"❌ Failed to heal {task}: {e}")
 

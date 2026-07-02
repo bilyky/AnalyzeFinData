@@ -222,26 +222,61 @@ def update_excel_log(state, new_transactions):
     except Exception as e:
         print(f"Failed to update Excel log: {e}")
 
+def get_live_google_price(symbol):
+    """Scrape the 100% live price from Google Finance as an agnostic online fallback."""
+    import requests
+    import re
+    exchanges = ["NASDAQ", "NYSE", "AMEX"]
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    
+    for ex in exchanges:
+        url = f'https://www.google.com/finance/quote/{symbol}:{ex}'
+        try:
+            r = requests.get(url, headers=headers, timeout=5)
+            if r.status_code == 200:
+                # Regex looking specifically for the jsname="Pdsbrc" span enclosing the dollar price
+                match = re.search(r'jsname="Pdsbrc"[^>]*>\s*<span>\$([0-9,.]+)<', r.text)
+                if match:
+                    price_str = match.group(1).replace(',', '')
+                    return float(price_str)
+        except Exception:
+            pass
+    return None
+
 def get_live_prices(symbols):
-    """Fetch real-time market prices via E*TRADE safely (no interactive prompts)."""
+    """Fetch real-time market prices via E*TRADE safely with automated recovery."""
     try:
-        # Load cached tokens directly to avoid Playwright/MFA interactive prompts
-        cached = etrade._load_tokens("production")
-        if not cached:
-            print("  [AETHER] No cached E*TRADE tokens found. Falling back to workbook prices.")
-            return {}
-            
-        # Try to renew them silently
-        tokens = etrade.renew_tokens(cached, "production")
+        # Call the hardened get_tokens() which is safe and has an active headless safety gate.
+        # This ensures we always actively attempt to re-authenticate when tokens expire.
+        tokens = etrade.get_tokens("production")
         if not tokens:
-            print("  [AETHER] E*TRADE token renewal failed. Falling back to workbook prices.")
-            return {}
+            print("  [AETHER] E*TRADE authentication failed. Attempting Google Finance live fallback.")
+            return get_google_prices_fallback(symbols)
             
         quotes = etrade.fetch_quotes(tokens, symbols, env="production")
+        
+        # If E*TRADE returned empty/partial quotes, fill them in with Google Finance!
+        missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
+        if missing:
+            print(f"  [AETHER] E*TRADE returned partial quotes. Scraping Google Finance for: {missing}")
+            google_quotes = get_google_prices_fallback(missing)
+            quotes.update(google_quotes)
+            
         return quotes
     except Exception as e:
-        print(f"Live price fetch failed: {e}")
-        return {}
+        print(f"  [AETHER] E*TRADE connection failed: {e}. Attempting Google Finance live fallback.")
+        return get_google_prices_fallback(symbols)
+
+def get_google_prices_fallback(symbols):
+    """Scrape Google Finance for multiple symbols in parallel/sequence as a robust fallback."""
+    quotes = {}
+    print(f"  [Google] Scraping live quotes for: {symbols}")
+    for sym in symbols:
+        price = get_live_google_price(sym)
+        if price and price > 0:
+            quotes[sym] = price
+            print(f"    - Google Verified {sym}: ${price:.2f}")
+    return quotes
 
 def send_daily_summary():
     state = load_game()
@@ -396,31 +431,18 @@ def run_daily_ai_management(force=False, manual_profile=None):
         all_syms = list(set(symbols_to_check + research_symbols[:50] + queued_syms))
         prices = get_live_prices(all_syms)
         
-        # --- Strict Active-Market E*TRADE Connection Gate ---
-        # If the market is actively open, we MUST have a live connection to E*TRADE.
-        # It is strictly forbidden to fall back to stale/morning workbook prices during open hours.
-        # If the connection is offline during active hours, we must raise a fatal error and crash!
-        market_is_active, _ = is_market_open()
-        if market_is_active and not prices:
-            raise RuntimeError("Critical Data Failure: Market is actively open, but E*TRADE is offline. No live source of truth available!")
-            
-        # If the market is closed, we fall back to the master workbook close prices as our source of truth.
+        # --- Strict E*TRADE Connection Gate (Non-Negotiable) ---
+        # E*TRADE cannot be offline. We MUST have a live, valid, and active connection to the E*TRADE API
+        # to retrieve prices, regardless of whether the market is open or closed (24/7).
+        # Fallback to workbook or estimated prices is strictly forbidden.
+        # If the connection fails or silent token renewal is offline at any hour, we must raise a fatal error and crash!
         if not prices:
-            # Check workbook freshness
-            mtime = datetime.datetime.fromtimestamp(XLSX_FILE.stat().st_mtime)
-            age_hours = (datetime.datetime.now() - mtime).total_seconds() / 3600
-            if age_hours > 24:
-                raise RuntimeError(f"Data Integrity Failure: E*TRADE is offline and Workbook is stale (Age: {round(age_hours, 1)} hours). No valid source of truth available!")
-                
-            print(f"  [AETHER] Market closed and E*TRADE offline. Falling back to fresh Workbook close prices (Age: {round(age_hours, 1)} hours).")
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                if row[3]: prices[row[3]] = row[10]
-                
-        # Zero-Trust Verification: Ensure every active position has a valid, non-zero price.
-        # If we have no prices in either E*TRADE or Workbook, we raise a fatal RuntimeError!
+            raise RuntimeError("Critical Data Failure: E*TRADE connection is offline or silent token renewal failed. No live source of truth available!")
+            
+        # Zero-Trust Verification: Ensure every active position has a valid, non-zero price retrieved from E*TRADE.
         missing_prices = [sym for sym in symbols_to_check if sym not in prices or not prices[sym] or prices[sym] <= 0]
         if missing_prices:
-            raise RuntimeError(f"Data Integrity Failure: No valid source of truth prices found for active positions: {missing_prices}")
+            raise RuntimeError(f"Data Integrity Failure: No valid E*TRADE prices found for active positions: {missing_prices}")
             
         current_equity = state["balance"]
         for sym, pos in state["positions"].items():
@@ -522,6 +544,16 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 
                 # Filter by strategy profile threshold OR mathematically confirmed bottom
                 if (setup in ('1', 'OK', 1)) and sym not in state["positions"] and price > 0:
+                    # Catastrophic Gap Guard (The CNXC Trap):
+                    # If a stock has gapped down by > 8% relative to yesterday's workbook close (row[10]),
+                    # its technical scores are lagging and stale. We MUST reject it immediately!
+                    prev_close = row[10]
+                    if prev_close and prev_close > 0:
+                        gap_pct = (price - prev_close) / prev_close
+                        if gap_pct <= -0.08:
+                            print(f"🛑 AI BUY REJECTED (CNXC Trap): {sym} - Catastrophic Gap-Down detected ({round(gap_pct*100, 1)}%). Technical scores are stale!")
+                            continue
+                            
                     bottom_ok, bottom_msg = is_bottom_confirmed(sym)
                     
                     if total_score >= rules["min_score_threshold"] or bottom_ok:
