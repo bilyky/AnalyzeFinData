@@ -16,6 +16,7 @@
     2.  *Structural Scarcity Core:* Create a dedicated, long-term 20% portfolio allocation cap reserved strictly for metals, agriculture, and grid utility assets (e.g., FCX, RS, EIX) to ride Grantham's secular "Hard Asset Supercycle."
     3.  *E*TRADE Alerts API Integration:* Research and prototype a headless client for E*TRADE's native Alerts API (`GET /v1/user/alerts`) to dynamically capture "Power Inflow" and broker order-flow events (like today's INTC alert) directly from the broker in real-time.
     4.  *The Intraday Sentinel Trigger:* Code the real-time event-driven loop to parse these broker alerts every 15 minutes, run technical bottom checks, and instantly execute buy orders inside the active session.
+    5.  *The Real-Account Shadow Copilot:* Design an automated, isolated daily risk-auditor (`real_copilot.py`). It will headlessly scan the user's 44 actual E*TRADE holdings every evening, cross-reference our fresh technical sheets, and automatically email precise "Actionable Trade Tickets" (BUY/SELL recommendations with ATR stop levels) to their inbox, keeping real-money risk perfectly optimized without giving the AI raw trade execution access.
 
 ## Workflow Conventions
 
