@@ -22,6 +22,7 @@
     1.  *The "Flower Protection" Trailing Stop:* Research dynamic trailing stops to let our winning "flowers" run. Instead of selling immediately on a short-term score drop, allow high-conviction positions (with Bullish/Very Bullish PGR) to be held as long as they remain above their 50-day moving average.
     2.  *The "Weed Cutter" (Breaking the Disposition Effect):* Code strict, non-negotiable risk rules that force the immediate liquidation of any losing "weed" position that breaches support, completely eliminating the human emotional trap of "waiting to get back to even."
     3.  *The "Lynch Local Edge" Filter:* Integrate fundamental metrics that track consumer-footprint strength, transaction growth, and operational inventory cycles to identify undervalued consumer/retail companies before Wall Street notices them.
+    4.  *Trader Vic's Reversal Engines:* Code Victor Sperandeo's legendary "1-2-3 Reversal" (trendline break + higher low + peak breakout) and the "2B Reversal Pattern" (the classic bear-trap liquidity reclaim) as our advanced, real-time price action filters to capture the absolute physical bottoms of our target "flowers."
 
 ## Workflow Conventions
 
