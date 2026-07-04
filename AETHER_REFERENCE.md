@@ -108,6 +108,9 @@ AETHER's factor weights are fully customizable and backtest-driven:
     ```
     Simply copy these suggested weights directly into `scoring.py` to optimize the model's accuracy.
 
+4.  **🗓️ Scheduled Milestone: Saturday, July 18, 2026 — The Autonomic Self-Tuning Optimizer (`calibrate_model.py`):**
+    We will develop a fully automated self-calibration engine. It will headlessly run `backtest_ratings.py`, parse the generated factor spreads, programmatically write the newly optimized coefficients directly into `scoring.py` and `patterns.py` (updating designated anchor blocks), automatically run the **77-test QA suite** to verify 100% code stability, and email a beautiful comparative audit report to your inbox. This turns AETHER into an adaptive, self-tuning quantitative neural net.
+
 ---
 
 ## 🏁 7. Developer Modification Checklist

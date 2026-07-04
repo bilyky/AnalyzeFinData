@@ -24,6 +24,12 @@
     3.  *The "Lynch Local Edge" Filter:* Integrate fundamental metrics that track consumer-footprint strength, transaction growth, and operational inventory cycles to identify undervalued consumer/retail companies before Wall Street notices them.
     4.  *Trader Vic's Reversal Engines:* Code Victor Sperandeo's legendary "1-2-3 Reversal" (trendline break + higher low + peak breakout) and the "2B Reversal Pattern" (the classic bear-trap liquidity reclaim) as our advanced, real-time price action filters to capture the absolute physical bottoms of our target "flowers."
 
+*   **Session: Saturday, July 18, 2026 (10:00 AM PST) — The Autonomic Self-Tuning Optimizer:**
+    1.  *The Backtest Parser:* Code a headless parser inside `calibrate_model.py` that executes `backtest_ratings.py` programmatically, extracts the 10-day forward return spreads for all technical and pattern factors, and calculates the optimal weights using normalized spread ratio distributions.
+    2.  *The Dynamic Code-Writer:* Build a safe, self-contained file-writing routine that opens `scoring.py` and `patterns.py`, locates the designated central weight configurations (marked by developer anchor comments), and programmatically rewrites the active coefficients with the newly optimized values.
+    3.  *The Automated QA Gate:* Program the calibration loop to instantly run the full unit testing suite (`python -m unittest discover tests`) after any weight adjustment to ensure 100% code compilation and system stability.
+    4.  *The Calibration Audit Email:* Integrate a notification routine that emails a detailed HTML report to the user, displaying the old weights, the newly optimized weights, the statistical alpha improvements, and a green "QA Passed" confirmation badge.
+
 ## Workflow Conventions
 
 When the user asks to "send", "push", "create", or "save" something (e.g., Gmail draft, commit, file), execute the full action — do not just preview or show content for review unless explicitly asked.
