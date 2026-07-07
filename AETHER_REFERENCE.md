@@ -108,8 +108,10 @@ AETHER's factor weights are fully customizable and backtest-driven:
     ```
     Simply copy these suggested weights directly into `scoring.py` to optimize the model's accuracy.
 
-4.  **🗓️ Scheduled Milestone: Saturday, July 18, 2026 — The Autonomic Self-Tuning Optimizer (`calibrate_model.py`):**
-    We will develop a fully automated self-calibration engine. It will headlessly run `backtest_ratings.py`, parse the generated factor spreads, programmatically write the newly optimized coefficients directly into `scoring.py` and `patterns.py` (updating designated anchor blocks), automatically run the **77-test QA suite** to verify 100% code stability, and email a beautiful comparative audit report to your inbox. This turns AETHER into an adaptive, self-tuning quantitative neural net.
+4.  **🗓️ Scheduled Milestone: Saturday, July 18, 2026 — The Autonomic Self-Tuning Optimizer & Retrospective (`calibrate_model.py` & `retrospective.py`):**
+    We will develop a fully automated self-calibration and learning engine. 
+    *   **The Optimizer (`calibrate_model.py`):** Headlessly runs `backtest_ratings.py`, parses the generated factor spreads, programmatically writes the newly optimized coefficients directly into `scoring.py` and `patterns.py` (updating designated anchor blocks), automatically runs the **119-test QA suite** to verify 100% code stability, and emails a beautiful comparative audit report to your inbox.
+    *   **The Post-Mortem Retrospective (`retrospective.py`):** Whenever a trade is closed at a loss, it will automatically backtrack the historical state of the day of that entry, analyze the exact combination of technical scores, OB/OS, and candlestick patterns, log the "Failure DNA" to a local, ignored `Data/vulnerability_ledger.json` (Taleb's Antifragile Vulnerability Ledger), and instruct our Optimizer to automatically penalize those specific fragile setups on future runs, ensuring AETHER never makes the same trading mistake twice!
 
 ---
 
