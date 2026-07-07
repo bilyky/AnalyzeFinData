@@ -1,0 +1,22 @@
+{
+  "chaikin": {
+    "email": "your_chaikin_email@example.com",
+    "password": "your_chaikin_password"
+  },
+  "etrade": {
+    "username": "your_etrade_username",
+    "password": "your_etrade_password",
+    "proxy": "",
+    "sandbox": {
+      "consumer_key": "your_sandbox_consumer_key",
+      "consumer_secret": "your_sandbox_consumer_secret"
+    },
+    "production": {
+      "consumer_key": "your_production_consumer_key",
+      "consumer_secret": "your_production_consumer_secret"
+    }
+  },
+  "rapidapi": {
+    "api_key": "your_rapidapi_key_here"
+  }
+}

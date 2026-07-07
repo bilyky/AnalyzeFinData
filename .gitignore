@@ -1,7 +1,9 @@
 # Cache, API data, personal files — never commit
 Data/
+config.json
 etrade_config.json
 chaikin_config.json
+rapidapi_config.json
 
 # Python
 __pycache__/

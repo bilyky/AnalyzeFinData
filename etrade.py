@@ -5,8 +5,7 @@ import time
 import pyetrade
 from zoneinfo import ZoneInfo
 
-_DIR = os.path.dirname(__file__)
-_CONFIG_PATH = os.path.join(_DIR, "etrade_config.json")
+_DIR = os.path.dirname(os.path.abspath(__file__))
 _TOKEN_PATH  = os.path.join(_DIR, "Data", "etrade_tokens.json")
 
 _ET = ZoneInfo("America/New_York")
@@ -30,20 +29,19 @@ def _et_today() -> str:
 # ---------------------------------------------------------------------------
 
 def _load_config(env="sandbox"):
-    with open(_CONFIG_PATH) as f:
-        cfg = json.load(f)
-    ck = cfg[env]["consumer_key"]
-    cs = cfg[env]["consumer_secret"]
-    username = cfg.get("username", "")
-    password = cfg.get("password", "")
-    proxy = cfg.get("proxy")
+    from config import CFG
+    if env == "sandbox":
+        ck, cs = CFG.etrade_sandbox_key, CFG.etrade_sandbox_secret
+    else:
+        ck, cs = CFG.etrade_production_key, CFG.etrade_production_secret
+    proxy = CFG.etrade_proxy
     if proxy:
         os.environ["HTTPS_PROXY"] = proxy
         os.environ["HTTP_PROXY"]  = proxy
     else:
         os.environ.pop("HTTPS_PROXY", None)
         os.environ.pop("HTTP_PROXY",  None)
-    return ck, cs, username, password
+    return ck, cs, CFG.etrade_username, CFG.etrade_password
 
 
 def _proxies():

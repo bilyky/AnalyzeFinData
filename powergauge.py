@@ -391,32 +391,15 @@ def _jwt_to_session_id(jwt_token: str) -> str:
     return session_id
 
 
-CREDENTIALS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chaikin_config.json")
-
-
 def _load_credentials() -> tuple[str, str]:
-    """Load Chaikin credentials: env vars (CHAIKIN_EMAIL/CHAIKIN_PASSWORD) take priority,
-    then chaikin_config.json in the project root."""
-    email    = os.environ.get('CHAIKIN_EMAIL', '')
-    password = os.environ.get('CHAIKIN_PASSWORD', '')
-    if email and password:
-        return email, password
-    if os.path.exists(CREDENTIALS_FILE):
-        try:
-            with open(CREDENTIALS_FILE) as f:
-                cfg = json.load(f)
-        except Exception as e:
-            raise EnvironmentError(f"Failed to parse {CREDENTIALS_FILE}: {e}") from e
-        missing = {'email', 'password'} - set(cfg.keys())
-        if missing:
-            raise EnvironmentError(f"Missing required keys in {CREDENTIALS_FILE}: {missing}")
-        email    = cfg['email']
-        password = cfg['password']
+    """Load Chaikin credentials from unified config (env vars override config.json)."""
+    from config import CFG
+    email, password = CFG.chaikin_email, CFG.chaikin_password
     if not email or not password:
         raise EnvironmentError(
             "Chaikin credentials not found.\n"
             "  Option 1: set env vars CHAIKIN_EMAIL and CHAIKIN_PASSWORD\n"
-            f"  Option 2: copy chaikin_config.json.example -> {CREDENTIALS_FILE} and fill in values"
+            "  Option 2: add chaikin.email / chaikin.password to config.json"
         )
     return email, password
 

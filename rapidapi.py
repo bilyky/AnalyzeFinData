@@ -13,8 +13,9 @@ Usage:
     python rapidapi.py               # repair all symbols from Research sheet
     python rapidapi.py AAPL MSFT     # repair specific symbols
 
-Env vars:
-    RAPIDAPI_KEY   RapidAPI key for Alpha Vantage (required)
+Config (in order of precedence):
+    1. RAPIDAPI_KEY env var
+    2. rapidapi_config.json  {"api_key": "..."}   (copy from rapidapi_config.json.example)
 """
 
 import datetime
@@ -25,8 +26,11 @@ import time
 
 import requests
 
-RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
-OHLCV_DIR    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
+from config import CFG
+
+_DIR         = os.path.dirname(os.path.abspath(__file__))
+RAPIDAPI_KEY = CFG.rapidapi_key
+OHLCV_DIR    = os.path.join(_DIR, "Data", "Symbol_full")
 MAX_GAP_DAYS = 30   # trigger compact/full fetch if latest entry is this many calendar days behind
 SLEEP_SEC    = 14   # 14 s between requests → 4.3 req/min (safe under 5/min limit)
 
