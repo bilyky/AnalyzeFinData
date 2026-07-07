@@ -1,0 +1,312 @@
+/* AETHER Dashboard — frontend logic (vanilla JS, no build step). */
+
+const $ = (id) => document.getElementById(id);
+const fmt$ = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const fmtPct = (n) => (n == null ? "—" : (n >= 0 ? "+" : "") + Number(n).toFixed(2) + "%");
+const cls = (n) => (n > 0 ? "pos" : n < 0 ? "neg" : "mut");
+
+async function api(path, opts) {
+    const r = await fetch(path, opts);
+    if (!r.ok) throw new Error(`${path} → ${r.status}`);
+    return r.json();
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+let activeTab = "dashboard";
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+});
+function switchTab(tab) {
+    activeTab = tab;
+    document.querySelectorAll(".tab-btn").forEach((b) =>
+        b.classList.toggle("active", b.dataset.tab === tab));
+    document.querySelectorAll(".tab-panel").forEach((p) =>
+        p.classList.toggle("hidden", p.id !== `tab-${tab}`));
+    loadTab(tab);
+}
+
+// ── Market-hours detection (ET, 9:30–16:00 weekdays) ────────────────────────────
+function marketOpen() {
+    const now = new Date();
+    // Convert to US Eastern via locale trick
+    const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+    const day = et.getDay();
+    if (day === 0 || day === 6) return false;
+    const mins = et.getHours() * 60 + et.getMinutes();
+    return mins >= 570 && mins <= 960; // 9:30 – 16:00
+}
+
+// ── Header + health ─────────────────────────────────────────────────────────────
+async function loadHeader() {
+    try {
+        const [pf, health] = await Promise.all([api("/api/portfolio"), api("/api/health")]);
+        $("hdr-equity").textContent = fmt$(pf.equity);
+        $("hdr-cash").textContent = fmt$(pf.balance);
+        const ret = $("hdr-return");
+        ret.textContent = fmtPct(pf.return_pct);
+        ret.className = "font-bold text-base " + cls(pf.return_pct);
+        $("profile-big").textContent = pf.profile || "—";
+        $("positions-big").textContent = `${pf.open_positions} / ${pf.max_positions}`;
+
+        const dot = $("fresh-dot"), txt = $("fresh-text");
+        if (health.data_fresh) { dot.className = "w-2.5 h-2.5 rounded-full bg-green-500"; txt.textContent = "Data fresh"; }
+        else { dot.className = "w-2.5 h-2.5 rounded-full bg-red-500"; txt.textContent = "Data STALE"; }
+    } catch (e) { console.error(e); }
+}
+
+// ── Dashboard tab ───────────────────────────────────────────────────────────────
+let dashPicks = [], dashPositions = [];
+
+async function loadDashboard() {
+    const [picks, pf] = await Promise.all([api("/api/picks"), api("/api/portfolio")]);
+
+    // Regime badges
+    const regime = picks.market_regime || "Unknown";
+    const color = picks.regime_color || "#64748b";
+    ["regime-badge", "regime-big"].forEach((id) => {
+        const el = $(id); el.textContent = regime; el.style.color = color;
+    });
+
+    // Picks
+    dashPicks = picks.picks || [];
+    const pb = $("picks-body");
+    if (!dashPicks.length) {
+        pb.innerHTML = `<tr><td colspan="11" class="text-center text-slate-500 py-6">No qualifying picks today.</td></tr>`;
+    } else {
+        pb.innerHTML = dashPicks.map((p, i) => `
+            <tr data-sym="${p.Symbol}">
+                <td>${i + 1}</td>
+                <td class="font-semibold">${p.Symbol}<div class="text-xs mut">${p.Industry || ""}</div></td>
+                <td>${p.PGR || "—"}</td>
+                <td class="px-live">${fmt$(p.Price)}</td>
+                <td>${fmt$(p.Stop)}</td>
+                <td>${fmt$(p.Target)}</td>
+                <td class="${cls(p.S10)}">${p.S10?.toFixed(1)}</td>
+                <td class="${cls(p.L60)}">${p.L60?.toFixed(1)}</td>
+                <td class="font-bold ${cls(p.Total)}">${p.Total?.toFixed(1)}</td>
+                <td class="text-xs text-purple-300">${p.Patterns || "—"}</td>
+                <td class="text-xs">${p.Shares_ATR ?? "—"} / ${p.Shares_Stop ?? "—"}</td>
+            </tr>`).join("");
+    }
+
+    // Positions
+    dashPositions = pf.positions || [];
+    const posb = $("positions-body");
+    if (!dashPositions.length) {
+        posb.innerHTML = `<tr><td colspan="8" class="text-center text-slate-500 py-6">No open positions.</td></tr>`;
+    } else {
+        posb.innerHTML = dashPositions.map((p) => `
+            <tr data-sym="${p.symbol}">
+                <td class="font-semibold">${p.symbol}</td>
+                <td>${p.qty}</td>
+                <td>${fmt$(p.cost)}</td>
+                <td class="px-live">${fmt$(p.current_price)}</td>
+                <td class="pnl-$ ${cls(p.pnl)}">${fmt$(p.pnl)}</td>
+                <td class="pnl-pct ${cls(p.pnl_pct)}">${fmtPct(p.pnl_pct)}</td>
+                <td>${fmt$(p.stop_loss)}</td>
+                <td>${p.days_held}</td>
+            </tr>`).join("");
+    }
+
+    refreshPrices();
+}
+
+// ── Live price refresh (updates current price + P&L in place) ──────────────────
+async function refreshPrices() {
+    const syms = new Set();
+    dashPicks.forEach((p) => syms.add(p.Symbol));
+    dashPositions.forEach((p) => syms.add(p.symbol));
+    if (!syms.size) return;
+    let prices;
+    try { prices = await api("/api/prices?symbols=" + [...syms].join(",")); }
+    catch { return; }
+
+    // Update pick prices
+    document.querySelectorAll("#picks-body tr[data-sym]").forEach((tr) => {
+        const px = prices[tr.dataset.sym];
+        if (px > 0) tr.querySelector(".px-live").textContent = fmt$(px);
+    });
+    // Update position prices + P&L live
+    dashPositions.forEach((p) => {
+        const px = prices[p.symbol];
+        if (!(px > 0)) return;
+        const tr = document.querySelector(`#positions-body tr[data-sym="${p.symbol}"]`);
+        if (!tr) return;
+        const pnl = (px - p.cost) * p.qty;
+        const pnlPct = p.cost ? ((px - p.cost) / p.cost) * 100 : 0;
+        tr.querySelector(".px-live").textContent = fmt$(px);
+        const c$ = tr.querySelector(".pnl-\\$"), cP = tr.querySelector(".pnl-pct");
+        c$.textContent = fmt$(pnl); c$.className = "pnl-$ " + cls(pnl);
+        cP.textContent = fmtPct(pnlPct); cP.className = "pnl-pct " + cls(pnlPct);
+    });
+}
+
+// ── Rotation tab ─────────────────────────────────────────────────────────────
+async function loadRotation() {
+    const [rep, res] = await Promise.all([api("/api/replacements"), api("/api/reserves")]);
+    const rb = $("rotation-body");
+    const pairs = rep.pairs || [];
+    rb.innerHTML = pairs.length ? pairs.map((p) => `
+        <tr>
+            <td class="neg font-semibold">${p.Sell}</td>
+            <td class="${cls(p.Sell_Score)}">${p.Sell_Score?.toFixed?.(1) ?? p.Sell_Score}</td>
+            <td class="text-xs">${p.Sell_Status || ""}</td>
+            <td class="mut">→</td>
+            <td class="pos font-semibold">${p.Buy}</td>
+            <td class="${cls(p.Buy_Score)}">${p.Buy_Score?.toFixed?.(1) ?? p.Buy_Score}</td>
+            <td>${p.Buy_PGR || "—"}</td>
+        </tr>`).join("")
+        : `<tr><td colspan="7" class="text-center text-slate-500 py-6">No rotation pairs.</td></tr>`;
+
+    const resb = $("reserves-body");
+    const rv = res.reserves || [];
+    resb.innerHTML = rv.length ? rv.map((r) => `
+        <tr>
+            <td class="font-semibold">${r.Symbol}</td>
+            <td class="text-xs">${r.Industry || ""}</td>
+            <td>${r.PGR || "—"}</td>
+            <td class="${cls(r.S10)}">${Number(r.S10).toFixed(1)}</td>
+            <td class="${cls(r.L60)}">${Number(r.L60).toFixed(1)}</td>
+            <td class="font-bold ${cls(r.Total)}">${Number(r.Total).toFixed(1)}</td>
+        </tr>`).join("")
+        : `<tr><td colspan="6" class="text-center text-slate-500 py-6">No reserves.</td></tr>`;
+}
+
+// ── History tab ────────────────────────────────────────────────────────────────
+let histOffset = 0;
+const HIST_LIMIT = 25;
+let equityChart = null;
+
+async function loadHistory() {
+    const data = await api(`/api/history?limit=${HIST_LIMIT}&offset=${histOffset}`);
+    $("hist-pnl").textContent = fmt$(data.total_pnl);
+    $("hist-pnl").className = "text-2xl font-bold mt-1 " + cls(data.total_pnl);
+    $("hist-winrate").textContent = (data.win_rate ?? 0) + "%";
+    $("hist-count").textContent = data.total;
+
+    const tb = $("history-body");
+    const txns = data.transactions || [];
+    tb.innerHTML = txns.length ? txns.map((t) => `
+        <tr>
+            <td class="text-xs">${(t.date || "").slice(0, 10)}</td>
+            <td class="font-semibold ${t.type === "SELL" ? "neg" : t.type === "BUY" ? "pos" : "mut"}">${t.type}</td>
+            <td>${t.symbol || "—"}</td>
+            <td>${t.qty ?? "—"}</td>
+            <td>${fmt$(t.price)}</td>
+            <td>${fmt$((t.price || 0) * (t.qty || 0))}</td>
+            <td class="${t.pnl == null ? "mut" : cls(t.pnl)}">${t.pnl == null ? "—" : fmt$(t.pnl)}</td>
+        </tr>`).join("")
+        : `<tr><td colspan="7" class="text-center text-slate-500 py-6">No transactions.</td></tr>`;
+
+    const pages = Math.max(1, Math.ceil(data.total / HIST_LIMIT));
+    $("hist-page").textContent = `Page ${histOffset / HIST_LIMIT + 1} / ${pages}`;
+    $("hist-prev").disabled = histOffset === 0;
+    $("hist-next").disabled = histOffset + HIST_LIMIT >= data.total;
+
+    loadEquityCurve();
+}
+
+$("hist-prev").addEventListener("click", () => { if (histOffset > 0) { histOffset -= HIST_LIMIT; loadHistory(); } });
+$("hist-next").addEventListener("click", () => { histOffset += HIST_LIMIT; loadHistory(); });
+
+async function loadEquityCurve() {
+    let pts;
+    try { pts = await api("/api/history/equity-curve"); } catch { return; }
+    if (!pts.length) return;
+    const ctx = $("equity-chart");
+    const cfg = {
+        type: "line",
+        data: {
+            labels: pts.map((p) => p.date),
+            datasets: [{
+                label: "Balance", data: pts.map((p) => p.balance),
+                borderColor: "#60a5fa", backgroundColor: "rgba(96,165,250,0.1)",
+                fill: true, tension: 0.2, pointRadius: 0,
+            }],
+        },
+        options: {
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: { color: "#64748b", maxTicksLimit: 8 }, grid: { color: "rgba(51,65,85,0.3)" } },
+                y: { ticks: { color: "#64748b" }, grid: { color: "rgba(51,65,85,0.3)" } },
+            },
+        },
+    };
+    if (equityChart) { equityChart.data = cfg.data; equityChart.update(); }
+    else equityChart = new Chart(ctx, cfg);
+}
+
+// ── System tab ─────────────────────────────────────────────────────────────────
+async function loadSystem() {
+    const [health, tasks, logs] = await Promise.all([
+        api("/api/health"), api("/api/tasks"), api("/api/pipeline/logs?lines=100"),
+    ]);
+
+    $("health-body").innerHTML = `
+        <div>Data fresh: <b class="${health.data_fresh ? "pos" : "neg"}">${health.data_fresh ? "YES" : "NO"}</b></div>
+        <div>Last refresh: <span class="mut">${health.last_refresh || "—"}</span></div>
+        <div>Last pipeline: <span class="mut">${health.last_pipeline_run || "—"}</span></div>
+        <div>Pipeline status: <b class="${health.pipeline_status === "OK" ? "pos" : "mut"}">${health.pipeline_status}</b></div>
+        <div>Server time: <span class="mut">${health.server_time || "—"}</span></div>`;
+
+    const tb = $("tasks-body");
+    const ts = tasks.tasks || [];
+    tb.innerHTML = ts.length ? ts.map((t) => `
+        <tr>
+            <td class="font-semibold">${t.name}</td>
+            <td>${t.status || "—"}</td>
+            <td class="text-xs mut">${t.last_run || "—"}</td>
+            <td class="text-xs mut">${t.next_run || "—"}</td>
+        </tr>`).join("")
+        : `<tr><td colspan="4" class="text-center text-slate-500 py-6">No tasks found.</td></tr>`;
+
+    const lv = $("log-view");
+    lv.textContent = (logs.lines || []).join("\n");
+    lv.scrollTop = lv.scrollHeight;
+}
+
+$("run-pipeline-btn").addEventListener("click", async () => {
+    if (!confirm("Run the full daily pipeline now? This fetches fresh data and may take several minutes.")) return;
+    const key = prompt("Enter dashboard API key (leave blank if none set):") || "";
+    $("action-msg").textContent = "Starting pipeline…";
+    try {
+        const r = await api("/api/pipeline/run", { method: "POST", headers: { "X-API-Key": key } });
+        $("action-msg").textContent = r.status === "started" ? `Pipeline started (pid ${r.pid}).`
+            : r.status === "already_running" ? "Pipeline is already running." : (r.message || r.status);
+    } catch (e) { $("action-msg").textContent = "Error: " + e.message; }
+});
+
+$("heal-tasks-btn").addEventListener("click", async () => {
+    if (!confirm("Re-register all scheduled tasks?")) return;
+    const key = prompt("Enter dashboard API key (leave blank if none set):") || "";
+    $("action-msg").textContent = "Healing tasks…";
+    try {
+        await api("/api/tasks/heal", { method: "POST", headers: { "X-API-Key": key } });
+        $("action-msg").textContent = "Tasks healed.";
+        loadSystem();
+    } catch (e) { $("action-msg").textContent = "Error: " + e.message; }
+});
+
+// ── Per-tab loader ───────────────────────────────────────────────────────────
+function loadTab(tab) {
+    if (tab === "dashboard") loadDashboard();
+    else if (tab === "rotation") loadRotation();
+    else if (tab === "history") loadHistory();
+    else if (tab === "system") loadSystem();
+}
+
+// ── Polling loops ──────────────────────────────────────────────────────────────
+function startPolling() {
+    loadHeader();
+    setInterval(loadHeader, 30000);
+
+    // Live prices: 30s during market hours, 5min otherwise (dashboard tab only)
+    setInterval(() => { if (activeTab === "dashboard") refreshPrices(); }, marketOpen() ? 30000 : 300000);
+
+    // System log auto-refresh when on system tab
+    setInterval(() => { if (activeTab === "system") loadSystem(); }, 15000);
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+switchTab("dashboard");
+startPolling();

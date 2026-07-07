@@ -78,11 +78,40 @@ class TestConfigNullSafety(unittest.TestCase):
         cfg = _make_cfg({"rapidapi": None})
         self.assertEqual(cfg.rapidapi_key, "")
 
+    def test_null_web_does_not_crash(self):
+        cfg = _make_cfg({"web": None})
+        self.assertEqual(cfg.web_port, 8888)   # falls back to default
+        self.assertEqual(cfg.web_host, "0.0.0.0")
+        self.assertEqual(cfg.web_api_key, "")
+
     def test_empty_config_returns_empty_strings(self):
         cfg = _make_cfg({})
         self.assertEqual(cfg.chaikin_email, "")
         self.assertEqual(cfg.etrade_production_key, "")
         self.assertEqual(cfg.rapidapi_key, "")
+
+
+class TestConfigWeb(unittest.TestCase):
+    def test_web_defaults(self):
+        cfg = _make_cfg({})
+        self.assertEqual(cfg.web_port, 8888)
+        self.assertEqual(cfg.web_host, "0.0.0.0")
+        self.assertEqual(cfg.web_api_key, "")
+
+    def test_web_from_file(self):
+        cfg = _make_cfg({"web": {"port": 9090, "host": "127.0.0.1", "api_key": "secret"}})
+        self.assertEqual(cfg.web_port, 9090)
+        self.assertEqual(cfg.web_host, "127.0.0.1")
+        self.assertEqual(cfg.web_api_key, "secret")
+
+    def test_web_port_env_override(self):
+        cfg = _make_cfg({"web": {"port": 9090}}, env={"WEB_PORT": "7000"})
+        self.assertEqual(cfg.web_port, 7000)
+
+    def test_web_port_is_int(self):
+        cfg = _make_cfg({"web": {"port": "9090"}})   # string in JSON coerced to int
+        self.assertIsInstance(cfg.web_port, int)
+        self.assertEqual(cfg.web_port, 9090)
 
 
 class TestConfigMissingFile(unittest.TestCase):

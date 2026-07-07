@@ -18,5 +18,10 @@
   },
   "rapidapi": {
     "api_key": "your_rapidapi_key_here"
+  },
+  "web": {
+    "port": 8888,
+    "host": "0.0.0.0",
+    "api_key": "your_dashboard_api_key"
   }
 }

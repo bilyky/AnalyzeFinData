@@ -57,6 +57,12 @@ class _Config:
         rapidapi = raw.get("rapidapi") or {}
         self.rapidapi_key = os.environ.get("RAPIDAPI_KEY") or rapidapi.get("api_key", "")
 
+        # ── Web Dashboard ─────────────────────────────────────────────────────
+        web = raw.get("web") or {}
+        self.web_port    = int(os.environ.get("WEB_PORT",    "") or web.get("port",    8888))
+        self.web_host    = os.environ.get("WEB_HOST")    or web.get("host",    "0.0.0.0")
+        self.web_api_key = os.environ.get("WEB_API_KEY") or web.get("api_key", "")
+
     def require(self, *attrs: str) -> None:
         """Raise RuntimeError if any of the given attributes are empty."""
         missing = [a for a in attrs if not getattr(self, a, "")]

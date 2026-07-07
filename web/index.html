@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AETHER Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="bg-slate-950 text-slate-200 min-h-screen">
+
+    <!-- Header -->
+    <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-20">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
+            <div class="flex items-center gap-3">
+                <span class="text-xl font-bold tracking-tight">🛡️ AETHER</span>
+                <span id="regime-badge" class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-700">—</span>
+            </div>
+            <div class="flex items-center gap-5 text-sm">
+                <div class="text-right">
+                    <div class="text-slate-400 text-xs">Equity</div>
+                    <div id="hdr-equity" class="font-bold text-base">—</div>
+                </div>
+                <div class="text-right">
+                    <div class="text-slate-400 text-xs">Cash</div>
+                    <div id="hdr-cash" class="font-bold text-base">—</div>
+                </div>
+                <div class="text-right">
+                    <div class="text-slate-400 text-xs">Return</div>
+                    <div id="hdr-return" class="font-bold text-base">—</div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span id="fresh-dot" class="w-2.5 h-2.5 rounded-full bg-slate-600"></span>
+                    <span id="fresh-text" class="text-xs text-slate-400">—</span>
+                </div>
+            </div>
+        </div>
+        <nav class="max-w-7xl mx-auto px-4 flex gap-1 text-sm">
+            <button data-tab="dashboard" class="tab-btn px-4 py-2 border-b-2 border-transparent">Dashboard</button>
+            <button data-tab="rotation"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Rotation</button>
+            <button data-tab="history"   class="tab-btn px-4 py-2 border-b-2 border-transparent">History</button>
+            <button data-tab="system"    class="tab-btn px-4 py-2 border-b-2 border-transparent">System</button>
+        </nav>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 py-6">
+
+        <!-- ======================= DASHBOARD TAB ======================= -->
+        <section id="tab-dashboard" class="tab-panel">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+                <div class="card">
+                    <div class="card-label">Market Regime</div>
+                    <div id="regime-big" class="text-2xl font-bold mt-1">—</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Strategy Profile</div>
+                    <div id="profile-big" class="text-2xl font-bold mt-1">—</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Open Positions</div>
+                    <div id="positions-big" class="text-2xl font-bold mt-1">—</div>
+                </div>
+            </div>
+
+            <h2 class="section-title">Today's Top 5 Picks</h2>
+            <div class="overflow-x-auto mb-8">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>#</th><th>Symbol</th><th>PGR</th><th>Price</th><th>Stop</th>
+                            <th>Target</th><th>S10</th><th>L60</th><th>Score</th>
+                            <th>Patterns</th><th>Sizing (ATR/Stop)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="picks-body">
+                        <tr><td colspan="11" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h2 class="section-title">Open Positions</h2>
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th><th>Qty</th><th>Entry</th><th>Current</th>
+                            <th>P&amp;L $</th><th>P&amp;L %</th><th>Stop</th><th>Days</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positions-body">
+                        <tr><td colspan="8" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ======================= ROTATION TAB ======================= -->
+        <section id="tab-rotation" class="tab-panel hidden">
+            <h2 class="section-title">Portfolio Rotation Pairs</h2>
+            <div class="overflow-x-auto mb-8">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>Sell</th><th>Score</th><th>Status</th><th></th><th>Buy</th><th>Score</th><th>PGR</th></tr>
+                    </thead>
+                    <tbody id="rotation-body">
+                        <tr><td colspan="7" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h2 class="section-title">A-Reserves (Backup Players)</h2>
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>Symbol</th><th>Industry</th><th>PGR</th><th>S10</th><th>L60</th><th>Score</th></tr>
+                    </thead>
+                    <tbody id="reserves-body">
+                        <tr><td colspan="6" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ======================= HISTORY TAB ======================= -->
+        <section id="tab-history" class="tab-panel hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+                <div class="card"><div class="card-label">Total P&amp;L</div><div id="hist-pnl" class="text-2xl font-bold mt-1">—</div></div>
+                <div class="card"><div class="card-label">Win Rate</div><div id="hist-winrate" class="text-2xl font-bold mt-1">—</div></div>
+                <div class="card"><div class="card-label">Transactions</div><div id="hist-count" class="text-2xl font-bold mt-1">—</div></div>
+            </div>
+
+            <h2 class="section-title">Equity Curve</h2>
+            <div class="card mb-8"><canvas id="equity-chart" height="90"></canvas></div>
+
+            <h2 class="section-title">Transaction Log</h2>
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>Date</th><th>Type</th><th>Symbol</th><th>Qty</th><th>Price</th><th>Value</th><th>P&amp;L</th></tr>
+                    </thead>
+                    <tbody id="history-body">
+                        <tr><td colspan="7" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="flex justify-between items-center mt-3 text-sm">
+                <button id="hist-prev" class="btn">‹ Prev</button>
+                <span id="hist-page" class="text-slate-400">—</span>
+                <button id="hist-next" class="btn">Next ›</button>
+            </div>
+        </section>
+
+        <!-- ======================= SYSTEM TAB ======================= -->
+        <section id="tab-system" class="tab-panel hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+                <div class="card">
+                    <div class="card-label">System Health</div>
+                    <div id="health-body" class="mt-2 text-sm space-y-1">Loading…</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Actions</div>
+                    <div class="mt-3 flex flex-col gap-2">
+                        <button id="run-pipeline-btn" class="btn-primary">▶ Run Pipeline Now</button>
+                        <button id="heal-tasks-btn" class="btn">🔧 Heal All Tasks</button>
+                        <div id="action-msg" class="text-xs text-slate-400"></div>
+                    </div>
+                </div>
+            </div>
+
+            <h2 class="section-title">Scheduled Tasks</h2>
+            <div class="overflow-x-auto mb-8">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>Task</th><th>Status</th><th>Last Run</th><th>Next Run</th></tr>
+                    </thead>
+                    <tbody id="tasks-body">
+                        <tr><td colspan="4" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h2 class="section-title">Pipeline Log</h2>
+            <pre id="log-view" class="bg-black/50 border border-slate-800 rounded p-3 text-xs text-slate-300 h-80 overflow-auto font-mono">Loading…</pre>
+        </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

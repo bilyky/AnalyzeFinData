@@ -1,0 +1,301 @@
+"""
+Pure data-reading layer for the AETHER web dashboard.
+No HTTP, no FastAPI — only reads from files and calls existing modules.
+All functions are safe to call from async FastAPI route handlers.
+"""
+
+import json
+import os
+import subprocess
+import time
+from datetime import datetime, date
+from pathlib import Path
+
+_DIR      = Path(__file__).resolve().parent
+_DATA_DIR = _DIR / "Data"
+_XLSX     = _DATA_DIR / "state_of_the_day.xlsx"
+_GAME     = _DATA_DIR / "ai_portfolio_game.json"
+_LOG      = _DATA_DIR / "autonomous_run.log"
+_PERF     = _DATA_DIR / "performance_log.json"
+
+# ── Simple in-process TTL cache ───────────────────────────────────────────────
+
+_cache: dict = {}
+
+
+def _cached(key: str, ttl: float, fn):
+    entry = _cache.get(key)
+    now = time.monotonic()
+    if entry and now - entry["ts"] < ttl:
+        return entry["val"]
+    val = fn()
+    _cache[key] = {"ts": now, "val": val}
+    return val
+
+
+# ── Portfolio ─────────────────────────────────────────────────────────────────
+
+def read_portfolio() -> dict:
+    """Read ai_portfolio_game.json and compute position-level P&L."""
+    try:
+        with open(_GAME, encoding="utf-8") as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"balance": 0, "equity": 0, "return_pct": 0, "positions": [],
+                "profile": "UNKNOWN", "open_positions": 0, "max_positions": 5,
+                "start_date": "", "total_return": 0}
+
+    positions = state.get("positions", {})
+    balance   = state.get("balance", 0)
+    history   = state.get("history", [])
+
+    # Derive initial balance from history or default
+    initial = 10000.0
+    pos_list = []
+    for sym, pos in positions.items():
+        cost  = pos.get("cost", 0)
+        qty   = pos.get("qty", 0)
+        stop  = pos.get("stop_loss", 0)
+        # Compute days held from history
+        days_held = 0
+        for tx in reversed(history):
+            if tx.get("symbol") == sym and tx.get("type") == "BUY":
+                try:
+                    d = datetime.fromisoformat(tx["date"]).date()
+                    days_held = (date.today() - d).days
+                except Exception:
+                    pass
+                break
+        pos_list.append({
+            "symbol":        sym,
+            "qty":           qty,
+            "cost":          round(cost, 2),
+            "current_price": round(cost, 2),  # filled by /api/prices live refresh
+            "pnl":           0.0,
+            "pnl_pct":       0.0,
+            "stop_loss":     round(stop, 2),
+            "days_held":     days_held,
+        })
+
+    equity = state.get("equity", balance)
+    return_pct = round((equity - initial) / initial * 100, 2) if initial else 0
+
+    return {
+        "balance":        round(balance, 2),
+        "equity":         round(equity, 2),
+        "return_pct":     return_pct,
+        "total_return":   round(equity - initial, 2),
+        "profile":        state.get("profile", "BALANCED"),
+        "positions":      pos_list,
+        "open_positions": len(pos_list),
+        "max_positions":  5,
+        "start_date":     state.get("start_date", ""),
+    }
+
+
+# ── Picks & replacements ──────────────────────────────────────────────────────
+
+def read_picks() -> dict:
+    """Cached 60s — reads state_of_the_day.xlsx Research sheet."""
+    def _load():
+        try:
+            import autonomous_pipeline as _ap
+            picks = _ap.get_top_5_picks()
+            regime, color = _ap.get_market_regime()
+            return {"market_regime": regime, "regime_color": color, "picks": picks}
+        except Exception as e:
+            return {"market_regime": "Unknown", "regime_color": "#7f8c8d",
+                    "picks": [], "error": str(e)}
+    return _cached("picks", 60.0, _load)
+
+
+def read_replacements() -> dict:
+    """Cached 60s — reads Replacements sheet."""
+    def _load():
+        try:
+            import autonomous_pipeline as _ap
+            pairs = _ap.get_replacement_pairs()
+            return {"pairs": pairs}
+        except Exception as e:
+            return {"pairs": [], "error": str(e)}
+    return _cached("replacements", 60.0, _load)
+
+
+def read_reserves() -> dict:
+    """Cached 60s — reads A-Reserves from game state + Research sheet scores."""
+    def _load():
+        try:
+            import autonomous_pipeline as _ap
+            data = _ap.get_reserves_data()
+            return {"reserves": data}
+        except Exception as e:
+            return {"reserves": [], "error": str(e)}
+    return _cached("reserves", 60.0, _load)
+
+
+# ── Transaction history ───────────────────────────────────────────────────────
+
+def read_history(limit: int = 50, offset: int = 0) -> dict:
+    """Read transaction log from ai_portfolio_game.json history array."""
+    try:
+        with open(_GAME, encoding="utf-8") as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"total": 0, "transactions": [], "win_rate": 0, "total_pnl": 0}
+
+    history = list(reversed(state.get("history", [])))  # newest first
+    total   = len(history)
+    page    = history[offset: offset + limit]
+
+    sells   = [t for t in history if t.get("type") == "SELL" and t.get("pnl") is not None]
+    wins    = [t for t in sells if (t.get("pnl") or 0) > 0]
+    win_rate = round(len(wins) / len(sells) * 100, 1) if sells else 0
+    total_pnl = round(sum(t.get("pnl") or 0 for t in sells), 2)
+
+    return {
+        "total":        total,
+        "transactions": page,
+        "win_rate":     win_rate,
+        "total_pnl":    total_pnl,
+    }
+
+
+def read_equity_curve() -> list[dict]:
+    """Reconstruct daily equity snapshots from transaction history."""
+    try:
+        with open(_GAME, encoding="utf-8") as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+    history  = sorted(state.get("history", []), key=lambda t: t.get("date", ""))
+    balance  = 10000.0
+    by_date: dict[str, float] = {}
+    for tx in history:
+        d = tx.get("date", "")[:10]
+        if not d:
+            continue
+        pnl = tx.get("pnl") or 0
+        # Approximate: BUY reduces balance, SELL adds back cost + pnl
+        if tx.get("type") == "BUY":
+            balance -= (tx.get("price", 0) * tx.get("qty", 0))
+        elif tx.get("type") == "SELL":
+            balance += (tx.get("price", 0) * tx.get("qty", 0))
+        by_date[d] = round(balance, 2)
+
+    return [{"date": d, "balance": v} for d, v in sorted(by_date.items())]
+
+
+# ── Log tailing ───────────────────────────────────────────────────────────────
+
+def read_log_tail(n_lines: int = 100) -> list[str]:
+    """Return last n_lines from autonomous_run.log."""
+    if not _LOG.exists():
+        return ["[Log file not found]"]
+    try:
+        with open(_LOG, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        return [l.rstrip() for l in lines[-n_lines:]]
+    except Exception as e:
+        return [f"[Error reading log: {e}]"]
+
+
+# ── System health ─────────────────────────────────────────────────────────────
+
+def get_system_health() -> dict:
+    """Check file freshness and last pipeline status."""
+    now = datetime.now()
+    today = date.today()
+
+    # Workbook freshness
+    data_fresh   = False
+    last_refresh = None
+    if _XLSX.exists():
+        mtime = datetime.fromtimestamp(_XLSX.stat().st_mtime)
+        data_fresh   = mtime.date() >= today
+        last_refresh = mtime.isoformat(timespec="minutes")
+
+    # Last pipeline run time (parse from log)
+    last_pipeline_run  = None
+    pipeline_status    = "UNKNOWN"
+    if _LOG.exists():
+        try:
+            with open(_LOG, encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            for line in reversed(lines):
+                if "Starting Daily Trading Pipeline" in line:
+                    # [2026-07-01 11:06:53] Starting ...
+                    ts = line.strip()[1:20]
+                    last_pipeline_run = ts
+                    break
+            for line in reversed(lines):
+                if "Pipeline completed successfully" in line:
+                    pipeline_status = "OK"
+                    break
+                if "Pipeline failed" in line or "ALERT" in line:
+                    pipeline_status = "ERROR"
+                    break
+        except Exception:
+            pass
+
+    # Watchdog — check if watchdog.log or similar file was updated today
+    watchdog_ok = True  # default optimistic; future: check watchdog log
+
+    return {
+        "data_fresh":        data_fresh,
+        "last_refresh":      last_refresh,
+        "last_pipeline_run": last_pipeline_run,
+        "pipeline_status":   pipeline_status,
+        "watchdog_ok":       watchdog_ok,
+        "server_time":       now.isoformat(timespec="seconds"),
+    }
+
+
+# ── Scheduled tasks ───────────────────────────────────────────────────────────
+
+_KNOWN_TASKS = [
+    "AnalyzeFinData_Morning",
+    "AnalyzeFinData_AI_Game",
+    "AnalyzeFinData_AI_Summary",
+    "AnalyzeFinData_Evening",
+    "Project_AETHER_Watchdog",
+]
+
+
+def read_scheduled_tasks() -> list[dict]:
+    """Query Windows Task Scheduler for known AETHER tasks."""
+    results = []
+    try:
+        out = subprocess.check_output(
+            ["schtasks", "/query", "/fo", "CSV", "/v"],
+            encoding="utf-8", errors="replace",
+            timeout=10, stderr=subprocess.DEVNULL,
+        )
+        lines = out.splitlines()
+        if not lines:
+            return []
+        header = [h.strip('"') for h in lines[0].split('","')]
+
+        def col(row_parts, name):
+            try:
+                return row_parts[header.index(name)].strip('"')
+            except (ValueError, IndexError):
+                return ""
+
+        for line in lines[1:]:
+            parts = line.split('","')
+            task_name = col(parts, "TaskName").lstrip("\\")
+            if task_name not in _KNOWN_TASKS:
+                continue
+            results.append({
+                "name":     task_name,
+                "status":   col(parts, "Status"),
+                "last_run": col(parts, "Last Run Time"),
+                "next_run": col(parts, "Next Run Time"),
+                "last_result": col(parts, "Last Result"),
+            })
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+        # Not on Windows or schtasks unavailable — return stubs
+        results = [{"name": t, "status": "N/A", "last_run": "", "next_run": "", "last_result": ""}
+                   for t in _KNOWN_TASKS]
+    return results
