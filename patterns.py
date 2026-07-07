@@ -353,7 +353,7 @@ def pattern_summary(ohlcv_ts: dict, date_str: str):
     # All three factors are contrarian: high score = lower fwd returns.
     # Spreads: candlestick 3.49%, chart 11.83%, momentum 5.76%.
     # Combined score is negated so positive = bullish input to short/long scores.
-    pattern_score = cs * 0.25 + cps * 0.45 + ms * 0.30
+    pattern_score = -1.0 * (cs * 0.25 + cps * 0.45 + ms * 0.30)
     pattern_score = round(max(-2.0, min(2.0, pattern_score)), 2)
 
     text_parts = []
