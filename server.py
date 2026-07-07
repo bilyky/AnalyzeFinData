@@ -387,14 +387,53 @@ def cmd_serve(host: str, port: int):
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
+def cmd_regen_secret():
+    """Generate a fresh web.secret in config.json and restart if running.
+    Invalidates all existing admin sessions (everyone must log in again)."""
+    import datetime
+    import json
+    import shutil
+
+    cfg_path = _DIR / "config.json"
+    if not cfg_path.exists():
+        print("config.json not found — create it from config.json.example first.")
+        return
+
+    # Backup before writing (Data/Backup is gitignored)
+    (_DIR / "Data" / "Backup").mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    bak = _DIR / "Data" / "Backup" / f"config_{ts}.json"
+    shutil.copy2(cfg_path, bak)
+
+    cfg = json.loads(cfg_path.read_text())
+    web = cfg.get("web") or {}
+    web["secret"] = secrets.token_hex(32)
+    cfg["web"] = web
+    tmp = str(cfg_path) + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=2)
+    os.replace(tmp, cfg_path)
+
+    print(f"New web.secret written (64 chars). Backup: {bak}")
+    print("All existing admin sessions are now invalid.")
+    pid = _read_pid()
+    if pid and _is_running(pid):
+        print("Server is running -> restarting to apply...")
+        cmd_restart()
+    else:
+        print("Start the server for it to take effect: python server.py start")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AETHER Dashboard server")
     parser.add_argument(
         "cmd", nargs="?", default="dev",
-        choices=["start", "stop", "restart", "status", "upgrade", "serve", "dev"],
+        choices=["start", "stop", "restart", "status", "upgrade",
+                 "regen-secret", "serve", "dev"],
         help="start/stop/restart/status/upgrade the background server; "
+             "regen-secret rotates web.secret in config.json; "
              "'serve' runs uvicorn in-process; omit for foreground dev mode",
     )
     parser.add_argument("--port", type=int, help="Override configured port (serve/dev)")
@@ -411,6 +450,8 @@ if __name__ == "__main__":
         cmd_status()
     elif args.cmd == "upgrade":
         cmd_upgrade()
+    elif args.cmd == "regen-secret":
+        cmd_regen_secret()
     elif args.cmd == "serve":
         cfg = _cfg()
         cmd_serve(args.host or cfg.web_host, args.port or cfg.web_port)
