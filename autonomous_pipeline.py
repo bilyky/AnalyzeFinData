@@ -396,7 +396,7 @@ def main():
     except subprocess.CalledProcessError as e:
         log(f"Warning: run_history.py failed (will continue): {e.stderr}")
 
-    # 2. Execute main.py
+    # 2. Execute main.py (writes today's closes into OHLCV JSON via _append_ohlcv_entry)
     log("Refreshing workbook (main.py)...")
     try:
         script_path = str(BASE_DIR / "main.py")
@@ -407,6 +407,22 @@ def main():
         log(error_msg)
         notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline failed during main.py execution.\n\n{error_msg}")
         return
+
+    # 2b. OHLCV recovery pass — repair missing/corrupted/stale Symbol_full files via RapidAPI.
+    #     Today's closes are already written by main.py (Chaikin). This only touches symbols
+    #     with gaps > 30 days. Non-fatal: pipeline continues even if RapidAPI is unavailable.
+    log("OHLCV recovery pass (rapidapi.py)...")
+    try:
+        import rapidapi
+        from run_history import load_symbols
+        _ohlcv_syms = load_symbols()
+        _today_str = str(datetime.date.today())
+        _ohlcv_result = rapidapi.repair_missing(_ohlcv_syms, _today_str)
+        log(f"OHLCV: {_ohlcv_result['updated']} recovered, "
+            f"{_ohlcv_result['skipped']} already current, "
+            f"{len(_ohlcv_result['errors'])} errors")
+    except Exception as e:
+        log(f"Warning: OHLCV recovery failed (non-fatal, pipeline continues): {e}")
 
     # 3. Verify data freshness
     fresh, msg = verify_data_freshness()

@@ -702,6 +702,46 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
     return round(max(-10.0, min(10.0, score)), 1)
 
 
+def _append_ohlcv_entry(symbol: str, date_str: str, power_g: "PowerGauge", ohlcv_ts: dict) -> None:
+    """Append today's closing price from Chaikin into the local OHLCV JSON file.
+
+    Uses data already fetched from Chaikin — zero extra API calls. Called once per
+    symbol inside check_from_xls() after power_g is fully populated.
+    """
+    if ohlcv_ts is None:
+        return  # no file yet; rapidapi.repair_missing() will handle it
+
+    if date_str in ohlcv_ts:
+        return  # already have an entry for this date
+
+    path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
+    if not os.path.exists(path):
+        return  # rapidapi.repair_missing() will create the file
+
+    close  = round(power_g.price, 4)
+    high   = round(power_g.max_price, 4) if power_g.max_price and power_g.max_price >= close else close
+    entry  = {
+        "1. open":  str(close),
+        "2. high":  str(high),
+        "3. low":   str(close),
+        "4. close": str(close),
+        "5. volume": "0",
+    }
+
+    try:
+        with open(path) as f:
+            full = json.load(f)
+        full.setdefault("Time Series (Daily)", {})[date_str] = entry
+        full.setdefault("Meta Data", {})["3. Last Refreshed"] = date_str
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(full, f)
+        os.replace(tmp, path)
+        ohlcv_ts[date_str] = entry  # keep in-memory cache consistent
+    except Exception as e:
+        print(f"  [OHLCV] {symbol}: could not append today's entry: {e}")
+
+
 def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
     pgr_value = _pgr_str(power_g.pgr_value)
     pgr_corrected_value = _pgr_str(power_g.pgr_corrected_value)
@@ -952,6 +992,10 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         row[25].value = f['long_score']
         # col AA: pattern recognition summary text
         ws.cell(row[0].row, 27).value = f.get('pattern_text') or None
+
+        # Append today's close from Chaikin into Symbol_full OHLCV JSON (free — no extra API call)
+        if power_g.price > 0:
+            _append_ohlcv_entry(symbol, today_str, power_g, ohlcv_ts)
 
         picks_data.append({
             'symbol':   symbol,
