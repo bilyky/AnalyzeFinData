@@ -226,7 +226,7 @@ def get_live_google_price(symbol):
     """Scrape the 100% live price from Google Finance as an agnostic online fallback."""
     import requests
     import re
-    exchanges = ["NASDAQ", "NYSE", "AMEX"]
+    exchanges = ["NASDAQ", "NYSE", "NYSEARCA", "AMEX"]
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
     for ex in exchanges:
@@ -431,18 +431,16 @@ def run_daily_ai_management(force=False, manual_profile=None):
         all_syms = list(set(symbols_to_check + research_symbols[:50] + queued_syms))
         prices = get_live_prices(all_syms)
         
-        # --- Strict E*TRADE Connection Gate (Non-Negotiable) ---
-        # E*TRADE cannot be offline. We MUST have a live, valid, and active connection to the E*TRADE API
-        # to retrieve prices, regardless of whether the market is open or closed (24/7).
-        # Fallback to workbook or estimated prices is strictly forbidden.
-        # If the connection fails or silent token renewal is offline at any hour, we must raise a fatal error and crash!
+        # --- Price Source Gate ---
+        # Primary source: E*TRADE live API. Automatic fallback: Google Finance scraper.
+        # If both fail (prices is empty), crash — no stale workbook prices allowed.
         if not prices:
-            raise RuntimeError("Critical Data Failure: E*TRADE connection is offline or silent token renewal failed. No live source of truth available!")
-            
-        # Zero-Trust Verification: Ensure every active position has a valid, non-zero price retrieved from E*TRADE.
+            raise RuntimeError("Critical Data Failure: Both E*TRADE and Google Finance fallback returned no prices. No live source of truth available!")
+
+        # Zero-Trust: every open position must have a valid non-zero price from a live source.
         missing_prices = [sym for sym in symbols_to_check if sym not in prices or not prices[sym] or prices[sym] <= 0]
         if missing_prices:
-            raise RuntimeError(f"Data Integrity Failure: No valid E*TRADE prices found for active positions: {missing_prices}")
+            raise RuntimeError(f"Data Integrity Failure: No live prices found for active positions: {missing_prices}")
             
         current_equity = state["balance"]
         for sym, pos in state["positions"].items():
@@ -544,18 +542,18 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 
                 # Filter by strategy profile threshold OR mathematically confirmed bottom
                 if (setup in ('1', 'OK', 1)) and sym not in state["positions"] and price > 0:
+                    bottom_ok, bottom_msg = is_bottom_confirmed(sym)
+
                     # Catastrophic Gap Guard (The CNXC Trap):
-                    # If a stock has gapped down by > 8% relative to yesterday's workbook close (row[10]),
-                    # its technical scores are lagging and stale. We MUST reject it immediately!
+                    # Reject gap-downs > 8% unless bottom is independently confirmed — a volume-confirmed
+                    # capitulation gap is exactly the entry signal bottom detection targets.
                     prev_close = row[10]
                     if prev_close and prev_close > 0:
                         gap_pct = (price - prev_close) / prev_close
-                        if gap_pct <= -0.08:
-                            print(f"🛑 AI BUY REJECTED (CNXC Trap): {sym} - Catastrophic Gap-Down detected ({round(gap_pct*100, 1)}%). Technical scores are stale!")
+                        if gap_pct <= -0.08 and not bottom_ok:
+                            print(f"🛑 AI BUY REJECTED (CNXC Trap): {sym} - Gap-Down {round(gap_pct*100, 1)}% with no confirmed bottom.")
                             continue
-                            
-                    bottom_ok, bottom_msg = is_bottom_confirmed(sym)
-                    
+
                     if total_score >= rules["min_score_threshold"] or bottom_ok:
                         bottom_desc = f" (Bottom Confirmed: {bottom_msg})" if bottom_ok else ""
                         top_buys.append({

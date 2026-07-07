@@ -14,32 +14,34 @@ def run_real_copilot_audit():
         print("[Shadow Copilot] Error: state_of_the_day.xlsx not found.")
         return
         
-    wb = openpyxl.load_workbook(XLSX_FILE, data_only=True)
-    ws = wb["Research"]
+    wb = openpyxl.load_workbook(XLSX_FILE, data_only=True, read_only=True)
+    try:
+        ws = wb["Research"]
 
-    scores = {}
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        sym = row[3]
-        if sym:
-            scores[sym] = {
-                "pgr": row[6] or "N/A",
-                "s10": row[24] or 0.0,
-                "l60": row[25] or 0.0,
-                "total": (row[24] or 0.0) + (row[25] or 0.0),
-                "setup": str(row[20] or ''),
-                "ind": row[4] or "Unknown"
-            }
+        scores = {}
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            sym = row[3]
+            if sym:
+                scores[sym] = {
+                    "pgr": row[6] or "N/A",
+                    "s10": row[24] or 0.0,
+                    "l60": row[25] or 0.0,
+                    "total": (row[24] or 0.0) + (row[25] or 0.0),
+                    "setup": str(row[20] or ''),
+                    "ind": row[4] or "Unknown"
+                }
+    finally:
+        wb.close()
 
     # 2. Connect to E*TRADE and fetch actual holdings
     try:
-        tokens = etrade._load_tokens("production")
-        renewed = etrade.renew_tokens(tokens, "production")
-        if not renewed:
-            print("[Shadow Copilot] Error: Could not renew E*TRADE tokens. Auth required.")
+        tokens = etrade.get_tokens("production")
+        if not tokens:
+            print("[Shadow Copilot] Error: Could not obtain E*TRADE tokens.")
             return
-        positions = etrade.fetch_positions(renewed, "production")
+        positions = etrade.fetch_positions(tokens, "production")
     except Exception as e:
-        print(f"[Shadow Copilot] E*TRADE Connection failed: {e}")
+        print(f"[Shadow Copilot] E*TRADE connection failed: {e}")
         return
 
     # 3. Analyze holdings for critical SELL signals (Score < 0)
@@ -61,9 +63,10 @@ def run_real_copilot_audit():
     # 4. Analyze our dynamic A-Reserves (including EWT/EWY) for BUY signals
     # We load reserves from ai_portfolio_game.json
     try:
-        state = ai_portfolio_game.load_game_state()
+        state = ai_portfolio_game.load_game()
         reserves = state.get("reserves", ["EIX", "AMAT", "URI", "GEV", "RS"])
-    except:
+    except Exception as e:
+        print(f"[Shadow Copilot] Warning: Could not load game state ({e}). Using default reserves.")
         reserves = ["EIX", "AMAT", "URI", "GEV", "RS"]
         
     # Always include EWT and EWY in our copilot watchlist

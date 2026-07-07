@@ -181,24 +181,30 @@ def check_data_freshness():
 
 def heal_tasks(missing_tasks, force=False):
     """Attempt to re-register tasks that have disappeared, failed, or need environment upgrades."""
-    for task in missing_tasks if not force else TASKS:
+    run_as = os.environ.get("USERNAME") or os.environ.get("USER") or os.getlogin()
+    python_exe = sys.executable
+    for task in (TASKS if force else missing_tasks):
         print(f"🔧 Healing/Upgrading scheduled task: {task}")
-        # Run tasks with native OS-level UTF-8 encoding environment to prevent CP1252/Charmap bugs
-        python_exe = sys.executable
         if task == "AnalyzeFinData_Morning":
-            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "autonomous_pipeline.py"}" /sc daily /st 05:30 /f /it /ru yufa'
+            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "autonomous_pipeline.py"}" /sc daily /st 05:30 /f /it /ru {run_as}'
         elif task == "AnalyzeFinData_Evening":
-            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "daily_task.py"}" /sc daily /st 17:00 /f /it /ru yufa'
+            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "daily_task.py"}" /sc daily /st 17:00 /f /it /ru {run_as}'
         elif task == "AnalyzeFinData_AI_Game":
-            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "ai_portfolio_game.py"} --run" /sc daily /st 07:00 /f /it /ru yufa'
+            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "ai_portfolio_game.py"} --run" /sc daily /st 07:00 /f /it /ru {run_as}'
+        elif task == "AnalyzeFinData_AI_Summary":
+            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "ai_portfolio_game.py"} --summary" /sc daily /st 18:00 /f /it /ru {run_as}'
         elif task == "Project_AETHER_Watchdog":
-            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "watchdog.py"}" /sc hourly /f /it /ru yufa'
+            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "watchdog.py"}" /sc hourly /f /it /ru {run_as}'
         else:
+            print(f"⚠️  No registration template for task: {task}")
             continue
-        
+
         try:
-            subprocess.run(cmd, shell=True, capture_output=True)
-            print(f"✅ Task {task} successfully registered with native UTF-8 environment.")
+            result = subprocess.run(cmd, shell=True, capture_output=True)
+            if result.returncode == 0:
+                print(f"✅ Task {task} successfully registered with native UTF-8 environment.")
+            else:
+                print(f"❌ schtasks failed for {task} (rc={result.returncode}): {result.stderr.decode(errors='replace').strip()}")
         except Exception as e:
             print(f"❌ Failed to heal {task}: {e}")
 
