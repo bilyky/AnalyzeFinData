@@ -37,25 +37,24 @@ class _Config:
         raw = _load_file()
 
         # ── Chaikin ──────────────────────────────────────────────────────────
-        chaikin = raw.get("chaikin", {})
+        chaikin = raw.get("chaikin") or {}
         self.chaikin_email    = os.environ.get("CHAIKIN_EMAIL")    or chaikin.get("email",    "")
         self.chaikin_password = os.environ.get("CHAIKIN_PASSWORD") or chaikin.get("password", "")
 
         # ── E*TRADE ──────────────────────────────────────────────────────────
-        etrade = raw.get("etrade", {})
+        etrade     = raw.get("etrade") or {}
+        sandbox    = etrade.get("sandbox")    or {}
+        production = etrade.get("production") or {}
         self.etrade_username = os.environ.get("ETRADE_USERNAME") or etrade.get("username", "")
         self.etrade_password = os.environ.get("ETRADE_PASSWORD") or etrade.get("password", "")
         self.etrade_proxy    = os.environ.get("ETRADE_PROXY")    or etrade.get("proxy",    "")
-
-        sandbox    = etrade.get("sandbox",    {})
-        production = etrade.get("production", {})
         self.etrade_sandbox_key        = os.environ.get("ETRADE_SANDBOX_KEY")        or sandbox.get("consumer_key",    "")
         self.etrade_sandbox_secret     = os.environ.get("ETRADE_SANDBOX_SECRET")     or sandbox.get("consumer_secret", "")
         self.etrade_production_key     = os.environ.get("ETRADE_PRODUCTION_KEY")     or production.get("consumer_key",    "")
         self.etrade_production_secret  = os.environ.get("ETRADE_PRODUCTION_SECRET")  or production.get("consumer_secret", "")
 
         # ── RapidAPI / Alpha Vantage ──────────────────────────────────────────
-        rapidapi = raw.get("rapidapi", {})
+        rapidapi = raw.get("rapidapi") or {}
         self.rapidapi_key = os.environ.get("RAPIDAPI_KEY") or rapidapi.get("api_key", "")
 
     def require(self, *attrs: str) -> None:

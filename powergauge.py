@@ -685,42 +685,44 @@ def _buying_ratio(power_g: PowerGauge, fields: dict) -> float:
     return round(max(-10.0, min(10.0, score)), 1)
 
 
-def _append_ohlcv_entry(symbol: str, date_str: str, power_g: "PowerGauge", ohlcv_ts: dict) -> None:
+def _append_ohlcv_entry(symbol: str, date_str: str, power_g: "PowerGauge", ohlcv_full: dict | None) -> None:
     """Append today's closing price from Chaikin into the local OHLCV JSON file.
 
-    Uses data already fetched from Chaikin — zero extra API calls. Called once per
-    symbol inside check_from_xls() after power_g is fully populated.
+    Uses the full JSON dict already loaded into ohlcv_cache — zero disk re-reads, zero extra
+    API calls. Called once per symbol inside check_from_xls() after power_g is fully populated.
+    ohlcv_full is the complete JSON (with Meta Data + Time Series), not just the Time Series slice.
     """
-    if ohlcv_ts is None:
-        return  # no file yet; rapidapi.repair_missing() will handle it
+    if ohlcv_full is None:
+        return  # file missing; rapidapi.repair_missing() will create it
 
-    if date_str in ohlcv_ts:
+    ts = ohlcv_full.get("Time Series (Daily)")
+    if ts is None:
+        return
+
+    if date_str in ts:
         return  # already have an entry for this date
 
     path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
     if not os.path.exists(path):
-        return  # rapidapi.repair_missing() will create the file
+        return
 
-    close  = round(power_g.price, 4)
-    high   = round(power_g.max_price, 4) if power_g.max_price and power_g.max_price >= close else close
-    entry  = {
-        "1. open":  str(close),
-        "2. high":  str(high),
-        "3. low":   str(close),
-        "4. close": str(close),
+    close = round(power_g.price, 4)
+    high  = round(power_g.max_price, 4) if power_g.max_price and power_g.max_price >= close else close
+    entry = {
+        "1. open":   str(close),
+        "2. high":   str(high),
+        "3. low":    str(close),
+        "4. close":  str(close),
         "5. volume": "0",
     }
 
     try:
-        with open(path) as f:
-            full = json.load(f)
-        full.setdefault("Time Series (Daily)", {})[date_str] = entry
-        full.setdefault("Meta Data", {})["3. Last Refreshed"] = date_str
+        ts[date_str] = entry
+        ohlcv_full.setdefault("Meta Data", {})["3. Last Refreshed"] = date_str
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
-            json.dump(full, f)
+            json.dump(ohlcv_full, f)
         os.replace(tmp, path)
-        ohlcv_ts[date_str] = entry  # keep in-memory cache consistent
     except Exception as e:
         print(f"  [OHLCV] {symbol}: could not append today's entry: {e}")
 
@@ -904,7 +906,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     updated = 0
     skipped = 0
     picks_data: list[dict] = []
-    ohlcv_cache: dict = {}  # symbol → Time Series dict
+    ohlcv_cache: dict = {}  # symbol → full JSON dict (Meta Data + Time Series)
 
     for n, (symbol, row) in enumerate(valid_rows, 1):
         power_g = pg_results[symbol]
@@ -914,18 +916,18 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
             skipped += 1
             continue
 
-        # Load OHLCV for entry-filter computation — cached per symbol
+        # Load full OHLCV JSON — cached per symbol; _append_ohlcv_entry reuses it to avoid re-read
         if symbol not in ohlcv_cache:
             ohlcv_path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
             try:
                 with open(ohlcv_path) as _f:
-                    ohlcv_cache[symbol] = json.load(_f).get('Time Series (Daily)')
+                    ohlcv_cache[symbol] = json.load(_f)
             except FileNotFoundError:
                 ohlcv_cache[symbol] = None
             except (json.JSONDecodeError, OSError) as e:
                 print(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
                 ohlcv_cache[symbol] = None
-        ohlcv_ts = ohlcv_cache[symbol]
+        ohlcv_ts = ohlcv_cache[symbol].get('Time Series (Daily)') if ohlcv_cache[symbol] else None
 
         f = _compute_pgr_fields(power_g, ohlcv_ts=ohlcv_ts)
         setup_ok = f['setup_ok']   # True / False / None
@@ -978,7 +980,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
 
         # Append today's close from Chaikin into Symbol_full OHLCV JSON (free — no extra API call)
         if power_g.price > 0:
-            _append_ohlcv_entry(symbol, today_str, power_g, ohlcv_ts)
+            _append_ohlcv_entry(symbol, today_str, power_g, ohlcv_cache.get(symbol))
 
         picks_data.append({
             'symbol':   symbol,

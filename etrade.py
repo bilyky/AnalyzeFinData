@@ -31,8 +31,10 @@ def _et_today() -> str:
 def _load_config(env="sandbox"):
     from config import CFG
     if env == "sandbox":
+        CFG.require("etrade_sandbox_key", "etrade_sandbox_secret")
         ck, cs = CFG.etrade_sandbox_key, CFG.etrade_sandbox_secret
     else:
+        CFG.require("etrade_production_key", "etrade_production_secret")
         ck, cs = CFG.etrade_production_key, CFG.etrade_production_secret
     proxy = CFG.etrade_proxy
     if proxy:

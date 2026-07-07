@@ -15,7 +15,7 @@ Usage:
 
 Config (in order of precedence):
     1. RAPIDAPI_KEY env var
-    2. rapidapi_config.json  {"api_key": "..."}   (copy from rapidapi_config.json.example)
+    2. config.json  {"rapidapi": {"api_key": "..."}}  (copy from config.json.example)
 """
 
 import datetime
@@ -28,9 +28,8 @@ import requests
 
 from config import CFG
 
-_DIR         = os.path.dirname(os.path.abspath(__file__))
-RAPIDAPI_KEY = CFG.rapidapi_key
-OHLCV_DIR    = os.path.join(_DIR, "Data", "Symbol_full")
+_DIR      = os.path.dirname(os.path.abspath(__file__))
+OHLCV_DIR = os.path.join(_DIR, "Data", "Symbol_full")
 MAX_GAP_DAYS = 30   # trigger compact/full fetch if latest entry is this many calendar days behind
 SLEEP_SEC    = 14   # 14 s between requests → 4.3 req/min (safe under 5/min limit)
 
@@ -58,26 +57,30 @@ def _latest_date(ts: dict) -> str | None:
     return max(ts.keys()) if ts else None
 
 
-def _needs_recovery(path: str, today_str: str) -> bool:
-    """Check if this file needs a RapidAPI call. Never touches the network."""
+def _check_recovery(path: str, today_str: str) -> tuple[bool, dict | None]:
+    """Return (needs_repair, cache_or_None). Loads the file once; caller reuses the cache."""
     cache = _load_cache(path)
     if cache is None:
-        return True
+        return True, None
     ts = cache["Time Series (Daily)"]
     latest = _latest_date(ts)
     if not latest:
-        return True
+        return True, None
     gap = (datetime.date.fromisoformat(today_str) - datetime.date.fromisoformat(latest)).days
-    return gap > MAX_GAP_DAYS
+    return gap > MAX_GAP_DAYS, cache
 
 
 def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
     """Single Alpha Vantage HTTP call. Returns parsed JSON. Raises on error."""
-    if not RAPIDAPI_KEY:
-        raise RuntimeError("RAPIDAPI_KEY env var not set — cannot fetch from RapidAPI")
+    key = CFG.rapidapi_key
+    if not key:
+        raise RuntimeError(
+            "RapidAPI key not configured. Set RAPIDAPI_KEY env var "
+            "or add rapidapi.api_key to config.json."
+        )
     resp = requests.get(
         _BASE_URL,
-        headers={**_HEADERS, "X-RapidAPI-Key": RAPIDAPI_KEY},
+        headers={**_HEADERS, "X-RapidAPI-Key": key},
         params={
             "function": "TIME_SERIES_DAILY",
             "symbol": symbol,
@@ -143,11 +146,11 @@ def repair_missing(symbols: list[str], today_str: str) -> dict:
 
     for i, sym in enumerate(symbols, 1):
         path = os.path.join(OHLCV_DIR, f"{sym}_daily.json")
-        if not _needs_recovery(path, today_str):
+        needs, existing = _check_recovery(path, today_str)
+        if not needs:
             results["skipped"] += 1
             continue
 
-        existing = _load_cache(path)
         outputsize = "full" if existing is None else "compact"
         try:
             _fetch_and_merge(sym, path, outputsize=outputsize)
@@ -166,11 +169,12 @@ def repair_missing(symbols: list[str], today_str: str) -> dict:
 
 def get_data(symbol: str, outputsize: str = "compact") -> str:
     """Low-level fetch — returns raw response text."""
-    if not RAPIDAPI_KEY:
-        raise RuntimeError("RAPIDAPI_KEY env var not set")
+    key = CFG.rapidapi_key
+    if not key:
+        raise RuntimeError("RapidAPI key not configured — set RAPIDAPI_KEY or config.json rapidapi.api_key")
     resp = requests.get(
         _BASE_URL,
-        headers={**_HEADERS, "X-RapidAPI-Key": RAPIDAPI_KEY},
+        headers={**_HEADERS, "X-RapidAPI-Key": key},
         params={
             "function": "TIME_SERIES_DAILY",
             "symbol": symbol,
@@ -191,7 +195,7 @@ def get_quotes(time_frame, year=2022, month=1, day=1, symbol='MSFT'):
             data = json.load(f).get('Time Series (Daily)', {})
         cutoff = f"{year}-{month:02d}-{day:02d}"
         for date_key, value in data.items():
-            if date_key <= cutoff:
+            if date_key < cutoff:
                 break
             result.insert(0, [
                 float(value.get("1. open",  0)),
