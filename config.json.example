@@ -22,6 +22,9 @@
   "web": {
     "port": 8888,
     "host": "0.0.0.0",
-    "api_key": "your_dashboard_api_key"
+    "secret": "long_random_string_for_signing_session_tokens",
+    "admins": [
+      { "user": "admin", "pass": "change_me" }
+    ]
   }
 }

@@ -11,6 +11,75 @@ async function api(path, opts) {
     return r.json();
 }
 
+// ── Auth state ─────────────────────────────────────────────────────────────
+const TOKEN_KEY = "aether_token", USER_KEY = "aether_user";
+function getToken() { return localStorage.getItem(TOKEN_KEY) || ""; }
+function authHeaders() { const t = getToken(); return t ? { Authorization: "Bearer " + t } : {}; }
+function isAdmin() { return !!getToken(); }
+
+function setAdminUI(user) {
+    const on = !!user;
+    $("login-btn").classList.toggle("hidden", on);
+    $("logout-btn").classList.toggle("hidden", !on);
+    $("admin-label").classList.toggle("hidden", !on);
+    if (on) $("admin-user").textContent = user;
+    // Enable/disable admin action buttons + hint
+    document.querySelectorAll(".admin-action").forEach((b) => (b.disabled = !on));
+    const hint = $("admin-hint");
+    if (hint) hint.classList.toggle("hidden", on);
+}
+
+async function refreshAuth() {
+    if (!getToken()) { setAdminUI(null); return; }
+    try {
+        const r = await api("/api/whoami", { headers: authHeaders() });
+        if (r.authenticated) setAdminUI(r.user);
+        else logout();               // token expired/invalid — clear it
+    } catch { setAdminUI(null); }
+}
+
+function logout() {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    setAdminUI(null);
+}
+
+// Login modal wiring
+$("login-btn").addEventListener("click", () => {
+    $("login-error").classList.add("hidden");
+    $("login-modal").classList.remove("hidden");
+    $("login-user").focus();
+});
+$("login-cancel").addEventListener("click", () => $("login-modal").classList.add("hidden"));
+$("logout-btn").addEventListener("click", logout);
+$("login-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = $("login-error");
+    err.classList.add("hidden");
+    try {
+        const r = await fetch("/api/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: $("login-user").value, password: $("login-pass").value }),
+        });
+        if (!r.ok) {
+            const d = await r.json().catch(() => ({}));
+            err.textContent = d.detail || `Login failed (${r.status})`;
+            err.classList.remove("hidden");
+            return;
+        }
+        const data = await r.json();
+        localStorage.setItem(TOKEN_KEY, data.token);
+        localStorage.setItem(USER_KEY, data.user);
+        $("login-pass").value = "";
+        $("login-modal").classList.add("hidden");
+        setAdminUI(data.user);
+    } catch (ex) {
+        err.textContent = "Network error: " + ex.message;
+        err.classList.remove("hidden");
+    }
+});
+
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 let activeTab = "dashboard";
 document.querySelectorAll(".tab-btn").forEach((btn) => {
@@ -266,22 +335,25 @@ async function loadSystem() {
 }
 
 $("run-pipeline-btn").addEventListener("click", async () => {
+    if (!isAdmin()) { $("login-btn").click(); return; }
     if (!confirm("Run the full daily pipeline now? This fetches fresh data and may take several minutes.")) return;
-    const key = prompt("Enter dashboard API key (leave blank if none set):") || "";
     $("action-msg").textContent = "Starting pipeline…";
     try {
-        const r = await api("/api/pipeline/run", { method: "POST", headers: { "X-API-Key": key } });
-        $("action-msg").textContent = r.status === "started" ? `Pipeline started (pid ${r.pid}).`
-            : r.status === "already_running" ? "Pipeline is already running." : (r.message || r.status);
+        const r = await fetch("/api/pipeline/run", { method: "POST", headers: authHeaders() });
+        if (r.status === 401) { logout(); $("action-msg").textContent = "Session expired — log in again."; return; }
+        const d = await r.json();
+        $("action-msg").textContent = d.status === "started" ? `Pipeline started (pid ${d.pid}).`
+            : d.status === "already_running" ? "Pipeline is already running." : (d.message || d.status);
     } catch (e) { $("action-msg").textContent = "Error: " + e.message; }
 });
 
 $("heal-tasks-btn").addEventListener("click", async () => {
+    if (!isAdmin()) { $("login-btn").click(); return; }
     if (!confirm("Re-register all scheduled tasks?")) return;
-    const key = prompt("Enter dashboard API key (leave blank if none set):") || "";
     $("action-msg").textContent = "Healing tasks…";
     try {
-        await api("/api/tasks/heal", { method: "POST", headers: { "X-API-Key": key } });
+        const r = await fetch("/api/tasks/heal", { method: "POST", headers: authHeaders() });
+        if (r.status === 401) { logout(); $("action-msg").textContent = "Session expired — log in again."; return; }
         $("action-msg").textContent = "Tasks healed.";
         loadSystem();
     } catch (e) { $("action-msg").textContent = "Error: " + e.message; }
@@ -308,5 +380,7 @@ function startPolling() {
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
+setAdminUI(null);   // default to logged-out UI until whoami confirms
+refreshAuth();
 switchTab("dashboard");
 startPolling();

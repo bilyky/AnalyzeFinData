@@ -34,6 +34,11 @@
                     <span id="fresh-dot" class="w-2.5 h-2.5 rounded-full bg-slate-600"></span>
                     <span id="fresh-text" class="text-xs text-slate-400">—</span>
                 </div>
+                <div class="flex items-center gap-2 border-l border-slate-700 pl-4">
+                    <span id="admin-label" class="text-xs text-slate-400 hidden">👤 <b id="admin-user"></b></span>
+                    <button id="login-btn" class="btn text-xs py-1">Admin Login</button>
+                    <button id="logout-btn" class="btn text-xs py-1 hidden">Logout</button>
+                </div>
             </div>
         </div>
         <nav class="max-w-7xl mx-auto px-4 flex gap-1 text-sm">
@@ -161,8 +166,9 @@
                 <div class="card">
                     <div class="card-label">Actions</div>
                     <div class="mt-3 flex flex-col gap-2">
-                        <button id="run-pipeline-btn" class="btn-primary">▶ Run Pipeline Now</button>
-                        <button id="heal-tasks-btn" class="btn">🔧 Heal All Tasks</button>
+                        <button id="run-pipeline-btn" class="btn-primary admin-action">▶ Run Pipeline Now</button>
+                        <button id="heal-tasks-btn" class="btn admin-action">🔧 Heal All Tasks</button>
+                        <div id="admin-hint" class="text-xs text-amber-400/80">Admin login required to run actions.</div>
                         <div id="action-msg" class="text-xs text-slate-400"></div>
                     </div>
                 </div>
@@ -184,6 +190,25 @@
             <pre id="log-view" class="bg-black/50 border border-slate-800 rounded p-3 text-xs text-slate-300 h-80 overflow-auto font-mono">Loading…</pre>
         </section>
     </main>
+
+    <!-- Login modal -->
+    <div id="login-modal" class="hidden fixed inset-0 z-30 bg-black/60 flex items-center justify-center">
+        <div class="card w-full max-w-sm">
+            <h3 class="text-lg font-bold mb-1">Admin Login</h3>
+            <p class="text-xs mut mb-4">Required only to run the pipeline or heal tasks.</p>
+            <form id="login-form" class="space-y-3">
+                <input id="login-user" type="text" autocomplete="username" placeholder="Username"
+                       class="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm" />
+                <input id="login-pass" type="password" autocomplete="current-password" placeholder="Password"
+                       class="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm" />
+                <div id="login-error" class="text-xs neg hidden"></div>
+                <div class="flex gap-2 justify-end pt-1">
+                    <button type="button" id="login-cancel" class="btn">Cancel</button>
+                    <button type="submit" class="btn-primary">Log in</button>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <script src="/static/app.js"></script>
 </body>

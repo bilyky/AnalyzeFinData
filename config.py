@@ -59,9 +59,21 @@ class _Config:
 
         # ── Web Dashboard ─────────────────────────────────────────────────────
         web = raw.get("web") or {}
-        self.web_port    = int(os.environ.get("WEB_PORT",    "") or web.get("port",    8888))
-        self.web_host    = os.environ.get("WEB_HOST")    or web.get("host",    "0.0.0.0")
-        self.web_api_key = os.environ.get("WEB_API_KEY") or web.get("api_key", "")
+        self.web_port   = int(os.environ.get("WEB_PORT", "") or web.get("port", 8888))
+        self.web_host   = os.environ.get("WEB_HOST") or web.get("host", "0.0.0.0")
+        # Admin accounts: list of {"user": ..., "pass": ...}. Empty = admin actions disabled.
+        # WEB_ADMINS env var (JSON array) overrides the config file when set.
+        _admins_env = os.environ.get("WEB_ADMINS")
+        if _admins_env:
+            try:
+                self.web_admins = json.loads(_admins_env) or []
+            except (json.JSONDecodeError, ValueError):
+                self.web_admins = []
+        else:
+            self.web_admins = web.get("admins") or []
+        # HMAC signing secret for session tokens. Empty = server generates an
+        # ephemeral one at startup (tokens don't survive a restart).
+        self.web_secret = os.environ.get("WEB_SECRET") or web.get("secret", "")
 
     def require(self, *attrs: str) -> None:
         """Raise RuntimeError if any of the given attributes are empty."""

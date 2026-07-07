@@ -14,7 +14,12 @@ API docs:  http://localhost:8888/docs
 """
 
 import argparse
+import base64
+import hashlib
+import hmac
+import json
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -28,6 +33,8 @@ _PID     = _DIR / "Data" / "webserver.pid"
 _LOG     = _DIR / "Data" / "webserver.log"
 _PYTHON  = sys.executable
 
+_TOKEN_TTL = 12 * 3600   # session token lifetime (seconds)
+
 # ── Config (lazy import to avoid import-time side effects in CLI mode) ────────
 
 def _cfg():
@@ -35,16 +42,66 @@ def _cfg():
     return CFG
 
 
+# ── Session token (HMAC-signed, JWT-like; no external deps) ────────────────────
+
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def _b64d(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def make_token(user: str, secret: str, ttl: int = _TOKEN_TTL) -> str:
+    body = _b64(json.dumps({"u": user, "exp": int(time.time()) + ttl}).encode())
+    sig = _b64(hmac.new(secret.encode(), body.encode(), hashlib.sha256).digest())
+    return f"{body}.{sig}"
+
+
+def verify_token(token: str, secret: str) -> str | None:
+    """Return the username if the token is valid and unexpired, else None."""
+    if not token or not secret:
+        return None
+    try:
+        body, sig = token.split(".", 1)
+        expected = _b64(hmac.new(secret.encode(), body.encode(), hashlib.sha256).digest())
+        if not hmac.compare_digest(sig, expected):
+            return None
+        payload = json.loads(_b64d(body))
+        if payload.get("exp", 0) < time.time():
+            return None
+        return payload.get("u")
+    except Exception:
+        return None
+
+
+def check_credentials(username: str, password: str, admins: list) -> bool:
+    """Constant-time-ish credential check against the configured admin list."""
+    ok = False
+    for a in admins:
+        u_match = hmac.compare_digest(str(a.get("user", "")), username)
+        p_match = hmac.compare_digest(str(a.get("pass", "")), password)
+        if u_match and p_match:
+            ok = True
+    return ok
+
+
 # ── FastAPI application ───────────────────────────────────────────────────────
 
 def create_app():
     import asyncio
-    from fastapi import FastAPI, Header, HTTPException, Query
+    from fastapi import Body, FastAPI, Header, HTTPException, Query
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse
     from fastapi.staticfiles import StaticFiles
 
     import data_api
+
+    # Signing secret: configured value survives restarts; otherwise ephemeral.
+    _secret = _cfg().web_secret or secrets.token_hex(32)
+    if not _cfg().web_secret:
+        print("[AETHER] No web.secret configured -- using an ephemeral signing "
+              "secret (admin sessions won't survive a restart).")
 
     app = FastAPI(title="AETHER Dashboard", version="1.0")
 
@@ -147,21 +204,38 @@ def create_app():
 
     _pipeline_proc: list = []   # mutable container for the running subprocess
 
-    def _require_key(x_api_key: str):
-        """Fail-closed auth for mutating endpoints. Rejects when no key is configured
-        so a pipeline/heal can never be triggered by an unauthenticated caller."""
+    def _require_admin(authorization: str) -> str:
+        """Fail-closed admin gate. Requires a valid Bearer session token.
+        Returns the admin username, or raises 401."""
+        token = ""
+        if authorization and authorization.lower().startswith("bearer "):
+            token = authorization[7:].strip()
+        user = verify_token(token, _secret)
+        if not user:
+            raise HTTPException(status_code=401, detail="Admin authentication required")
+        return user
+
+    # ── Auth ──────────────────────────────────────────────────────────────────
+
+    @app.post("/api/login")
+    async def login(username: str = Body(...), password: str = Body(...)):
         cfg = _cfg()
-        if not cfg.web_api_key:
-            raise HTTPException(
-                status_code=403,
-                detail="Mutating endpoints are disabled: set web.api_key in config.json to enable.",
-            )
-        if x_api_key != cfg.web_api_key:
-            raise HTTPException(status_code=403, detail="Invalid API key")
+        if not cfg.web_admins:
+            raise HTTPException(status_code=403,
+                                detail="Admin login disabled: configure web.admins in config.json.")
+        if not check_credentials(username, password, cfg.web_admins):
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        return {"token": make_token(username, _secret), "user": username, "expires_in": _TOKEN_TTL}
+
+    @app.get("/api/whoami")
+    async def whoami(authorization: str = Header(default="")):
+        token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+        user = verify_token(token, _secret)
+        return {"authenticated": bool(user), "user": user}
 
     @app.post("/api/pipeline/run")
-    async def run_pipeline(x_api_key: str = Header(default="")):
-        _require_key(x_api_key)
+    async def run_pipeline(authorization: str = Header(default="")):
+        _require_admin(authorization)
         lock = _DIR / "Data" / "pipeline.lock"
         if lock.exists():
             return {"status": "already_running", "message": "Pipeline is already running"}
@@ -185,8 +259,8 @@ def create_app():
         return {"tasks": result}
 
     @app.post("/api/tasks/heal")
-    async def heal_tasks(x_api_key: str = Header(default="")):
-        _require_key(x_api_key)
+    async def heal_tasks(authorization: str = Header(default="")):
+        _require_admin(authorization)
         loop = asyncio.get_event_loop()
         def _heal():
             import watchdog
