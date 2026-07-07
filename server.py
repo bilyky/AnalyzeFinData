@@ -181,6 +181,12 @@ def create_app():
     async def reserves():
         return data_api.read_reserves()
 
+    # ── Accounts (2 real + 1 game) ──────────────────────────────────────────────
+
+    @app.get("/api/accounts")
+    async def accounts():
+        return data_api.read_accounts()
+
     # ── History ───────────────────────────────────────────────────────────────
 
     @app.get("/api/history")

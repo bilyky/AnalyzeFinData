@@ -133,6 +133,104 @@ def read_reserves() -> dict:
     return _cached("reserves", 60.0, _load)
 
 
+# ── Accounts (2 real from Short_Long sheet + 1 AI game) ────────────────────────
+
+# Short_Long column layout (0-based), matching excel_output.update_short_long_scores.
+_SL = {"sym": 1, "qty": 2, "buy": 3, "top": 4, "target": 5, "stop": 6,
+       "s10": 16, "l60": 17, "winpct": 18, "status": 19, "in_profit": 22}
+# The two real E*TRADE accounts, top table first (see excel_output ACCT_T1/ACCT_T2).
+_REAL_ACCT_IDS = ["0053", "1315"]
+
+
+def _f(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def read_accounts() -> dict:
+    """Return the two real accounts (parsed from the Short_Long sheet's two tables)
+    plus the AI game account (ai_portfolio_game.json). Cached 30s."""
+    def _load():
+        accounts = []
+
+        # ── Real accounts: parse the two Short_Long tables ──────────────────
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(_XLSX, data_only=True, read_only=True)
+            try:
+                rows = list(wb["Short_Long"].iter_rows(values_only=True))
+            finally:
+                wb.close()
+
+            hdrs = [i for i, r in enumerate(rows)
+                    if len(r) > 1 and str(r[1]).strip() == "Symb"]
+
+            for tbl_idx, h in enumerate(hdrs[:2]):
+                holdings, started = [], False
+                for r in rows[h + 1:]:
+                    sym = r[_SL["sym"]] if len(r) > _SL["sym"] else None
+                    sym = str(sym).strip() if sym else ""
+                    if not sym:
+                        if started:
+                            break          # blank row after data → end of table
+                        continue            # skip leading blanks between header and data
+                    started = True
+                    buy = _f(r[_SL["buy"]]); top = _f(r[_SL["top"]]); qty = _f(r[_SL["qty"]])
+                    s10 = _f(r[_SL["s10"]]); l60 = _f(r[_SL["l60"]])
+                    pnl = pnl_pct = None
+                    if buy and top and qty:
+                        pnl = round((top - buy) * qty, 2)
+                        pnl_pct = round((top - buy) / buy * 100, 2)
+                    holdings.append({
+                        "symbol":    sym,
+                        "qty":       qty,
+                        "buy":       buy,
+                        "current":   top,     # sheet's last price; live-refreshed client-side
+                        "target":    _f(r[_SL["target"]]),
+                        "stop":      _f(r[_SL["stop"]]),
+                        "s10":       s10,
+                        "l60":       l60,
+                        "total":     round((s10 or 0) + (l60 or 0), 1),
+                        "win_pct":   r[_SL["winpct"]],
+                        "status":    str(r[_SL["status"]] or ""),
+                        "in_profit": str(r[_SL["in_profit"]] or ""),
+                        "pnl":       pnl,
+                        "pnl_pct":   pnl_pct,
+                    })
+                acct_id = _REAL_ACCT_IDS[tbl_idx] if tbl_idx < len(_REAL_ACCT_IDS) else f"T{tbl_idx+1}"
+                accounts.append({
+                    "id":       acct_id,
+                    "label":    f"Real · {acct_id}",
+                    "type":     "real",
+                    "holdings": holdings,
+                    "count":    len(holdings),
+                })
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            accounts.append({"id": "real", "label": "Real accounts", "type": "real",
+                             "holdings": [], "count": 0, "error": str(e)})
+
+        # ── AI game account ─────────────────────────────────────────────────
+        pf = read_portfolio()
+        accounts.append({
+            "id":       "game",
+            "label":    "AI Game",
+            "type":     "game",
+            "balance":  pf["balance"],
+            "equity":   pf["equity"],
+            "return_pct": pf["return_pct"],
+            "profile":  pf["profile"],
+            "holdings": pf["positions"],
+            "count":    pf["open_positions"],
+        })
+
+        return {"accounts": accounts}
+    return _cached("accounts", 30.0, _load)
+
+
 # ── Transaction history ───────────────────────────────────────────────────────
 
 def read_history(limit: int = 50, offset: int = 0) -> dict:

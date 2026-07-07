@@ -210,6 +210,92 @@ async function refreshPrices() {
     });
 }
 
+// ── Accounts tab ─────────────────────────────────────────────────────────────
+let acctHoldings = [];   // flat [{acctId, symbol, buy, qty}] for live-price refresh
+
+async function loadAccounts() {
+    const data = await api("/api/accounts");
+    const box = $("accounts-container");
+    const accts = data.accounts || [];
+    acctHoldings = [];
+
+    box.innerHTML = accts.map((a) => {
+        const isGame = a.type === "game";
+        const badge = isGame
+            ? `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-purple-900/60 text-purple-300">AI GAME</span>`
+            : `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-blue-900/60 text-blue-300">REAL</span>`;
+        const summary = isGame
+            ? `<span class="text-sm mut">Equity <b class="text-slate-200">${fmt$(a.equity)}</b> · Cash ${fmt$(a.balance)} · <span class="${cls(a.return_pct)}">${fmtPct(a.return_pct)}</span> · ${a.profile || ""}</span>`
+            : `<span class="text-sm mut">${a.count} holdings</span>`;
+
+        const rows = (a.holdings || []).map((h) => {
+            const sym = h.symbol;
+            const entry = isGame ? h.cost : h.buy;
+            const cur   = isGame ? h.current_price : h.current;
+            acctHoldings.push({ acctId: a.id, symbol: sym, buy: entry, qty: h.qty });
+            const s10 = h.s10, l60 = h.l60, total = h.total;
+            const scoreCells = isGame ? "" :
+                `<td class="${cls(s10)}">${s10 == null ? "—" : s10.toFixed(1)}</td>
+                 <td class="${cls(l60)}">${l60 == null ? "—" : l60.toFixed(1)}</td>
+                 <td class="font-bold ${cls(total)}">${total == null ? "—" : total.toFixed(1)}</td>
+                 <td class="text-xs">${h.status || ""}</td>`;
+            return `<tr data-acct="${a.id}" data-sym="${sym}" data-buy="${entry ?? ""}" data-qty="${h.qty ?? ""}">
+                <td class="font-semibold">${sym}</td>
+                <td>${h.qty ?? "—"}</td>
+                <td>${fmt$(entry)}</td>
+                <td class="px-live">${fmt$(cur)}</td>
+                <td class="pnl-$ ${cls(h.pnl)}">${fmt$(h.pnl)}</td>
+                <td class="pnl-pct ${cls(h.pnl_pct)}">${fmtPct(h.pnl_pct)}</td>
+                <td>${fmt$(h.stop ?? h.stop_loss)}</td>
+                ${isGame ? `<td>${h.days_held ?? "—"} d</td>` : `<td>${fmt$(h.target)}</td>`}
+                ${scoreCells}
+            </tr>`;
+        }).join("");
+
+        const scoreHdr = isGame
+            ? `<th>Stop</th><th>Days</th>`
+            : `<th>Stop</th><th>Target</th><th>S10</th><th>L60</th><th>Score</th><th>Status</th>`;
+
+        return `
+        <div>
+            <div class="flex items-center gap-3 mb-2">
+                <h2 class="section-title mb-0">${a.label}</h2>${badge}
+                <div class="flex-1"></div>${summary}
+            </div>
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead><tr>
+                        <th>Symbol</th><th>Qty</th><th>Entry</th><th>Current</th>
+                        <th>P&amp;L $</th><th>P&amp;L %</th>${scoreHdr}
+                    </tr></thead>
+                    <tbody>${rows || `<tr><td colspan="10" class="text-center text-slate-500 py-4">No holdings.</td></tr>`}</tbody>
+                </table>
+            </div>
+        </div>`;
+    }).join("");
+
+    refreshAccountPrices();
+}
+
+async function refreshAccountPrices() {
+    if (!acctHoldings.length) return;
+    const syms = [...new Set(acctHoldings.map((h) => h.symbol))];
+    let prices;
+    try { prices = await api("/api/prices?symbols=" + syms.join(",")); } catch { return; }
+    document.querySelectorAll("#accounts-container tr[data-sym]").forEach((tr) => {
+        const px = prices[tr.dataset.sym];
+        if (!(px > 0)) return;
+        tr.querySelector(".px-live").textContent = fmt$(px);
+        const buy = parseFloat(tr.dataset.buy), qty = parseFloat(tr.dataset.qty);
+        if (!isNaN(buy) && !isNaN(qty) && buy) {
+            const pnl = (px - buy) * qty, pnlPct = ((px - buy) / buy) * 100;
+            const c$ = tr.querySelector(".pnl-\\$"), cP = tr.querySelector(".pnl-pct");
+            c$.textContent = fmt$(pnl); c$.className = "pnl-$ " + cls(pnl);
+            cP.textContent = fmtPct(pnlPct); cP.className = "pnl-pct " + cls(pnlPct);
+        }
+    });
+}
+
 // ── Rotation tab ─────────────────────────────────────────────────────────────
 async function loadRotation() {
     const [rep, res] = await Promise.all([api("/api/replacements"), api("/api/reserves")]);
@@ -362,6 +448,7 @@ $("heal-tasks-btn").addEventListener("click", async () => {
 // ── Per-tab loader ───────────────────────────────────────────────────────────
 function loadTab(tab) {
     if (tab === "dashboard") loadDashboard();
+    else if (tab === "accounts") loadAccounts();
     else if (tab === "rotation") loadRotation();
     else if (tab === "history") loadHistory();
     else if (tab === "system") loadSystem();
@@ -372,8 +459,11 @@ function startPolling() {
     loadHeader();
     setInterval(loadHeader, 30000);
 
-    // Live prices: 30s during market hours, 5min otherwise (dashboard tab only)
-    setInterval(() => { if (activeTab === "dashboard") refreshPrices(); }, marketOpen() ? 30000 : 300000);
+    // Live prices: 30s during market hours, 5min otherwise
+    setInterval(() => {
+        if (activeTab === "dashboard") refreshPrices();
+        else if (activeTab === "accounts") refreshAccountPrices();
+    }, marketOpen() ? 30000 : 300000);
 
     // System log auto-refresh when on system tab
     setInterval(() => { if (activeTab === "system") loadSystem(); }, 15000);
