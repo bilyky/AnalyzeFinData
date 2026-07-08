@@ -108,7 +108,13 @@ AETHER's factor weights are fully customizable and backtest-driven:
     ```
     Simply copy these suggested weights directly into `scoring.py` to optimize the model's accuracy.
 
-4.  **🗓️ Scheduled Milestone: Saturday, July 18, 2026 — The Autonomic Self-Tuning Optimizer & Retrospective (`calibrate_model.py` & `retrospective.py`):**
+5.  **🗓️ Scheduled Milestone: Saturday, July 11, 2026 — Peter Lynch, Trader Vic, and Market Breadth Engines:**
+    We will develop three major quantitative and risk-mitigation modules:
+    *   **The Peter Lynch & Trader Vic Engine (`satellite_slot.py`):** Integrates Lynch's "Flower Protection" trailing stops, "Weed Cutter" forced liquidations, and Trader Vic's legendary "1-2-3 Reversal" and "2B Pattern" price action bottom snipers.
+    *   **The "Non-Correlated Satellite" Engine:** A dynamic allocation bypass that automatically expands our active position limits from 3 to 4 slots during Defensive regimes *specifically* to capture elite breakouts in low-beta, non-correlated sectors (specifically Biotechnology and Defense).
+    *   **The SPY-RSP Breadth Divergence Filter:** A macro-regime guard that calculates the delta between SPY (Cap-Weighted) and RSP (Equal-Weighted S&P 500). If `SPY_Score - RSP_Score > 4.0` (representing extreme, fragile cap-weight tech concentration), the system will automatically downgrade our strategy profile by one level (e.g. from Balanced to Defensive) to protect our capital from bad market breadth.
+
+6.  **🗓️ Scheduled Milestone: Saturday, July 18, 2026 — The Autonomic Self-Tuning Optimizer & Retrospective (`calibrate_model.py` & `retrospective.py`):**
     We will develop a fully automated self-calibration and learning engine. 
     *   **The Optimizer (`calibrate_model.py`):** Headlessly runs `backtest_ratings.py`, parses the generated factor spreads, programmatically writes the newly optimized coefficients directly into `scoring.py` and `patterns.py` (updating designated anchor blocks), automatically runs the **119-test QA suite** to verify 100% code stability, and emails a beautiful comparative audit report to your inbox.
     *   **The Post-Mortem Retrospective (`retrospective.py`):** Whenever a trade is closed at a loss, it will automatically backtrack the historical state of the day of that entry, analyze the exact combination of technical scores, OB/OS, and candlestick patterns, log the "Failure DNA" to a local, ignored `Data/vulnerability_ledger.json` (Taleb's Antifragile Vulnerability Ledger), and instruct our Optimizer to automatically penalize those specific fragile setups on future runs, ensuring AETHER never makes the same trading mistake twice!
