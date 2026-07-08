@@ -126,6 +126,30 @@ async function loadHeader() {
 // ── Dashboard tab ───────────────────────────────────────────────────────────────
 let dashPicks = [], dashPositions = [];
 
+// Pattern Tooltip Helper: renders space-separated pattern abbreviations as interactive, styled badges with native tooltips.
+function renderPatternsHTML(patterns_str) {
+    if (!patterns_str || patterns_str === "—") return "—";
+    const desc_map = {
+        "CS↑": "Bullish Candlestick Pattern (Oversold Recovery)",
+        "CS↓": "Bearish Candlestick Pattern (Overbought Exhaustion)",
+        "GoldX↑": "Golden Cross (20 SMA crossed above 50 SMA - Bullish Breakout)",
+        "DeathX↓": "Death Cross (20 SMA crossed below 50 SMA - Bearish Breakdown)",
+        "MACD+": "MACD Bullish Trend Crossover (Bullish Momentum)",
+        "MACD-": "MACD Bearish Trend Crossover (Bearish Momentum)",
+        "HS↓": "Head & Shoulders (Bearish Trend Reversal)",
+        "InvHS↑": "Inverse Head & Shoulders (Bullish Trend Reversal / Spring)",
+        "DoubleTop↓": "Double Top (Bearish Resistance Rejection)",
+        "DoubleBottom↑": "Double Bottom (Bullish Support Bounce)",
+        "CupHandle↑": "Cup & Handle (Bullish Continuation Pattern)",
+        "BullFlag↑": "Bull Flag (Bullish Momentum Consolidation)",
+        "BearFlag↓": "Bear Flag (Bearish Momentum Consolidation)"
+    };
+    return patterns_str.split(" ").map(p => {
+        const desc = desc_map[p] || "Technical Price Action Pattern";
+        return `<span class="px-1.5 py-0.5 rounded bg-purple-950/40 text-purple-300 border border-purple-800/40 cursor-help font-medium text-[10px]" title="${desc}">${p}</span>`;
+    }).join("");
+}
+
 async function loadDashboard() {
     const [picks, pf] = await Promise.all([api("/api/picks"), api("/api/portfolio")]);
 
@@ -153,7 +177,7 @@ async function loadDashboard() {
                 <td class="${cls(p.S10)}">${p.S10?.toFixed(1)}</td>
                 <td class="${cls(p.L60)}">${p.L60?.toFixed(1)}</td>
                 <td class="font-bold ${cls(p.Total)}">${p.Total?.toFixed(1)}</td>
-                <td class="text-xs text-purple-300">${p.Patterns || "—"}</td>
+                <td><div class="flex flex-wrap gap-1">${renderPatternsHTML(p.Patterns)}</div></td>
                 <td class="text-xs">${p.Shares_ATR ?? "—"} / ${p.Shares_Stop ?? "—"}</td>
             </tr>`).join("");
     }
