@@ -5,6 +5,8 @@ import time
 import datetime
 from pathlib import Path
 
+from data_api import _SL  # canonical Short_Long column map (single source of truth)
+
 XLSX_FILE = Path("Data/state_of_the_day.xlsx")
 
 def get_monitored_positions():
@@ -16,12 +18,15 @@ def get_monitored_positions():
             return []
         
         ws = wb["Short_Long"]
-        # SL: (1, 'ANET', 11, 171.27, 151.76, ...)
-        # Col B=1 (Symbol), Col E=4 (Stop)
+        # Column indices come from the canonical map: sym=1, stop=6.
+        # (Previously read row[4] = the "Top" column — a bug; Stop is index 6.)
+        # Type-guard: the sheet has two tables separated by blank + repeated
+        # "Symb"/"Stop" header rows — skip anything non-numeric so BOTH accounts load.
         for row in ws.iter_rows(min_row=3, values_only=True):
-            sym = row[1]
-            stop = row[4]
-            if sym and stop and stop > 0:
+            sym  = row[_SL["sym"]]  if len(row) > _SL["sym"]  else None
+            stop = row[_SL["stop"]] if len(row) > _SL["stop"] else None
+            if (isinstance(sym, str) and sym.strip() and sym.strip() != "Symb"
+                    and isinstance(stop, (int, float)) and stop > 0):
                 positions.append({"symbol": sym, "stop": stop})
     except Exception as e:
         print(f"Error loading positions: {e}")

@@ -39,6 +39,21 @@ INITIAL_BALANCE = 10000.0
 
 # Import risk utils safely
 import risk_utils
+import sell_rules
+
+
+def _sma50(symbol):
+    """50-day SMA of closes from the local OHLCV cache, or None if unavailable."""
+    try:
+        path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+        if not path.exists():
+            return None
+        with open(path) as f:
+            ts = json.load(f).get("Time Series (Daily)", {})
+        closes = [float(ts[d]["4. close"]) for d in sorted(ts.keys())]
+        return sell_rules.sma_from_closes(closes, 50)
+    except Exception:
+        return None
 
 def is_market_open():
     """Check if current time is within US Market hours (9:30 AM - 4:00 PM EST)."""
@@ -525,17 +540,27 @@ def run_daily_ai_management(force=False, manual_profile=None):
             
             state["queued_orders"] = []
 
-        # SELL logic (standard technical decay)
+        # SELL logic — unified deterministic exit policy (sell_rules.exit_decision):
+        # hard ATR stop > soft momentum signal (winner-protected) > hold.
         symbols_to_sell = []
         for sym in list(state["positions"].keys()):
+            pos = state["positions"][sym]
+            s10 = l60 = 0
             for row in ws.iter_rows(min_row=2, values_only=True):
                 if row[3] == sym:
                     s10 = row[24] or 0
                     l60 = row[25] or 0
-                    if (s10 + l60) < 0:
-                        symbols_to_sell.append(sym)
                     break
-        
+            price = prices.get(sym, pos.get("cost"))
+            action, reason = sell_rules.exit_decision(
+                price=price, cost=pos.get("cost"), stop_loss=pos.get("stop_loss"),
+                s10=s10, l60=l60, sma50=_sma50(sym))
+            if action == "SELL":
+                symbols_to_sell.append(sym)
+            elif action == "REVIEW":
+                # Winner above its 50-DMA on a soft signal — hold, don't dump.
+                print(f"🌸 AI HOLD (winner-protected): {sym} — {reason}")
+
         for sym in symbols_to_sell:
             pos = state["positions"].pop(sym)
             price = prices.get(sym, pos["cost"])

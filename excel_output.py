@@ -737,21 +737,14 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
     RED_FONT  = Font(bold=True, color="9C0006")
     CTR       = Alignment(horizontal="center", vertical="center")
 
-    STATUS_CFG = [
-        (4,    "STRONG HOLD", GRN_FILL),
-        (2,    "HOLD",        LGN_FILL),
-        (0,    "WATCH",       YEL_FILL),
-        (-2,   "REDUCE",      ORG_FILL),
-        (-999, "EXIT",        RED_FILL),
-    ]
+    # Label comes from the unified policy (sell_rules.status_label); fill mapping is local.
+    _STATUS_FILLS = {"STRONG HOLD": GRN_FILL, "HOLD": LGN_FILL, "WATCH": YEL_FILL,
+                     "REDUCE": ORG_FILL, "EXIT": RED_FILL, "N/A": GRY_FILL}
 
     def _status(score):
-        if score is None:
-            return "N/A", GRY_FILL
-        for thresh, label, fill in STATUS_CFG:
-            if score >= thresh:
-                return label, fill
-        return "EXIT", RED_FILL
+        import sell_rules
+        label = sell_rules.status_label(score)
+        return label, _STATUS_FILLS.get(label, GRY_FILL)
 
     today = datetime.date.today()
 
@@ -1183,11 +1176,8 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
     }
 
     def _status(l60):
-        if l60 >= 4:  return "STRONG HOLD"
-        if l60 >= 2:  return "HOLD"
-        if l60 >= 0:  return "WATCH"
-        if l60 >= -2: return "REDUCE"
-        return "EXIT"
+        import sell_rules
+        return sell_rules.status_label(l60)
 
     def _pgr_fill(pgr):
         g = str(pgr or "")
