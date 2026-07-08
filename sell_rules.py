@@ -64,22 +64,44 @@ def winner_protected(in_profit, price, sma50) -> bool:
 
 # ── The unified decision ───────────────────────────────────────────────────────
 
+# Fallback stop distance when a position has no explicit stop stored (matches the
+# game's 8% fallback used at buy time). Guarantees the hard floor always exists.
+DEFAULT_STOP_PCT = 0.08
+
+
+def _num(x):
+    """Coerce to float, or None if not numeric (guards against string/junk state)."""
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
 def exit_decision(price, cost, stop_loss, s10, l60, sma50=None, in_profit=None):
     """Return (action, reason) where action is 'SELL' | 'REVIEW' | 'HOLD'.
 
     price      current market price (required for any exit)
-    cost       entry/cost basis (used to derive in_profit if not given)
-    stop_loss  hard stop price (ATR- or percent-based); 0/None disables the floor
+    cost       entry/cost basis (used to derive in_profit and the fallback stop)
+    stop_loss  hard stop price; if missing/non-numeric a cost-based fallback is used
     s10, l60   momentum scores
     sma50      50-day SMA for winner-protection (optional)
     in_profit  override; derived from price > cost if None
     """
+    price = _num(price)
+    cost = _num(cost)
+    stop = _num(stop_loss)
+
+    # Ensure a hard floor always exists (Rule of Loss Minimization): if no valid
+    # stop was stored, fall back to cost * (1 - DEFAULT_STOP_PCT).
+    if (stop is None or stop <= 0) and cost:
+        stop = round(cost * (1 - DEFAULT_STOP_PCT), 2)
+
     if in_profit is None and price is not None and cost:
         in_profit = price > cost
 
     # 1. HARD FLOOR — capital preservation, always wins.
-    if stop_loss and price is not None and price > 0 and price <= stop_loss:
-        return "SELL", f"ATR stop breached (price {price} <= stop {stop_loss})"
+    if stop and price is not None and price > 0 and price <= stop:
+        return "SELL", f"stop breached (price {price} <= stop {stop})"
 
     # 2. SOFT SIGNAL — momentum decay, with winner-protection.
     if soft_exit(s10, l60):

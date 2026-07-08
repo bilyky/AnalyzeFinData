@@ -104,10 +104,32 @@ class TestExitDecision(unittest.TestCase):
         self.assertEqual(action, "HOLD")
         self.assertEqual(reason, "")
 
-    def test_no_stop_configured_still_soft_sells(self):
-        action, _ = sr.exit_decision(price=40, cost=50, stop_loss=0,
-                                     s10=-3, l60=-3, sma50=None)
+    def test_no_stop_configured_uses_fallback_floor(self):
+        # No stored stop + price below cost*0.92 (46) -> fallback stop fires.
+        action, reason = sr.exit_decision(price=40, cost=50, stop_loss=0,
+                                          s10=-3, l60=-3, sma50=None)
         self.assertEqual(action, "SELL")
+        self.assertIn("stop", reason.lower())
+
+    def test_missing_stop_legacy_position_still_has_floor(self):
+        # Legacy position (stop_loss=None), soft-positive score, but crashed >8%:
+        # fallback floor must still force a SELL (capital preservation).
+        action, reason = sr.exit_decision(price=80, cost=100, stop_loss=None,
+                                          s10=1, l60=1, sma50=None)
+        self.assertEqual(action, "SELL")
+        self.assertIn("stop", reason.lower())
+
+    def test_fallback_floor_not_triggered_when_above_it(self):
+        # Down only 5% (above cost*0.92=92), soft-positive -> HOLD, no false stop.
+        action, _ = sr.exit_decision(price=95, cost=100, stop_loss=None,
+                                     s10=2, l60=2, sma50=None)
+        self.assertEqual(action, "HOLD")
+
+    def test_non_numeric_stop_does_not_crash(self):
+        # A junk/string stop must not raise; treated as missing -> cost fallback.
+        action, _ = sr.exit_decision(price=80, cost=100, stop_loss="N/A",
+                                     s10=1, l60=1, sma50=None)
+        self.assertEqual(action, "SELL")   # cost*0.92=92, price 80 <= 92
 
     def test_enph_style_deep_loser_not_protected(self):
         # Deeply underwater, soft-negative, below its 50-DMA -> SELL (not a "flower").

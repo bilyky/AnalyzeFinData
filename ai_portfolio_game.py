@@ -42,15 +42,22 @@ import risk_utils
 import sell_rules
 
 
-def _sma50(symbol):
-    """50-day SMA of closes from the local OHLCV cache, or None if unavailable."""
+def _sma50(symbol, max_stale_days=10):
+    """50-day SMA of closes from the local OHLCV cache, or None if unavailable
+    or stale. Returns None when the newest cached bar is older than
+    max_stale_days so winner-protection never trusts an out-of-date average."""
     try:
         path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
         if not path.exists():
             return None
         with open(path) as f:
             ts = json.load(f).get("Time Series (Daily)", {})
-        closes = [float(ts[d]["4. close"]) for d in sorted(ts.keys())]
+        dates = sorted(ts.keys())
+        if not dates:
+            return None
+        if (datetime.date.today() - datetime.date.fromisoformat(dates[-1])).days > max_stale_days:
+            return None  # cache too stale to trust
+        closes = [float(ts[d]["4. close"]) for d in dates]
         return sell_rules.sma_from_closes(closes, 50)
     except Exception:
         return None
@@ -552,9 +559,12 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     l60 = row[25] or 0
                     break
             price = prices.get(sym, pos.get("cost"))
+            # Only pay the OHLCV read when the soft signal actually fires (winner-
+            # protection is the only consumer of sma50); HOLD positions skip the I/O.
+            sma50 = _sma50(sym) if sell_rules.soft_exit(s10, l60) else None
             action, reason = sell_rules.exit_decision(
                 price=price, cost=pos.get("cost"), stop_loss=pos.get("stop_loss"),
-                s10=s10, l60=l60, sma50=_sma50(sym))
+                s10=s10, l60=l60, sma50=sma50)
             if action == "SELL":
                 symbols_to_sell.append(sym)
             elif action == "REVIEW":

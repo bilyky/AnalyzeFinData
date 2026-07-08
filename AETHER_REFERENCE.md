@@ -79,14 +79,14 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 
 ## 🧪 5. Quality Assurance & Testing Suite
 
-AETHER possesses an automated, rigorous unit-testing suite containing **77 comprehensive tests** that programmatically verify the mathematical and operational correctness of all system components.
+AETHER possesses an automated, rigorous unit-testing suite (**130+ tests** across scoring, sell-rules, config, accounts, auth, and sheet sync) that programmatically verifies the mathematical and operational correctness of all system components.
 
 ### 🚀 How to Execute the QA Suite:
 Before committing any code modifications, always execute the full test suite using our virtual environment:
 ```powershell
 .\venv_new\Scripts\python.exe -m unittest discover tests
 ```
-*   **Expected Output:** `Ran 77 tests in XXs. OK`
+*   **Expected Output:** `Ran <N> tests in XXs. OK` (all green)
 *   **Pre-Flight Linter:** `daily_task.py` executes `ruff check` on every single daily run before executing the trading logic, blocking any run if syntax or style issues are detected.
 
 ---
