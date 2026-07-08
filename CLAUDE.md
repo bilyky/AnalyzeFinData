@@ -33,6 +33,19 @@
     4.  *The Calibration Audit Email:* Integrate a notification routine that emails a detailed HTML report to the user, displaying the old weights, the newly optimized weights, the statistical alpha improvements, and a green "QA Passed" confirmation badge.
     5.  *The Post-Mortem Retrospective & Antifragile Vulnerability Ledger:* Code a post-mortem diagnostic parser (`retrospective.py`). Whenever a trade is closed at a loss, it will automatically backtrack the historical state of the day of that entry, analyze the exact combination of technical scores, OB/OS, and candlestick patterns, log the "Failure DNA" to a local, ignored `Data/vulnerability_ledger.json`, and instruct our Optimizer to automatically penalize those specific fragile setups on future runs.
 
+*   **Session: Saturday, July 25, 2026 (10:00 AM PST) — "Right Kind of Wrong" (Amy Edmondson): Failing Well by Design:**
+    Research the FT/Schroders 2023 Business Book of the Year — Amy Edmondson's *Right Kind of Wrong: The Science of Failing Well* — and apply its failure taxonomy to how AETHER learns from losses. Core idea: **not all losses are equal; prevent the preventable, welcome the productive.** Three archetypes:
+    - **Basic failure** — preventable, in familiar territory, a deviation from a known standard.
+    - **Complex failure** — a "perfect storm" of several causes aligning in familiar territory.
+    - **Intelligent failure** — the "right kind of wrong": a hypothesis-driven bet in *new* territory, adequately prepared, and **as small as possible**, whose loss buys real information.
+
+    Application principles:
+    1.  *The Failure-Type Classifier:* Extend the Jul-18 Vulnerability Ledger / `decision_eval` scorecard so every closed loss is tagged **basic / complex / intelligent**, not just "loss." Basic = the preventable ones (sold a winner on stale data à la ANET/RPD, ignored/mis-set an ATR stop, traded on a stale workbook, bypassed the gap guard, any data-integrity violation). Complex = multi-cause market storms (e.g. the Jul-8 Iran + oil-spike + Fed-hawkish day). Intelligent = a well-reasoned new-setup bet, sized small, that simply didn't pan out.
+    2.  *Drive Basic Failures to Zero:* Basic failures are the only kind the Optimizer should penalize hard — they represent broken process, and the system must learn to never repeat them (this is exactly what the winner-protection + enforced-stop work in `sell_rules.py` already started).
+    3.  *Do NOT Over-Penalize Intelligent Failures:* Critical nuance / guardrail — the Jul-18 optimizer's "penalize fragile setups" reflex must **exempt intelligent failures**, or the system slowly becomes over-conservative and stops discovering new alpha ("fail fast" done blindly is a trap Edmondson explicitly warns against). Treat them as paid-for information, not defects.
+    4.  *The Intelligent-Failure Budget:* Reserve a small, explicit slice of capital for hypothesis-driven experimental entries (new patterns/sectors), sized "as small as possible," tracked separately as experiments — expected to fail often but cheaply, generating learning without threatening capital preservation.
+    5.  *Blameless, Data-Driven Post-Mortem:* Frame the reflection/retrospective process as blameless and evidence-based (reflect on the *pattern* and its Failure DNA, never a single "bad call") — the decision log + scorecard is the objective record. Mitigate complex failures structurally (cash buffer, diversification, breadth filter) rather than blaming any one signal.
+
 ## Workflow Conventions
 
 When the user asks to "send", "push", "create", or "save" something (e.g., Gmail draft, commit, file), execute the full action — do not just preview or show content for review unless explicitly asked.
