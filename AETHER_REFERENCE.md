@@ -55,7 +55,8 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
     *   `AGGRESSIVE`: Max 6 open positions, 15% maximum trade size, minimum 0% cash buffer.
 *   **`is_bottom_confirmed()` 3-day Slope Trigger:** Computes the first and second derivatives of a stock's 3-day price slope to verify that the downward velocity of a pullback has flattened and turned positive (average slope > 0.5% and accelerating).
 *   **The "On-Trigger Strike" (Strike Trigger):** Allows immediate entry into bottom-confirmed setups, bypassing strict Defensive profile score restrictions.
-*   **Dynamic ATR Stop-Loss Trailing Stops:** Computes trailing stops based on Average True Range multipliers adjusted for risk tolerance (1.5*ATR Defensive, 2.5*ATR Balanced, 3.5*ATR Aggressive).
+*   **Unified Exit Policy (`sell_rules.exit_decision`):** Single source of truth for sell/status decisions — a hard ATR stop-loss floor (a static `price <= stop` check, now **enforced**; 1.5/2.5/3.5×ATR by profile, cost×0.92 fallback) always wins, then a soft momentum signal (S10+L60<0), then hold.
+*   **Flower Protection (Peter Lynch):** A soft exit on a position that is in profit AND above its 50-day MA is downgraded to REVIEW instead of SELL — winners aren't dumped on a momentum dip. Only ever overrides the soft signal, never the hard stop.
 *   **The "Catastrophic Gap Guard" (CNXC Trap Protection):** Instantly rejects any BUY order if today's live price is more than 8% below yesterday's workbook close, protecting capital from waterfall crashes on earnings panics.
 
 ---

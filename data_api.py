@@ -138,8 +138,14 @@ def read_reserves() -> dict:
 # Short_Long column layout (0-based), matching excel_output.update_short_long_scores.
 _SL = {"sym": 1, "qty": 2, "buy": 3, "top": 4, "target": 5, "stop": 6,
        "s10": 16, "l60": 17, "winpct": 18, "status": 19, "in_profit": 22}
-# The two real E*TRADE accounts, top table first (see excel_output ACCT_T1/ACCT_T2).
-_REAL_ACCT_IDS = ["0053", "1315"]
+# The two real E*TRADE accounts (last-4 IDs), top table first. Sourced from config
+# (PII — never hardcode). Falls back to generic T1/T2 labels if unset.
+def _real_acct_ids():
+    try:
+        from config import CFG
+        return CFG.accounts_real or []
+    except Exception:
+        return []
 
 
 def _f(v):
@@ -156,6 +162,7 @@ def read_accounts() -> dict:
         accounts = []
 
         # ── Real accounts: parse the two Short_Long tables ──────────────────
+        real_ids = _real_acct_ids()
         try:
             import openpyxl
             wb = openpyxl.load_workbook(_XLSX, data_only=True, read_only=True)
@@ -199,7 +206,7 @@ def read_accounts() -> dict:
                         "pnl":       pnl,
                         "pnl_pct":   pnl_pct,
                     })
-                acct_id = _REAL_ACCT_IDS[tbl_idx] if tbl_idx < len(_REAL_ACCT_IDS) else f"T{tbl_idx+1}"
+                acct_id = real_ids[tbl_idx] if tbl_idx < len(real_ids) else f"T{tbl_idx+1}"
                 accounts.append({
                     "id":       acct_id,
                     "label":    f"Real · {acct_id}",

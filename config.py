@@ -57,6 +57,19 @@ class _Config:
         rapidapi = raw.get("rapidapi") or {}
         self.rapidapi_key = os.environ.get("RAPIDAPI_KEY") or rapidapi.get("api_key", "")
 
+        # ── Real brokerage accounts (last-4 IDs; PII — never hardcode in source) ─
+        # Ordered: [0] = top Short_Long table (T1), [1] = bottom table (T2).
+        # ACCOUNTS_REAL env var (JSON array) overrides config when set.
+        accounts = raw.get("accounts") or {}
+        _acc_env = os.environ.get("ACCOUNTS_REAL")
+        if _acc_env:
+            try:
+                self.accounts_real = json.loads(_acc_env) or []
+            except (json.JSONDecodeError, ValueError):
+                self.accounts_real = []
+        else:
+            self.accounts_real = accounts.get("real") or []
+
         # ── Web Dashboard ─────────────────────────────────────────────────────
         web = raw.get("web") or {}
         self.web_port   = int(os.environ.get("WEB_PORT", "") or web.get("port", 8888))

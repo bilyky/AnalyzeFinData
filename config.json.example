@@ -19,6 +19,9 @@
   "rapidapi": {
     "api_key": "your_rapidapi_key_here"
   },
+  "accounts": {
+    "real": ["XXXX", "YYYY"]
+  },
   "web": {
     "port": 8888,
     "host": "0.0.0.0",

@@ -723,8 +723,11 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         return
     ws = wb["Short_Long"]
 
-    ACCT_T1 = "0053"
-    ACCT_T2 = "1315"
+    # Real account last-4 IDs from config (PII — never hardcode). [0]=T1, [1]=T2.
+    from config import CFG
+    _real_ids = CFG.accounts_real or []
+    ACCT_T1 = _real_ids[0] if len(_real_ids) > 0 else ""
+    ACCT_T2 = _real_ids[1] if len(_real_ids) > 1 else ""
 
     # ── Styling constants ────────────────────────────────────────────────────
     GRN_FILL  = PatternFill("solid", fgColor="C6EFCE")
@@ -1174,6 +1177,8 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
         "REDUCE":      ORG_FILL,
         "EXIT":        RED_FILL,
     }
+    # Note: consumed via STATUS_FILL.get(status, None) below, so an unmapped label
+    # (e.g. the unreachable "N/A") is safe — renders no fill rather than crashing.
 
     def _status(l60):
         import sell_rules
