@@ -59,31 +59,22 @@ class TestConfigPriority(unittest.TestCase):
 
 
 class TestConfigNullSafety(unittest.TestCase):
-    def test_null_chaikin_does_not_crash(self):
-        cfg = _make_cfg({"chaikin": None})
-        self.assertEqual(cfg.chaikin_email, "")
-        self.assertEqual(cfg.chaikin_password, "")
-
-    def test_null_etrade_does_not_crash(self):
-        cfg = _make_cfg({"etrade": None})
-        self.assertEqual(cfg.etrade_sandbox_key, "")
-        self.assertEqual(cfg.etrade_production_key, "")
-
-    def test_null_sandbox_does_not_crash(self):
-        cfg = _make_cfg({"etrade": {"sandbox": None, "production": None}})
-        self.assertEqual(cfg.etrade_sandbox_key, "")
-        self.assertEqual(cfg.etrade_production_secret, "")
-
-    def test_null_rapidapi_does_not_crash(self):
-        cfg = _make_cfg({"rapidapi": None})
-        self.assertEqual(cfg.rapidapi_key, "")
-
-    def test_null_web_does_not_crash(self):
-        cfg = _make_cfg({"web": None})
-        self.assertEqual(cfg.web_port, 8888)   # falls back to default
-        self.assertEqual(cfg.web_host, "0.0.0.0")
-        self.assertEqual(cfg.web_admins, [])
-        self.assertEqual(cfg.web_secret, "")
+    def test_explicit_null_blocks_do_not_crash(self):
+        # Every top-level block set to JSON null must not crash and must yield safe defaults.
+        cases = {
+            "chaikin":  ({"chaikin": None},  [("chaikin_email", ""), ("chaikin_password", "")]),
+            "etrade":   ({"etrade": None},   [("etrade_sandbox_key", ""), ("etrade_production_key", "")]),
+            "subblocks":({"etrade": {"sandbox": None, "production": None}},
+                                              [("etrade_sandbox_key", ""), ("etrade_production_secret", "")]),
+            "rapidapi": ({"rapidapi": None}, [("rapidapi_key", "")]),
+            "web":      ({"web": None},      [("web_port", 8888), ("web_host", "0.0.0.0"),
+                                              ("web_admins", []), ("web_secret", "")]),
+        }
+        for name, (raw, checks) in cases.items():
+            with self.subTest(block=name):
+                cfg = _make_cfg(raw)
+                for attr, expected in checks:
+                    self.assertEqual(getattr(cfg, attr), expected)
 
     def test_empty_config_returns_empty_strings(self):
         cfg = _make_cfg({})
@@ -130,16 +121,9 @@ class TestConfigWeb(unittest.TestCase):
 
 
 class TestConfigMissingFile(unittest.TestCase):
-    def test_missing_file_returns_empty_strings(self):
-        orig = config_module._load_file
-        config_module._load_file = lambda: {}  # simulate missing file (returns {})
-        try:
-            cfg = config_module._Config()
-            self.assertEqual(cfg.chaikin_email, "")
-            self.assertEqual(cfg.rapidapi_key, "")
-        finally:
-            config_module._load_file = orig
-
+    # Note: "mocked empty file -> empty attrs" is already covered by
+    # TestConfigNullSafety.test_empty_config_returns_empty_strings. This class
+    # tests the REAL _load_file() behavior (not mocked) on a nonexistent path.
     def test_real_missing_file_returns_empty(self):
         orig_path = config_module._CFG_PATH
         config_module._CFG_PATH = "/nonexistent/config.json"
