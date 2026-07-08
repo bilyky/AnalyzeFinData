@@ -22,6 +22,29 @@
   "accounts": {
     "real": ["XXXX", "YYYY"]
   },
+  "ai": {
+    "primary": "github_gpt",
+    "providers": {
+      "github_gpt": {
+        "enabled": true,
+        "type": "openai_compatible",
+        "model": "gpt-4o-mini",
+        "endpoint": "https://models.inference.ai.azure.com/chat/completions",
+        "api_key_source": "env:GITHUB_TOKEN"
+      },
+      "claude": {
+        "enabled": false,
+        "type": "anthropic",
+        "model": "claude-opus-4-8",
+        "api_key_source": "env:ANTHROPIC_API_KEY"
+      },
+      "gemini": {
+        "enabled": false,
+        "type": "gemini_cli",
+        "model": "gemini-2.5-flash"
+      }
+    }
+  },
   "web": {
     "port": 8888,
     "host": "0.0.0.0",

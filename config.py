@@ -57,6 +57,11 @@ class _Config:
         rapidapi = raw.get("rapidapi") or {}
         self.rapidapi_key = os.environ.get("RAPIDAPI_KEY") or rapidapi.get("api_key", "")
 
+        # ── AI evaluation backends (multiple named providers, each toggleable) ──
+        ai = raw.get("ai") or {}
+        self.ai_primary   = os.environ.get("AI_PRIMARY") or ai.get("primary", "")
+        self.ai_providers = ai.get("providers") or {}
+
         # ── Real brokerage accounts (last-4 IDs; PII — never hardcode in source) ─
         # Ordered: [0] = top Short_Long table (T1), [1] = bottom table (T2).
         # ACCOUNTS_REAL env var (JSON array) overrides config when set.

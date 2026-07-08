@@ -37,8 +37,16 @@ def status_label(l60) -> str:
 # ── Soft momentum exit signal ──────────────────────────────────────────────────
 
 def soft_exit(s10, l60) -> bool:
-    """Soft momentum-decay exit. Currently (S10 + L60) < 0 — the game's existing
-    rule, preserved unchanged. Threshold to be backtest-tuned in Phase 2."""
+    """Soft momentum-decay exit: (S10 + L60) < 0 — the game's existing rule, kept.
+
+    Phase-2 backtest note (296k obs, 2023-2025): win% rises monotonically with
+    score (S10 47.5%->59.7%, L60 48.2%->57.9%), which supports exiting weak names;
+    HOWEVER avg 10d forward return is positive in EVERY score bucket, including
+    score<=-4 (+1.28% S10 / +1.53% L60) due to oversold-bounce outliers. So the
+    entry-forward-return study is not a clean exit test — it can't justify a
+    specific cutoff. Threshold left at <0 pending a proper hold-vs-exit P&L
+    simulation (tracked as follow-up). Do not "tune" this from entry-quality data.
+    """
     return ((s10 or 0) + (l60 or 0)) < 0
 
 

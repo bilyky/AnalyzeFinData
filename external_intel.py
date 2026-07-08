@@ -20,55 +20,25 @@ BASE_DIR = Path(__file__).resolve().parent
 STOCK_KEYWORDS = ["BUY", "SELL", "STOCK", "TICKER", "NEWSLETTER", "PICK", "ALPHA", "PORTFOLIO", "EARNINGS"]
 
 def get_ai_reasoning(symbol, industry, pgr, s10, l60):
-    """Call the GitHub Models API (gpt-4o-mini) to generate a live, ruthless risk audit."""
-    token = None
-    env_path = BASE_DIR / ".env"
-    if env_path.exists():
-        with open(env_path) as f:
-            for line in f:
-                if line.startswith("GITHUB_TOKEN="):
-                    token = line.split("=", 1)[1].strip().strip('"')
-
-    if not token:
-        return f"<b>Standard Audit:</b> Technicals and Fundamentals aligned ({pgr})."
-
-    url = "https://models.inference.ai.azure.com/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    
-    prompt = f"""
+    """Advisory risk audit via the configured AI provider (see ai_client).
+    Falls back to a deterministic alignment string when no provider is available."""
+    import ai_client
+    system = ("You are Project AETHER, an elite, highly skeptical hedge fund risk "
+              "manager. Your tone is professional, concise, and critical.")
+    user = f"""
     Analyze stock {symbol} (Industry: {industry}, Chaikin Rating: {pgr}, Short10 Score: {s10}, Long60 Score: {l60}).
     Generate a 2-sentence analysis:
     Sentence 1: (Devil's Advocate) Ruthlessly criticize why this trade might fail. Be highly skeptical.
     Sentence 2: (Strategic Catalyst) Identify the 'Strategic Requirement' or 'AI Force Multiplier' if it exists, or the primary momentum driver.
     Keep the output extremely tight, professional, and under 50 words. Do not use prefixes like 'Devil's Advocate:'.
     """
-
-    data = {
-        "messages": [
-            {"role": "system", "content": "You are Project AETHER, an elite, highly skeptical hedge fund risk manager. Your tone is professional, concise, and critical."},
-            {"role": "user", "content": prompt}
-        ],
-        "model": "gpt-4o-mini",
-        "max_tokens": 100,
-        "temperature": 0.3
-    }
-
-    try:
-        r = requests.post(url, json=data, headers=headers)
-        if r.status_code == 200:
-            content = r.json()["choices"][0]["message"]["content"].strip()
-            sentences = content.split(". ")
-            devils_advocate = sentences[0] + "." if len(sentences) > 0 else ""
-            catalyst = ". ".join(sentences[1:]) if len(sentences) > 1 else ""
-            
-            return f"🚨 <b>Devil's Advocate:</b> {devils_advocate}<br>💡 <b>Catalyst:</b> {catalyst}"
-        else:
-            return f"<b>API Error ({r.status_code}):</b> Fallback to technical alignment."
-    except Exception as e:
-        return f"<b>Verification failed:</b> {e}"
+    content = ai_client.evaluate(system, user, max_tokens=100, temperature=0.3)
+    if not content:
+        return f"<b>Standard Audit:</b> Technicals and Fundamentals aligned ({pgr})."
+    sentences = content.split(". ")
+    devils_advocate = sentences[0] + "." if len(sentences) > 0 else ""
+    catalyst = ". ".join(sentences[1:]) if len(sentences) > 1 else ""
+    return f"🚨 <b>Devil's Advocate:</b> {devils_advocate}<br>💡 <b>Catalyst:</b> {catalyst}"
 
 def get_existing_symbols():
     """Load the valid symbols from the root Research sheet to prevent false positives."""
@@ -109,63 +79,36 @@ def extract_tickers(text):
     return list(set(valid_tickers))
 
 def analyze_email_content(subject, body):
-    """Use GPT-4o-mini to semantically analyze the email content and extract structured trade ideas."""
-    token = None
-    env_path = BASE_DIR / ".env"
-    if env_path.exists():
-        with open(env_path) as f:
-            for line in f:
-                if line.startswith("GITHUB_TOKEN="):
-                    token = line.split("=", 1)[1].strip().strip('"')
-
-    if not token:
-        return None
-
-    url = "https://models.inference.ai.azure.com/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-
-    # Fetch existing symbols to help the LLM filter out false tickers
-    universe = list(get_existing_symbols())[:150] # Sample to fit prompt limits comfortably
-
-    prompt = f"""
+    """Semantically analyze email content into structured trade ideas via the
+    configured AI provider (see ai_client). Returns [] when unavailable."""
+    import ai_client
+    universe = list(get_existing_symbols())[:150]  # sample to fit prompt limits
+    system = ("You are a precise financial data extractor. You only output valid "
+              "JSON. No markdown wrappers like ```json.")
+    user = f"""
     You are Project AETHER, an elite AI hedge fund analyst. Read this financial email and extract concrete stock recommendations.
-    
+
     Email Subject: {subject}
     Email Body: {body[:1500]}
-    
+
     Instructions:
     1. Extract the specific stock tickers being recommended.
     2. Cross-reference with this list of valid tickers if possible: {', '.join(universe)}.
     3. Determine the exact sentiment: BUY, SELL, or HOLD.
     4. Summarize the core thesis in one short sentence.
-    
+
     Output strictly as a JSON list of objects, or an empty list [] if no concrete recommendations exist.
     Example:
     [
         {{"symbol": "AAPL", "sentiment": "BUY", "thesis": "Strong iPhone sales in China driving immediate momentum."}}
     ]
     """
-
-    data = {
-        "messages": [
-            {"role": "system", "content": "You are a precise financial data extractor. You only output valid JSON. No markdown wrappers like ```json."},
-            {"role": "user", "content": prompt}
-        ],
-        "model": "gpt-4o-mini",
-        "max_tokens": 300,
-        "temperature": 0.1
-    }
-
+    content = ai_client.evaluate(system, user, max_tokens=300, temperature=0.1)
+    if not content:
+        return []
     try:
-        r = requests.post(url, json=data, headers=headers)
-        if r.status_code == 200:
-            content = r.json()["choices"][0]["message"]["content"].strip()
-            # Handle potential markdown wrappers if any
-            content = content.replace("```json", "").replace("```", "").strip()
-            return json.loads(content)
+        content = content.replace("```json", "").replace("```", "").strip()
+        return json.loads(content)
     except Exception as e:
         print(f"Semantic email analysis failed: {e}")
     return []
