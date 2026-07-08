@@ -243,9 +243,31 @@ def get_live_google_price(symbol):
             pass
     return None
 
+def is_market_hours():
+    """Return True if current time is within active US equity market hours (6:30 AM - 1:15 PM PST, weekdays)."""
+    try:
+        tz_la = pytz.timezone("America/Los_Angeles")
+        now_la = datetime.datetime.now(tz_la)
+        
+        # Check if weekend (Saturday=5, Sunday=6)
+        if now_la.weekday() in (5, 6):
+            return False
+            
+        start_time = now_la.replace(hour=6, minute=30, second=0, microsecond=0)
+        end_time = now_la.replace(hour=13, minute=15, second=0, microsecond=0)
+        return start_time <= now_la <= end_time
+    except Exception:
+        # Fallback to True if timezone check fails, to prevent blocking active hours
+        return True
+
 def get_live_prices(symbols):
     """Fetch real-time market prices via E*TRADE safely with automated recovery."""
     try:
+        # Trading Hours Gate: If after hours or weekends, bypass E*TRADE entirely to prevent login lockouts!
+        if not is_market_hours():
+            print("  [AETHER] After-hours detected — bypassing E*TRADE login to prevent lockout. Scraping Google Finance directly.")
+            return get_google_prices_fallback(symbols)
+
         # Call the hardened get_tokens() which is safe and has an active headless safety gate.
         # This ensures we always actively attempt to re-authenticate when tokens expire.
         tokens = etrade.get_tokens("production")
