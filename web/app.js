@@ -126,7 +126,7 @@ async function loadHeader() {
 // ── Dashboard tab ───────────────────────────────────────────────────────────────
 let dashPicks = [], dashPositions = [];
 
-// Pattern Tooltip Helper: renders space-separated pattern abbreviations as interactive, styled badges with native tooltips.
+// Pattern Tooltip Helper: renders space-separated pattern abbreviations as plain inline text with native tooltips.
 function renderPatternsHTML(patterns_str) {
     if (!patterns_str || patterns_str === "—") return "—";
     const desc_map = {
@@ -146,8 +146,8 @@ function renderPatternsHTML(patterns_str) {
     };
     return patterns_str.split(" ").map(p => {
         const desc = desc_map[p] || "Technical Price Action Pattern";
-        return `<span class="px-1.5 py-0.5 rounded bg-purple-950/40 text-purple-300 border border-purple-800/40 cursor-help font-medium text-[10px]" title="${desc}">${p}</span>`;
-    }).join("");
+        return `<span class="text-purple-300 cursor-help hover:underline decoration-dotted" title="${desc}">${p}</span>`;
+    }).join(" ");
 }
 
 async function loadDashboard() {
@@ -177,7 +177,7 @@ async function loadDashboard() {
                 <td class="${cls(p.S10)}">${p.S10?.toFixed(1)}</td>
                 <td class="${cls(p.L60)}">${p.L60?.toFixed(1)}</td>
                 <td class="font-bold ${cls(p.Total)}">${p.Total?.toFixed(1)}</td>
-                <td><div class="flex flex-wrap gap-1">${renderPatternsHTML(p.Patterns)}</div></td>
+                <td class="text-xs">${renderPatternsHTML(p.Patterns)}</td>
                 <td class="text-xs">${p.Shares_ATR ?? "—"} / ${p.Shares_Stop ?? "—"}</td>
             </tr>`).join("");
     }
