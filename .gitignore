@@ -5,10 +5,6 @@ etrade_config.json
 chaikin_config.json
 rapidapi_config.json
 
-# Live state workbook — real portfolio/screening data, regenerated locally
-# (see README "Generating state_of_the_day.xlsx"). Never commit its binary churn.
-state_of_the_day.xlsx
-
 # Python
 __pycache__/
 *.pyc

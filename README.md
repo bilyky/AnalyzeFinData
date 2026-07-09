@@ -145,15 +145,18 @@ powergauge.check_from_file(prefer_cache=False, date=date)
 The screener detects the file-lock and saves to `Data/investment_pending_<timestamp>.xlsx`.
 Close Excel, then rename/copy that file over `investment.xlsx`.
 
-### Generating `state_of_the_day.xlsx`
+### `state_of_the_day.xlsx` (source) → `Data/state_of_the_day.xlsx` (generated)
 
-The root-level `state_of_the_day.xlsx` is the live state workbook the pipeline,
-dashboard, and AI game read from. It holds **real portfolio/screening data**, so it
-is **git-ignored** and not shipped in the repo — a fresh clone must generate it
-locally by running the screener (`powergauge.check_from_xls(...)`), which writes the
-Research/Short_Long sheets. If a run finishes while the file is open, powergauge
-saves a `state_of_the_day_pending_<timestamp>.xlsx`; close Excel and copy it over
-`state_of_the_day.xlsx`.
+The **root-level `state_of_the_day.xlsx` is the source workbook** — the watchlist
+symbols plus the Short_Long real-account holdings. The screener
+(`powergauge.check_from_xls(...)`) reads it as `SRC_XLSX` and writes the enriched,
+scored copy to **`Data/state_of_the_day.xlsx`** (`XLSX_FILE`) — the file the
+dashboard, pipeline, and AI game read at runtime. The root source is tracked in the
+repo; the generated `Data/` copy is git-ignored (all of `Data/` is).
+
+If `Data/state_of_the_day.xlsx` is open in Excel when a run finishes, powergauge
+saves the changes to `Data/investment_pending_<timestamp>.xlsx` instead; close Excel
+and copy that over `Data/state_of_the_day.xlsx`.
 
 ---
 
