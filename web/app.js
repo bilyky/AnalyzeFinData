@@ -513,12 +513,45 @@ $("heal-tasks-btn").addEventListener("click", async () => {
     } catch (e) { $("action-msg").textContent = "Error: " + e.message; }
 });
 
+// ── Scorecard tab ──────────────────────────────────────────────────────────────
+async function loadScorecard() {
+    const sc = await api("/api/scorecard");
+    const sel = sc.selectors || {};
+    const names = Object.keys(sel);
+    const empty = $("scorecard-empty");
+    empty.classList.toggle("hidden", names.length > 0);
+
+    const fmtPct = (v) => (v == null ? "—" : v + "%");
+    $("scorecard-body").innerHTML = names.length ? names.map((n) => {
+        const s = sel[n];
+        return `<tr>
+            <td class="font-semibold">${n}</td>
+            <td>${s.scored}</td>
+            <td class="${s.hit_rate >= 50 ? "pos" : "neg"}">${fmtPct(s.hit_rate)}</td>
+            <td class="${s.winner_sell_miss ? "neg" : "mut"}">${s.winner_sell_miss}</td>
+            <td class="mut">${fmtPct(s.missed_upside_pct)}</td>
+            <td class="pos">${fmtPct(s.avoided_loss_pct)}</td>
+        </tr>`;
+    }).join("") : `<tr><td colspan="6" class="text-center text-slate-500 py-6">No scored decisions yet.</td></tr>`;
+
+    const misses = sc.winner_selling_misses || [];
+    $("misses-body").innerHTML = misses.length ? misses.map((m) => `
+        <tr>
+            <td class="font-semibold">${m.symbol}</td>
+            <td class="text-xs mut">${m.date || "—"}</td>
+            <td class="text-xs mut">${m.reason || "—"}</td>
+            <td class="neg">+${m.fwd_return_pct}%</td>
+        </tr>`).join("")
+        : `<tr><td colspan="4" class="text-center text-slate-500 py-6">None in the scored window.</td></tr>`;
+}
+
 // ── Per-tab loader ───────────────────────────────────────────────────────────
 function loadTab(tab) {
     if (tab === "dashboard") loadDashboard();
     else if (tab === "accounts") loadAccounts();
     else if (tab === "rotation") loadRotation();
     else if (tab === "history") loadHistory();
+    else if (tab === "scorecard") loadScorecard();
     else if (tab === "system") loadSystem();
 }
 

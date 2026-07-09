@@ -47,6 +47,7 @@
             <button data-tab="accounts"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Accounts</button>
             <button data-tab="rotation"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Rotation</button>
             <button data-tab="history"   class="tab-btn px-4 py-2 border-b-2 border-transparent">History</button>
+            <button data-tab="scorecard" class="tab-btn px-4 py-2 border-b-2 border-transparent">Scorecard</button>
             <button data-tab="system"    class="tab-btn px-4 py-2 border-b-2 border-transparent">System</button>
         </nav>
     </header>
@@ -197,6 +198,37 @@
 
             <h2 class="section-title">Pipeline Log</h2>
             <pre id="log-view" class="bg-black/50 border border-slate-800 rounded p-3 text-xs text-slate-300 h-80 overflow-auto font-mono">Loading…</pre>
+        </section>
+
+        <!-- Scorecard -->
+        <section id="tab-scorecard" class="tab-panel hidden">
+            <p class="text-xs mut mb-3">Backtracked exit-selector performance (rules vs each AI provider), scored against
+                the 10-day forward close. A winner-selling miss is a SELL of a position in profit that then rose — the
+                "cutting a flower" error. Outcome is not decision quality, but persistent bias shows up here.</p>
+            <div id="scorecard-empty" class="text-slate-500 py-6 hidden">No decisions scored yet — logged rows need
+                ~10 trading days of forward data.</div>
+            <div class="overflow-x-auto mb-8">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>Selector</th><th>Scored</th><th>Hit Rate</th><th>Winner-Sell Misses</th>
+                            <th>Missed Upside</th><th>Avoided Loss</th></tr>
+                    </thead>
+                    <tbody id="scorecard-body">
+                        <tr><td colspan="6" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <h2 class="section-title">Winner-Selling Misses</h2>
+            <div class="overflow-x-auto mb-8">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>Symbol</th><th>Date</th><th>Reason</th><th>Forward Return</th></tr>
+                    </thead>
+                    <tbody id="misses-body">
+                        <tr><td colspan="4" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </section>
     </main>
 

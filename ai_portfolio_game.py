@@ -40,6 +40,7 @@ INITIAL_BALANCE = 10000.0
 # Import risk utils safely
 import risk_utils
 import sell_rules
+import decision_eval
 
 
 def _sma50(symbol, max_stale_days=10):
@@ -614,6 +615,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
         # SELL logic — unified deterministic exit policy (sell_rules.exit_decision):
         # hard ATR stop > soft momentum signal (winner-protected) > hold.
         symbols_to_sell = []
+        decision_entries = []
         for sym in list(state["positions"].keys()):
             pos = state["positions"][sym]
             s10 = l60 = 0
@@ -634,6 +636,15 @@ def run_daily_ai_management(force=False, manual_profile=None):
             elif action == "REVIEW":
                 # Winner above its 50-DMA on a soft signal — hold, don't dump.
                 print(f"🌸 AI HOLD (winner-protected): {sym} — {reason}")
+            # Part G — log the decision for backtracking. Shadow AI verdicts only
+            # for exit candidates (SELL/REVIEW), never for cheap HOLDs, to bound
+            # provider calls; the deterministic action is always recorded.
+            decision_entries.append(decision_eval.build_entry(
+                symbol=sym, price=price, cost=pos.get("cost"),
+                stop_loss=pos.get("stop_loss"), s10=s10, l60=l60, sma50=sma50,
+                date=today, run_shadow=(action != "HOLD")))
+        if decision_entries:
+            decision_eval.log_decisions(decision_entries)
 
         for sym in symbols_to_sell:
             pos = state["positions"].pop(sym)

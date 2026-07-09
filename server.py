@@ -206,6 +206,13 @@ def create_app():
     async def pipeline_logs(lines: int = Query(100, ge=1, le=1000)):
         return {"lines": data_api.read_log_tail(lines)}
 
+    # ── Selector scorecard (backtracked) ──────────────────────────────────────
+
+    @app.get("/api/scorecard")
+    async def scorecard(horizon: int = Query(10, ge=1, le=60)):
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, data_api.read_scorecard, horizon)
+
     # ── Run pipeline (protected) ──────────────────────────────────────────────
 
     _pipeline_proc: list = []   # mutable container for the running subprocess

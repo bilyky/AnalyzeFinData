@@ -367,6 +367,20 @@ _KNOWN_TASKS = [
 ]
 
 
+def read_scorecard(horizon_days: int = 10) -> dict:
+    """Backtracked selector scorecard (rules vs each AI provider) + winner-selling
+    misses, from Data/decision_log.jsonl. Cached; empty when no log yet."""
+    def _load():
+        import decision_eval
+        entries = decision_eval.read_log()
+        if not entries:
+            return {"selectors": {}, "winner_selling_misses": [], "logged": 0}
+        sc = decision_eval.score_log(entries, horizon_days=horizon_days)
+        sc["logged"] = len(entries)
+        return sc
+    return _cached(f"scorecard:{horizon_days}", 300.0, _load)
+
+
 def read_scheduled_tasks() -> list[dict]:
     """Query Windows Task Scheduler for known AETHER tasks."""
     results = []
