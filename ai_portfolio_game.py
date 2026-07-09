@@ -63,6 +63,19 @@ def _sma50(symbol, max_stale_days=10):
     except Exception:
         return None
 
+def _live_equity(cash, positions, price_of):
+    """Cash + Σ qty·price across positions, falling back to each position's cost when
+    its live quote is missing/invalid. A data gap must never crash the caller — the
+    equity number is for reporting/sizing, not a risk gate."""
+    equity = cash or 0.0
+    for sym, pos in positions.items():
+        px = price_of.get(sym)
+        if not px or px <= 0:
+            px = pos.get("cost", 0.0)
+        equity += pos.get("qty", 0) * px
+    return equity
+
+
 def is_market_open():
     """Check if current time is within US Market hours (9:30 AM - 4:00 PM EST)."""
     tz = pytz.timezone("America/New_York")
@@ -358,12 +371,19 @@ def get_live_prices(symbols):
             return get_google_prices_fallback(symbols)
             
         quotes = etrade.fetch_quotes(tokens, symbols, env="production")
-        
-        # If E*TRADE returned empty/partial quotes, raise an error to alert you of dead/delisted symbols
+
+        # Fill only the gaps from Google — keep the E*TRADE quotes we already have.
+        # Surface dead/delisted/misaligned tickers loudly instead of discarding
+        # every good quote and re-scraping the whole list.
         missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
         if missing:
-            raise ValueError(f"Ticker Symbology Error: E*TRADE returned no quote for: {missing}. These symbols may be dead, delisted, or misaligned.")
-            
+            print(f"  [AETHER] E*TRADE returned no quote for {missing} "
+                  f"(possibly dead/delisted/misaligned); filling gaps via Google Finance.")
+            quotes.update(get_google_prices_fallback(missing))
+            still_missing = [s for s in missing if s not in quotes or not quotes[s] or quotes[s] <= 0]
+            if still_missing:
+                print(f"  [AETHER] ⚠️ No live quote from any source for: {still_missing}")
+
         return quotes
     except Exception as e:
         print(f"  [AETHER] E*TRADE connection failed: {e}. Attempting Google Finance live fallback.")
@@ -546,16 +566,17 @@ def run_daily_ai_management(force=False, manual_profile=None):
         if not prices:
             raise RuntimeError("Critical Data Failure: Both E*TRADE and Google Finance fallback returned no prices. No live source of truth available!")
 
-        # Zero-Trust: every open position must have a valid non-zero price from a live source.
+        # Zero-Trust: surface held positions with no live quote, but do NOT abort the
+        # run over them — aborting would skip stop-loss enforcement on every *other*
+        # position too, violating the Rule of Loss Minimization. Unpriced names fall
+        # back to cost for the equity figure (via _live_equity) and are held (their
+        # cost-based price won't trip a stop) until a quote returns.
         missing_prices = [sym for sym in symbols_to_check if sym not in prices or not prices[sym] or prices[sym] <= 0]
         if missing_prices:
-            raise RuntimeError(f"Data Integrity Failure: No live prices found for active positions: {missing_prices}")
-            
-        current_equity = state["balance"]
-        for sym, pos in state["positions"].items():
-            price = prices[sym] # Access directly, no fallback to cost basis to enforce strict data accuracy
-            current_equity += pos["qty"] * price
-        state["equity"] = round(current_equity, 0)
+            print(f"⚠️ [AETHER] No live quote for held positions {missing_prices}; "
+                  f"using cost basis for their equity share and skipping their stop check this run.")
+
+        state["equity"] = round(_live_equity(state["balance"], state["positions"], prices), 0)
 
         # 0. Execute QUEUED ORDERS (Strategic Overrides with Volatility Sizing)
         if queued:
