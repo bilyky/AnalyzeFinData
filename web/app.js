@@ -521,16 +521,18 @@ async function loadScorecard() {
     const empty = $("scorecard-empty");
     empty.classList.toggle("hidden", names.length > 0);
 
-    const fmtPct = (v) => (v == null ? "—" : v + "%");
+    // Values already arrive as percentages (e.g. 66.7); the module-global fmtPct
+    // adds a +/- sign and 2 decimals, which we don't want here.
+    const pct = (v) => (v == null ? "—" : v + "%");
     $("scorecard-body").innerHTML = names.length ? names.map((n) => {
         const s = sel[n];
         return `<tr>
             <td class="font-semibold">${n}</td>
             <td>${s.scored}</td>
-            <td class="${s.hit_rate >= 50 ? "pos" : "neg"}">${fmtPct(s.hit_rate)}</td>
+            <td class="${s.hit_rate >= 50 ? "pos" : "neg"}">${pct(s.hit_rate)}</td>
             <td class="${s.winner_sell_miss ? "neg" : "mut"}">${s.winner_sell_miss}</td>
-            <td class="mut">${fmtPct(s.missed_upside_pct)}</td>
-            <td class="pos">${fmtPct(s.avoided_loss_pct)}</td>
+            <td class="mut">${pct(s.missed_upside_pct)}</td>
+            <td class="pos">${pct(s.avoided_loss_pct)}</td>
         </tr>`;
     }).join("") : `<tr><td colspan="6" class="text-center text-slate-500 py-6">No scored decisions yet.</td></tr>`;
 

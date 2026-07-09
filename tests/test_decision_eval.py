@@ -7,9 +7,19 @@ import os
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import decision_eval as de
+
+
+def _write_ohlcv(closes_by_date):
+    """Write a temp OHLCV JSON file and return its directory + symbol."""
+    d = tempfile.mkdtemp()
+    ts = {day: {"4. close": str(c)} for day, c in closes_by_date.items()}
+    with open(os.path.join(d, "TST_daily.json"), "w") as f:
+        json.dump({"Time Series (Daily)": ts}, f)
+    return d
 
 
 def _entry(sym, action, price, cost, verdicts=None, date="2026-06-01"):
@@ -31,6 +41,53 @@ class TestLogRoundTrip(unittest.TestCase):
 
     def test_read_missing_file(self):
         self.assertEqual(de.read_log(path="/nonexistent/x.jsonl"), [])
+
+    def test_skips_malformed_line(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w");
+        tmp.write('{"symbol": "AAA"}\n')
+        tmp.write('this is not json\n')        # a half-written crash line
+        tmp.write('{"symbol": "BBB"}\n')
+        tmp.close()
+        try:
+            rows = de.read_log(path=tmp.name)
+            self.assertEqual([r["symbol"] for r in rows], ["AAA", "BBB"])
+        finally:
+            os.unlink(tmp.name)
+
+
+class TestBuildEntry(unittest.TestCase):
+    def test_no_shadow_records_action_without_verdicts(self):
+        # Winner on a soft signal, above its 50-DMA -> REVIEW, no AI calls.
+        e = de.build_entry("RPD", price=100, cost=60, stop_loss=50,
+                           s10=-4, l60=-2, sma50=90, date="2026-06-01", run_shadow=False)
+        self.assertEqual(e["rules_action"], "REVIEW")
+        self.assertEqual(e["verdicts"], {})
+        self.assertAlmostEqual(e["pnl_pct"], (100 - 60) / 60 * 100, places=3)
+
+    def test_stop_breach_records_sell(self):
+        e = de.build_entry("XXX", price=49, cost=60, stop_loss=50,
+                           s10=0, l60=0, date="2026-06-01", run_shadow=False)
+        self.assertEqual(e["rules_action"], "SELL")
+
+
+class TestForwardClose(unittest.TestCase):
+    def setUp(self):
+        self._orig = de.OHLCV_DIR
+    def tearDown(self):
+        de.OHLCV_DIR = self._orig
+
+    def test_none_until_horizon_matures(self):
+        de.OHLCV_DIR = Path(_write_ohlcv({"2026-06-02": 10, "2026-06-03": 11}))
+        self.assertIsNone(de.ohlcv_forward_close("TST", "2026-06-01", 10))
+
+    def test_returns_close_at_horizon(self):
+        de.OHLCV_DIR = Path(_write_ohlcv({f"2026-06-{i:02d}": 10 + i for i in range(2, 15)}))
+        # 3rd forward trading day after 06-01 is 06-04 -> close 14
+        self.assertEqual(de.ohlcv_forward_close("TST", "2026-06-01", 3), 14.0)
+
+    def test_missing_date_or_symbol(self):
+        self.assertIsNone(de.ohlcv_forward_close("TST", None, 10))
+        self.assertIsNone(de.ohlcv_forward_close(None, "2026-06-01", 10))
 
 
 class TestScoring(unittest.TestCase):
@@ -91,6 +148,20 @@ class TestScoring(unittest.TestCase):
                    verdicts={"gpt": {"verdict": "FLAG-FOR-REVIEW", "note": "?"}})
         sc = self._score([e], {"AAA": 80})   # rules right (fell); flagging was not useful
         self.assertEqual(sc["selectors"]["gpt"]["correct"], 0)
+
+    def test_dedup_same_symbol_date_keeps_last(self):
+        # Same symbol/day logged twice (scheduled run + manual re-run); the final
+        # decision (SELL) is what stands, and it must be scored exactly once.
+        entries = [_entry("A", "HOLD", 100, 90, date="2026-06-01"),
+                   _entry("A", "SELL", 100, 90, date="2026-06-01")]
+        sc = self._score(entries, {"A": 80})
+        self.assertEqual(sc["selectors"]["rules"]["scored"], 1)
+        self.assertEqual(sc["selectors"]["rules"]["correct"], 1)  # SELL, then fell
+
+    def test_entry_without_date_skipped(self):
+        e = _entry("A", "SELL", 100, 90, date=None)
+        sc = self._score([e], {"A": 80})
+        self.assertEqual(sc["selectors"], {})
 
     def test_hit_rate_aggregates(self):
         entries = [_entry("A", "SELL", 100, 90), _entry("B", "SELL", 100, 90),

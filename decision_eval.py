@@ -1,22 +1,19 @@
 """
-Part G — decision logging + backtracking scorecard + reflection.
+Part G — decision logging + backtracking scorecard.
 
-Every exit decision is logged (the deterministic rules action + shadow AI verdicts
-from every enabled provider) to Data/decision_log.jsonl. Later, each logged
-decision is scored against the actual forward price outcome so we can compare
-selectors (rules vs gpt vs claude vs ...) on evidence, not anecdote — and measure
-the winner-selling error rate specifically.
+Logs each exit decision (deterministic rules action + shadow AI verdicts from every
+enabled provider) to Data/decision_log.jsonl, then scores each selector against the
+N-day-forward close so provider choice is backed by data, not a single anecdote.
 
-Reflection runs on EVERY close, gains included: a SELL that then rose is a
-winner-selling miss (opportunity cost) even though it may have booked a profit.
-Outcome != decision quality.
+Scores every close, gains included: a SELL of a position in profit that then rose is
+a winner-selling miss (the "cutting a flower" error) — outcome is not the same as
+decision quality (CLAUDE.md, Jul-25 principle 6).
 
-Deterministic and I/O-light; the scorer takes an injectable forward-price function
-so it is fully unit-testable without real data.
+score_log takes an injectable forward-price function so it is unit-testable without
+real data.
 """
 
 import json
-import os
 from pathlib import Path
 
 import sell_rules
@@ -66,13 +63,19 @@ def log_decisions(entries, path=LOG):
 
 
 def read_log(path=LOG):
+    """Read the append-only log, skipping blank or malformed lines (a crash can
+    leave a half-written final line — one bad row must not sink the scorecard)."""
     entries = []
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line:
+                if not line:
+                    continue
+                try:
                     entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
     except FileNotFoundError:
         pass
     return entries
@@ -81,21 +84,24 @@ def read_log(path=LOG):
 # ── Forward price lookup ───────────────────────────────────────────────────────
 
 def ohlcv_forward_close(symbol, from_date, horizon_days):
-    """Close ~horizon trading days after from_date from the OHLCV cache, or None
-    if the file/forward data isn't available yet."""
+    """Close exactly horizon trading days after from_date from the OHLCV cache.
+    Returns None until the full horizon of forward data exists, so a decision is
+    never scored on an immature window (matches the dashboard's "needs ~N days")."""
+    if not symbol or not from_date:
+        return None
     path = OHLCV_DIR / f"{symbol}_daily.json"
     if not path.exists():
         return None
     try:
-        ts = json.load(open(path)).get("Time Series (Daily)", {})
+        with open(path) as f:
+            ts = json.load(f).get("Time Series (Daily)", {})
     except Exception:
         return None
     fut = [d for d in sorted(ts.keys()) if d > from_date]
-    if not fut:
+    if len(fut) < horizon_days:
         return None
-    target = fut[horizon_days - 1] if len(fut) >= horizon_days else fut[-1]
     try:
-        return float(ts[target]["4. close"])
+        return float(ts[fut[horizon_days - 1]]["4. close"])
     except (KeyError, ValueError, TypeError):
         return None
 
@@ -131,7 +137,17 @@ def score_log(entries, horizon_days=10, fwd_price_fn=ohlcv_forward_close):
 
     misses = []  # notable winner-selling misses across all selectors (rules)
 
+    # Collapse intraday/manual re-runs: the pipeline can log a symbol several times
+    # on the same day (scheduled run + a manual "Run Pipeline"), so keep only the
+    # last (final) decision per symbol per day — the raw log stays as an audit trail.
+    deduped = {}
     for e in entries:
+        sym, day = e.get("symbol"), e.get("date")
+        if not sym or not day:
+            continue  # a row with no symbol/date can't be scored against forward data
+        deduped[(sym, day)] = e
+
+    for e in deduped.values():
         price = e.get("price"); cost = e.get("cost")
         if not price:
             continue

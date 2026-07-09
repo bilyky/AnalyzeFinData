@@ -636,9 +636,9 @@ def run_daily_ai_management(force=False, manual_profile=None):
             elif action == "REVIEW":
                 # Winner above its 50-DMA on a soft signal — hold, don't dump.
                 print(f"🌸 AI HOLD (winner-protected): {sym} — {reason}")
-            # Part G — log the decision for backtracking. Shadow AI verdicts only
-            # for exit candidates (SELL/REVIEW), never for cheap HOLDs, to bound
-            # provider calls; the deterministic action is always recorded.
+            # Part G — log the decision for backtracking. Shadow AI verdicts run
+            # only for exit candidates (SELL/REVIEW), not HOLDs, to bound provider
+            # calls; the deterministic action is always recorded.
             decision_entries.append(decision_eval.build_entry(
                 symbol=sym, price=price, cost=pos.get("cost"),
                 stop_loss=pos.get("stop_loss"), s10=s10, l60=l60, sma50=sma50,
