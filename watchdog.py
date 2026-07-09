@@ -61,10 +61,12 @@ def check_logs():
             lines = f.readlines()
             for line in lines[-50:]: # Check last 50 lines
                 if any(word in line.upper() for word in ["ERROR", "FAILED", "FATAL", "CRASH", "TRACEBACK", "UNBOUNDLOCALERROR", "UNICODEENCODEERROR"]):
+                    if "0 ERRORS" in line.upper() or "NO ERRORS" in line.upper():
+                        continue
                     try:
                         log_date_str = line.split("]")[0].strip("[")
                         log_date = datetime.datetime.strptime(log_date_str, "%Y-%m-%d %H:%M:%S")
-                        if (now - log_date).total_seconds() < 86400:
+                        if (now - log_date).total_seconds() < 3600:
                             errors.append(f"[{log_path.name}] {line.strip()}")
                     except:
                         errors.append(f"[{log_path.name}] {line.strip()}")
@@ -219,6 +221,19 @@ def kill_ghost_processes():
 def run_watchdog():
     print(f"[{datetime.datetime.now()}] Project AETHER Healer starting...")
     
+    # 0. E*TRADE Proactive Session Keeper (Prevents Soft Expiry)
+    try:
+        import etrade
+        tokens = etrade._load_tokens("production")
+        if tokens:
+            renewed = etrade.renew_tokens(tokens, "production")
+            if renewed:
+                print("  [Healer] E*TRADE production tokens successfully renewed and session extended!")
+            else:
+                print("  [Healer] E*TRADE production tokens are expired or could not be renewed silently.")
+    except Exception as e:
+        print(f"  [Healer] E*TRADE session keep-alive bypassed or failed: {e}")
+
     # 1. Gather Initial System Health Data
     initial_errors = check_logs()
     missing_tasks = check_task_scheduler()

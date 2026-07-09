@@ -106,9 +106,12 @@ function marketOpen() {
 }
 
 // ── Header + health ─────────────────────────────────────────────────────────────
+let cashBalance = 0;
+
 async function loadHeader() {
     try {
         const [pf, health] = await Promise.all([api("/api/portfolio"), api("/api/health")]);
+        cashBalance = pf.balance;
         $("hdr-equity").textContent = fmt$(pf.equity);
         $("hdr-cash").textContent = fmt$(pf.balance);
         const ret = $("hdr-return");
@@ -219,10 +222,17 @@ async function refreshPrices() {
         const px = prices[tr.dataset.sym];
         if (px > 0) tr.querySelector(".px-live").textContent = fmt$(px);
     });
+
+    let liveEquity = cashBalance;
+
     // Update position prices + P&L live
     dashPositions.forEach((p) => {
         const px = prices[p.symbol];
-        if (!(px > 0)) return;
+        if (!(px > 0)) {
+            liveEquity += p.qty * p.cost;
+            return;
+        }
+        liveEquity += p.qty * px;
         const tr = document.querySelector(`#positions-body tr[data-sym="${p.symbol}"]`);
         if (!tr) return;
         const pnl = (px - p.cost) * p.qty;
@@ -232,10 +242,19 @@ async function refreshPrices() {
         c$.textContent = fmt$(pnl); c$.className = "pnl-$ " + cls(pnl);
         cP.textContent = fmtPct(pnlPct); cP.className = "pnl-pct " + cls(pnlPct);
     });
+
+    // Dynamically update the header equity and return with live prices!
+    $("hdr-equity").textContent = fmt$(liveEquity);
+    const initialBalance = 10000.0;
+    const returnPct = ((liveEquity - initialBalance) / initialBalance) * 100;
+    const ret = $("hdr-return");
+    ret.textContent = fmtPct(returnPct);
+    ret.className = "font-bold text-base " + cls(returnPct);
 }
 
 // ── Accounts tab ─────────────────────────────────────────────────────────────
 let acctHoldings = [];   // flat [{acctId, symbol, buy, qty}] for live-price refresh
+let gameCashBalance = 0;
 
 async function loadAccounts() {
     const data = await api("/api/accounts");
@@ -248,8 +267,11 @@ async function loadAccounts() {
         const badge = isGame
             ? `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-purple-900/60 text-purple-300">AI GAME</span>`
             : `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-blue-900/60 text-blue-300">REAL</span>`;
+        if (isGame) {
+            gameCashBalance = a.balance || 0;
+        }
         const summary = isGame
-            ? `<span class="text-sm mut">Equity <b class="text-slate-200">${fmt$(a.equity)}</b> · Cash ${fmt$(a.balance)} · <span class="${cls(a.return_pct)}">${fmtPct(a.return_pct)}</span> · ${a.profile || ""}</span>`
+            ? `<span class="text-sm mut">Equity <b id="game-live-equity" class="text-slate-200">${fmt$(a.equity)}</b> · Cash ${fmt$(a.balance)} · <span id="game-live-return" class="${cls(a.return_pct)}">${fmtPct(a.return_pct)}</span> · ${a.profile || ""}</span>`
             : `<span class="text-sm mut">${a.count} holdings</span>`;
 
         const rows = (a.holdings || []).map((h) => {
@@ -306,9 +328,18 @@ async function refreshAccountPrices() {
     const syms = [...new Set(acctHoldings.map((h) => h.symbol))];
     let prices;
     try { prices = await api("/api/prices?symbols=" + syms.join(",")); } catch { return; }
+
+    let liveGameEquity = gameCashBalance;
+
     document.querySelectorAll("#accounts-container tr[data-sym]").forEach((tr) => {
         const px = prices[tr.dataset.sym];
-        if (!(px > 0)) return;
+        if (!(px > 0)) {
+            if (tr.dataset.acct === "game") {
+                const buy = parseFloat(tr.dataset.buy), qty = parseFloat(tr.dataset.qty);
+                if (!isNaN(buy) && !isNaN(qty)) liveGameEquity += qty * buy;
+            }
+            return;
+        }
         tr.querySelector(".px-live").textContent = fmt$(px);
         const buy = parseFloat(tr.dataset.buy), qty = parseFloat(tr.dataset.qty);
         if (!isNaN(buy) && !isNaN(qty) && buy) {
@@ -316,8 +347,21 @@ async function refreshAccountPrices() {
             const c$ = tr.querySelector(".pnl-\\$"), cP = tr.querySelector(".pnl-pct");
             c$.textContent = fmt$(pnl); c$.className = "pnl-$ " + cls(pnl);
             cP.textContent = fmtPct(pnlPct); cP.className = "pnl-pct " + cls(pnlPct);
+
+            if (tr.dataset.acct === "game") {
+                liveGameEquity += qty * px;
+            }
         }
     });
+
+    const eqEl = $("game-live-equity"), retEl = $("game-live-return");
+    if (eqEl && retEl) {
+        eqEl.textContent = fmt$(liveGameEquity);
+        const initialBalance = 10000.0;
+        const returnPct = ((liveGameEquity - initialBalance) / initialBalance) * 100;
+        retEl.textContent = fmtPct(returnPct);
+        retEl.className = cls(returnPct);
+    }
 }
 
 // ── Rotation tab ─────────────────────────────────────────────────────────────

@@ -70,6 +70,10 @@ def _check_recovery(path: str, today_str: str) -> tuple[bool, dict | None]:
     return gap > MAX_GAP_DAYS, cache
 
 
+_SYMBOL_OVERRIDES = {
+    "IAC": "IACVV",
+}
+
 def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
     """Single Alpha Vantage HTTP call. Returns parsed JSON. Raises on error."""
     key = CFG.rapidapi_key
@@ -78,12 +82,17 @@ def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
             "RapidAPI key not configured. Set RAPIDAPI_KEY env var "
             "or add rapidapi.api_key to config.json."
         )
+
+    # Resolve any Alpha Vantage-specific symbol overrides or formatting quirks
+    api_symbol = _SYMBOL_OVERRIDES.get(symbol.upper(), symbol)
+    api_symbol = api_symbol.replace(".", "-")
+
     resp = requests.get(
         _BASE_URL,
         headers={**_HEADERS, "X-RapidAPI-Key": key},
         params={
             "function": "TIME_SERIES_DAILY",
-            "symbol": symbol,
+            "symbol": api_symbol,
             "outputsize": outputsize,
             "datatype": "json",
         },

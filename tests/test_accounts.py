@@ -41,6 +41,8 @@ def _build_sheet(path):
 class TestReadAccounts(unittest.TestCase):
     def setUp(self):
         self._orig_xlsx = data_api._XLSX
+        self._orig_real_acct_ids = data_api._real_acct_ids
+        data_api._real_acct_ids = lambda: ["0053", "1315"]
         data_api._cache.clear()
         self.tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         self.tmp.close()
@@ -49,6 +51,7 @@ class TestReadAccounts(unittest.TestCase):
 
     def tearDown(self):
         data_api._XLSX = self._orig_xlsx
+        data_api._real_acct_ids = self._orig_real_acct_ids
         data_api._cache.clear()
         os.unlink(self.tmp.name)
 

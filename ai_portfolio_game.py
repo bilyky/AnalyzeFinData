@@ -78,20 +78,79 @@ def is_market_open():
     else:
         return False, f"Market is Closed. (Current EST: {now.strftime('%H:%M')})"
 
+def calculate_ticker_trend_score(symbol: str) -> float:
+    """
+    Calculate a normalized, standardized trend score in [-10.0, +10.0] for a symbol
+    based on its price relative to its 20, 50, and 200 daily SMAs.
+    """
+    try:
+        path = XLSX_FILE.parent / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+        if not path.exists():
+            return 0.0
+        with open(path) as f:
+            ts = json.load(f).get("Time Series (Daily)", {})
+        dates = sorted(ts.keys())
+        if len(dates) < 200:
+            return 0.0
+            
+        closes = [float(ts[d]["4. close"]) for d in dates]
+        sma20 = sum(closes[-20:]) / 20
+        sma50 = sum(closes[-50:]) / 50
+        sma200 = sum(closes[-200:]) / 200
+        current_price = closes[-1]
+        
+        s_20 = 2.5 if current_price > sma20 else -2.5
+        s_50 = 2.5 if current_price > sma50 else -2.5
+        s_200 = 2.5 if current_price > sma200 else -2.5
+        s_cross1 = 1.25 if sma20 > sma50 else -1.25
+        s_cross2 = 1.25 if sma50 > sma200 else -1.25
+        
+        return s_20 + s_50 + s_200 + s_cross1 + s_cross2
+    except Exception:
+        return 0.0
+
 def get_market_regime():
-    """Query SPY momentum to dynamically determine the best strategy profile."""
+    """Query SPY momentum to dynamically determine the best strategy profile, adjusting for breadth divergence."""
+    base_profile = "BALANCED"
+    wb = None
     try:
         wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
         ws = wb["Research"]
         for row in ws.iter_rows(min_row=2, values_only=True):
             if row[3] == "SPY":
                 l60 = row[25] or 0
-                if l60 > 2: return "AGGRESSIVE" # Strong bull market
-                if l60 < -2: return "DEFENSIVE" # Bear market
-                return "BALANCED" # Consolidation
-    except:
-        pass
-    return "BALANCED"
+                if l60 > 2:
+                    base_profile = "AGGRESSIVE" # Strong bull market
+                elif l60 < -2:
+                    base_profile = "DEFENSIVE" # Bear market
+                else:
+                    base_profile = "BALANCED" # Consolidation
+                break
+    except Exception as e:
+        print(f"Error loading SPY regime: {e}")
+        base_profile = "BALANCED"
+    finally:
+        if wb:
+            wb.close()
+
+    # Breadth Divergence Adjustment Pass
+    try:
+        spy_score = calculate_ticker_trend_score("SPY")
+        rsp_score = calculate_ticker_trend_score("RSP")
+        delta = spy_score - rsp_score
+        
+        if delta > 4.0:
+            print(f"⚠️ [BREADTH ALERT] SPY-RSP Divergence is high: {delta:.2f} (SPY: {spy_score:.1f}, RSP: {rsp_score:.1f})")
+            if base_profile == "AGGRESSIVE":
+                print("  -> Downgrading profile from AGGRESSIVE to BALANCED due to narrow market breadth!")
+                return "BALANCED"
+            elif base_profile == "BALANCED":
+                print("  -> Downgrading profile from BALANCED to DEFENSIVE due to narrow market breadth!")
+                return "DEFENSIVE"
+    except Exception as e:
+        print(f"Error applying breadth divergence filter: {e}")
+
+    return base_profile
 
 def get_strategy_rules(profile):
     """Define risk and size rules based on the chosen strategy profile."""
@@ -299,12 +358,10 @@ def get_live_prices(symbols):
             
         quotes = etrade.fetch_quotes(tokens, symbols, env="production")
         
-        # If E*TRADE returned empty/partial quotes, fill them in with Google Finance!
+        # If E*TRADE returned empty/partial quotes, raise an error to alert you of dead/delisted symbols
         missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
         if missing:
-            print(f"  [AETHER] E*TRADE returned partial quotes. Scraping Google Finance for: {missing}")
-            google_quotes = get_google_prices_fallback(missing)
-            quotes.update(google_quotes)
+            raise ValueError(f"Ticker Symbology Error: E*TRADE returned no quote for: {missing}. These symbols may be dead, delisted, or misaligned.")
             
         return quotes
     except Exception as e:
@@ -354,12 +411,14 @@ def send_daily_summary():
 
     # Build the open positions HTML table
     pos_table_rows = ""
+    live_equity = state.get("balance", 0.0)
     if positions:
         for sym, pos in positions.items():
             qty = pos["qty"]
             cost = pos["cost"]
             current = live_prices.get(sym, cost)
             val = qty * current
+            live_equity += val
             pnl = (current - cost) * qty
             pnl_pct = ((current - cost) / cost) * 100
             
@@ -380,6 +439,10 @@ def send_daily_summary():
             """
     else:
         pos_table_rows = "<tr><td colspan='6' style='padding: 15px; text-align: center; color: #888;'>No open positions currently.</td></tr>"
+
+    # Synchronize the final calculated closing equity back to the JSON state file so it stays updated
+    state["equity"] = round(live_equity, 2)
+    save_game(state)
 
     html = f"""
     <html>
@@ -414,7 +477,7 @@ def send_daily_summary():
         <table border="0" cellpadding="10" cellspacing="0" style="width: 100%; max-width: 400px; border-collapse: collapse; margin-bottom: 25px; border: 1px solid #ddd;">
             <tr style="background: #f8f9fa;">
                 <td style="border-bottom: 1px solid #ddd; font-weight: bold;">Current Equity</td>
-                <td style="border-bottom: 1px solid #ddd; text-align: right; font-weight: bold; font-size: 16px;">${state['equity']:.2f}</td>
+                <td style="border-bottom: 1px solid #ddd; text-align: right; font-weight: bold; font-size: 16px;">${live_equity:.2f}</td>
             </tr>
             <tr>
                 <td style="border-bottom: 1px solid #ddd; font-weight: bold; color: #555;">Cash Balance (Dry Powder)</td>
@@ -422,8 +485,8 @@ def send_daily_summary():
             </tr>
             <tr style="background: #f8f9fa;">
                 <td style="font-weight: bold;">Total Return</td>
-                <td style="text-align: right; font-weight: bold; color: {'#27ae60' if state['equity'] >= INITIAL_BALANCE else '#c0392b'};">
-                    {'+' if state['equity'] >= INITIAL_BALANCE else ''}{round(((state['equity'] - INITIAL_BALANCE)/INITIAL_BALANCE)*100, 2)}%
+                <td style="text-align: right; font-weight: bold; color: {'#27ae60' if live_equity >= INITIAL_BALANCE else '#c0392b'};">
+                    {'+' if live_equity >= INITIAL_BALANCE else ''}{round(((live_equity - INITIAL_BALANCE)/INITIAL_BALANCE)*100, 2)}%
                 </td>
             </tr>
         </table>
@@ -467,12 +530,13 @@ def run_daily_ai_management(force=False, manual_profile=None):
         symbols_to_check = list(state["positions"].keys())
         research_symbols = []
         for row in ws.iter_rows(min_row=2, values_only=True):
-            if row[3]: research_symbols.append(row[3])
+            if row[3] and str(row[20] or '') in ('1', 'OK', 1):
+                research_symbols.append(row[3])
             
         queued = state.get("queued_orders", [])
         queued_syms = [q["symbol"] for q in queued]
         
-        all_syms = list(set(symbols_to_check + research_symbols[:50] + queued_syms))
+        all_syms = list(set(symbols_to_check + research_symbols + queued_syms))
         prices = get_live_prices(all_syms)
         
         # --- Price Source Gate ---
@@ -622,33 +686,38 @@ def run_daily_ai_management(force=False, manual_profile=None):
             
             top_buys.sort(key=lambda x: x["total"], reverse=True)
             
-            for buy in top_buys[:available_slots]:
-                # Re-check cash buffer before buying
-                if state["balance"] - (int((state["balance"] / available_slots) // buy["price"]) * buy["price"]) >= min_cash_required:
+            buys_executed = 0
+            for buy in top_buys:
+                if buys_executed >= available_slots:
+                    break
+                    
+                # Re-calculate cash buffer dynamically based on remaining available slots
+                current_available = available_slots - buys_executed
+                cash_per_buy = (state["balance"] - min_cash_required) / current_available
+                qty = int(cash_per_buy // buy["price"])
+                if qty > 0:
                     is_verified, v_msg = backtrack_verify(buy["sym"])
                     if not is_verified:
                         print(f"🛑 AI BUY REJECTED: {buy['sym']} - {v_msg}")
                         continue
 
-                    cash_per_buy = (state["balance"] - min_cash_required) / available_slots
-                    qty = int(cash_per_buy // buy["price"])
-                    if qty > 0:
-                        cost = qty * buy["price"]
-                        state["balance"] -= cost
-                        
-                        atr = risk_utils.calculate_atr(buy["sym"])
-                        if atr and atr > 0:
-                            stop_loss = round(buy["price"] - (rules["atr_multiplier"] * atr), 2)
-                            stop_desc = f"ATR-based Stop: ${stop_loss}{buy.get('bottom_desc', '')}"
-                        else:
-                            stop_loss = round(buy["price"] * 0.92, 2)
-                            stop_desc = f"8% Fallback{buy.get('bottom_desc', '')}"
+                    cost = qty * buy["price"]
+                    state["balance"] -= cost
+                    
+                    atr = risk_utils.calculate_atr(buy["sym"])
+                    if atr and atr > 0:
+                        stop_loss = round(buy["price"] - (rules["atr_multiplier"] * atr), 2)
+                        stop_desc = f"ATR-based Stop: ${stop_loss}{buy.get('bottom_desc', '')}"
+                    else:
+                        stop_loss = round(buy["price"] * 0.92, 2)
+                        stop_desc = f"8% Fallback{buy.get('bottom_desc', '')}"
                             
-                        state["positions"][buy["sym"]] = {"qty": qty, "cost": buy["price"], "stop_loss": stop_loss}
-                        tx = {"date": today, "time": now_time, "type": "BUY", "symbol": buy["sym"], "price": buy["price"], "qty": qty}
-                        state["history"].append(tx)
-                        new_transactions.append(tx)
-                        print(f"🤖 AI LIVE BUY: {qty} shares of {buy['sym']} at ${buy['price']} ({stop_desc})")
+                    state["positions"][buy["sym"]] = {"qty": qty, "cost": buy["price"], "stop_loss": stop_loss}
+                    tx = {"date": today, "time": now_time, "type": "BUY", "symbol": buy["sym"], "price": buy["price"], "qty": qty}
+                    state["history"].append(tx)
+                    new_transactions.append(tx)
+                    buys_executed += 1
+                    print(f"🤖 AI LIVE BUY: {qty} shares of {buy['sym']} at ${buy['price']} ({stop_desc})")
 
     except Exception as e:
         print(f"⚠️ SCRIPT ERROR: {e}")
@@ -678,16 +747,41 @@ def deduct_operational_costs(amount):
 
 def show_report():
     state = load_game()
+    
+    # Dynamically compute the equity using latest available prices from workbook
+    positions = state.get("positions", {})
+    live_prices = {}
+    
+    try:
+        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
+        ws = wb["Research"]
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            sym = row[3]
+            if sym in positions:
+                live_prices[sym] = row[10]
+        wb.close()
+    except Exception:
+        pass
+        
+    for sym in positions:
+        if sym not in live_prices or not live_prices[sym]:
+            live_prices[sym] = positions[sym]["cost"]
+            
+    live_equity = state.get("balance", 0.0)
+    for sym, pos in positions.items():
+        live_equity += pos["qty"] * live_prices.get(sym, pos["cost"])
+        
     print("--- 🤖 AI PORTFOLIO MANAGER REPORT ---")
     print(f"Active Strategy: {state.get('profile', 'BALANCED')}")
-    print(f"Current Equity:  ${state['equity']}")
+    print(f"Current Equity:  ${round(live_equity, 2)}")
     print(f"Cash Balance:    ${round(state['balance'], 2)}")
     print(f"Total Ops Cost:  ${state.get('total_ops_cost', 0)}")
-    print(f"Open Positions:  {len(state['positions'])}")
-    for sym, pos in state["positions"].items():
-        print(f"  - {sym}: {pos['qty']} @ ${pos['cost']} (Stop: ${pos.get('stop_loss', 'N/A')})")
+    print(f"Open Positions:  {len(positions)}")
+    for sym, pos in positions.items():
+        cur_px = live_prices.get(sym, pos['cost'])
+        print(f"  - {sym}: {pos['qty']} @ ${pos['cost']} (Current: ${cur_px:.2f}, Stop: ${pos.get('stop_loss', 'N/A')})")
     
-    profit = state['equity'] - INITIAL_BALANCE
+    profit = live_equity - INITIAL_BALANCE
     print(f"Net Profit:      ${round(profit, 2)} ({round((profit/INITIAL_BALANCE)*100, 2)}%)")
     target = INITIAL_BALANCE * 2
     days_elapsed = (datetime.date.today() - datetime.datetime.strptime(state["start_date"], "%Y-%m-%d").date()).days
