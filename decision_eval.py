@@ -21,16 +21,24 @@ import sell_rules
 _DIR = Path(__file__).resolve().parent
 LOG = _DIR / "Data" / "decision_log.jsonl"
 OHLCV_DIR = _DIR / "Data" / "Symbol_full"
+_MAX_LOG_LINES = 5000   # bound the append-only log; keep the most recent decisions
 
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 
 def build_entry(symbol, price, cost, stop_loss, s10, l60, sma50=None,
-                pgr=None, patterns=None, date=None, run_shadow=True):
-    """Compute the deterministic action and (optionally) shadow AI verdicts from
-    every enabled provider, returning one loggable decision record."""
+                pgr=None, patterns=None, date=None, run_shadow=None):
+    """Compute the deterministic action (the single source of truth for the caller)
+    and, when it's an exit candidate, shadow AI verdicts from every enabled provider.
+    Returns one loggable decision record.
+
+    run_shadow: None = auto (shadow only when the action isn't HOLD), or force with
+    True/False. The reference price is the live decision-time quote — the same price
+    the sim would transact at — measured later against the forward daily close."""
     action, reason = sell_rules.exit_decision(
         price=price, cost=cost, stop_loss=stop_loss, s10=s10, l60=l60, sma50=sma50)
+    if run_shadow is None:
+        run_shadow = (action != "HOLD")
     pnl_pct = ((price - cost) / cost * 100) if (price and cost) else None
     entry = {
         "date": date, "symbol": symbol, "price": price, "cost": cost,
@@ -58,8 +66,20 @@ def log_decisions(entries, path=LOG):
         with open(path, "a", encoding="utf-8") as f:
             for e in entries:
                 f.write(json.dumps(e) + "\n")
+        _trim_log(path)
     except Exception as e:
         print(f"[decision_eval] log write failed: {e}")
+
+
+def _trim_log(path, max_lines=_MAX_LOG_LINES):
+    """Keep the append-only log bounded to the most recent max_lines so it can't
+    grow without limit. No-op while under the cap."""
+    with open(path, encoding="utf-8") as f:
+        lines = f.readlines()
+    if len(lines) <= max_lines:
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(lines[-max_lines:])
 
 
 def read_log(path=LOG):

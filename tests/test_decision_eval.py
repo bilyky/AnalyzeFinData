@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import decision_eval as de
@@ -68,6 +69,41 @@ class TestBuildEntry(unittest.TestCase):
         e = de.build_entry("XXX", price=49, cost=60, stop_loss=50,
                            s10=0, l60=0, date="2026-06-01", run_shadow=False)
         self.assertEqual(e["rules_action"], "SELL")
+
+    def test_auto_shadow_skips_ai_on_hold(self):
+        # run_shadow=None + a HOLD action must make zero AI calls.
+        with mock.patch("ai_client.enabled_providers") as ep:
+            e = de.build_entry("AAA", price=100, cost=90, stop_loss=50,
+                               s10=5, l60=5, date="2026-06-01", run_shadow=None)
+            self.assertEqual(e["rules_action"], "HOLD")
+            self.assertEqual(e["verdicts"], {})
+            ep.assert_not_called()
+
+
+class TestLogTrim(unittest.TestCase):
+    def test_trims_to_cap(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False); tmp.close()
+        try:
+            with open(tmp.name, "w") as f:
+                for i in range(120):
+                    f.write(json.dumps({"symbol": f"S{i}", "date": "2026-06-01"}) + "\n")
+            de._trim_log(tmp.name, max_lines=50)
+            rows = de.read_log(path=tmp.name)
+            self.assertEqual(len(rows), 50)
+            self.assertEqual(rows[0]["symbol"], "S70")   # oldest kept
+            self.assertEqual(rows[-1]["symbol"], "S119")  # newest kept
+        finally:
+            os.unlink(tmp.name)
+
+    def test_no_trim_under_cap(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False); tmp.close()
+        try:
+            with open(tmp.name, "w") as f:
+                f.write(json.dumps({"symbol": "A", "date": "2026-06-01"}) + "\n")
+            de._trim_log(tmp.name, max_lines=50)
+            self.assertEqual(len(de.read_log(path=tmp.name)), 1)
+        finally:
+            os.unlink(tmp.name)
 
 
 class TestForwardClose(unittest.TestCase):

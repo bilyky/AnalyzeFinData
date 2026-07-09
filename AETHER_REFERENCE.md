@@ -80,7 +80,7 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 
 ## 🧪 5. Quality Assurance & Testing Suite
 
-AETHER possesses an automated, rigorous unit-testing suite (**130+ tests** across scoring, sell-rules, config, accounts, auth, and sheet sync) that programmatically verifies the mathematical and operational correctness of all system components.
+AETHER possesses an automated, rigorous unit-testing suite (**187 tests** across scoring, sell-rules, the AI client, the exit-decision scorecard, config, accounts, auth, breadth filter, and sheet sync) that programmatically verifies the mathematical and operational correctness of all system components.
 
 ### 🚀 How to Execute the QA Suite:
 Before committing any code modifications, always execute the full test suite using our virtual environment:

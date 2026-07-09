@@ -175,10 +175,19 @@ AnalyzeFinData/
 ├── organize_symbol_files.py  # Organise cached Symbol/ files
 ├── chaikin_config.json.example
 │
-├── tests/
-│   ├── conftest.py        # make_ohlcv() fixture helper
-│   ├── test_scoring.py    # 43 tests: scoring pure functions
-│   └── test_compute.py    # 25 tests: PowerGauge compute helpers
+├── tests/                 # 187 tests total (python -m unittest discover tests)
+│   ├── conftest.py            # make_ohlcv() fixture helper
+│   ├── test_scoring.py        # scoring pure functions
+│   ├── test_compute.py        # PowerGauge compute helpers
+│   ├── test_sell_rules.py     # unified exit policy (stop > soft > hold)
+│   ├── test_ai_client.py      # configurable multi-provider AI dispatch
+│   ├── test_sell_eval.py      # advisory exit-rubric layer
+│   ├── test_decision_eval.py  # backtracking selector scorecard
+│   ├── test_config.py         # unified config + env overrides
+│   ├── test_accounts.py       # Short_Long accounts parsing
+│   ├── test_server.py         # dashboard API + auth
+│   ├── test_breadth_filter.py # SPY-RSP breadth divergence guard
+│   └── test_short_long_sync.py
 │
 └── Data/                  # gitignored — local data only
     ├── investment.xlsx          # Main workbook (Research + Picks sheets)
@@ -321,7 +330,7 @@ Tests are plain `unittest.TestCase` — no pytest required.
 python -m unittest discover -s tests -v
 ```
 
-Expected output: **68 tests, 0 failures.**
+Expected output: **187 tests, 0 failures.**
 
 ### Run a single file
 
