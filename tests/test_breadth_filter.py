@@ -74,30 +74,32 @@ class TestBreadthFilter(unittest.TestCase):
         self.assertAlmostEqual(score, 10.0, places=1)
 
     def test_trend_score_missing_file(self):
-        # For a non-existent file, should return 0.0 safely
+        # For a non-existent file, return None ("no data"), not a 0.0 score.
         score = ai_portfolio_game.calculate_ticker_trend_score("INVALID_SYMBOL")
-        self.assertEqual(score, 0.0)
+        self.assertIsNone(score)
 
-    def test_regime_downgrade_on_breadth_divergence(self):
-        # Create a mock state_of_the_day.xlsx workbook
+    def _write_spy_row(self, l60=5.0):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Research"
-        ws.append(["spacer"] * 30) # Header row
-        
-        # Append a SPY row indicating AGGRESSIVE trend (long-term l60 = 5.0)
+        ws.append(["spacer"] * 30)          # header row
         spy_row = [None] * 30
         spy_row[3] = "SPY"
-        spy_row[25] = 5.0 # l60 score
+        spy_row[25] = l60                   # l60 score
         ws.append(spy_row)
         wb.save(ai_portfolio_game.XLSX_FILE)
-        
-        # Run market regime.
-        # Base profile should be AGGRESSIVE (since l60 is 5.0).
-        # But SPY has +10.0 score and RSP has flat score (not 10.0).
-        # Divergence should trigger a downgrade from AGGRESSIVE to BALANCED.
-        profile = ai_portfolio_game.get_market_regime()
-        self.assertEqual(profile, "BALANCED")
+
+    def test_regime_downgrade_on_breadth_divergence(self):
+        # Base profile AGGRESSIVE (l60=5.0); SPY rising (+10) vs flat RSP -> wide
+        # divergence -> downgrade AGGRESSIVE -> BALANCED.
+        self._write_spy_row(l60=5.0)
+        self.assertEqual(ai_portfolio_game.get_market_regime(), "BALANCED")
+
+    def test_regime_not_downgraded_when_rsp_cache_missing(self):
+        # RSP cache absent -> rsp_score None -> breadth skipped, base profile kept.
+        os.remove(self.rsp_path)
+        self._write_spy_row(l60=5.0)
+        self.assertEqual(ai_portfolio_game.get_market_regime(), "AGGRESSIVE")
 
 if __name__ == "__main__":
     unittest.main()

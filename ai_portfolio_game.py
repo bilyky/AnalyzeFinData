@@ -92,36 +92,40 @@ def is_market_open():
     else:
         return False, f"Market is Closed. (Current EST: {now.strftime('%H:%M')})"
 
-def calculate_ticker_trend_score(symbol: str) -> float:
+def calculate_ticker_trend_score(symbol: str):
     """
     Calculate a normalized, standardized trend score in [-10.0, +10.0] for a symbol
     based on its price relative to its 20, 50, and 200 daily SMAs.
+
+    Returns None when the OHLCV cache is missing or has < 200 days — a distinct
+    "no data" signal, not a 0.0 score, so the breadth filter never treats an absent
+    cache as a flat market (Zero-Trust).
     """
     try:
         path = XLSX_FILE.parent / "Data" / "Symbol_full" / f"{symbol}_daily.json"
         if not path.exists():
-            return 0.0
+            return None
         with open(path) as f:
             ts = json.load(f).get("Time Series (Daily)", {})
         dates = sorted(ts.keys())
         if len(dates) < 200:
-            return 0.0
-            
+            return None
+
         closes = [float(ts[d]["4. close"]) for d in dates]
         sma20 = sum(closes[-20:]) / 20
         sma50 = sum(closes[-50:]) / 50
         sma200 = sum(closes[-200:]) / 200
         current_price = closes[-1]
-        
+
         s_20 = 2.5 if current_price > sma20 else -2.5
         s_50 = 2.5 if current_price > sma50 else -2.5
         s_200 = 2.5 if current_price > sma200 else -2.5
         s_cross1 = 1.25 if sma20 > sma50 else -1.25
         s_cross2 = 1.25 if sma50 > sma200 else -1.25
-        
+
         return s_20 + s_50 + s_200 + s_cross1 + s_cross2
     except Exception:
-        return 0.0
+        return None
 
 def get_market_regime():
     """Query SPY momentum to dynamically determine the best strategy profile, adjusting for breadth divergence."""
@@ -151,8 +155,16 @@ def get_market_regime():
     try:
         spy_score = calculate_ticker_trend_score("SPY")
         rsp_score = calculate_ticker_trend_score("RSP")
+        # Zero-Trust: only judge breadth when BOTH series have enough history. A
+        # missing/short cache (score None) must not fake a divergence — e.g. absent
+        # RSP data would otherwise read as a large SPY-RSP gap and force a spurious
+        # defensive downgrade.
+        if spy_score is None or rsp_score is None:
+            print(f"  [Breadth] Skipped — insufficient SMA history "
+                  f"(SPY={spy_score}, RSP={rsp_score}).")
+            return base_profile
         delta = spy_score - rsp_score
-        
+
         if delta > 4.0:
             print(f"⚠️ [BREADTH ALERT] SPY-RSP Divergence is high: {delta:.2f} (SPY: {spy_score:.1f}, RSP: {rsp_score:.1f})")
             if base_profile == "AGGRESSIVE":
