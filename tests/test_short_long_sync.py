@@ -65,7 +65,7 @@ class TestSellRebuyDetection(unittest.TestCase):
 
         positions = [{"symbol": "AAPL", "qty": 10, "cost": 182.0,
                       "price": 182.0, "mval": 1820.0, "date_acquired": new_date,
-                      "account_last4": "0053"}]
+                      "account_last4": "ACCT_A"}]
 
         update_short_long_scores(wb, {}, {}, positions)
 
@@ -84,7 +84,7 @@ class TestSellRebuyDetection(unittest.TestCase):
 
         positions = [{"symbol": "MSFT", "qty": 5, "cost": 400.0,
                       "price": 425.0, "mval": 2125.0, "date_acquired": old_date,
-                      "account_last4": "0053"}]
+                      "account_last4": "ACCT_A"}]
 
         update_short_long_scores(wb, {}, {}, positions)
 
@@ -110,7 +110,7 @@ class TestSellRebuyDetection(unittest.TestCase):
 
         positions = [{"symbol": "NVDA", "qty": 3, "cost": 900.0,
                       "price": 910.0, "mval": 2730.0, "date_acquired": acq,
-                      "account_last4": "0053"}]
+                      "account_last4": "ACCT_A"}]
 
         update_short_long_scores(wb, {}, {}, positions)
 
@@ -126,7 +126,7 @@ class TestSellRebuyDetection(unittest.TestCase):
 
         positions = [{"symbol": "AMD", "qty": 5, "cost": 120.0,
                       "price": 125.0, "mval": 625.0, "date_acquired": None,
-                      "account_last4": "0053"}]
+                      "account_last4": "ACCT_A"}]
 
         update_short_long_scores(wb, {}, {}, positions)
 

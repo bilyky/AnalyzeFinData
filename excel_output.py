@@ -710,8 +710,8 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
     """Sync the Short_Long sheet with E*TRADE positions and write score columns Q-W.
 
     Two account-based tables separated by exactly 3 blank rows:
-    - Account 0053 (ACCT_T1) → top table
-    - Account 1315 (ACCT_T2) → bottom table
+    - First real account (ACCT_T1) → top table
+    - Second real account (ACCT_T2) → bottom table
     - User notes below T2 are never touched.
     """
     import bisect

@@ -42,7 +42,7 @@ class TestReadAccounts(unittest.TestCase):
     def setUp(self):
         self._orig_xlsx = data_api._XLSX
         self._orig_real_acct_ids = data_api._real_acct_ids
-        data_api._real_acct_ids = lambda: ["0053", "1315"]
+        data_api._real_acct_ids = lambda: ["ACCT_A", "ACCT_B"]
         data_api._cache.clear()
         self.tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         self.tmp.close()
@@ -58,22 +58,22 @@ class TestReadAccounts(unittest.TestCase):
     def test_three_accounts_returned(self):
         accts = data_api.read_accounts()["accounts"]
         ids = [a["id"] for a in accts]
-        self.assertEqual(ids, ["0053", "1315", "game"])
+        self.assertEqual(ids, ["ACCT_A", "ACCT_B", "game"])
 
     def test_real_account_types_and_counts(self):
         accts = {a["id"]: a for a in data_api.read_accounts()["accounts"]}
-        self.assertEqual(accts["0053"]["type"], "real")
-        self.assertEqual(accts["0053"]["count"], 2)   # PATH, EVTV
-        self.assertEqual(accts["1315"]["count"], 1)   # PRTS (leading blank skipped)
+        self.assertEqual(accts["ACCT_A"]["type"], "real")
+        self.assertEqual(accts["ACCT_A"]["count"], 2)   # PATH, EVTV
+        self.assertEqual(accts["ACCT_B"]["count"], 1)   # PRTS (leading blank skipped)
 
     def test_leading_blank_in_second_table_skipped(self):
         accts = {a["id"]: a for a in data_api.read_accounts()["accounts"]}
-        syms = [h["symbol"] for h in accts["1315"]["holdings"]]
+        syms = [h["symbol"] for h in accts["ACCT_B"]["holdings"]]
         self.assertEqual(syms, ["PRTS"])
 
     def test_pnl_and_total_computed(self):
         accts = {a["id"]: a for a in data_api.read_accounts()["accounts"]}
-        path = accts["0053"]["holdings"][0]
+        path = accts["ACCT_A"]["holdings"][0]
         self.assertEqual(path["symbol"], "PATH")
         self.assertAlmostEqual(path["pnl"], (20.0 - 18.7) * 56, places=2)
         self.assertEqual(path["total"], 18.0)          # 8.5 + 9.5
