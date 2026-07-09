@@ -57,5 +57,32 @@ class TestGetLivePricesPartialFill(unittest.TestCase):
         goog.assert_not_called()
 
 
+class TestSummaryEquityPersistence(unittest.TestCase):
+    """send_daily_summary must refresh stored equity only when fully priced —
+    never overwrite it with a cost/workbook-fallback estimate."""
+
+    def _run(self, live_prices):
+        state = {"balance": 1000.0, "positions": {"AAA": {"qty": 10, "cost": 5.0}},
+                 "equity": 9999.0, "history": [], "start_date": "2026-01-01",
+                 "profile": "BALANCED"}
+        saved = {}
+        with mock.patch.object(game, "load_game", return_value=state), \
+             mock.patch.object(game, "get_live_prices", return_value=dict(live_prices)), \
+             mock.patch.object(game, "save_game", side_effect=lambda s: saved.update({"equity": s["equity"]})), \
+             mock.patch.object(game.openpyxl, "load_workbook", side_effect=Exception("no wb")), \
+             mock.patch("notify.send_email"):
+            game.send_daily_summary()
+        return state, saved
+
+    def test_unpriced_does_not_persist_equity(self):
+        state, saved = self._run({})           # no live quote -> cost fallback
+        self.assertNotIn("equity", saved)      # save_game not called with a new equity
+        self.assertEqual(state["equity"], 9999.0)  # stored value left intact
+
+    def test_fully_priced_persists_equity(self):
+        state, saved = self._run({"AAA": 6.0})  # real quote
+        self.assertEqual(saved.get("equity"), 1000.0 + 10 * 6.0)
+
+
 if __name__ == "__main__":
     unittest.main()

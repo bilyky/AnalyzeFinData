@@ -412,7 +412,11 @@ def send_daily_summary():
     # Fetch live quotes for open positions to show accurate daily values
     positions = state.get("positions", {})
     live_prices = get_live_prices(list(positions.keys()))
-    
+    # Track which positions had a genuine live quote; if any needed a workbook/cost
+    # fallback, the equity below is an estimate and must not overwrite stored equity.
+    fully_priced = all(sym in live_prices and live_prices[sym] and live_prices[sym] > 0
+                       for sym in positions)
+
     # Standardize fallback to workbook close prices if E*TRADE renewal fails (e.g. on weekends)
     if not live_prices or any(sym not in live_prices for sym in positions):
         try:
@@ -461,9 +465,13 @@ def send_daily_summary():
     else:
         pos_table_rows = "<tr><td colspan='6' style='padding: 15px; text-align: center; color: #888;'>No open positions currently.</td></tr>"
 
-    # Synchronize the final calculated closing equity back to the JSON state file so it stays updated
-    state["equity"] = round(live_equity, 2)
-    save_game(state)
+    # Keep the dashboard's stored equity fresh — but only when every position had a
+    # real live quote. Persisting a cost/workbook-fallback estimate here would let a
+    # weekend/no-quote run overwrite the authoritative equity that read_portfolio
+    # surfaces. On a partial-priced run, leave the last good value untouched.
+    if fully_priced:
+        state["equity"] = round(live_equity, 2)
+        save_game(state)
 
     html = f"""
     <html>
