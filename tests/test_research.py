@@ -19,6 +19,8 @@ def _row(**kw):
     r[m["sym"]] = kw.get("sym")
     r[m["industry"]] = kw.get("industry")
     r[m["pgr"]] = kw.get("pgr")
+    r[m["prev_pgr"]] = kw.get("prev_pgr")
+    r[m["ind_strength"]] = kw.get("ind_strength")
     r[m["setup"]] = kw.get("setup")
     r[m["winpct"]] = kw.get("winpct")
     r[m["money_flow"]] = kw.get("money_flow")
@@ -34,7 +36,8 @@ def _build(path):
     ws = wb.active
     ws.title = "Research"
     ws.append(["Rank", None, None, "Symb"] + [None] * 23)   # header row
-    ws.append(_row(sym="AAA", industry="Software", pgr="Bu+", setup=1, winpct=0.643,
+    ws.append(_row(sym="AAA", industry="Software", pgr="Bu+", prev_pgr="Bu",
+                   ind_strength="Strong", setup=1, winpct=0.643,
                    money_flow="Strong", lt_trend="Weak", s10=4.0, l60=6.0, patterns="MACD+"))
     ws.append(_row(sym="BBB", industry="Energy", pgr="Be-", setup=0, winpct=0.463,
                    money_flow="Neutral", lt_trend="Strong", s10=-3.0, l60=-4.0))
@@ -76,6 +79,12 @@ class TestReadResearch(unittest.TestCase):
         aaa = next(r for r in data_api.read_research()["rows"] if r["symbol"] == "AAA")
         self.assertEqual(aaa["money_flow"], "Strong")     # not coerced to None
         self.assertEqual(aaa["lt_trend"], "Weak")
+
+    def test_pgr_columns_mapped(self):
+        aaa = next(r for r in data_api.read_research()["rows"] if r["symbol"] == "AAA")
+        self.assertEqual(aaa["pgr"], "Bu+")
+        self.assertEqual(aaa["prev_pgr"], "Bu")
+        self.assertEqual(aaa["industry_strength"], "Strong")
 
     def test_summary_counts(self):
         s = data_api.read_research()["summary"]

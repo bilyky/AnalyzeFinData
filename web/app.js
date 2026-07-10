@@ -593,7 +593,9 @@ function renderResearch() {
         <tr>
             <td class="font-semibold">${r.symbol}</td>
             <td class="text-xs mut">${r.industry || "—"}</td>
+            <td class="text-xs">${r.industry_strength || "—"}</td>
             <td>${r.pgr || "—"}</td>
+            <td class="text-xs mut">${r.prev_pgr || "—"}</td>
             <td class="text-right ${cls(r.s10)}">${num(r.s10, 1)}</td>
             <td class="text-right ${cls(r.l60)}">${num(r.l60, 1)}</td>
             <td class="text-right font-semibold ${cls(r.combined)}">${num(r.combined, 1)}</td>
@@ -609,7 +611,7 @@ function renderResearch() {
             <td class="text-right">${num(r.risk_ratio, 2)}</td>
             <td>${renderPatternsHTML(r.patterns)}</td>
         </tr>`).join("")
-        : `<tr><td colspan="17" class="text-center text-slate-500 py-6">No matching symbols.</td></tr>`;
+        : `<tr><td colspan="19" class="text-center text-slate-500 py-6">No matching symbols.</td></tr>`;
     $("research-count").textContent = `${rows.length} of ${researchRows.length} symbols`;
 }
 
