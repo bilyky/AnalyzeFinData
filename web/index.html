@@ -44,6 +44,7 @@
         </div>
         <nav class="max-w-7xl mx-auto px-4 flex gap-1 text-sm">
             <button data-tab="dashboard" class="tab-btn px-4 py-2 border-b-2 border-transparent">Dashboard</button>
+            <button data-tab="research"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Research</button>
             <button data-tab="accounts"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Accounts</button>
             <button data-tab="rotation"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Rotation</button>
             <button data-tab="history"   class="tab-btn px-4 py-2 border-b-2 border-transparent">History</button>
@@ -99,6 +100,62 @@
                     </thead>
                     <tbody id="positions-body">
                         <tr><td colspan="8" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ======================= RESEARCH TAB ======================= -->
+        <section id="tab-research" class="tab-panel hidden">
+            <div class="flex items-center justify-between flex-wrap gap-3 mb-4">
+                <h2 class="section-title mb-0">Research — Full Screener Output</h2>
+                <div id="research-regime" class="text-sm mut"></div>
+            </div>
+
+            <!-- Summary cards -->
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+                <div class="card"><div class="card-label">Symbols</div><div id="rs-total" class="text-2xl font-bold">—</div></div>
+                <div class="card"><div class="card-label">Valid Setups</div><div id="rs-setups" class="text-2xl font-bold pos">—</div></div>
+                <div class="card"><div class="card-label">Bullish (S10+L60&gt;0)</div><div id="rs-bullish" class="text-2xl font-bold pos">—</div></div>
+                <div class="card"><div class="card-label">Bearish</div><div id="rs-bearish" class="text-2xl font-bold neg">—</div></div>
+                <div class="card"><div class="card-label">Avg Combined</div><div id="rs-avg" class="text-2xl font-bold">—</div></div>
+            </div>
+
+            <!-- Controls -->
+            <div class="flex items-center gap-3 flex-wrap mb-3">
+                <input id="research-search" type="text" placeholder="Filter by symbol or industry…"
+                       class="bg-slate-800 border border-slate-700 rounded px-3 py-1.5 text-sm w-64" />
+                <label class="text-sm mut flex items-center gap-2">
+                    <input id="research-setups-only" type="checkbox" class="accent-blue-500" /> Setups only
+                </label>
+                <span id="research-count" class="text-xs mut ml-auto"></span>
+            </div>
+
+            <div class="overflow-x-auto mb-8">
+                <table class="data-table text-sm" id="research-table">
+                    <thead>
+                        <tr>
+                            <th data-sort="symbol">Symbol</th>
+                            <th data-sort="industry">Industry</th>
+                            <th data-sort="pgr">PGR</th>
+                            <th data-sort="s10" class="text-right">S10</th>
+                            <th data-sort="l60" class="text-right">L60</th>
+                            <th data-sort="combined" class="text-right">Comb.</th>
+                            <th data-sort="status">Status</th>
+                            <th data-sort="setup">Setup</th>
+                            <th data-sort="win_pct" class="text-right">Win%</th>
+                            <th data-sort="buying_ratio" class="text-right">Buy Ratio</th>
+                            <th data-sort="money_flow" class="text-right">Money Flow</th>
+                            <th data-sort="obos" class="text-right">OB/OS</th>
+                            <th data-sort="lt_trend" class="text-right">LT Trend</th>
+                            <th data-sort="price" class="text-right">Price</th>
+                            <th data-sort="stop" class="text-right">Stop</th>
+                            <th data-sort="risk_ratio" class="text-right">R:R</th>
+                            <th data-sort="patterns">Patterns</th>
+                        </tr>
+                    </thead>
+                    <tbody id="research-body">
+                        <tr><td colspan="17" class="text-center text-slate-500 py-6">Loading…</td></tr>
                     </tbody>
                 </table>
             </div>

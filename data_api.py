@@ -133,6 +133,88 @@ def read_reserves() -> dict:
     return _cached("reserves", 60.0, _load)
 
 
+# ── Research sheet (full screener output) ──────────────────────────────────────
+
+# Research sheet column layout (0-based tuple index), matching powergauge.py writes.
+_RESEARCH = {"sym": 3, "industry": 4, "prev_pgr": 5, "pgr": 6, "ind_strength": 7,
+             "stop": 9, "price": 10, "target": 11, "risk_ratio": 12,
+             "lt_trend": 17, "money_flow": 18, "obos": 19, "setup": 20,
+             "buying_ratio": 21, "seasonality": 22, "winpct": 23,
+             "s10": 24, "l60": 25, "patterns": 26}
+
+
+def read_research() -> dict:
+    """All screened symbols from the Research sheet with their full computed fields
+    (PGR, S10/L60, setup flag, buying ratio, money flow, OB/OS, win%, patterns …)
+    plus a summary block. Cached 60s."""
+    def _load():
+        import openpyxl
+        import sell_rules
+        if not _XLSX.exists():
+            return {"rows": [], "summary": {}, "error": "state_of_the_day.xlsx not found"}
+        rows = []
+        wb = None
+        try:
+            wb = openpyxl.load_workbook(_XLSX, read_only=True, data_only=True)
+            ws = wb["Research"]
+            maxi = max(_RESEARCH.values())
+            for r in ws.iter_rows(min_row=2, values_only=True):
+                if len(r) <= maxi:
+                    continue
+                sym = r[_RESEARCH["sym"]]
+                if not sym or not isinstance(sym, str) or sym.strip().upper() == "SYMB":
+                    continue
+                g = lambda k: r[_RESEARCH[k]]
+                s10, l60 = _f(g("s10")), _f(g("l60"))
+                setup_raw = g("setup")
+                win = _f(g("winpct"))
+                rows.append({
+                    "symbol": sym.strip(),
+                    "industry": g("industry"),
+                    "pgr": g("pgr"), "prev_pgr": g("prev_pgr"),
+                    # These four are categorical text ratings (e.g. Weak/Neutral/Wait),
+                    # not numbers — pass through raw.
+                    "industry_strength": g("ind_strength"),
+                    "lt_trend": g("lt_trend"), "money_flow": g("money_flow"),
+                    "obos": g("obos"),
+                    "price": _f(g("price")), "stop": _f(g("stop")),
+                    "target": _f(g("target")), "risk_ratio": _f(g("risk_ratio")),
+                    "setup": str(setup_raw) in ("1", "OK") or setup_raw == 1,
+                    "buying_ratio": _f(g("buying_ratio")),
+                    "seasonality": _f(g("seasonality")),
+                    "win_pct": round(win * 100, 1) if win is not None else None,
+                    "s10": s10, "l60": l60,
+                    "combined": round((s10 or 0) + (l60 or 0), 1),
+                    "status": sell_rules.status_label(l60),
+                    "patterns": g("patterns") or "",
+                })
+        except Exception as e:
+            return {"rows": [], "summary": {}, "error": str(e)}
+        finally:
+            if wb:
+                wb.close()
+
+        setups = sum(1 for x in rows if x["setup"])
+        bullish = sum(1 for x in rows if x["combined"] > 0)
+        combos = [x["combined"] for x in rows]
+        summary = {
+            "total": len(rows),
+            "setups": setups,
+            "bullish": bullish,
+            "bearish": sum(1 for x in rows if x["combined"] < 0),
+            "avg_combined": round(sum(combos) / len(combos), 2) if combos else 0.0,
+        }
+        try:
+            import autonomous_pipeline as _ap
+            regime, color = _ap.get_market_regime()
+            summary["market_regime"], summary["regime_color"] = regime, color
+        except Exception:
+            summary["market_regime"], summary["regime_color"] = "Unknown", "#7f8c8d"
+        return {"rows": rows, "summary": summary}
+
+    return _cached("research", 60.0, _load)
+
+
 # ── Accounts (2 real from Short_Long sheet + 1 AI game) ────────────────────────
 
 # Short_Long column layout (0-based), matching excel_output.update_short_long_scores.

@@ -547,9 +547,88 @@ async function loadScorecard() {
         : `<tr><td colspan="4" class="text-center text-slate-500 py-6">None in the scored window.</td></tr>`;
 }
 
+// ── Research tab ─────────────────────────────────────────────────────────────
+let researchRows = [];
+let researchSort = { key: "combined", dir: -1 };
+const RESEARCH_TEXT_COLS = ["symbol", "industry", "pgr", "status", "patterns"];
+
+async function loadResearch() {
+    const data = await api("/api/research");
+    researchRows = data.rows || [];
+    const s = data.summary || {};
+    $("rs-total").textContent = s.total ?? "—";
+    $("rs-setups").textContent = s.setups ?? "—";
+    $("rs-bullish").textContent = s.bullish ?? "—";
+    $("rs-bearish").textContent = s.bearish ?? "—";
+    $("rs-avg").textContent = s.avg_combined ?? "—";
+    const rg = $("research-regime");
+    if (s.market_regime) {
+        rg.textContent = "Market Regime: " + s.market_regime;
+        rg.style.color = s.regime_color || "#94a3b8";
+    }
+    if (data.error) $("research-count").textContent = "Error: " + data.error;
+    renderResearch();
+}
+
+function renderResearch() {
+    const q = ($("research-search").value || "").trim().toLowerCase();
+    const setupsOnly = $("research-setups-only").checked;
+    let rows = researchRows.filter((r) =>
+        (!setupsOnly || r.setup) &&
+        (!q || (r.symbol && r.symbol.toLowerCase().includes(q)) ||
+               (r.industry && String(r.industry).toLowerCase().includes(q))));
+
+    const { key, dir } = researchSort;
+    rows = rows.slice().sort((a, b) => {
+        let av = a[key], bv = b[key];
+        if (av == null) av = -Infinity;
+        if (bv == null) bv = -Infinity;
+        if (typeof av === "string" || typeof bv === "string")
+            return dir * String(av).localeCompare(String(bv));
+        return dir * (av - bv);
+    });
+
+    const num = (v, d = 2) => (v == null ? "—" : Number(v).toFixed(d));
+    $("research-body").innerHTML = rows.length ? rows.map((r) => `
+        <tr>
+            <td class="font-semibold">${r.symbol}</td>
+            <td class="text-xs mut">${r.industry || "—"}</td>
+            <td>${r.pgr || "—"}</td>
+            <td class="text-right ${cls(r.s10)}">${num(r.s10, 1)}</td>
+            <td class="text-right ${cls(r.l60)}">${num(r.l60, 1)}</td>
+            <td class="text-right font-semibold ${cls(r.combined)}">${num(r.combined, 1)}</td>
+            <td class="text-xs">${r.status || "—"}</td>
+            <td>${r.setup ? '<span class="pos font-semibold">OK</span>' : '<span class="mut">—</span>'}</td>
+            <td class="text-right">${r.win_pct == null ? "—" : r.win_pct + "%"}</td>
+            <td class="text-right ${cls(r.buying_ratio)}">${num(r.buying_ratio, 1)}</td>
+            <td class="text-right text-xs">${r.money_flow || "—"}</td>
+            <td class="text-right text-xs">${r.obos || "—"}</td>
+            <td class="text-right text-xs">${r.lt_trend || "—"}</td>
+            <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
+            <td class="text-right">${r.stop == null ? "—" : fmt$(r.stop)}</td>
+            <td class="text-right">${num(r.risk_ratio, 2)}</td>
+            <td>${renderPatternsHTML(r.patterns)}</td>
+        </tr>`).join("")
+        : `<tr><td colspan="17" class="text-center text-slate-500 py-6">No matching symbols.</td></tr>`;
+    $("research-count").textContent = `${rows.length} of ${researchRows.length} symbols`;
+}
+
+document.querySelectorAll('#research-table th[data-sort]').forEach((th) => {
+    th.classList.add("cursor-pointer", "select-none");
+    th.addEventListener("click", () => {
+        const key = th.dataset.sort;
+        if (researchSort.key === key) researchSort.dir *= -1;
+        else researchSort = { key, dir: RESEARCH_TEXT_COLS.includes(key) ? 1 : -1 };
+        renderResearch();
+    });
+});
+$("research-search").addEventListener("input", renderResearch);
+$("research-setups-only").addEventListener("change", renderResearch);
+
 // ── Per-tab loader ───────────────────────────────────────────────────────────
 function loadTab(tab) {
     if (tab === "dashboard") loadDashboard();
+    else if (tab === "research") loadResearch();
     else if (tab === "accounts") loadAccounts();
     else if (tab === "rotation") loadRotation();
     else if (tab === "history") loadHistory();
