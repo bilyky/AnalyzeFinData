@@ -285,15 +285,17 @@ async function loadAccounts() {
                  <td class="${cls(l60)}">${l60 == null ? "—" : l60.toFixed(1)}</td>
                  <td class="font-bold ${cls(total)}">${total == null ? "—" : total.toFixed(1)}</td>
                  <td class="text-xs">${h.status || ""}</td>`;
+            const stopTitle = h.stop_source ? `stop source: ${h.stop_source}${h.buy_date ? " (as of " + h.buy_date + ")" : ""}` : "";
+            const tgtTitle = h.target_source ? `target source: ${h.target_source}` : "";
             return `<tr data-acct="${a.id}" data-sym="${sym}" data-buy="${entry ?? ""}" data-qty="${h.qty ?? ""}">
-                <td class="font-semibold">${sym}</td>
+                <td class="font-semibold">${sym}${instrumentBadge(h.instrument)}</td>
                 <td>${h.qty ?? "—"}</td>
                 <td>${fmt$(entry)}</td>
                 <td class="px-live">${fmt$(cur)}</td>
                 <td class="pnl-$ ${cls(h.pnl)}">${fmt$(h.pnl)}</td>
                 <td class="pnl-pct ${cls(h.pnl_pct)}">${fmtPct(h.pnl_pct)}</td>
-                <td>${fmt$(h.stop ?? h.stop_loss)}</td>
-                ${isGame ? `<td>${h.days_held ?? "—"} d</td>` : `<td>${fmt$(h.target)}</td>`}
+                <td class="${weakStop(h, h.stop_source) ? "text-amber-400" : ""}" title="${stopTitle}">${fmt$(h.stop ?? h.stop_loss)}</td>
+                ${isGame ? `<td>${h.days_held ?? "—"} d</td>` : `<td class="${weakStop(h, h.target_source) ? "text-amber-400" : ""}" title="${tgtTitle}">${fmt$(h.target)}</td>`}
                 ${scoreCells}
             </tr>`;
         }).join("");

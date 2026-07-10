@@ -79,6 +79,20 @@ class TestReadAccounts(unittest.TestCase):
         self.assertEqual(path["total"], 18.0)          # 8.5 + 9.5
         self.assertEqual(path["status"], "STRONG HOLD")
 
+    def test_date_str_normalization(self):
+        import datetime
+        self.assertEqual(data_api._to_date_str("2025-06-01"), "2025-06-01")
+        self.assertEqual(data_api._to_date_str(datetime.date(2025, 6, 1)), "2025-06-01")
+        self.assertEqual(data_api._to_date_str(datetime.datetime(2025, 6, 1, 9, 30)), "2025-06-01")
+        self.assertIsNone(data_api._to_date_str(None))
+        # Excel serial 45679 -> a 2025 date
+        self.assertTrue(str(data_api._to_date_str(45679)).startswith("2025"))
+
+    def test_holdings_have_entry_anchored_level_fields(self):
+        h = data_api.read_accounts()["accounts"][0]["holdings"][0]
+        for k in ("buy_date", "stop_source", "target_source", "instrument"):
+            self.assertIn(k, h)
+
     def test_game_account_present(self):
         game = [a for a in data_api.read_accounts()["accounts"] if a["id"] == "game"][0]
         self.assertEqual(game["type"], "game")

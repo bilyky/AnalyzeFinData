@@ -45,9 +45,10 @@ _PCT_FALLBACK   = 0.08  # last-resort stop = price * (1 - 8%)
 STALE_STOP_DAYS = 10    # OHLCV cache older than this -> don't trust swing-low/ATR
 
 
-def _load_ohlcv_series(symbol):
+def _load_ohlcv_series(symbol, as_of=None):
     """(highs, lows, closes, last_date) chronological from the local OHLCV cache;
-    ([], [], [], None) when missing/unreadable."""
+    ([], [], [], None) when missing/unreadable. When as_of ('YYYY-MM-DD') is given,
+    truncate to bars on/before that date (for entry-anchored, as-of-buy-date levels)."""
     path = OHLCV_DIR / f"{symbol}_daily.json"
     if not path.exists():
         return [], [], [], None
@@ -55,6 +56,8 @@ def _load_ohlcv_series(symbol):
         with open(path) as f:
             ts = json.load(f).get("Time Series (Daily)", {})
         dates = sorted(ts.keys())
+        if as_of:
+            dates = [d for d in dates if d <= as_of]
         if not dates:
             return [], [], [], None
         return ([float(ts[d]["2. high"]) for d in dates],
@@ -124,11 +127,13 @@ def detect_support(price, lows, k=PIVOT_K, lookback=PIVOT_LOOKBACK):
 
 
 def resolve_stop_detailed(price, symbol=None, highs=None, lows=None, closes=None,
-                          max_stale_days=STALE_STOP_DAYS, exclude_swing=False):
+                          max_stale_days=STALE_STOP_DAYS, exclude_swing=False, as_of=None):
     """Resolve a stop below `price` and report how it was derived.
 
     exclude_swing=True skips the long swing-low support (used for leveraged/inverse
-    instruments) and goes straight to the ATR stop.
+    instruments) and goes straight to the ATR stop. as_of ('YYYY-MM-DD') computes the
+    level from bars up to that date (entry-anchored held-position stop) and skips the
+    staleness gate — an entry level is historical by design.
 
     Returns {'stop', 'source', 'support', 'age', 'stale'} where source is:
         support — confirmed swing-low (industry standard, preferred)
@@ -147,9 +152,9 @@ def resolve_stop_detailed(price, symbol=None, highs=None, lows=None, closes=None
         return out
 
     if highs is None and lows is None and closes is None and symbol:
-        highs, lows, closes, last = _load_ohlcv_series(symbol)
+        highs, lows, closes, last = _load_ohlcv_series(symbol, as_of=as_of)
         out["age"] = _age_days(last)
-        if out["age"] is None or out["age"] > max_stale_days:
+        if as_of is None and (out["age"] is None or out["age"] > max_stale_days):
             out.update(stop=round(price * (1 - _PCT_FALLBACK), 2), source="stale", stale=True)
             return out
     highs, lows, closes = highs or [], lows or [], closes or []
@@ -208,10 +213,12 @@ def detect_resistance(price, highs, k=PIVOT_K, lookback=PIVOT_LOOKBACK):
 
 
 def resolve_target_detailed(price, symbol=None, highs=None, lows=None, closes=None,
-                            max_stale_days=STALE_STOP_DAYS, exclude_swing=False):
+                            max_stale_days=STALE_STOP_DAYS, exclude_swing=False, as_of=None):
     """Resolve an upside target above `price` and report how it was derived.
 
     exclude_swing=True skips swing-high resistance (leveraged/inverse) -> ATR target.
+    as_of ('YYYY-MM-DD') computes from bars up to that date (entry-anchored) and skips
+    the staleness gate.
 
     Returns {'target', 'source', 'resistance', 'age', 'stale'} where source is:
         resistance — nearest confirmed swing-high (preferred)
@@ -230,9 +237,9 @@ def resolve_target_detailed(price, symbol=None, highs=None, lows=None, closes=No
         return out
 
     if highs is None and lows is None and closes is None and symbol:
-        highs, lows, closes, last = _load_ohlcv_series(symbol)
+        highs, lows, closes, last = _load_ohlcv_series(symbol, as_of=as_of)
         out["age"] = _age_days(last)
-        if out["age"] is None or out["age"] > max_stale_days:
+        if as_of is None and (out["age"] is None or out["age"] > max_stale_days):
             out.update(target=round(price * (1 + _PCT_FALLBACK), 2), source="stale", stale=True)
             return out
     highs, lows, closes = highs or [], lows or [], closes or []

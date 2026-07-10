@@ -113,6 +113,17 @@ class TestResolveStop(unittest.TestCase):
         self.assertTrue(t["stale"])
         self.assertEqual(t["target"], round(100.0 * 1.08, 2))   # +8% off live
 
+    def test_as_of_skips_staleness_and_computes_support(self):
+        # Entry-anchored: even a very old as-of date must NOT trip the staleness gate;
+        # it should compute the confirmed swing low from the as-of series.
+        lows = [100, 99, 98, 90, 98, 99, 100, 101, 102, 103]
+        with mock.patch.object(risk_utils, "_load_ohlcv_series",
+                               return_value=([110] * 10, lows, [100] * 10, "2020-01-01")):
+            d = risk_utils.resolve_stop_detailed(105.0, symbol="OLD", as_of="2020-01-01")
+        self.assertFalse(d["stale"])
+        self.assertEqual(d["source"], "support")
+        self.assertEqual(d["stop"], round(90 * 0.99, 2))
+
     def test_stop_always_below_price(self):
         for s in (risk_utils.resolve_stop(100.0, lows=[95, 96, 97], highs=[101]*3, closes=[100]*3),
                   risk_utils.resolve_stop(100.0)):

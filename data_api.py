@@ -282,8 +282,27 @@ def read_research() -> dict:
 # ── Accounts (2 real from Short_Long sheet + 1 AI game) ────────────────────────
 
 # Short_Long column layout (0-based), matching excel_output.update_short_long_scores.
-_SL = {"sym": 1, "qty": 2, "buy": 3, "top": 4, "target": 5, "stop": 6,
+_SL = {"sym": 1, "qty": 2, "buy": 3, "top": 4, "target": 5, "stop": 6, "buy_date": 10,
        "s10": 16, "l60": 17, "winpct": 18, "status": 19, "in_profit": 22}
+
+
+def _to_date_str(v):
+    """Normalize a Short_Long date cell (Excel serial int, datetime, date, or str)
+    to 'YYYY-MM-DD', or None."""
+    import datetime
+    if v is None:
+        return None
+    if isinstance(v, datetime.datetime):
+        return v.date().isoformat()
+    if isinstance(v, datetime.date):
+        return v.isoformat()
+    if isinstance(v, (int, float)):
+        try:
+            return (datetime.date(1899, 12, 30) + datetime.timedelta(days=int(v))).isoformat()
+        except Exception:
+            return None
+    s = str(v).strip()
+    return s[:10] if s else None
 # The two real E*TRADE accounts (last-4 IDs), top table first. Sourced from config
 # (PII — never hardcode). Falls back to generic T1/T2 labels if unset.
 def _real_acct_ids():
@@ -305,6 +324,8 @@ def read_accounts() -> dict:
     """Return the two real accounts (parsed from the Short_Long sheet's two tables)
     plus the AI game account (ai_portfolio_game.json). Cached 30s."""
     def _load():
+        import risk_utils
+        import instruments
         accounts = []
 
         # ── Real accounts: parse the two Short_Long tables ──────────────────
@@ -332,17 +353,37 @@ def read_accounts() -> dict:
                     started = True
                     buy = _f(r[_SL["buy"]]); top = _f(r[_SL["top"]]); qty = _f(r[_SL["qty"]])
                     s10 = _f(r[_SL["s10"]]); l60 = _f(r[_SL["l60"]])
+                    buy_date = _to_date_str(r[_SL["buy_date"]] if len(r) > _SL["buy_date"] else None)
                     pnl = pnl_pct = None
                     if buy and top and qty:
                         pnl = round((top - buy) * qty, 2)
                         pnl_pct = round((top - buy) / buy * 100, 2)
+                    # Held-position stop/target are ENTRY-anchored: computed once from
+                    # the confirmed swing low/high as of the buy date (not re-derived
+                    # from today's price). Falls back to the sheet's stored value.
+                    excl = instruments.is_excluded(sym)
+                    stop = _f(r[_SL["stop"]]); target = _f(r[_SL["target"]])
+                    stop_source = target_source = "sheet"
+                    if buy:
+                        sd = risk_utils.resolve_stop_detailed(buy, symbol=sym, as_of=buy_date,
+                                                              exclude_swing=excl)
+                        if sd["stop"] is not None:
+                            stop, stop_source = sd["stop"], sd["source"]
+                        td = risk_utils.resolve_target_detailed(buy, symbol=sym, as_of=buy_date,
+                                                                exclude_swing=excl)
+                        if td["target"] is not None:
+                            target, target_source = td["target"], td["source"]
                     holdings.append({
                         "symbol":    sym,
                         "qty":       qty,
                         "buy":       buy,
+                        "buy_date":  buy_date,
                         "current":   top,     # sheet's last price; live-refreshed client-side
-                        "target":    _f(r[_SL["target"]]),
-                        "stop":      _f(r[_SL["stop"]]),
+                        "target":    target,
+                        "target_source": target_source,
+                        "stop":      stop,
+                        "stop_source": stop_source,
+                        "instrument": instruments.classify(sym),
                         "s10":       s10,
                         "l60":       l60,
                         "total":     round((s10 or 0) + (l60 or 0), 1),
