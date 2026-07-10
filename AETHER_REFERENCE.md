@@ -38,6 +38,7 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 *   **`buying_ratio` (BR) Model (`powergauge.py`):** Compiles Chaikin PGR, sub-category ratings, relative volume, OB/OS, Long-Term Trend, Money Flow, and weekly seasonality into a consolidated score in `[-10.0, +10.0]`.
 *   **`S10` Short-Term Entry Score (`scoring.py`):** Calculates entry quality over a 10-day horizon (`[-10.0, +10.0]`). Compiles Relative Volume, OB/OS, Money Flow, contrarian Industry Strength, contrarian Long-Term Trend, Seasonality, Market Regime, Fibonacci, RSI Divergence, and pattern overlays.
 *   **`L60` Long-Term Position Score (`scoring.py`):** Measures intermediate-to-long-term trend durability over a 60-day horizon (`[-10.0, +10.0]`). Focuses on core moving average alignments and primary trend strength.
+*   **SPY-RSP Breadth Divergence Guard (Active):** Standardizes a trend score for Cap-Weighted **SPY** and Equal-Weighted **RSP**. If `SPY - RSP > 4.0`, it flags a technology-concentrated, narrow market top and automatically downgrades the active risk profile by one level (e.g. `BALANCED` ➡️ `DEFENSIVE`).
 *   **Weekly Seasonality Detection Engine (`scoring.py`):** Groups historical daily closing prices over 25 years by `(month, week_of_month)`. Calculates the historical 10-day forward return of that calendar week and applies a weighted tailwind (`+1.0`) or headwind (`-1.0`) factor.
 *   **Fibonacci Retracement Score (`scoring.py`):** Maps the current price against key retracement levels (23.6%, 38.2%, 50.0%, 61.8%) computed from historical high-low channels.
 *   **RSI Divergence Engine (`scoring.py`):** Detects classic bullish and bearish divergences between price and RSI(14) to identify short-term momentum exhaustion and trend exhaustion.
@@ -58,12 +59,14 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 *   **Unified Exit Policy (`sell_rules.exit_decision`):** Single source of truth for sell/status decisions — a hard ATR stop-loss floor (a static `price <= stop` check, now **enforced**; 1.5/2.5/3.5×ATR by profile, cost×0.92 fallback) always wins, then a soft momentum signal (S10+L60<0), then hold.
 *   **Flower Protection (Peter Lynch):** A soft exit on a position that is in profit AND above its 50-day MA is downgraded to REVIEW instead of SELL — winners aren't dumped on a momentum dip. Only ever overrides the soft signal, never the hard stop.
 *   **The "Catastrophic Gap Guard" (CNXC Trap Protection):** Instantly rejects any BUY order if today's live price is more than 8% below yesterday's workbook close, protecting capital from waterfall crashes on earnings panics.
+*   **The 2.5-Sigma Bubble Guard:** Dynamically calculates any asset's Z-score distance from its 500-day moving average. If the Z-score `> 2.5` (Super-Bubble Zone), the asset is blacklisted from new purchases, avoiding overextended parabolic peaks.
 
 ---
 
 ## 🧱 3. System Resilience & Headless Safety Gates
 
 *   **The "AETHER Healer" (`watchdog.py`):** Headless, synchronously blocking AI self-healing loop. Intercepts script tracebacks, launches Gemini CLI, repairs code defects, and restarts the task while maintaining a `self_healing.lock` circuit breaker.
+*   **Proactive E*TRADE Session Keeper (`watchdog.py`):** The watchdog silently executes E*TRADE access token renewals every 1 hour (PT1H) in the background. This keeps the brokerage session permanently active on their servers, completely avoiding slow interactive browser re-auth runs during active trading hours.
 *   **Windows CP1252 Hardening:** Enforces `SafeStreamWrapper` and OS-level `PYTHONIOENCODING=utf-8` environmental variables to completely prevent legacy Windows console encoding crashes during background Task Scheduler runs.
 *   **The RapidAPI "Content Validation Gate" (`rapidapi.py`):** Verifies that the API response contains valid `'Time Series (Daily)'` data before writing. If it finds a rate limit or API key error message, **it aborts the write, protecting our multi-year historical files from corruption.**
 *   **The E\*TRADE "Always Refresh" Safety Gate:** Forces live HTTP token renewal requests on every single price pull. If token renewal fails headlessly (preventing browser manual inputs), **it immediately raises a RuntimeError and crashes cleanly (Exit 1)** rather than hanging on manual console prompts, allowing the Watchdog to recover.
@@ -80,7 +83,7 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 
 ## 🧪 5. Quality Assurance & Testing Suite
 
-AETHER possesses an automated, rigorous unit-testing suite (**187 tests** across scoring, sell-rules, the AI client, the exit-decision scorecard, config, accounts, auth, breadth filter, and sheet sync) that programmatically verifies the mathematical and operational correctness of all system components.
+AETHER possesses an automated, rigorous unit-testing suite (**204 tests** across scoring, sell-rules, the AI client, the exit-decision scorecard, config, accounts, auth, breadth filter, and sheet sync) that programmatically verifies the mathematical and operational correctness of all system components.
 
 ### 🚀 How to Execute the QA Suite:
 Before committing any code modifications, always execute the full test suite using our virtual environment:
@@ -113,7 +116,7 @@ AETHER's factor weights are fully customizable and backtest-driven:
     We will develop three major quantitative and risk-mitigation modules:
     *   **The Peter Lynch & Trader Vic Engine (`satellite_slot.py`):** Integrates Lynch's "Flower Protection" trailing stops, "Weed Cutter" forced liquidations, and Trader Vic's legendary "1-2-3 Reversal" and "2B Pattern" price action bottom snipers.
     *   **The "Non-Correlated Satellite" Engine:** A dynamic allocation bypass that automatically expands our active position limits from 3 to 4 slots during Defensive regimes *specifically* to capture elite breakouts in low-beta, non-correlated sectors (specifically Biotechnology and Defense).
-    *   **The SPY-RSP Breadth Divergence Filter:** A macro-regime guard that calculates the delta between SPY (Cap-Weighted) and RSP (Equal-Weighted S&P 500). If `SPY_Score - RSP_Score > 4.0` (representing extreme, fragile cap-weight tech concentration), the system will automatically downgrade our strategy profile by one level (e.g. from Balanced to Defensive) to protect our capital from bad market breadth.
+    *   **The SPY-RSP Breadth Divergence Filter & 2.5-Sigma Bubble Guard:** 🚀 **FULLY IMPLEMENTED, TESTED, AND DEPLOYED!** Both macro guards are active under the hood, protecting our capital from top-heavy market breadth anomalies and parabolic, overextended asset bubbles.
 
 6.  **🗓️ Scheduled Milestone: Saturday, July 18, 2026 — The Autonomic Self-Tuning Optimizer & Retrospective (`calibrate_model.py` & `retrospective.py`):**
     We will develop a fully automated self-calibration and learning engine. 
