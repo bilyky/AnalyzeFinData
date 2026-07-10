@@ -49,6 +49,7 @@
             <button data-tab="history"   class="tab-btn px-4 py-2 border-b-2 border-transparent">History</button>
             <button data-tab="scorecard" class="tab-btn px-4 py-2 border-b-2 border-transparent">Scorecard</button>
             <button data-tab="system"    class="tab-btn px-4 py-2 border-b-2 border-transparent">System</button>
+            <button data-tab="about"     class="tab-btn px-4 py-2 border-b-2 border-transparent">About</button>
         </nav>
     </header>
 
@@ -228,6 +229,224 @@
                         <tr><td colspan="4" class="text-center text-slate-500 py-6">Loading…</td></tr>
                     </tbody>
                 </table>
+            </div>
+        </section>
+
+        <!-- ======================= ABOUT TAB ======================= -->
+        <section id="tab-about" class="tab-panel hidden">
+            <div class="space-y-8 max-w-5xl mx-auto mb-12">
+                <!-- Overview Header -->
+                <div class="border border-slate-800 bg-slate-900/40 p-6 rounded-lg backdrop-blur">
+                    <h2 class="text-2xl font-bold text-slate-100 tracking-tight flex items-center gap-2 mb-3">
+                        🛡️ Project AETHER Overview
+                    </h2>
+                    <p class="text-sm text-slate-400 leading-relaxed mb-4">
+                        <b>Project AETHER (Automated Equity Trading & Heuristic Evaluation Routine)</b> is an institutional-grade, self-funding quantitative portfolio management co-pilot. It oversees assets with rigorous, zero-trust capital safety systems, adaptive strategy regimes, and self-healing resilience.
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-center text-xs text-slate-400 font-medium mt-6">
+                        <div class="border border-slate-800 bg-slate-900/60 p-3 rounded">
+                            <span class="block text-purple-400 font-semibold mb-1">REGIME-ADAPTIVE</span>
+                            Sizing & stops auto-scale
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/60 p-3 rounded">
+                            <span class="block text-green-400 font-semibold mb-1">ZERO-TRUST</span>
+                            Loud warnings & safety gates
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/60 p-3 rounded">
+                            <span class="block text-blue-400 font-semibold mb-1">AUTONOMIC HEALER</span>
+                            Proactive 24/7 session keeper
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CATEGORY 1: QUANTITATIVE MODELS -->
+                <div>
+                    <h3 class="text-base font-bold text-slate-200 uppercase tracking-wider border-b border-slate-800 pb-2 mb-4 flex items-center gap-2">
+                        📊 1. Quantitative Models & Scoring Engines
+                    </h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">`buying_ratio` (BR) Model (`powergauge.py`)</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Compiles Chaikin PowerGauge Rating (PGR), sub-category ratings, relative volume, OB/OS oscillators, Long-Term Trend, Money Flow, and weekly seasonality into a unified score in <code>[-10.0, +10.0]</code>.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">`S10` Short-Term Entry Score (`scoring.py`)</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Standardizes short-term entry quality over a 10-day trading horizon. Aggregates Relative Volume, Money Flow, contrarian Industry Strength, Fibonacci retracements, and pattern overlays.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">`L60` Long-Term Trend Score (`scoring.py`)</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Measures intermediate-to-long-term trend strength and durability over a rolling 60-day horizon, focusing on core moving average alignments (SMA 20, 50, 200).
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Weekly Seasonality Detection Engine</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Groups 25 years of historical closes by month and week-of-month, calculating the historical 10-day forward return of that specific calendar week to apply a weighted tailwind or headwind factor.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Fibonacci Channels & RSI Divergence Engines</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Maps price relative to key Fibonacci channels (23.6%, 38.2%, 50.0%, 61.8%) and tracks price-RSI(14) divergences to identify momentum exhaustion and bottoming opportunities.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CATEGORY 2: PATTERN RECOGNITION -->
+                <div>
+                    <h3 class="text-base font-bold text-slate-200 uppercase tracking-wider border-b border-slate-800 pb-2 mb-4 flex items-center gap-2">
+                        🔍 2. Advanced Pattern Recognition Suite
+                    </h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Japanese Candlestick Recognition</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Tracks and aggregates **17 distinct Japanese candlestick patterns** (e.g. Bullish Engulfing, Hammer, Shooting Star) over a rolling 5-day lookback window.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Structural Chart Formations</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Autonomously detects structural chart formations including <b>Head & Shoulders</b>, <b>Double Tops/Bottoms</b>, <b>Cup & Handle</b>, and <b>Bull/Bear Flags</b>.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Momentum Crossover Engine</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Monitors moving average crossings (Golden/Death Crosses) and MACD crossings (signal line and trend crossovers) to lock in entry direction.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Contrarian Calibration Override</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Programmatically negates the combined pattern score (<code>-1.0 * score</code>) because backtests prove highly overbought patterns act as contrarian signals, prioritizing oversold bottoming plays.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CATEGORY 3: RISK MANAGEMENT -->
+                <div>
+                    <h3 class="text-base font-bold text-slate-200 uppercase tracking-wider border-b border-slate-800 pb-2 mb-4 flex items-center gap-2">
+                        🛡️ 3. Risk Management & Exit Heuristics
+                    </h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Adaptive Strategy Profiles</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Scales settings based on SPY momentum: <b>Defensive</b> (max 3 slots, 10% size, 50% cash), <b>Balanced</b> (max 5 slots, 15% size, 20% cash), and <b>Aggressive</b> (max 6 slots, 15% size, 0% cash).
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">`is_bottom_confirmed()` 3-day Slope Trigger</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Computes the first and second derivatives of a stock's 3-day slope to verify that downward selling velocity has flattened and turned positive (average slope &gt; +0.5% and accelerating).
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">SPY-RSP Breadth Divergence Guard</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Monitors the score gap between Cap-Weighted <b>SPY</b> and Equal-Weighted <b>RSP</b>. If delta <code>&gt; 4.0</code>, it flags a fragile, narrow market top and automatically downgrades the risk profile by one level.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">2.5-Sigma Bubble Guard</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Calculates standard deviation distance from the 500-day moving average. If Z-score <code>&gt; 2.5</code>, the stock is blacklisted from buys to avoid deploying cash at overextended bubble peaks.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Unified Exit Policy & Flower Protection</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Hard ATR stop-loss floor (1.5x/2.5x/3.5x ATR) always overrides soft signals. Peter Lynch "Flower Protection" downgrades soft exits on profitable, above-50-DMA winners to REVIEW, avoiding dumping winners.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Catastrophic Gap Guard (CNXC Trap)</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Instantly rejects any buy order if today's price is more than 8% below yesterday's workbook close, protecting capital from waterfall crashes on earnings panics.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">AI Sell & Decision Quality Evaluation (`decision_eval.py`)</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Evaluates exits with a hybrid qualitative LLM rubric (sell_eval.py) combining fundamental risks with charts. Automatically logs, scores, and audits decision quality for both closed trades and active reviews.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CATEGORY 4: SYSTEM RESILIENCE -->
+                <div>
+                    <h3 class="text-base font-bold text-slate-200 uppercase tracking-wider border-b border-slate-800 pb-2 mb-4 flex items-center gap-2">
+                        🧱 4. System Resilience & Headless Safety Gates
+                    </h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">AETHER Healer Watchdog</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Headless background AI self-healing traceback circuit-breaker. Intercepts script crashes, spawns AI debugger to patch code, and restarts tasks safely.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Proactive E*TRADE Session Keeper</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Silent autonomic background keeper running hourly (PT1H). Calls the E*TRADE OAuth renewal endpoint in the background, keeping the session active 24/7 without browser re-auth prompts.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Windows UTF-8 Hardening</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Employs a custom <code>SafeStreamWrapper</code> and OS-level environmental encoding to prevent Windows cp1252 background console crashes during Task Scheduler runs.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Content Validation Gates</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                RapidAPI and E*TRADE parsers verify data structures before saving, instantly aborting if rate limits or empty payloads are detected to protect multi-year historical files.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CATEGORY 5: PRODUCTION INTEGRATIONS -->
+                <div>
+                    <h3 class="text-base font-bold text-slate-200 uppercase tracking-wider border-b border-slate-800 pb-2 mb-4 flex items-center gap-2">
+                        🔌 5. Production & Brokerage Integrations
+                    </h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Real-Account Shadow Copilot</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Logs into your real-money production E*TRADE accounts headlessly, retrieves 44 active positions, cross-references local sheets, and emails beautifully styled HTML buy/sell tickets.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Loud Symbology Exception Warnings</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Unpriced watchlist symbols log severe, uppercase <code>SYMBOLOGY ERROR</code>. This keeps stop checks active for other positions while instantly triggering watchdog email alerts.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Gaps Quote Fallback Scraper</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                If E*TRADE returns partial/empty quotes, the system seamlessly scrapes Google Finance live price elements (span <code>jsname="Pdsbrc"</code>) to fill the gaps.
+                            </p>
+                        </div>
+                        <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">NYSEARCA ETF Exchange Suffixing</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Suffixes international ETFs with NYSEARCA, NASDAQ, NYSE, and AMEX to guarantee complete pricing redundancy when API servers are offline.
+                            </p>
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
     </main>
