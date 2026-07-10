@@ -556,6 +556,22 @@ function industryColor(strength) {
     return "mut";
 }
 
+// PowerGauge ratings, worst -> best. Used to color the prev->current transition.
+const PGR_RANK = { "Be-": 0, "Be": 1, "N/Be": 2, "N": 3, "N/": 3, "N/Bu": 4, "Bu": 5, "Bu+": 6 };
+
+// One cell showing "prev > current"; green if the rating improved, red if it
+// deteriorated, white when unchanged (or shown alone when there's no comparable
+// prior rating).
+function pgrCell(prev, cur) {
+    const c = cur == null ? "" : String(cur);
+    const p = prev == null ? "" : String(prev);
+    if (!c) return '<span class="mut">—</span>';
+    const rc = PGR_RANK[c], rp = PGR_RANK[p];
+    if (rp == null || rc == null || p === c) return `<span>${c}</span>`;
+    const klass = rc > rp ? "pos" : rc < rp ? "neg" : "";
+    return `<span class="${klass}">${p} &gt; ${c}</span>`;
+}
+
 let researchRows = [];
 let researchSort = { key: "combined", dir: -1 };
 const RESEARCH_TEXT_COLS = ["symbol", "industry", "pgr", "status", "patterns"];
@@ -602,8 +618,7 @@ function renderResearch() {
             <td class="font-semibold">${r.symbol}</td>
             <td><div class="truncate text-xs ${industryColor(r.industry_strength)}" style="max-width:70px"
                      title="${(r.industry || "")}${r.industry_strength ? " — " + r.industry_strength : ""}">${r.industry || "—"}</div></td>
-            <td>${r.pgr || "—"}</td>
-            <td class="text-xs mut">${r.prev_pgr || "—"}</td>
+            <td class="text-xs whitespace-nowrap">${pgrCell(r.prev_pgr, r.pgr)}</td>
             <td class="text-right ${cls(r.s10)}">${num(r.s10, 1)}</td>
             <td class="text-right ${cls(r.l60)}">${num(r.l60, 1)}</td>
             <td class="text-right font-semibold ${cls(r.combined)}">${num(r.combined, 1)}</td>
@@ -619,7 +634,7 @@ function renderResearch() {
             <td class="text-right">${num(r.risk_ratio, 2)}</td>
             <td>${renderPatternsHTML(r.patterns)}</td>
         </tr>`).join("")
-        : `<tr><td colspan="18" class="text-center text-slate-500 py-6">No matching symbols.</td></tr>`;
+        : `<tr><td colspan="17" class="text-center text-slate-500 py-6">No matching symbols.</td></tr>`;
     $("research-count").textContent = `${rows.length} of ${researchRows.length} symbols`;
 }
 
