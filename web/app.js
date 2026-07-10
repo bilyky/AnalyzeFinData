@@ -572,9 +572,22 @@ function pgrCell(prev, cur) {
     return `<span class="${klass}">${p} &gt; ${c}</span>`;
 }
 
+// Sort key: PGR sorts by rating rank (not alphabetically); Industry sorts by its
+// strength (Strong > Weak > NA), matching the color it's shown in.
+function researchSortValue(r, key) {
+    if (key === "pgr") { const v = PGR_RANK[String(r.pgr)]; return v == null ? -1 : v; }
+    if (key === "industry") {
+        const s = r.industry_strength;
+        return s === "Strong" ? 3 : s === "Weak" ? 2 : s === "NA" ? 1 : 0;
+    }
+    return r[key];
+}
+
 let researchRows = [];
 let researchSort = { key: "combined", dir: -1 };
-const RESEARCH_TEXT_COLS = ["symbol", "industry", "pgr", "status", "patterns"];
+// Columns that sort as text (ascending default). PGR and Industry sort by numeric
+// rank (see researchSortValue), so they default to descending = best/strongest first.
+const RESEARCH_TEXT_COLS = ["symbol", "status", "patterns"];
 
 async function loadResearch() {
     const data = await api("/api/research");
@@ -604,7 +617,7 @@ function renderResearch() {
 
     const { key, dir } = researchSort;
     rows = rows.slice().sort((a, b) => {
-        let av = a[key], bv = b[key];
+        let av = researchSortValue(a, key), bv = researchSortValue(b, key);
         if (av == null) av = -Infinity;
         if (bv == null) bv = -Infinity;
         if (typeof av === "string" || typeof bv === "string")
