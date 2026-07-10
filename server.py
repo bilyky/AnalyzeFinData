@@ -115,6 +115,18 @@ def create_app():
 
     # ── Static files ──────────────────────────────────────────────────────────
 
+    @app.middleware("http")
+    async def _revalidate_dashboard_assets(request, call_next):
+        """Force the browser to revalidate the dashboard HTML/JS/CSS on every load
+        (ETag/Last-Modified still yield 304s when unchanged). Without this, an edited
+        app.js can be served from cache after a restart, leaving a tab stuck on
+        'Loading…' because the old code lacks the new loader."""
+        resp = await call_next(request)
+        path = request.url.path
+        if path == "/" or path.startswith("/static"):
+            resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
+
     web_dir = _DIR / "web"
     if web_dir.exists():
         app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
