@@ -394,7 +394,7 @@ def get_live_prices(symbols):
             quotes.update(get_google_prices_fallback(missing))
             still_missing = [s for s in missing if s not in quotes or not quotes[s] or quotes[s] <= 0]
             if still_missing:
-                print(f"  [AETHER] ⚠️ No live quote from any source for: {still_missing}")
+                print(f"  [AETHER] SYMBOLOGY ERROR: No live quote from any source for: {still_missing}")
 
         return quotes
     except Exception as e:
@@ -593,8 +593,8 @@ def run_daily_ai_management(force=False, manual_profile=None):
         # cost-based price won't trip a stop) until a quote returns.
         missing_prices = [sym for sym in symbols_to_check if sym not in prices or not prices[sym] or prices[sym] <= 0]
         if missing_prices:
-            print(f"⚠️ [AETHER] No live quote for held positions {missing_prices}; "
-                  f"using cost basis for their equity share and skipping their stop check this run.")
+            print(f"  [AETHER] PORTFOLIO ERROR: No live quote found for held positions {missing_prices}! "
+                  f"Using cost basis for their equity share and skipping their stop check this run.")
 
         state["equity"] = round(_live_equity(state["balance"], state["positions"], prices), 0)
 
