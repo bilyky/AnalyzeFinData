@@ -150,6 +150,7 @@ def read_research() -> dict:
     def _load():
         import openpyxl
         import sell_rules
+        import risk_utils
         if not _XLSX.exists():
             return {"rows": [], "summary": {}, "error": "state_of_the_day.xlsx not found"}
         rows = []
@@ -168,6 +169,12 @@ def read_research() -> dict:
                 s10, l60 = _f(g("s10")), _f(g("l60"))
                 setup_raw = g("setup")
                 win = _f(g("winpct"))
+                price = _f(g("price"))
+                # Prefer the stop already in the sheet; only detect one (swing-low ->
+                # ATR -> 8%) when it's missing/0, so we don't recompute needlessly.
+                sheet_stop = _f(g("stop"))
+                stop = sheet_stop if (sheet_stop and sheet_stop > 0) \
+                    else risk_utils.resolve_stop(price, symbol=sym.strip())
                 rows.append({
                     "symbol": sym.strip(),
                     "industry": g("industry"),
@@ -177,7 +184,7 @@ def read_research() -> dict:
                     "industry_strength": g("ind_strength"),
                     "lt_trend": g("lt_trend"), "money_flow": g("money_flow"),
                     "obos": g("obos"),
-                    "price": _f(g("price")), "stop": _f(g("stop")),
+                    "price": price, "stop": stop,
                     "target": _f(g("target")), "risk_ratio": _f(g("risk_ratio")),
                     "setup": str(setup_raw) in ("1", "OK") or setup_raw == 1,
                     "buying_ratio": _f(g("buying_ratio")),

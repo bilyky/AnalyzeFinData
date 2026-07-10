@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import openpyxl
 
@@ -21,6 +22,8 @@ def _row(**kw):
     r[m["pgr"]] = kw.get("pgr")
     r[m["prev_pgr"]] = kw.get("prev_pgr")
     r[m["ind_strength"]] = kw.get("ind_strength")
+    r[m["price"]] = kw.get("price")
+    r[m["stop"]] = kw.get("stop")
     r[m["setup"]] = kw.get("setup")
     r[m["winpct"]] = kw.get("winpct")
     r[m["money_flow"]] = kw.get("money_flow")
@@ -37,9 +40,10 @@ def _build(path):
     ws.title = "Research"
     ws.append(["Rank", None, None, "Symb"] + [None] * 23)   # header row
     ws.append(_row(sym="AAA", industry="Software", pgr="Bu+", prev_pgr="Bu",
-                   ind_strength="Strong", setup=1, winpct=0.643,
+                   ind_strength="Strong", setup=1, winpct=0.643, price=100.0, stop=90.0,
                    money_flow="Strong", lt_trend="Weak", s10=4.0, l60=6.0, patterns="MACD+"))
     ws.append(_row(sym="BBB", industry="Energy", pgr="Be-", setup=0, winpct=0.463,
+                   price=50.0, stop=0,   # non-setup: no stop in sheet
                    money_flow="Neutral", lt_trend="Strong", s10=-3.0, l60=-4.0))
     wb.save(path)
 
@@ -85,6 +89,16 @@ class TestReadResearch(unittest.TestCase):
         self.assertEqual(aaa["pgr"], "Bu+")
         self.assertEqual(aaa["prev_pgr"], "Bu")
         self.assertEqual(aaa["industry_strength"], "Strong")
+
+    def test_stop_from_sheet_else_computed(self):
+        # AAA has a sheet stop (use it, don't recompute); BBB's is 0 (detect one).
+        with mock.patch("risk_utils.resolve_stop", return_value=44.0) as rs:
+            rows = {r["symbol"]: r for r in data_api.read_research()["rows"]}
+        self.assertEqual(rows["AAA"]["stop"], 90.0)     # straight from the sheet
+        self.assertEqual(rows["BBB"]["stop"], 44.0)     # computed fallback
+        called_syms = [c.kwargs.get("symbol") for c in rs.call_args_list]
+        self.assertIn("BBB", called_syms)               # computed only for the gap
+        self.assertNotIn("AAA", called_syms)            # never recomputed
 
     def test_summary_counts(self):
         s = data_api.read_research()["summary"]

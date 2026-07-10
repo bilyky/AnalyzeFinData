@@ -951,11 +951,14 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         row[6].value = f['pgr']
         row[7].value = power_g.industry_strength
         # row[8] col I: manual price level - preserved
-        # J=stop, L=target: zero when filter failed (False) or no OHLCV (None)
-        row[9].value  = f['stop_price']       if setup_ok is True else 0  # col J
+        # J=stop, L=target, M=risk: written for ALL symbols (not just setups) so the
+        # sheet carries a stop everywhere. stop_price is the swing-low technical stop;
+        # it is 0 only when no recent low sits below price — the dashboard fills those
+        # via risk_utils.resolve_stop (ATR -> 8%). See resolve_stop for the full ladder.
+        row[9].value  = f['stop_price']                                     # col J
         row[10].value = final_price                                         # col K (Overridden)
-        row[11].value = f['prev_move_price']  if setup_ok is True else 0  # col L
-        row[12].value = f['risk_ratio']       if setup_ok is True else 0  # col M
+        row[11].value = f['prev_move_price']                                # col L
+        row[12].value = f['risk_ratio']                                     # col M
         row[13].value = f['prev_move_perc']
         row[14].value = f['prev_percentage']
         row[15].value = power_g.percentage
