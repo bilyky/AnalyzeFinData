@@ -42,6 +42,7 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 *   **Weekly Seasonality Detection Engine (`scoring.py`):** Groups historical daily closing prices over 25 years by `(month, week_of_month)`. Calculates the historical 10-day forward return of that calendar week and applies a weighted tailwind (`+1.0`) or headwind (`-1.0`) factor.
 *   **Fibonacci Retracement Score (`scoring.py`):** Maps the current price against key retracement levels (23.6%, 38.2%, 50.0%, 61.8%) computed from historical high-low channels.
 *   **RSI Divergence Engine (`scoring.py`):** Detects classic bullish and bearish divergences between price and RSI(14) to identify short-term momentum exhaustion and trend exhaustion.
+*   **AI Sell Evaluation Engine (`sell_eval.py` & `prompts/sell_evaluation.md`):** A hybrid qualitative reasoning module that combines an LLM's fundamental analysis of company-specific risks (earnings outlook, structural headwinds, competitive decay) with technical charts to deliver a clear `SELL`, `REDUCE`, or `HOLD` second opinion on active reviews.
 
 ### B. Advanced Pattern Recognition Suite (`patterns.py`)
 *   **Candlestick Pattern Engine:** Tracks and aggregates **17 distinct Japanese candlestick patterns** over a 5-day lookback window.
@@ -68,7 +69,9 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 *   **The "AETHER Healer" (`watchdog.py`):** Headless, synchronously blocking AI self-healing loop. Intercepts script tracebacks, launches Gemini CLI, repairs code defects, and restarts the task while maintaining a `self_healing.lock` circuit breaker.
 *   **Proactive E*TRADE Session Keeper (`watchdog.py`):** The watchdog silently executes E*TRADE access token renewals every 1 hour (PT1H) in the background. This keeps the brokerage session permanently active on their servers, completely avoiding slow interactive browser re-auth runs during active trading hours.
 *   **Windows CP1252 Hardening:** Enforces `SafeStreamWrapper` and OS-level `PYTHONIOENCODING=utf-8` environmental variables to completely prevent legacy Windows console encoding crashes during background Task Scheduler runs.
-*   **The RapidAPI "Content Validation Gate" (`rapidapi.py`):** Verifies that the API response contains valid `'Time Series (Daily)'` data before writing. If it finds a rate limit or API key error message, **it aborts the write, protecting our multi-year historical files from corruption.**
+*   **The RapidAPI "Content Validation & Symbology Gate" (`rapidapi.py`):** 
+    *   *Content Validation:* Verifies that the API response contains valid `'Time Series (Daily)'` data before writing. If it finds a rate limit or API key error, **it aborts the write, protecting our multi-year historical files from corruption.**
+    *   *Symbology Translation:* Transparently maps E*TRADE/Chaikin period symbols to Alpha Vantage-specific standards (e.g. converting `MOG.A` ➡️ `MOG-A` and resolving anomalies like mapping `IAC` ➡️ `IACVV`) during HTTP requests, while saving them under their native period-based file names to ensure 100% database synchronicity.
 *   **The E\*TRADE "Always Refresh" Safety Gate:** Forces live HTTP token renewal requests on every single price pull. If token renewal fails headlessly (preventing browser manual inputs), **it immediately raises a RuntimeError and crashes cleanly (Exit 1)** rather than hanging on manual console prompts, allowing the Watchdog to recover.
 
 ---
