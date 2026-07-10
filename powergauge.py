@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from utils import _to_float
+import risk_utils
 
 from excel_output import (
     write_research_headers      as _write_research_headers,
@@ -110,8 +111,8 @@ _FETCH_WORKERS = int(os.environ.get("CHAIKIN_WORKERS", "10"))
 _SYMBOL_RE = re.compile(r"^[A-Z0-9._\-]+$")
 
 # ── OHLCV / entry-filter parameters ──────────────────────────────────────────
-_STOP_LOOKBACK_DAYS   = 3    # min-low window for stop price
-_TARGET_LOOKBACK_DAYS = 10   # max-high window for target price
+# Stop/target now come from risk_utils.detect_support/detect_resistance (shared with
+# the dashboard); only the trend/direction entry filter is computed here.
 _TREND_SMA_PERIOD     = 20   # SMA period for trend filter
 _DIR_CHECK_DAYS       = 3    # "price above N days ago" direction check
 SESSION_INSTRUCTIONS = """
@@ -755,20 +756,21 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
         if past:
             idx = all_dates.index(past[-1])
 
-            # stop: min low of previous _STOP_LOOKBACK_DAYS trading days (excluding today) × 0.99
-            stop_w = all_dates[max(0, idx - _STOP_LOOKBACK_DAYS): idx]
-            local_low = min((_to_float(ohlcv_ts[d].get('3. low'), 0) for d in stop_w), default=0)
-            raw_stop = round(local_low * 0.99, 2) if local_low else 0
-            stop_price = raw_stop if raw_stop and raw_stop < power_g.price else 0
-
-            # target: _TARGET_LOOKBACK_DAYS high lookback (excluding today) — matches backtest validation
-            tgt_w = all_dates[max(0, idx - _TARGET_LOOKBACK_DAYS): idx]
-            if tgt_w:
-                hi = max((_to_float(ohlcv_ts[d].get('2. high'), 0) for d in tgt_w), default=0)
-                prev_move_price = round(hi, 2) if hi > power_g.price else 0.0
+            # Stop = confirmed swing-low support; target = confirmed swing-high
+            # resistance — the SAME detectors the dashboard uses (risk_utils), so the
+            # sheet and the Research page agree. Levels are computed as-of this bar
+            # (series up to idx, no look-ahead).
+            past_dates = all_dates[:idx + 1]
+            _highs  = [_to_float(ohlcv_ts[d].get('2. high'), 0) for d in past_dates]
+            _lows   = [_to_float(ohlcv_ts[d].get('3. low'), 0) for d in past_dates]
+            _closes = [_to_float(ohlcv_ts[d].get('4. close'), 0) for d in past_dates]
+            stop_price = risk_utils.resolve_stop_detailed(
+                power_g.price, highs=_highs, lows=_lows, closes=_closes)["stop"] or 0
+            prev_move_price = risk_utils.resolve_target_detailed(
+                power_g.price, highs=_highs, lows=_lows, closes=_closes)["target"] or 0
 
             # risk/reward
-            if power_g.price > 0 and stop_price and prev_move_price:
+            if power_g.price > 0 and stop_price and prev_move_price and power_g.price > stop_price:
                 risk_ratio = round(
                     (prev_move_price - power_g.price) / (power_g.price - stop_price), 2
                 )
@@ -842,15 +844,21 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     session_id = login()
     print(f"SESSION ID: {session_id}")
 
+    # A full run (symbols=None) rebuilds from the ROOT source of truth. A targeted
+    # run (symbols=[...]) merges onto the existing OUTPUT so the computed scores of
+    # symbols NOT being re-screened are preserved (loading the score-less source
+    # would wipe them).
+    import os as _os
+    base_path = XLSX_FILE if (symbols and _os.path.exists(XLSX_FILE)) else SRC_XLSX
     try:
-        # We read from the ROOT folder file
-        wb = openpyxl.load_workbook(SRC_XLSX)
+        wb = openpyxl.load_workbook(base_path)
     except Exception as e:
-        print(f"  [ERROR] Failed to load source {SRC_XLSX}: {e}")
-        print(f"  [INFO] Attempting to load existing output {XLSX_FILE} instead...")
+        alt = SRC_XLSX if base_path == XLSX_FILE else XLSX_FILE
+        print(f"  [ERROR] Failed to load {base_path}: {e}")
+        print(f"  [INFO] Attempting to load {alt} instead...")
         try:
-            wb = openpyxl.load_workbook(XLSX_FILE)
-        except Exception as e2:
+            wb = openpyxl.load_workbook(alt)
+        except Exception:
             print(f"  [FATAL] Both source and output files missing or corrupt.")
             return
     
