@@ -548,6 +548,14 @@ async function loadScorecard() {
 }
 
 // ── Research tab ─────────────────────────────────────────────────────────────
+// Industry text color encodes Industry Strength: Strong=green, Weak=red, NA=amber.
+function industryColor(strength) {
+    if (strength === "Strong") return "pos";
+    if (strength === "Weak") return "neg";
+    if (strength === "NA") return "text-amber-400";
+    return "mut";
+}
+
 let researchRows = [];
 let researchSort = { key: "combined", dir: -1 };
 const RESEARCH_TEXT_COLS = ["symbol", "industry", "pgr", "status", "patterns"];
@@ -592,8 +600,8 @@ function renderResearch() {
     $("research-body").innerHTML = rows.length ? rows.map((r) => `
         <tr>
             <td class="font-semibold">${r.symbol}</td>
-            <td class="text-xs mut">${r.industry || "—"}</td>
-            <td class="text-xs">${r.industry_strength || "—"}</td>
+            <td><div class="truncate text-xs ${industryColor(r.industry_strength)}" style="max-width:70px"
+                     title="${(r.industry || "")}${r.industry_strength ? " — " + r.industry_strength : ""}">${r.industry || "—"}</div></td>
             <td>${r.pgr || "—"}</td>
             <td class="text-xs mut">${r.prev_pgr || "—"}</td>
             <td class="text-right ${cls(r.s10)}">${num(r.s10, 1)}</td>
@@ -611,7 +619,7 @@ function renderResearch() {
             <td class="text-right">${num(r.risk_ratio, 2)}</td>
             <td>${renderPatternsHTML(r.patterns)}</td>
         </tr>`).join("")
-        : `<tr><td colspan="19" class="text-center text-slate-500 py-6">No matching symbols.</td></tr>`;
+        : `<tr><td colspan="18" class="text-center text-slate-500 py-6">No matching symbols.</td></tr>`;
     $("research-count").textContent = `${rows.length} of ${researchRows.length} symbols`;
 }
 
