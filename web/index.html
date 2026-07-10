@@ -134,6 +134,15 @@
                 <span id="research-count" class="text-xs mut ml-auto"></span>
             </div>
 
+            <!-- Level backtest: how well this symbol's support/resistance held historically -->
+            <div class="flex items-center gap-2 flex-wrap mb-4 text-sm">
+                <span class="mut">Level backtest:</span>
+                <input id="bt-symbol" type="text" placeholder="Symbol" maxlength="8"
+                       class="bg-slate-800 border border-slate-700 rounded px-2 py-1 w-24 uppercase" />
+                <button id="bt-run" class="btn text-xs">Run</button>
+                <span id="bt-result" class="text-xs mut"></span>
+            </div>
+
             <div class="overflow-x-auto mb-8">
                 <table class="data-table text-sm" id="research-table">
                     <thead>

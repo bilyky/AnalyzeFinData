@@ -692,6 +692,24 @@ $("sort-industry-az").addEventListener("click", (e) => {
 $("research-search").addEventListener("input", renderResearch);
 $("research-setups-only").addEventListener("change", renderResearch);
 
+async function runBacktest() {
+    const sym = ($("bt-symbol").value || "").trim().toUpperCase();
+    const out = $("bt-result");
+    if (!sym) { out.textContent = "enter a symbol"; return; }
+    out.textContent = "running…";
+    try {
+        const d = await api("/api/backtest?symbol=" + encodeURIComponent(sym));
+        if (d.error) { out.textContent = `${sym}: ${d.error}`; return; }
+        const sup = d.support, res = d.resistance, o = d.outcome;
+        out.innerHTML = `<b class="text-slate-200">${sym}</b> · ${d.samples} predictions · ` +
+            (sup ? `support held <b class="${sup.hold_rate >= 50 ? "pos" : "neg"}">${sup.hold_rate}%</b> (gap ${sup.median_gap_pct}%) · ` : "") +
+            (res ? `target hit <b class="pos">${res.hit_rate}%</b> (gap ${res.median_gap_pct}%) · ` : "") +
+            (o && o.win_rate != null ? `win-rate <b class="${o.win_rate >= 50 ? "pos" : "neg"}">${o.win_rate}%</b>` : "");
+    } catch (e) { out.textContent = "error: " + e.message; }
+}
+$("bt-run").addEventListener("click", runBacktest);
+$("bt-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") runBacktest(); });
+
 // ── Per-tab loader ───────────────────────────────────────────────────────────
 function loadTab(tab) {
     if (tab === "dashboard") loadDashboard();

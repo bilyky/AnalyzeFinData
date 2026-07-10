@@ -523,6 +523,15 @@ def read_scorecard(horizon_days: int = 10) -> dict:
     return _cached(f"scorecard:{horizon_days}", 300.0, _load)
 
 
+def read_backtest(symbol: str, horizon: int = 20) -> dict:
+    """Walk-forward accuracy of the support/resistance levels for one symbol
+    (backtest_levels.backtest_symbol). Cached 10 min — it scans full history."""
+    def _load():
+        import backtest_levels
+        return backtest_levels.backtest_symbol((symbol or "").upper(), horizon=horizon)
+    return _cached(f"bt:{(symbol or '').upper()}:{horizon}", 600.0, _load)
+
+
 def read_scheduled_tasks() -> list[dict]:
     """Query Windows Task Scheduler for known AETHER tasks."""
     results = []

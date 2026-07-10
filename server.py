@@ -225,6 +225,14 @@ def create_app():
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, data_api.read_research)
 
+    # ── Level backtest (support/resistance accuracy) ──────────────────────────
+
+    @app.get("/api/backtest")
+    async def backtest(symbol: str = Query(..., min_length=1, max_length=8),
+                       horizon: int = Query(20, ge=5, le=60)):
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, data_api.read_backtest, symbol, horizon)
+
     # ── Selector scorecard (backtracked) ──────────────────────────────────────
 
     @app.get("/api/scorecard")
