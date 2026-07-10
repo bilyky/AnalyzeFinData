@@ -44,21 +44,21 @@ class TestBreadthFilter(unittest.TestCase):
     def setUp(self):
         # Cache and save originals
         self._orig_xlsx = ai_portfolio_game.XLSX_FILE
+        self._orig_symdir = ai_portfolio_game.SYMBOL_FULL_DIR
         self.temp_dir = tempfile.TemporaryDirectory()
         self.symbol_full_dir = Path(self.temp_dir.name) / "Data" / "Symbol_full"
         os.makedirs(self.symbol_full_dir, exist_ok=True)
-        
-        # Override paths inside ai_portfolio_game
+
+        # Point the game at the temp workbook + OHLCV cache dir (the trend score
+        # reads SYMBOL_FULL_DIR, the single source of truth for the cache path).
         ai_portfolio_game.XLSX_FILE = Path(self.temp_dir.name) / "state_of_the_day.xlsx"
-        
-        # We also mock parent path in calculate_ticker_trend_score
-        self._orig_parent = ai_portfolio_game.XLSX_FILE.parent
-        
+        ai_portfolio_game.SYMBOL_FULL_DIR = self.symbol_full_dir
+
         # Generate mock files for SPY and RSP
         # Bullish SPY (constantly rising)
         self.spy_path = self.symbol_full_dir / "SPY_daily.json"
         create_mock_ohlcv(self.spy_path, 400.0, 0.5) # rising
-        
+
         # Flat RSP (stagnant/consolidation)
         self.rsp_path = self.symbol_full_dir / "RSP_daily.json"
         create_mock_ohlcv(self.rsp_path, 150.0, 0.0) # flat
@@ -66,6 +66,7 @@ class TestBreadthFilter(unittest.TestCase):
     def tearDown(self):
         # Restore originals
         ai_portfolio_game.XLSX_FILE = self._orig_xlsx
+        ai_portfolio_game.SYMBOL_FULL_DIR = self._orig_symdir
         self.temp_dir.cleanup()
 
     def test_trend_score_bullish(self):

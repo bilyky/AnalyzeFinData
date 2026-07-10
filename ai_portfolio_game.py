@@ -35,6 +35,7 @@ BASE_DIR = Path(__file__).resolve().parent
 AI_GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 AI_PERF_XLSX = BASE_DIR / "Data" / "ai_portfolio_performance.xlsx"
+SYMBOL_FULL_DIR = BASE_DIR / "Data" / "Symbol_full"   # OHLCV cache — one source of truth
 INITIAL_BALANCE = 10000.0
 
 # Import risk utils safely
@@ -43,12 +44,28 @@ import sell_rules
 import decision_eval
 
 
+def _load_closes(symbol):
+    """Sorted daily closes for a symbol from the local OHLCV cache, or [] when the
+    file is missing/unreadable. Single loader so the cache path is defined once —
+    trend-score and bubble-z-score previously used a wrong doubled-`Data` path and
+    silently read nothing."""
+    try:
+        path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
+        if not path.exists():
+            return []
+        with open(path) as f:
+            ts = json.load(f).get("Time Series (Daily)", {})
+        return [float(ts[d]["4. close"]) for d in sorted(ts.keys())]
+    except Exception:
+        return []
+
+
 def _sma50(symbol, max_stale_days=10):
     """50-day SMA of closes from the local OHLCV cache, or None if unavailable
     or stale. Returns None when the newest cached bar is older than
     max_stale_days so winner-protection never trusts an out-of-date average."""
     try:
-        path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+        path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
         if not path.exists():
             return None
         with open(path) as f:
@@ -74,6 +91,66 @@ def _live_equity(cash, positions, price_of):
             px = pos.get("cost", 0.0)
         equity += pos.get("qty", 0) * px
     return equity
+
+
+def _active_setup_symbols(ws):
+    """Symbols on the Research sheet with an active Setup flag (col U / index 20 =
+    '1' or 'OK'). Single definition of the filter used for both price-gathering and
+    buy-candidate selection."""
+    out = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if row[3] and str(row[20] or '') in ('1', 'OK', 1):
+            out.append(row[3])
+    return out
+
+
+def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
+                  today, now_time, new_transactions):
+    """Fill up to available_slots from ranked top_buys while preserving the cash
+    buffer. Rejects super-bubble names (>2.5σ over the 500-day mean) and unverified
+    setups, falling through to the next candidate so a slot isn't wasted. Mutates
+    state (balance/positions/history) and appends to new_transactions; returns the
+    number of buys executed."""
+    buys_executed = 0
+    for buy in top_buys:
+        if buys_executed >= available_slots:
+            break
+
+        # Re-calculate cash buffer dynamically based on remaining available slots
+        current_available = available_slots - buys_executed
+        cash_per_buy = (state["balance"] - min_cash_required) / current_available
+        qty = int(cash_per_buy // buy["price"])
+        if qty > 0:
+            # 2.5-Sigma Bubble Guard: Reject if symbol trades > 2.5 standard deviations above 500 SMA
+            z_score = calculate_bubble_z_score(buy["sym"])
+            if z_score is not None and z_score > 2.5:
+                print(f"🛑 AI BUY REJECTED (2.5-Sigma Bubble Guard): {buy['sym']} trades "
+                      f"at +{z_score:.2f} SD above its 500-day mean (Super-Bubble Zone!).")
+                continue
+
+            is_verified, v_msg = backtrack_verify(buy["sym"])
+            if not is_verified:
+                print(f"🛑 AI BUY REJECTED: {buy['sym']} - {v_msg}")
+                continue
+
+            cost = qty * buy["price"]
+            state["balance"] -= cost
+
+            atr = risk_utils.calculate_atr(buy["sym"])
+            if atr and atr > 0:
+                stop_loss = round(buy["price"] - (rules["atr_multiplier"] * atr), 2)
+                stop_desc = f"ATR-based Stop: ${stop_loss}{buy.get('bottom_desc', '')}"
+            else:
+                stop_loss = round(buy["price"] * 0.92, 2)
+                stop_desc = f"8% Fallback{buy.get('bottom_desc', '')}"
+
+            state["positions"][buy["sym"]] = {"qty": qty, "cost": buy["price"], "stop_loss": stop_loss}
+            tx = {"date": today, "time": now_time, "type": "BUY", "symbol": buy["sym"], "price": buy["price"], "qty": qty}
+            state["history"].append(tx)
+            new_transactions.append(tx)
+            buys_executed += 1
+            print(f"🤖 AI LIVE BUY: {qty} shares of {buy['sym']} at ${buy['price']} ({stop_desc})")
+    return buys_executed
 
 
 def is_market_open():
@@ -102,16 +179,10 @@ def calculate_ticker_trend_score(symbol: str):
     cache as a flat market (Zero-Trust).
     """
     try:
-        path = XLSX_FILE.parent / "Data" / "Symbol_full" / f"{symbol}_daily.json"
-        if not path.exists():
-            return None
-        with open(path) as f:
-            ts = json.load(f).get("Time Series (Daily)", {})
-        dates = sorted(ts.keys())
-        if len(dates) < 200:
+        closes = _load_closes(symbol)
+        if len(closes) < 200:
             return None
 
-        closes = [float(ts[d]["4. close"]) for d in dates]
         sma20 = sum(closes[-20:]) / 20
         sma50 = sum(closes[-50:]) / 50
         sma200 = sum(closes[-200:]) / 200
@@ -134,16 +205,10 @@ def calculate_bubble_z_score(symbol: str):
     Returns None if there is insufficient historical data (< 500 days).
     """
     try:
-        path = XLSX_FILE.parent / "Data" / "Symbol_full" / f"{symbol}_daily.json"
-        if not path.exists():
-            return None
-        with open(path) as f:
-            ts = json.load(f).get("Time Series (Daily)", {})
-        dates = sorted(ts.keys())
-        if len(dates) < 500:
+        closes = _load_closes(symbol)
+        if len(closes) < 500:
             return None # Insufficient history for 500-day mean
-            
-        closes = [float(ts[d]["4. close"]) for d in dates]
+
         recent_closes = closes[-500:]
         
         # Calculate 500-day Mean (SMA500)
@@ -604,11 +669,8 @@ def run_daily_ai_management(force=False, manual_profile=None):
         ws = wb["Research"]
         
         symbols_to_check = list(state["positions"].keys())
-        research_symbols = []
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if row[3] and str(row[20] or '') in ('1', 'OK', 1):
-                research_symbols.append(row[3])
-            
+        research_symbols = _active_setup_symbols(ws)
+
         queued = state.get("queued_orders", [])
         queued_syms = [q["symbol"] for q in queued]
         
@@ -770,46 +832,9 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         })
             
             top_buys.sort(key=lambda x: x["total"], reverse=True)
-            
-            buys_executed = 0
-            for buy in top_buys:
-                if buys_executed >= available_slots:
-                    break
-                    
-                # Re-calculate cash buffer dynamically based on remaining available slots
-                current_available = available_slots - buys_executed
-                cash_per_buy = (state["balance"] - min_cash_required) / current_available
-                qty = int(cash_per_buy // buy["price"])
-                if qty > 0:
-                    # 2.5-Sigma Bubble Guard: Reject if symbol trades > 2.5 standard deviations above 500 SMA
-                    z_score = calculate_bubble_z_score(buy["sym"])
-                    if z_score is not None and z_score > 2.5:
-                        print(f"🛑 AI BUY REJECTED (2.5-Sigma Bubble Guard): {buy['sym']} trades "
-                              f"at +{z_score:.2f} SD above its 500-day mean (Super-Bubble Zone!).")
-                        continue
 
-                    is_verified, v_msg = backtrack_verify(buy["sym"])
-                    if not is_verified:
-                        print(f"🛑 AI BUY REJECTED: {buy['sym']} - {v_msg}")
-                        continue
-
-                    cost = qty * buy["price"]
-                    state["balance"] -= cost
-                    
-                    atr = risk_utils.calculate_atr(buy["sym"])
-                    if atr and atr > 0:
-                        stop_loss = round(buy["price"] - (rules["atr_multiplier"] * atr), 2)
-                        stop_desc = f"ATR-based Stop: ${stop_loss}{buy.get('bottom_desc', '')}"
-                    else:
-                        stop_loss = round(buy["price"] * 0.92, 2)
-                        stop_desc = f"8% Fallback{buy.get('bottom_desc', '')}"
-                            
-                    state["positions"][buy["sym"]] = {"qty": qty, "cost": buy["price"], "stop_loss": stop_loss}
-                    tx = {"date": today, "time": now_time, "type": "BUY", "symbol": buy["sym"], "price": buy["price"], "qty": qty}
-                    state["history"].append(tx)
-                    new_transactions.append(tx)
-                    buys_executed += 1
-                    print(f"🤖 AI LIVE BUY: {qty} shares of {buy['sym']} at ${buy['price']} ({stop_desc})")
+            _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
+                          today, now_time, new_transactions)
 
     except Exception as e:
         print(f"⚠️ SCRIPT ERROR: {e}")
