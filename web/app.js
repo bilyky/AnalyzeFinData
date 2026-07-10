@@ -580,6 +580,7 @@ function researchSortValue(r, key) {
         const s = r.industry_strength;
         return s === "Strong" ? 3 : s === "Weak" ? 2 : s === "NA" ? 1 : 0;
     }
+    if (key === "industry_name") return r.industry || "";   // alphabetical (A–Z button)
     return r[key];
 }
 
@@ -587,7 +588,7 @@ let researchRows = [];
 let researchSort = { key: "combined", dir: -1 };
 // Columns that sort as text (ascending default). PGR and Industry sort by numeric
 // rank (see researchSortValue), so they default to descending = best/strongest first.
-const RESEARCH_TEXT_COLS = ["symbol", "status", "patterns"];
+const RESEARCH_TEXT_COLS = ["symbol", "status", "patterns", "industry_name"];
 
 async function loadResearch() {
     const data = await api("/api/research");
@@ -651,14 +652,21 @@ function renderResearch() {
     $("research-count").textContent = `${rows.length} of ${researchRows.length} symbols`;
 }
 
+function setResearchSort(key) {
+    if (researchSort.key === key) researchSort.dir *= -1;
+    else researchSort = { key, dir: RESEARCH_TEXT_COLS.includes(key) ? 1 : -1 };
+    renderResearch();
+}
+
 document.querySelectorAll('#research-table th[data-sort]').forEach((th) => {
     th.classList.add("cursor-pointer", "select-none");
-    th.addEventListener("click", () => {
-        const key = th.dataset.sort;
-        if (researchSort.key === key) researchSort.dir *= -1;
-        else researchSort = { key, dir: RESEARCH_TEXT_COLS.includes(key) ? 1 : -1 };
-        renderResearch();
-    });
+    th.addEventListener("click", () => setResearchSort(th.dataset.sort));
+});
+// Industry supports two sorts: the header sorts by strength, the A–Z button sorts
+// by name (stopPropagation so the header's strength-sort doesn't also fire).
+$("sort-industry-az").addEventListener("click", (e) => {
+    e.stopPropagation();
+    setResearchSort("industry_name");
 });
 $("research-search").addEventListener("input", renderResearch);
 $("research-setups-only").addEventListener("change", renderResearch);
