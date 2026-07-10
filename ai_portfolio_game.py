@@ -127,6 +127,41 @@ def calculate_ticker_trend_score(symbol: str):
     except Exception:
         return None
 
+def calculate_bubble_z_score(symbol: str):
+    """
+    Calculate the Z-score (number of standard deviations) of the current price
+    relative to its 500-day moving average (mean) over historical closes.
+    Returns None if there is insufficient historical data (< 500 days).
+    """
+    try:
+        path = XLSX_FILE.parent / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+        if not path.exists():
+            return None
+        with open(path) as f:
+            ts = json.load(f).get("Time Series (Daily)", {})
+        dates = sorted(ts.keys())
+        if len(dates) < 500:
+            return None # Insufficient history for 500-day mean
+            
+        closes = [float(ts[d]["4. close"]) for d in dates]
+        recent_closes = closes[-500:]
+        
+        # Calculate 500-day Mean (SMA500)
+        mean = sum(recent_closes) / 500
+        
+        # Calculate 500-day Standard Deviation
+        variance = sum((p - mean) ** 2 for p in recent_closes) / 500
+        std_dev = variance ** 0.5
+        
+        if std_dev <= 0:
+            return 0.0
+            
+        current_price = closes[-1]
+        z_score = (current_price - mean) / std_dev
+        return z_score
+    except Exception:
+        return None
+
 def get_market_regime():
     """Query SPY momentum to dynamically determine the best strategy profile, adjusting for breadth divergence."""
     base_profile = "BALANCED"
@@ -746,6 +781,13 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 cash_per_buy = (state["balance"] - min_cash_required) / current_available
                 qty = int(cash_per_buy // buy["price"])
                 if qty > 0:
+                    # 2.5-Sigma Bubble Guard: Reject if symbol trades > 2.5 standard deviations above 500 SMA
+                    z_score = calculate_bubble_z_score(buy["sym"])
+                    if z_score is not None and z_score > 2.5:
+                        print(f"🛑 AI BUY REJECTED (2.5-Sigma Bubble Guard): {buy['sym']} trades "
+                              f"at +{z_score:.2f} SD above its 500-day mean (Super-Bubble Zone!).")
+                        continue
+
                     is_verified, v_msg = backtrack_verify(buy["sym"])
                     if not is_verified:
                         print(f"🛑 AI BUY REJECTED: {buy['sym']} - {v_msg}")
