@@ -10,8 +10,9 @@ This module handles recovery only:
   - Files with gap > MAX_GAP_DAYS               → compact fetch (last 100 days merged)
 
 Usage:
-    python rapidapi.py               # repair all symbols from Research sheet
-    python rapidapi.py AAPL MSFT     # repair specific symbols
+    python rapidapi.py                 # repair all symbols from Research sheet
+    python rapidapi.py AAPL MSFT       # repair specific symbols (only if stale/gapped)
+    python rapidapi.py INTC --force    # fetch even when the file isn't stale (re-test)
 
 Config (in order of precedence):
     1. RAPIDAPI_KEY env var
@@ -142,12 +143,15 @@ def _fetch_and_merge(symbol: str, path: str, outputsize: str = "compact") -> Non
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def repair_missing(symbols: list[str], today_str: str) -> dict:
+def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> dict:
     """
     Scan Symbol_full/ and repair symbols with missing, corrupted, or stale files.
     Uses compact fetch (last 100 days) when file exists but has a gap; full fetch
     when file is absent or corrupt. Skips symbols that already have today's close
     (written by powergauge._append_ohlcv_entry).
+
+    force=True fetches every listed symbol regardless of its gap (for re-testing a
+    single symbol whose file isn't stale enough to trip MAX_GAP_DAYS).
 
     Rate: 14 s sleep between API calls → ≤5 req/min.
     """
@@ -156,7 +160,7 @@ def repair_missing(symbols: list[str], today_str: str) -> dict:
     for i, sym in enumerate(symbols, 1):
         path = os.path.join(OHLCV_DIR, f"{sym}_daily.json")
         needs, existing = _check_recovery(path, today_str)
-        if not needs:
+        if not needs and not force:
             results["skipped"] += 1
             continue
 
@@ -169,7 +173,7 @@ def repair_missing(symbols: list[str], today_str: str) -> dict:
             time.sleep(SLEEP_SEC)
         except Exception as e:
             results["errors"].append((sym, str(e)))
-            print(f"  [RapidAPI] {sym}: ERROR — {e}")
+            print(f"  [RapidAPI] {sym}: ERROR - {e}")
 
     return results
 
@@ -220,17 +224,20 @@ def get_quotes(time_frame, year=2022, month=1, day=1, symbol='MSFT'):
 if __name__ == "__main__":
     today_str = str(datetime.date.today())
 
-    if len(sys.argv) > 1:
+    args = [a for a in sys.argv[1:] if a != "--force"]
+    force = "--force" in sys.argv[1:]
+
+    if args:
         # Explicit symbols passed on command line
-        syms = [s.upper() for s in sys.argv[1:]]
+        syms = [s.upper() for s in args]
     else:
         # Load all symbols from Research sheet
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from run_history import load_symbols
         syms = load_symbols()
 
-    print(f"[RapidAPI] Recovery pass — {len(syms)} symbols, today={today_str}")
-    result = repair_missing(syms, today_str)
+    print(f"[RapidAPI] Recovery pass — {len(syms)} symbols, today={today_str}, force={force}")
+    result = repair_missing(syms, today_str, force=force)
     print(f"\n[RapidAPI] Done: {result['updated']} fetched, "
           f"{result['skipped']} already current, "
           f"{len(result['errors'])} errors")
