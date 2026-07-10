@@ -115,6 +115,29 @@ def backtest_symbol(symbol, horizon=20, step=5, start_after=200):
     return agg
 
 
+def backtest_universe(symbols, horizon=20, step=10, start_after=200):
+    """Pool walk-forward records across many symbols into one aggregate scorecard.
+    Also returns a per-symbol win-rate list so outliers are visible."""
+    pooled = []
+    per_symbol = []
+    for sym in symbols:
+        highs, lows, closes, _ = risk_utils._load_ohlcv_series(sym)
+        if not closes:
+            continue
+        recs = backtest_series(highs, lows, closes, horizon=horizon, step=step,
+                               start_after=start_after)
+        if not recs:
+            continue
+        pooled.extend(recs)
+        a = aggregate(recs)
+        per_symbol.append({"symbol": sym, "samples": a["samples"],
+                           "win_rate": a.get("outcome", {}).get("win_rate")})
+    agg = aggregate(pooled)
+    agg["symbol"] = f"UNIVERSE ({len(per_symbol)} symbols)"
+    agg["per_symbol"] = per_symbol
+    return agg
+
+
 def _print_report(agg):
     sym = agg.get("symbol", "?")
     if agg.get("error"):
@@ -142,8 +165,21 @@ if __name__ == "__main__":
     if "--step" in args:
         step = int(args[args.index("--step") + 1])
     syms = [a.upper() for a in args if not a.startswith("--") and not a.isdigit()]
-    if not syms:
-        print("usage: python backtest_levels.py SYMBOL [SYMBOL ...] [--horizon 20] [--step 5]")
+
+    if "--all" in args:
+        # Aggregate across every cached symbol (or the Research sheet's symbols).
+        import glob, os
+        cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
+        all_syms = sorted(os.path.basename(p)[:-11] for p in glob.glob(os.path.join(cache, "*_daily.json")))
+        print(f"[backtest] universe over {len(all_syms)} cached symbols (step={step or 10})...")
+        agg = backtest_universe(all_syms, horizon=horizon, step=(step if "--step" in args else 10))
+        _print_report(agg)
+        wr = [p["win_rate"] for p in agg["per_symbol"] if p["win_rate"] is not None]
+        if wr:
+            print(f"  per-symbol win-rate: min={min(wr)}% median={statistics.median(wr)}% max={max(wr)}%")
+    elif syms:
+        for sym in syms:
+            _print_report(backtest_symbol(sym, horizon=horizon, step=step))
+    else:
+        print("usage: python backtest_levels.py SYMBOL [...] [--all] [--horizon 20] [--step 5]")
         sys.exit(1)
-    for sym in syms:
-        _print_report(backtest_symbol(sym, horizon=horizon, step=step))
