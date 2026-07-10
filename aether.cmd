@@ -7,8 +7,14 @@ cd /d "%~dp0"
 :: If no arguments are passed, display a beautiful help manual
 if "%~1"=="" goto help
 
+:: Pick an interpreter: prefer the project venv (venv_new) if present, else fall
+:: back to Python on PATH (avoids "system cannot find the path specified" when the
+:: venv is absent).
+set "PYEXE=python"
+if exist "%~dp0venv_new\Scripts\python.exe" set "PYEXE=%~dp0venv_new\Scripts\python.exe"
+
 :: Forward all arguments cleanly to the server daemon
-".\venv_new\Scripts\python.exe" server.py %*
+"%PYEXE%" server.py %*
 exit /b %errorlevel%
 
 :help
