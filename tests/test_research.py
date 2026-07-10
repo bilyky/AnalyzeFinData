@@ -90,15 +90,28 @@ class TestReadResearch(unittest.TestCase):
         self.assertEqual(aaa["prev_pgr"], "Bu")
         self.assertEqual(aaa["industry_strength"], "Strong")
 
-    def test_stop_from_sheet_else_computed(self):
-        # AAA has a sheet stop (use it, don't recompute); BBB's is 0 (detect one).
-        with mock.patch("risk_utils.resolve_stop", return_value=44.0) as rs:
+    def test_stop_from_sheet_when_cache_fresh(self):
+        # Fresh cache: AAA uses its sheet stop (no recompute); BBB (0) is detected.
+        with mock.patch("risk_utils.ohlcv_age_days", return_value=1), \
+             mock.patch("risk_utils.resolve_stop", return_value=44.0) as rs:
             rows = {r["symbol"]: r for r in data_api.read_research()["rows"]}
         self.assertEqual(rows["AAA"]["stop"], 90.0)     # straight from the sheet
         self.assertEqual(rows["BBB"]["stop"], 44.0)     # computed fallback
-        called_syms = [c.kwargs.get("symbol") for c in rs.call_args_list]
-        self.assertIn("BBB", called_syms)               # computed only for the gap
-        self.assertNotIn("AAA", called_syms)            # never recomputed
+        called = [c.kwargs.get("symbol") for c in rs.call_args_list]
+        self.assertIn("BBB", called)                    # computed only for the gap
+        self.assertNotIn("AAA", called)                 # never recomputed
+
+    def test_stale_cache_overrides_sheet_and_flags(self):
+        # Stale cache: the sheet stop is stale too -> override with % off live price
+        # and flag the gap in the summary.
+        with mock.patch("risk_utils.ohlcv_age_days", return_value=999), \
+             mock.patch("risk_utils.resolve_stop", return_value=44.0):
+            res = data_api.read_research()
+        rows = {r["symbol"]: r for r in res["rows"]}
+        self.assertEqual(rows["AAA"]["stop"], 44.0)     # sheet 90 overridden
+        self.assertEqual(rows["BBB"]["stop"], 44.0)
+        self.assertEqual(res["summary"]["stale_stops"], 2)
+        self.assertEqual(res["summary"]["ohlcv_max_age_days"], 999)
 
     def test_summary_counts(self):
         s = data_api.read_research()["summary"]

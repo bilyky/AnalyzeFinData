@@ -42,22 +42,44 @@ def calculate_atr(symbol, period=14):
 _SWING_LOOKBACK = 3     # days for the swing-low technical stop
 _ATR_STOP_MULT  = 2.5   # ATR multiple for the volatility stop
 _PCT_FALLBACK   = 0.08  # last-resort stop = price * (1 - 8%)
+STALE_STOP_DAYS = 10    # OHLCV cache older than this -> don't trust swing-low/ATR
 
 
 def _load_ohlcv_series(symbol):
-    """(highs, lows, closes) chronological from the local OHLCV cache, or ([],[],[])."""
+    """(highs, lows, closes, last_date) chronological from the local OHLCV cache;
+    ([], [], [], None) when missing/unreadable."""
     path = OHLCV_DIR / f"{symbol}_daily.json"
     if not path.exists():
-        return [], [], []
+        return [], [], [], None
     try:
         with open(path) as f:
             ts = json.load(f).get("Time Series (Daily)", {})
         dates = sorted(ts.keys())
+        if not dates:
+            return [], [], [], None
         return ([float(ts[d]["2. high"]) for d in dates],
                 [float(ts[d]["3. low"]) for d in dates],
-                [float(ts[d]["4. close"]) for d in dates])
+                [float(ts[d]["4. close"]) for d in dates],
+                dates[-1])
     except Exception:
-        return [], [], []
+        return [], [], [], None
+
+
+def _age_days(last_date, today=None):
+    """Days since `last_date` (ISO string), or None if unparseable/missing."""
+    if not last_date:
+        return None
+    try:
+        import datetime
+        d = datetime.date.fromisoformat(str(last_date)[:10])
+        return ((today or datetime.date.today()) - d).days
+    except Exception:
+        return None
+
+
+def ohlcv_age_days(symbol):
+    """Age in days of a symbol's newest cached bar, or None if no usable cache."""
+    return _age_days(_load_ohlcv_series(symbol)[3])
 
 
 def _atr_from_series(highs, lows, closes, period=14):
@@ -87,9 +109,17 @@ def resolve_stop(price, symbol=None, highs=None, lows=None, closes=None):
         return None
     if price <= 0:
         return None
+    stale = False
     if highs is None and lows is None and closes is None and symbol:
-        highs, lows, closes = _load_ohlcv_series(symbol)
+        highs, lows, closes, last = _load_ohlcv_series(symbol)
+        age = _age_days(last)
+        stale = age is None or age > STALE_STOP_DAYS
     highs, lows, closes = highs or [], lows or [], closes or []
+
+    # Stale cache -> its swing-low/ATR are unreliable; use the % stop off the
+    # (fresh) live price instead of a misleading old level.
+    if stale:
+        return round(price * (1 - _PCT_FALLBACK), 2)
 
     # 1. swing-low technical stop
     recent = lows[-_SWING_LOOKBACK:]

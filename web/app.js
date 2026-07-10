@@ -604,6 +604,15 @@ async function loadResearch() {
         rg.textContent = "Market Regime: " + s.market_regime;
         rg.style.color = s.regime_color || "#94a3b8";
     }
+    const stale = $("research-stale");
+    if (s.stale_stops > 0) {
+        stale.textContent = `⚠ OHLCV cache is stale for ${s.stale_stops} of ${s.total} symbols ` +
+            `(oldest ${s.ohlcv_max_age_days} days) — their Stop is an 8% level off the live price, ` +
+            `not a swing-low. Refresh Data/Symbol_full to restore technical stops.`;
+        stale.classList.remove("hidden");
+    } else {
+        stale.classList.add("hidden");
+    }
     if (data.error) $("research-count").textContent = "Error: " + data.error;
     renderResearch();
 }

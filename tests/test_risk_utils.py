@@ -2,9 +2,11 @@
 Tests for risk_utils.resolve_stop — the shared stop-detection ladder
 (swing-low -> ATR -> 8%). Pure inputs, no file I/O.
 """
+import datetime
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import risk_utils
@@ -38,6 +40,23 @@ class TestResolveStop(unittest.TestCase):
         self.assertIsNone(risk_utils.resolve_stop(0))
         self.assertIsNone(risk_utils.resolve_stop(None))
         self.assertIsNone(risk_utils.resolve_stop("nope"))
+
+    def test_stale_cache_uses_pct_off_live_price(self):
+        # Loading by symbol with a stale cache -> ignore swing-low/ATR, use 8% off price.
+        stale_date = "2020-01-01"
+        with mock.patch.object(risk_utils, "_load_ohlcv_series",
+                               return_value=([200, 201, 202], [190, 191, 192],
+                                             [195, 196, 197], stale_date)):
+            s = risk_utils.resolve_stop(100.0, symbol="OLD")
+        self.assertEqual(s, 92.0)   # 8% off live 100, NOT the (stale) 190x0.99=188.1
+
+    def test_fresh_cache_uses_swing_low(self):
+        fresh = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        with mock.patch.object(risk_utils, "_load_ohlcv_series",
+                               return_value=([12, 12, 12], [10, 11, 9],
+                                             [11, 11, 11], fresh)):
+            s = risk_utils.resolve_stop(12.0, symbol="NEW")
+        self.assertEqual(s, round(9.0 * 0.99, 2))   # 8.91 swing-low, cache is fresh
 
     def test_stop_always_below_price(self):
         for s in (risk_utils.resolve_stop(100.0, lows=[95, 96, 97], highs=[101]*3, closes=[100]*3),

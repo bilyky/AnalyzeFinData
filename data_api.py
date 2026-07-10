@@ -154,6 +154,8 @@ def read_research() -> dict:
         if not _XLSX.exists():
             return {"rows": [], "summary": {}, "error": "state_of_the_day.xlsx not found"}
         rows = []
+        stale_stops = 0
+        max_stale_age = 0
         wb = None
         try:
             wb = openpyxl.load_workbook(_XLSX, read_only=True, data_only=True)
@@ -170,11 +172,23 @@ def read_research() -> dict:
                 setup_raw = g("setup")
                 win = _f(g("winpct"))
                 price = _f(g("price"))
-                # Prefer the stop already in the sheet; only detect one (swing-low ->
-                # ATR -> 8%) when it's missing/0, so we don't recompute needlessly.
                 sheet_stop = _f(g("stop"))
-                stop = sheet_stop if (sheet_stop and sheet_stop > 0) \
-                    else risk_utils.resolve_stop(price, symbol=sym.strip())
+                # Stop policy:
+                #  - fresh cache: trust the sheet's stop, else detect one (swing-low
+                #    -> ATR -> 8%) without recomputing needlessly;
+                #  - stale cache (> STALE_STOP_DAYS): the sheet's swing-low stop is
+                #    stale too, so override it with an 8% stop off the live price and
+                #    flag the gap.
+                age = risk_utils.ohlcv_age_days(sym.strip())
+                stale = age is None or age > risk_utils.STALE_STOP_DAYS
+                if stale:
+                    stop = risk_utils.resolve_stop(price)          # % off live price
+                    stale_stops += 1
+                    if age is not None:
+                        max_stale_age = max(max_stale_age, age)
+                else:
+                    stop = sheet_stop if (sheet_stop and sheet_stop > 0) \
+                        else risk_utils.resolve_stop(price, symbol=sym.strip())
                 rows.append({
                     "symbol": sym.strip(),
                     "industry": g("industry"),
@@ -210,7 +224,14 @@ def read_research() -> dict:
             "bullish": bullish,
             "bearish": sum(1 for x in rows if x["combined"] < 0),
             "avg_combined": round(sum(combos) / len(combos), 2) if combos else 0.0,
+            "stale_stops": stale_stops,
+            "ohlcv_max_age_days": max_stale_age if stale_stops else 0,
         }
+        # Alert on the data gap: OHLCV cache too old to trust for swing-low/ATR stops.
+        if stale_stops:
+            print(f"[data_api] OHLCV STALE: {stale_stops}/{len(rows)} symbols have caches "
+                  f"older than {risk_utils.STALE_STOP_DAYS}d (oldest {max_stale_age}d) — "
+                  f"their stops fell back to 8% off the live price. Refresh Data/Symbol_full.")
         try:
             import autonomous_pipeline as _ap
             regime, color = _ap.get_market_regime()
