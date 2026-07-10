@@ -558,6 +558,8 @@ function industryColor(strength) {
 
 // PowerGauge ratings, worst -> best. Used to color the prev->current transition.
 const PGR_RANK = { "Be-": 0, "Be": 1, "N/Be": 2, "N": 3, "N/": 3, "N/Bu": 4, "Bu": 5, "Bu+": 6 };
+// Stop sources that aren't a confirmed swing-low support -> shown amber (weaker).
+const STOP_WEAK = new Set(["atr", "pct", "stale", "sheet"]);
 
 // One cell showing "prev > current"; green if the rating improved, red if it
 // deteriorated, white when unchanged (or shown alone when there's no comparable
@@ -605,10 +607,16 @@ async function loadResearch() {
         rg.style.color = s.regime_color || "#94a3b8";
     }
     const stale = $("research-stale");
-    if (s.stale_stops > 0) {
-        stale.textContent = `⚠ OHLCV cache is stale for ${s.stale_stops} of ${s.total} symbols ` +
-            `(oldest ${s.ohlcv_max_age_days} days) — their Stop is an 8% level off the live price, ` +
-            `not a swing-low. Refresh Data/Symbol_full to restore technical stops.`;
+    const msgs = [];
+    if (s.stale_stops > 0)
+        msgs.push(`⚠ OHLCV cache stale for ${s.stale_stops}/${s.total} symbols ` +
+            `(oldest ${s.ohlcv_max_age_days}d) — their Stop is 8% off the live price, not a swing-low. ` +
+            `Refresh Data/Symbol_full.`);
+    if (s.support_misses > 0)
+        msgs.push(`⚠ ${s.support_misses}/${s.total} symbols have fresh data but no confirmed ` +
+            `swing-low support — Stop used an ATR/8% fallback.`);
+    if (msgs.length) {
+        stale.innerHTML = msgs.join("<br>");
         stale.classList.remove("hidden");
     } else {
         stale.classList.add("hidden");
@@ -643,7 +651,7 @@ function renderResearch() {
                      title="${(r.industry || "")}${r.industry_strength ? " — " + r.industry_strength : ""}">${r.industry || "—"}</div></td>
             <td class="text-xs whitespace-nowrap">${pgrCell(r.prev_pgr, r.pgr)}</td>
             <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
-            <td class="text-right">${!r.stop ? "—" : fmt$(r.stop)}</td>
+            <td class="text-right ${STOP_WEAK.has(r.stop_source) ? "text-amber-400" : ""}" title="stop source: ${r.stop_source || "?"}">${!r.stop ? "—" : fmt$(r.stop)}</td>
             <td class="text-right">${!r.target ? "—" : fmt$(r.target)}</td>
             <td class="text-right ${cls(r.s10)}">${num(r.s10, 1)}</td>
             <td class="text-right ${cls(r.l60)}">${num(r.l60, 1)}</td>

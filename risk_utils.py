@@ -94,47 +94,91 @@ def _atr_from_series(highs, lows, closes, period=14):
     return round(sum(window) / len(window), 2) if window else None
 
 
-def resolve_stop(price, symbol=None, highs=None, lows=None, closes=None):
-    """Best stop strictly below `price`, most-preferred first:
-        1. swing-low  — min low of the last 3 bars x 0.99   (the screener's rule)
-        2. ATR        — price - 2.5 x ATR(14)
-        3. 8% fallback
+PIVOT_K        = 3    # bars each side that must confirm a swing (pivot) low
+PIVOT_LOOKBACK = 60   # bars scanned back for swing lows
 
-    Provide OHLCV series (chronological) directly, or a `symbol` to load them from
-    the cache. Returns a rounded stop < price, or None if `price` is invalid.
+
+def detect_support(price, lows, k=PIVOT_K, lookback=PIVOT_LOOKBACK):
+    """Most recent CONFIRMED swing-low below `price` (Sperandeo / Williams-fractal
+    standard): a bar whose low is the lowest within +-k bars, requiring k bars AFTER
+    it to confirm — so the newest k bars (an unconfirmed dip) never qualify. Returns
+    that support level, or None if there's no confirmed pivot below price.
     """
     try:
         price = float(price)
     except (TypeError, ValueError):
         return None
-    if price <= 0:
+    if price <= 0 or not lows or len(lows) < 2 * k + 1:
         return None
-    stale = False
+    n = len(lows)
+    pivots = []
+    for i in range(max(k, n - lookback), n - k):
+        if lows[i] == min(lows[i - k:i + k + 1]):
+            pivots.append(lows[i])
+    # walk newest-first: the last swing low price still trades above is live support
+    for low in reversed(pivots):
+        if 0 < low < price:
+            return low
+    return None
+
+
+def resolve_stop_detailed(price, symbol=None, highs=None, lows=None, closes=None,
+                          max_stale_days=STALE_STOP_DAYS):
+    """Resolve a stop below `price` and report how it was derived.
+
+    Returns {'stop', 'source', 'support', 'age', 'stale'} where source is:
+        support — confirmed swing-low (industry standard, preferred)
+        swing   — min of the last 3 lows x 0.99 (shallow recent low)
+        atr     — price - 2.5 x ATR(14)
+        pct     — 8% off the live price (last resort)
+        stale   — cache older than max_stale_days -> 8% off live price
+        none    — price invalid / no usable data (stop is None)
+    """
+    out = {"stop": None, "source": "none", "support": None, "age": None, "stale": False}
+    try:
+        price = float(price)
+    except (TypeError, ValueError):
+        return out
+    if price <= 0:
+        return out
+
     if highs is None and lows is None and closes is None and symbol:
         highs, lows, closes, last = _load_ohlcv_series(symbol)
-        age = _age_days(last)
-        stale = age is None or age > STALE_STOP_DAYS
+        out["age"] = _age_days(last)
+        if out["age"] is None or out["age"] > max_stale_days:
+            out.update(stop=round(price * (1 - _PCT_FALLBACK), 2), source="stale", stale=True)
+            return out
     highs, lows, closes = highs or [], lows or [], closes or []
 
-    # Stale cache -> its swing-low/ATR are unreliable; use the % stop off the
-    # (fresh) live price instead of a misleading old level.
-    if stale:
-        return round(price * (1 - _PCT_FALLBACK), 2)
-
-    # 1. swing-low technical stop
+    # 1. confirmed swing-low support (Sperandeo standard) — preferred
+    support = detect_support(price, lows)
+    if support:
+        out.update(stop=round(support * 0.99, 2), source="support", support=round(support, 2))
+        return out
+    # 2. shallow recent swing low (min of last 3)
     recent = lows[-_SWING_LOOKBACK:]
     if recent:
         tech = round(min(recent) * 0.99, 2)
         if 0 < tech < price:
-            return tech
-    # 2. ATR-based stop
+            out.update(stop=tech, source="swing")
+            return out
+    # 3. ATR-based stop
     atr = _atr_from_series(highs, lows, closes)
     if atr and atr > 0:
         s = round(price - _ATR_STOP_MULT * atr, 2)
         if 0 < s < price:
-            return s
-    # 3. percentage fallback
-    return round(price * (1 - _PCT_FALLBACK), 2)
+            out.update(stop=s, source="atr")
+            return out
+    # 4. percentage fallback
+    out.update(stop=round(price * (1 - _PCT_FALLBACK), 2), source="pct")
+    return out
+
+
+def resolve_stop(price, symbol=None, highs=None, lows=None, closes=None,
+                 max_stale_days=STALE_STOP_DAYS):
+    """The stop price only (see resolve_stop_detailed for how it was derived)."""
+    return resolve_stop_detailed(price, symbol=symbol, highs=highs, lows=lows,
+                                 closes=closes, max_stale_days=max_stale_days)["stop"]
 
 
 def get_position_size(price, stop_price, risk_usd=500):

@@ -58,6 +58,35 @@ class TestResolveStop(unittest.TestCase):
             s = risk_utils.resolve_stop(12.0, symbol="NEW")
         self.assertEqual(s, round(9.0 * 0.99, 2))   # 8.91 swing-low, cache is fresh
 
+    def test_detect_support_confirmed_pivot(self):
+        # A clear swing low of 90 with 3 higher bars each side -> support 90.
+        lows = [100, 99, 98, 90, 98, 99, 100, 101, 102, 103]
+        self.assertEqual(risk_utils.detect_support(105.0, lows, k=3), 90)
+
+    def test_detect_support_ignores_unconfirmed_recent_low(self):
+        # 85 is lower but sits in the last k=3 bars (unconfirmed) -> still returns 90.
+        lows = [100, 99, 98, 90, 98, 99, 100, 101, 85, 86]
+        self.assertEqual(risk_utils.detect_support(105.0, lows, k=3), 90)
+
+    def test_detect_support_none_when_too_short(self):
+        self.assertIsNone(risk_utils.detect_support(100.0, [95, 96, 97], k=3))
+
+    def test_resolve_detailed_reports_support_source(self):
+        lows = [100, 99, 98, 90, 98, 99, 100, 101, 102, 103]
+        d = risk_utils.resolve_stop_detailed(105.0, lows=lows,
+                                             highs=[110] * 10, closes=[105] * 10)
+        self.assertEqual(d["source"], "support")
+        self.assertEqual(d["support"], 90)
+        self.assertEqual(d["stop"], round(90 * 0.99, 2))
+
+    def test_resolve_detailed_stale_source(self):
+        with mock.patch.object(risk_utils, "_load_ohlcv_series",
+                               return_value=([200] * 8, [190] * 8, [195] * 8, "2020-01-01")):
+            d = risk_utils.resolve_stop_detailed(100.0, symbol="OLD")
+        self.assertTrue(d["stale"])
+        self.assertEqual(d["source"], "stale")
+        self.assertEqual(d["stop"], 92.0)
+
     def test_stop_always_below_price(self):
         for s in (risk_utils.resolve_stop(100.0, lows=[95, 96, 97], highs=[101]*3, closes=[100]*3),
                   risk_utils.resolve_stop(100.0)):

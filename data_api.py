@@ -156,6 +156,7 @@ def read_research() -> dict:
         rows = []
         stale_stops = 0
         max_stale_age = 0
+        support_misses = 0
         wb = None
         try:
             wb = openpyxl.load_workbook(_XLSX, read_only=True, data_only=True)
@@ -173,22 +174,23 @@ def read_research() -> dict:
                 win = _f(g("winpct"))
                 price = _f(g("price"))
                 sheet_stop = _f(g("stop"))
-                # Stop policy:
-                #  - fresh cache: trust the sheet's stop, else detect one (swing-low
-                #    -> ATR -> 8%) without recomputing needlessly;
-                #  - stale cache (> STALE_STOP_DAYS): the sheet's swing-low stop is
-                #    stale too, so override it with an 8% stop off the live price and
-                #    flag the gap.
-                age = risk_utils.ohlcv_age_days(sym.strip())
-                stale = age is None or age > risk_utils.STALE_STOP_DAYS
-                if stale:
-                    stop = risk_utils.resolve_stop(price)          # % off live price
-                    stale_stops += 1
-                    if age is not None:
-                        max_stale_age = max(max_stale_age, age)
+                # OHLCV-authoritative stop: when the cache is fresh, derive the stop
+                # from it (confirmed swing-low -> shallow low -> ATR -> 8%), ignoring
+                # a possibly-stale sheet value. Fall back to the sheet only when the
+                # cache can't produce one (missing file / no price).
+                d = risk_utils.resolve_stop_detailed(price, symbol=sym.strip())
+                stop_source = d["source"]
+                if d["stop"] is not None:
+                    stop = d["stop"]
                 else:
-                    stop = sheet_stop if (sheet_stop and sheet_stop > 0) \
-                        else risk_utils.resolve_stop(price, symbol=sym.strip())
+                    stop = sheet_stop if (sheet_stop and sheet_stop > 0) else None
+                    if stop is not None:
+                        stop_source = "sheet"
+                if d["stale"]:
+                    stale_stops += 1
+                    max_stale_age = max(max_stale_age, d["age"] or 0)
+                elif d["source"] in ("atr", "pct"):
+                    support_misses += 1   # fresh data but no real support/swing found
                 rows.append({
                     "symbol": sym.strip(),
                     "industry": g("industry"),
@@ -198,7 +200,7 @@ def read_research() -> dict:
                     "industry_strength": g("ind_strength"),
                     "lt_trend": g("lt_trend"), "money_flow": g("money_flow"),
                     "obos": g("obos"),
-                    "price": price, "stop": stop,
+                    "price": price, "stop": stop, "stop_source": stop_source,
                     "target": _f(g("target")), "risk_ratio": _f(g("risk_ratio")),
                     "setup": str(setup_raw) in ("1", "OK") or setup_raw == 1,
                     "buying_ratio": _f(g("buying_ratio")),
@@ -226,12 +228,16 @@ def read_research() -> dict:
             "avg_combined": round(sum(combos) / len(combos), 2) if combos else 0.0,
             "stale_stops": stale_stops,
             "ohlcv_max_age_days": max_stale_age if stale_stops else 0,
+            "support_misses": support_misses,
         }
-        # Alert on the data gap: OHLCV cache too old to trust for swing-low/ATR stops.
+        # Alert on data gaps that weaken the stop.
         if stale_stops:
             print(f"[data_api] OHLCV STALE: {stale_stops}/{len(rows)} symbols have caches "
                   f"older than {risk_utils.STALE_STOP_DAYS}d (oldest {max_stale_age}d) — "
                   f"their stops fell back to 8% off the live price. Refresh Data/Symbol_full.")
+        if support_misses:
+            print(f"[data_api] SUPPORT MISS: {support_misses}/{len(rows)} symbols have fresh "
+                  f"data but no confirmed swing-low support — stop used an ATR/8% fallback.")
         try:
             import autonomous_pipeline as _ap
             regime, color = _ap.get_market_regime()
