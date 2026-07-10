@@ -633,6 +633,9 @@ function renderResearch() {
             <td><div class="truncate text-xs ${industryColor(r.industry_strength)}" style="max-width:70px"
                      title="${(r.industry || "")}${r.industry_strength ? " — " + r.industry_strength : ""}">${r.industry || "—"}</div></td>
             <td class="text-xs whitespace-nowrap">${pgrCell(r.prev_pgr, r.pgr)}</td>
+            <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
+            <td class="text-right">${!r.stop ? "—" : fmt$(r.stop)}</td>
+            <td class="text-right">${!r.target ? "—" : fmt$(r.target)}</td>
             <td class="text-right ${cls(r.s10)}">${num(r.s10, 1)}</td>
             <td class="text-right ${cls(r.l60)}">${num(r.l60, 1)}</td>
             <td class="text-right font-semibold ${cls(r.combined)}">${num(r.combined, 1)}</td>
@@ -643,12 +646,10 @@ function renderResearch() {
             <td class="text-right text-xs">${r.money_flow || "—"}</td>
             <td class="text-right text-xs">${r.obos || "—"}</td>
             <td class="text-right text-xs">${r.lt_trend || "—"}</td>
-            <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
-            <td class="text-right">${r.stop == null ? "—" : fmt$(r.stop)}</td>
             <td class="text-right">${num(r.risk_ratio, 2)}</td>
             <td>${renderPatternsHTML(r.patterns)}</td>
         </tr>`).join("")
-        : `<tr><td colspan="17" class="text-center text-slate-500 py-6">No matching symbols.</td></tr>`;
+        : `<tr><td colspan="18" class="text-center text-slate-500 py-6">No matching symbols.</td></tr>`;
     $("research-count").textContent = `${rows.length} of ${researchRows.length} symbols`;
 }
 
