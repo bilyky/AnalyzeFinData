@@ -266,9 +266,9 @@
                     </h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Marc Chaikin PowerGauge Model (`buying_ratio`)</h4>
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">`buying_ratio` (BR) Model (`powergauge.py`)</h4>
                             <p class="text-xs text-slate-400 leading-relaxed">
-                                Consolidates Marc Chaikin's PGR rating, sub-category factors, relative volume, Money Flow, and weekly seasonality into a unified score in <code>[-10.0, +10.0]</code>.
+                                Compiles relative volume, Money Flow, oscillators, and weekly seasonality into a unified score in <code>[-10.0, +10.0]</code>. Sourced from Marc Chaikin's PowerGauge Rating (PGR) methodology.
                             </p>
                         </div>
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
@@ -290,9 +290,9 @@
                             </p>
                         </div>
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Leonardo Fibonacci Channels & J. Welles Wilder RSI Divergence</h4>
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Fibonacci Channels & RSI Divergences</h4>
                             <p class="text-xs text-slate-400 leading-relaxed">
-                                Maps price relative to Fibonacci retracement levels (23.6%, 38.2%, 50%, 61.8%) and tracks price-RSI(14) divergences to identify trend exhaustion.
+                                Maps price relative to Fibonacci retracement levels (23.6%, 38.2%, 50%, 61.8%) and tracks price-RSI(14) momentum divergences. Based on J. Welles Wilder Jr.'s RSI and classical Fibonacci standards.
                             </p>
                         </div>
                     </div>
@@ -305,9 +305,9 @@
                     </h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Munehisa Homma Candlestick Recognition</h4>
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Japanese Candlestick Recognition</h4>
                             <p class="text-xs text-slate-400 leading-relaxed">
-                                Aggregates 17 candlestick patterns derived from Homma's original Japanese rice-trading methodology over a rolling 5-day lookback window.
+                                Aggregates 17 candlestick patterns over a rolling 5-day lookback window. Based on Munehisa Homma's original Japanese rice-trading methodology.
                             </p>
                         </div>
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
@@ -344,27 +344,27 @@
                             </p>
                         </div>
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Victor Sperandeo (Trader Vic) Slope Trigger</h4>
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Price Slope Acceleration Trigger</h4>
                             <p class="text-xs text-slate-400 leading-relaxed">
-                                Implements Victor Sperandeo's '1-2-3 Reversal' and '2B Pattern' concepts, computing price slope derivatives to verify that downward selling velocity has flattened and turned positive.
+                                Computes price slope derivatives to verify that downward selling velocity has flattened and turned positive. Sourced from Victor Sperandeo's (Trader Vic) "1-2-3 Reversal" and "2B Pattern" bottom-confirmation concepts.
                             </p>
                         </div>
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">John Bollinger / S&P Market Breadth Filter</h4>
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">S&P Market Breadth Filter</h4>
                             <p class="text-xs text-slate-400 leading-relaxed">
-                                Monitors the score gap between Cap-Weighted <b>SPY</b> and Equal-Weighted <b>RSP</b>. If delta <code>&gt; 4.0</code>, it flags a fragile, narrow market top and automatically downgrades the risk profile.
+                                Monitors the score gap between Cap-Weighted <b>SPY</b> and Equal-Weighted <b>RSP</b>. If delta <code>&gt; 4.0</code>, it flags a technology-concentrated, narrow market top and automatically downgrades the active risk profile. Based on John Bollinger's concepts of volatility and index breadth.
                             </p>
                         </div>
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Statistical Mean-Reversion 2.5-Sigma Guard</h4>
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">2.5-Sigma Bubble Guard</h4>
                             <p class="text-xs text-slate-400 leading-relaxed">
-                                Calculates standard deviation distance from the 500-day mean. If Z-score <code>&gt; 2.5</code>, the stock is blacklisted to avoid deploying cash at overextended bubble peaks.
+                                Calculates standard deviation distance from the 500-day mean. If Z-score <code>&gt; 2.5</code>, the stock is blacklisted to avoid deploying cash at overextended bubble peaks. Inspired by John Bollinger's standard-deviation volatility band concepts.
                             </p>
                         </div>
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Unified Exit Policy & Peter Lynch Flower Protection</h4>
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Unified Exit Policy & Flower Protection</h4>
                             <p class="text-xs text-slate-400 leading-relaxed">
-                                Hard ATR stop-loss floor always overrides soft signals. Lynch's 'Flower Protection' trailing stops downgrade soft exits on profitable, above-50-DMA positions to REVIEW, avoiding dumping winners.
+                                Hard ATR stop-loss floor always overrides soft signals. Based on Peter Lynch's 'Flower Protection' trailing stops concept where soft exits on profitable, above-50-DMA positions are downgraded to REVIEW to let winners run.
                             </p>
                         </div>
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
@@ -374,15 +374,15 @@
                             </p>
                         </div>
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Nassim Nicholas Taleb Antifragile Safety Gates</h4>
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Antifragile Safety Gates</h4>
                             <p class="text-xs text-slate-400 leading-relaxed">
-                                Applies Taleb's zero-trust risk safety. Logs a 'Failure DNA' ledger of closed losses, programmatically adjusting model coefficients over future runs to prevent repeating trading errors.
+                                Employs zero-trust risk safety gates. Logs a 'Failure DNA' ledger of closed losses, programmatically adjusting model coefficients over future runs to prevent repeating errors. Based on Nassim Nicholas Taleb's concepts of antifragility.
                             </p>
                         </div>
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Jeremy Grantham Scarcity Allocations</h4>
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Secular Scarcity Allocations</h4>
                             <p class="text-xs text-slate-400 leading-relaxed">
-                                Calculates long-term allocation limits. Enforces Grantham's secular scarcity core to allocate a dedicated capital share strictly to metals, agriculture, and grid utility assets.
+                                Enforces dedicated capital share allocations strictly to metals, agriculture, and grid utility assets. Sourced from Jeremy Grantham's concepts of hard asset secular scarcity supercycles.
                             </p>
                         </div>
                         <div class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
