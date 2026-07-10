@@ -94,8 +94,9 @@ def _atr_from_series(highs, lows, closes, period=14):
     return round(sum(window) / len(window), 2) if window else None
 
 
-PIVOT_K        = 3    # bars each side that must confirm a swing (pivot) low
-PIVOT_LOOKBACK = 60   # bars scanned back for swing lows
+PIVOT_K        = 3    # bars each side that must confirm a swing (pivot) low/high
+PIVOT_LOOKBACK = 60   # bars scanned back for swing lows/highs
+_TARGET_RECENT = 10   # window for the shallow recent-high target fallback
 
 
 def detect_support(price, lows, k=PIVOT_K, lookback=PIVOT_LOOKBACK):
@@ -179,6 +180,74 @@ def resolve_stop(price, symbol=None, highs=None, lows=None, closes=None,
     """The stop price only (see resolve_stop_detailed for how it was derived)."""
     return resolve_stop_detailed(price, symbol=symbol, highs=highs, lows=lows,
                                  closes=closes, max_stale_days=max_stale_days)["stop"]
+
+
+def detect_resistance(price, highs, k=PIVOT_K, lookback=PIVOT_LOOKBACK):
+    """Nearest CONFIRMED swing-high above `price` — the overhead resistance a rally
+    must clear (Williams up-fractal): a bar whose high is the max within +-k bars,
+    requiring k bars AFTER to confirm. Returns that resistance level, or None.
+    """
+    try:
+        price = float(price)
+    except (TypeError, ValueError):
+        return None
+    if price <= 0 or not highs or len(highs) < 2 * k + 1:
+        return None
+    n = len(highs)
+    pivots = []
+    for i in range(max(k, n - lookback), n - k):
+        if highs[i] == max(highs[i - k:i + k + 1]):
+            pivots.append(highs[i])
+    above = [h for h in pivots if h > price]
+    return min(above) if above else None   # nearest resistance overhead
+
+
+def resolve_target_detailed(price, symbol=None, highs=None, lows=None, closes=None,
+                            max_stale_days=STALE_STOP_DAYS):
+    """Resolve an upside target above `price` and report how it was derived.
+
+    Returns {'target', 'source', 'resistance', 'age', 'stale'} where source is:
+        resistance — nearest confirmed swing-high (preferred)
+        high       — max of the last 10 highs (shallow recent high)
+        atr        — price + 2.5 x ATR(14) (blue-sky projection)
+        pct        — +8% off the live price (last resort)
+        stale      — cache older than max_stale_days -> +8% off live price
+        none       — price invalid / no usable data (target is None)
+    """
+    out = {"target": None, "source": "none", "resistance": None, "age": None, "stale": False}
+    try:
+        price = float(price)
+    except (TypeError, ValueError):
+        return out
+    if price <= 0:
+        return out
+
+    if highs is None and lows is None and closes is None and symbol:
+        highs, lows, closes, last = _load_ohlcv_series(symbol)
+        out["age"] = _age_days(last)
+        if out["age"] is None or out["age"] > max_stale_days:
+            out.update(target=round(price * (1 + _PCT_FALLBACK), 2), source="stale", stale=True)
+            return out
+    highs, lows, closes = highs or [], lows or [], closes or []
+
+    # 1. confirmed swing-high resistance (Williams up-fractal) — preferred
+    r = detect_resistance(price, highs)
+    if r:
+        out.update(target=round(r, 2), source="resistance", resistance=round(r, 2))
+        return out
+    # 2. shallow recent high
+    recent = highs[-_TARGET_RECENT:]
+    if recent and max(recent) > price:
+        out.update(target=round(max(recent), 2), source="high")
+        return out
+    # 3. ATR projection (blue-sky: no overhead resistance)
+    atr = _atr_from_series(highs, lows, closes)
+    if atr and atr > 0:
+        out.update(target=round(price + _ATR_STOP_MULT * atr, 2), source="atr")
+        return out
+    # 4. percentage fallback
+    out.update(target=round(price * (1 + _PCT_FALLBACK), 2), source="pct")
+    return out
 
 
 def get_position_size(price, stop_price, risk_usd=500):

@@ -157,6 +157,7 @@ def read_research() -> dict:
         stale_stops = 0
         max_stale_age = 0
         support_misses = 0
+        target_misses = 0
         wb = None
         try:
             wb = openpyxl.load_workbook(_XLSX, read_only=True, data_only=True)
@@ -191,6 +192,26 @@ def read_research() -> dict:
                     max_stale_age = max(max_stale_age, d["age"] or 0)
                 elif d["source"] in ("atr", "pct"):
                     support_misses += 1   # fresh data but no real support/swing found
+
+                # Target — mirror of the stop: nearest confirmed swing-high resistance
+                # (OHLCV-authoritative), sheet fallback only when the cache can't help.
+                sheet_target = _f(g("target"))
+                t = risk_utils.resolve_target_detailed(price, symbol=sym.strip())
+                target_source = t["source"]
+                if t["target"] is not None:
+                    target = t["target"]
+                else:
+                    target = sheet_target if (sheet_target and sheet_target > 0) else None
+                    if target is not None:
+                        target_source = "sheet"
+                if not t["stale"] and t["source"] in ("atr", "pct"):
+                    target_misses += 1    # fresh data but no real resistance above
+
+                # Recompute R:R from the resolved levels so the row is self-consistent.
+                if stop and target and price and price > stop:
+                    risk_ratio = round((target - price) / (price - stop), 2)
+                else:
+                    risk_ratio = _f(g("risk_ratio"))
                 rows.append({
                     "symbol": sym.strip(),
                     "industry": g("industry"),
@@ -201,7 +222,8 @@ def read_research() -> dict:
                     "lt_trend": g("lt_trend"), "money_flow": g("money_flow"),
                     "obos": g("obos"),
                     "price": price, "stop": stop, "stop_source": stop_source,
-                    "target": _f(g("target")), "risk_ratio": _f(g("risk_ratio")),
+                    "target": target, "target_source": target_source,
+                    "risk_ratio": risk_ratio,
                     "setup": str(setup_raw) in ("1", "OK") or setup_raw == 1,
                     "buying_ratio": _f(g("buying_ratio")),
                     "seasonality": _f(g("seasonality")),
@@ -229,6 +251,7 @@ def read_research() -> dict:
             "stale_stops": stale_stops,
             "ohlcv_max_age_days": max_stale_age if stale_stops else 0,
             "support_misses": support_misses,
+            "target_misses": target_misses,
         }
         # Alert on data gaps that weaken the stop.
         if stale_stops:
@@ -238,6 +261,9 @@ def read_research() -> dict:
         if support_misses:
             print(f"[data_api] SUPPORT MISS: {support_misses}/{len(rows)} symbols have fresh "
                   f"data but no confirmed swing-low support — stop used an ATR/8% fallback.")
+        if target_misses:
+            print(f"[data_api] TARGET MISS: {target_misses}/{len(rows)} symbols have fresh "
+                  f"data but no overhead resistance — target used an ATR/8% projection.")
         try:
             import autonomous_pipeline as _ap
             regime, color = _ap.get_market_regime()

@@ -615,6 +615,9 @@ async function loadResearch() {
     if (s.support_misses > 0)
         msgs.push(`⚠ ${s.support_misses}/${s.total} symbols have fresh data but no confirmed ` +
             `swing-low support — Stop used an ATR/8% fallback.`);
+    if (s.target_misses > 0)
+        msgs.push(`⚠ ${s.target_misses}/${s.total} symbols have fresh data but no overhead ` +
+            `resistance — Target used an ATR/8% projection.`);
     if (msgs.length) {
         stale.innerHTML = msgs.join("<br>");
         stale.classList.remove("hidden");
@@ -652,7 +655,7 @@ function renderResearch() {
             <td class="text-xs whitespace-nowrap">${pgrCell(r.prev_pgr, r.pgr)}</td>
             <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
             <td class="text-right ${STOP_WEAK.has(r.stop_source) ? "text-amber-400" : ""}" title="stop source: ${r.stop_source || "?"}">${!r.stop ? "—" : fmt$(r.stop)}</td>
-            <td class="text-right">${!r.target ? "—" : fmt$(r.target)}</td>
+            <td class="text-right ${STOP_WEAK.has(r.target_source) ? "text-amber-400" : ""}" title="target source: ${r.target_source || "?"}">${!r.target ? "—" : fmt$(r.target)}</td>
             <td class="text-right ${cls(r.s10)}">${num(r.s10, 1)}</td>
             <td class="text-right ${cls(r.l60)}">${num(r.l60, 1)}</td>
             <td class="text-right font-semibold ${cls(r.combined)}">${num(r.combined, 1)}</td>

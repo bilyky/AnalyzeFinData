@@ -122,6 +122,29 @@ class TestReadResearch(unittest.TestCase):
             res = data_api.read_research()
         self.assertEqual(res["summary"]["support_misses"], 2)
 
+    def _stop_d(self, **kw):
+        d = {"stop": 90.0, "source": "support", "support": 90.0, "age": 1, "stale": False}
+        d.update(kw)
+        return mock.patch("risk_utils.resolve_stop_detailed", return_value=d)
+
+    def _target_d(self, **kw):
+        d = {"target": None, "source": "none", "resistance": None, "age": None, "stale": False}
+        d.update(kw)
+        return mock.patch("risk_utils.resolve_target_detailed", return_value=d)
+
+    def test_target_and_rr_recomputed(self):
+        with self._stop_d(stop=90.0), \
+             self._target_d(target=130.0, source="resistance", resistance=130.0, age=1):
+            aaa = next(r for r in data_api.read_research()["rows"] if r["symbol"] == "AAA")
+        self.assertEqual(aaa["target"], 130.0)              # price 100
+        self.assertEqual(aaa["target_source"], "resistance")
+        self.assertEqual(aaa["risk_ratio"], 3.0)            # (130-100)/(100-90)
+
+    def test_target_miss_flagged_in_summary(self):
+        with self._stop_d(), self._target_d(target=108.0, source="atr", age=1):
+            res = data_api.read_research()
+        self.assertEqual(res["summary"]["target_misses"], 2)
+
     def test_summary_counts(self):
         s = data_api.read_research()["summary"]
         self.assertEqual(s["total"], 2)

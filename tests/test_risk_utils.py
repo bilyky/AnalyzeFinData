@@ -87,6 +87,32 @@ class TestResolveStop(unittest.TestCase):
         self.assertEqual(d["source"], "stale")
         self.assertEqual(d["stop"], 92.0)
 
+    def test_detect_resistance_confirmed_pivot(self):
+        highs = [100, 101, 102, 120, 102, 101, 100, 99, 98, 97]
+        self.assertEqual(risk_utils.detect_resistance(105.0, highs, k=3), 120)
+
+    def test_detect_resistance_ignores_unconfirmed_recent_high(self):
+        highs = [100, 101, 102, 120, 102, 101, 100, 99, 130, 131]  # 130/131 unconfirmed
+        self.assertEqual(risk_utils.detect_resistance(105.0, highs, k=3), 120)
+
+    def test_detect_resistance_none_when_price_above_all(self):
+        highs = [100, 101, 102, 103, 102, 101, 100, 99, 98, 97]
+        self.assertIsNone(risk_utils.detect_resistance(500.0, highs, k=3))
+
+    def test_resolve_target_reports_resistance(self):
+        highs = [100, 101, 102, 120, 102, 101, 100, 99, 98, 97]
+        t = risk_utils.resolve_target_detailed(105.0, highs=highs,
+                                               lows=[95] * 10, closes=[100] * 10)
+        self.assertEqual(t["source"], "resistance")
+        self.assertEqual(t["target"], 120)
+
+    def test_resolve_target_stale_source(self):
+        with mock.patch.object(risk_utils, "_load_ohlcv_series",
+                               return_value=([120] * 8, [110] * 8, [115] * 8, "2020-01-01")):
+            t = risk_utils.resolve_target_detailed(100.0, symbol="OLD")
+        self.assertTrue(t["stale"])
+        self.assertEqual(t["target"], round(100.0 * 1.08, 2))   # +8% off live
+
     def test_stop_always_below_price(self):
         for s in (risk_utils.resolve_stop(100.0, lows=[95, 96, 97], highs=[101]*3, closes=[100]*3),
                   risk_utils.resolve_stop(100.0)):
