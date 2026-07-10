@@ -42,6 +42,7 @@ INITIAL_BALANCE = 10000.0
 import risk_utils
 import sell_rules
 import decision_eval
+import instruments
 
 
 def _load_closes(symbol):
@@ -804,10 +805,15 @@ def run_daily_ai_management(force=False, manual_profile=None):
             for row in ws.iter_rows(min_row=2, values_only=True):
                 sym = row[3]
                 if not sym: continue
+                # TEMPORARY: skip leveraged/inverse/crypto ETFs as new long buys — the
+                # long swing-low framework doesn't fit them (see instruments.py + R&D).
+                # They still get ATR-based stops if already held; this only blocks entry.
+                if instruments.is_excluded(sym):
+                    continue
                 setup = str(row[20] or '')
                 price = prices.get(sym, 0)
                 total_score = (row[24] or 0) + (row[25] or 0)
-                
+
                 # Filter by strategy profile threshold OR mathematically confirmed bottom
                 if (setup in ('1', 'OK', 1)) and sym not in state["positions"] and price > 0:
                     bottom_ok, bottom_msg = is_bottom_confirmed(sym)

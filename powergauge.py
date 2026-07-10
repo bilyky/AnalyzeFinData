@@ -10,6 +10,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from utils import _to_float
 import risk_utils
+import instruments
 
 from excel_output import (
     write_research_headers      as _write_research_headers,
@@ -764,10 +765,13 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
             _highs  = [_to_float(ohlcv_ts[d].get('2. high'), 0) for d in past_dates]
             _lows   = [_to_float(ohlcv_ts[d].get('3. low'), 0) for d in past_dates]
             _closes = [_to_float(ohlcv_ts[d].get('4. close'), 0) for d in past_dates]
+            _excl = instruments.is_excluded(power_g.symbol)   # TEMPORARY: lev/inverse -> ATR
             stop_price = risk_utils.resolve_stop_detailed(
-                power_g.price, highs=_highs, lows=_lows, closes=_closes)["stop"] or 0
+                power_g.price, highs=_highs, lows=_lows, closes=_closes,
+                exclude_swing=_excl)["stop"] or 0
             prev_move_price = risk_utils.resolve_target_detailed(
-                power_g.price, highs=_highs, lows=_lows, closes=_closes)["target"] or 0
+                power_g.price, highs=_highs, lows=_lows, closes=_closes,
+                exclude_swing=_excl)["target"] or 0
 
             # risk/reward
             if power_g.price > 0 and stop_price and prev_move_price and power_g.price > stop_price:

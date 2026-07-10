@@ -560,6 +560,17 @@ function industryColor(strength) {
 const PGR_RANK = { "Be-": 0, "Be": 1, "N/Be": 2, "N": 3, "N/": 3, "N/Bu": 4, "Bu": 5, "Bu+": 6 };
 // Stop sources that aren't a confirmed swing-low support -> shown amber (weaker).
 const STOP_WEAK = new Set(["atr", "pct", "stale", "sheet"]);
+// Leveraged/inverse/crypto ETFs intentionally use ATR levels, so don't amber them.
+function weakStop(r, source) {
+    return r.instrument === "normal" && STOP_WEAK.has(source);
+}
+function instrumentBadge(instrument) {
+    if (instrument === "leveraged_inverse")
+        return ' <span class="text-[9px] px-1 rounded bg-amber-900/60 text-amber-300" title="Leveraged/inverse ETF — excluded from new buys (temporary); ATR stop">LEV</span>';
+    if (instrument === "crypto")
+        return ' <span class="text-[9px] px-1 rounded bg-purple-900/60 text-purple-300" title="Crypto ETF — excluded from new buys (temporary); ATR stop">CRYPTO</span>';
+    return "";
+}
 
 // One cell showing "prev > current"; green if the rating improved, red if it
 // deteriorated, white when unchanged (or shown alone when there's no comparable
@@ -649,13 +660,13 @@ function renderResearch() {
     const num = (v, d = 2) => (v == null ? "—" : Number(v).toFixed(d));
     $("research-body").innerHTML = rows.length ? rows.map((r) => `
         <tr>
-            <td class="font-semibold">${r.symbol}</td>
+            <td class="font-semibold">${r.symbol}${instrumentBadge(r.instrument)}</td>
             <td><div class="truncate text-xs ${industryColor(r.industry_strength)}" style="max-width:70px"
                      title="${(r.industry || "")}${r.industry_strength ? " — " + r.industry_strength : ""}">${r.industry || "—"}</div></td>
             <td class="text-xs whitespace-nowrap">${pgrCell(r.prev_pgr, r.pgr)}</td>
             <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
-            <td class="text-right ${STOP_WEAK.has(r.stop_source) ? "text-amber-400" : ""}" title="stop source: ${r.stop_source || "?"}">${!r.stop ? "—" : fmt$(r.stop)}</td>
-            <td class="text-right ${STOP_WEAK.has(r.target_source) ? "text-amber-400" : ""}" title="target source: ${r.target_source || "?"}">${!r.target ? "—" : fmt$(r.target)}</td>
+            <td class="text-right ${weakStop(r, r.stop_source) ? "text-amber-400" : ""}" title="stop source: ${r.stop_source || "?"}">${!r.stop ? "—" : fmt$(r.stop)}</td>
+            <td class="text-right ${weakStop(r, r.target_source) ? "text-amber-400" : ""}" title="target source: ${r.target_source || "?"}">${!r.target ? "—" : fmt$(r.target)}</td>
             <td class="text-right ${cls(r.s10)}">${num(r.s10, 1)}</td>
             <td class="text-right ${cls(r.l60)}">${num(r.l60, 1)}</td>
             <td class="text-right font-semibold ${cls(r.combined)}">${num(r.combined, 1)}</td>

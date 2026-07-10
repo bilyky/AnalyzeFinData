@@ -124,8 +124,11 @@ def detect_support(price, lows, k=PIVOT_K, lookback=PIVOT_LOOKBACK):
 
 
 def resolve_stop_detailed(price, symbol=None, highs=None, lows=None, closes=None,
-                          max_stale_days=STALE_STOP_DAYS):
+                          max_stale_days=STALE_STOP_DAYS, exclude_swing=False):
     """Resolve a stop below `price` and report how it was derived.
+
+    exclude_swing=True skips the long swing-low support (used for leveraged/inverse
+    instruments) and goes straight to the ATR stop.
 
     Returns {'stop', 'source', 'support', 'age', 'stale'} where source is:
         support — confirmed swing-low (industry standard, preferred)
@@ -151,18 +154,20 @@ def resolve_stop_detailed(price, symbol=None, highs=None, lows=None, closes=None
             return out
     highs, lows, closes = highs or [], lows or [], closes or []
 
-    # 1. confirmed swing-low support (Sperandeo standard) — preferred
-    support = detect_support(price, lows)
-    if support:
-        out.update(stop=round(support * 0.99, 2), source="support", support=round(support, 2))
-        return out
-    # 2. shallow recent swing low (min of last 3)
-    recent = lows[-_SWING_LOOKBACK:]
-    if recent:
-        tech = round(min(recent) * 0.99, 2)
-        if 0 < tech < price:
-            out.update(stop=tech, source="swing")
+    # Long swing-low support (skipped for leveraged/inverse — see instruments.py).
+    if not exclude_swing:
+        # 1. confirmed swing-low support (Sperandeo standard) — preferred
+        support = detect_support(price, lows)
+        if support:
+            out.update(stop=round(support * 0.99, 2), source="support", support=round(support, 2))
             return out
+        # 2. shallow recent swing low (min of last 3)
+        recent = lows[-_SWING_LOOKBACK:]
+        if recent:
+            tech = round(min(recent) * 0.99, 2)
+            if 0 < tech < price:
+                out.update(stop=tech, source="swing")
+                return out
     # 3. ATR-based stop
     atr = _atr_from_series(highs, lows, closes)
     if atr and atr > 0:
@@ -203,8 +208,10 @@ def detect_resistance(price, highs, k=PIVOT_K, lookback=PIVOT_LOOKBACK):
 
 
 def resolve_target_detailed(price, symbol=None, highs=None, lows=None, closes=None,
-                            max_stale_days=STALE_STOP_DAYS):
+                            max_stale_days=STALE_STOP_DAYS, exclude_swing=False):
     """Resolve an upside target above `price` and report how it was derived.
+
+    exclude_swing=True skips swing-high resistance (leveraged/inverse) -> ATR target.
 
     Returns {'target', 'source', 'resistance', 'age', 'stale'} where source is:
         resistance — nearest confirmed swing-high (preferred)
@@ -230,16 +237,18 @@ def resolve_target_detailed(price, symbol=None, highs=None, lows=None, closes=No
             return out
     highs, lows, closes = highs or [], lows or [], closes or []
 
-    # 1. confirmed swing-high resistance (Williams up-fractal) — preferred
-    r = detect_resistance(price, highs)
-    if r:
-        out.update(target=round(r, 2), source="resistance", resistance=round(r, 2))
-        return out
-    # 2. shallow recent high
-    recent = highs[-_TARGET_RECENT:]
-    if recent and max(recent) > price:
-        out.update(target=round(max(recent), 2), source="high")
-        return out
+    # Long swing-high resistance (skipped for leveraged/inverse — see instruments.py).
+    if not exclude_swing:
+        # 1. confirmed swing-high resistance (Williams up-fractal) — preferred
+        r = detect_resistance(price, highs)
+        if r:
+            out.update(target=round(r, 2), source="resistance", resistance=round(r, 2))
+            return out
+        # 2. shallow recent high
+        recent = highs[-_TARGET_RECENT:]
+        if recent and max(recent) > price:
+            out.update(target=round(max(recent), 2), source="high")
+            return out
     # 3. ATR projection (blue-sky: no overhead resistance)
     atr = _atr_from_series(highs, lows, closes)
     if atr and atr > 0:

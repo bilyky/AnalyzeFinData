@@ -151,6 +151,7 @@ def read_research() -> dict:
         import openpyxl
         import sell_rules
         import risk_utils
+        import instruments
         if not _XLSX.exists():
             return {"rows": [], "summary": {}, "error": "state_of_the_day.xlsx not found"}
         rows = []
@@ -179,7 +180,10 @@ def read_research() -> dict:
                 # from it (confirmed swing-low -> shallow low -> ATR -> 8%), ignoring
                 # a possibly-stale sheet value. Fall back to the sheet only when the
                 # cache can't produce one (missing file / no price).
-                d = risk_utils.resolve_stop_detailed(price, symbol=sym.strip())
+                # TEMPORARY: leveraged/inverse/crypto ETFs skip the long swing-low
+                # method and use ATR levels (instruments.py) — still fully protected.
+                excl = instruments.is_excluded(sym.strip())
+                d = risk_utils.resolve_stop_detailed(price, symbol=sym.strip(), exclude_swing=excl)
                 stop_source = d["source"]
                 if d["stop"] is not None:
                     stop = d["stop"]
@@ -190,13 +194,13 @@ def read_research() -> dict:
                 if d["stale"]:
                     stale_stops += 1
                     max_stale_age = max(max_stale_age, d["age"] or 0)
-                elif d["source"] in ("atr", "pct"):
+                elif not excl and d["source"] in ("atr", "pct"):
                     support_misses += 1   # fresh data but no real support/swing found
 
                 # Target — mirror of the stop: nearest confirmed swing-high resistance
                 # (OHLCV-authoritative), sheet fallback only when the cache can't help.
                 sheet_target = _f(g("target"))
-                t = risk_utils.resolve_target_detailed(price, symbol=sym.strip())
+                t = risk_utils.resolve_target_detailed(price, symbol=sym.strip(), exclude_swing=excl)
                 target_source = t["source"]
                 if t["target"] is not None:
                     target = t["target"]
@@ -204,7 +208,7 @@ def read_research() -> dict:
                     target = sheet_target if (sheet_target and sheet_target > 0) else None
                     if target is not None:
                         target_source = "sheet"
-                if not t["stale"] and t["source"] in ("atr", "pct"):
+                if not excl and not t["stale"] and t["source"] in ("atr", "pct"):
                     target_misses += 1    # fresh data but no real resistance above
 
                 # Recompute R:R from the resolved levels so the row is self-consistent.
@@ -223,7 +227,7 @@ def read_research() -> dict:
                     "obos": g("obos"),
                     "price": price, "stop": stop, "stop_source": stop_source,
                     "target": target, "target_source": target_source,
-                    "risk_ratio": risk_ratio,
+                    "risk_ratio": risk_ratio, "instrument": instruments.classify(sym.strip()),
                     "setup": str(setup_raw) in ("1", "OK") or setup_raw == 1,
                     "buying_ratio": _f(g("buying_ratio")),
                     "seasonality": _f(g("seasonality")),
