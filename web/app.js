@@ -749,6 +749,161 @@ function startPolling() {
     setInterval(() => { if (activeTab === "system") loadSystem(); }, 15000);
 }
 
+// ── Symbol detail modal ──────────────────────────────────────────────────────
+let _symChart = null;
+
+function _set(id, html, klass) {
+    const el = $(id); if (!el) return;
+    el.innerHTML = html;
+    if (klass !== undefined) el.className = klass;
+}
+
+async function openSymbol(sym) {
+    sym = (sym || "").trim().toUpperCase();
+    if (!sym) return;
+    const modal = $("sym-modal");
+    modal.classList.remove("hidden");
+    // Header (known before fetch)
+    _set("sm-symbol", sym);
+    _set("sm-badges", ""); _set("sm-pgr", ""); _set("sm-status", ""); _set("sm-industry", "");
+    _set("sm-price", ""); _set("sm-holding-badge", ""); $("sm-holding-badge").classList.add("hidden");
+    $("sm-loading").classList.remove("hidden");
+    $("sm-body").classList.add("hidden");
+
+    let d;
+    try { d = await api("/api/symbol/" + encodeURIComponent(sym)); }
+    catch (e) { _set("sm-loading", "Error: " + e.message); return; }
+
+    $("sm-loading").classList.add("hidden");
+    $("sm-body").classList.remove("hidden");
+
+    const r = d.research || {};
+    const bt = d.backtest || {};
+    const h = d.holding;
+
+    // Header
+    _set("sm-symbol", sym);
+    _set("sm-badges", instrumentBadge(r.instrument));
+    const pgrCls = (r.pgr || "").includes("Bu") ? "text-green-400" : (r.pgr || "").includes("Be") ? "text-red-400" : "text-slate-300";
+    _set("sm-pgr", pgrCell(r.prev_pgr, r.pgr));
+    $("sm-pgr").className = `text-sm font-semibold px-2 py-0.5 rounded bg-slate-800 ${pgrCls}`;
+    _set("sm-status", r.status || "—");
+    _set("sm-industry", [r.industry, r.industry_strength ? `(${r.industry_strength})` : ""].filter(Boolean).join(" "));
+    _set("sm-price", r.price != null ? fmt$(r.price) : "—");
+
+    // Scores
+    const n1 = (v, d=1) => v == null ? "—" : Number(v).toFixed(d);
+    _set("sm-s10", n1(r.s10), `text-lg font-bold ${cls(r.s10)}`);
+    _set("sm-l60", n1(r.l60), `text-lg font-bold ${cls(r.l60)}`);
+    _set("sm-comb", n1(r.combined), `text-lg font-bold ${cls(r.combined)}`);
+    _set("sm-win", r.win_pct != null ? r.win_pct + "%" : "—");
+    _set("sm-br", n1(r.buying_ratio), `text-lg font-bold ${cls(r.buying_ratio)}`);
+    _set("sm-seas", r.seasonality == null ? "—" : (r.seasonality >= 0 ? "+" : "") + r.seasonality.toFixed(1));
+
+    // Levels
+    const stopWk = weakStop(r, r.stop_source);
+    _set("sm-stop", r.stop ? fmt$(r.stop) : "—", `font-semibold ${stopWk ? "text-amber-400" : ""}`);
+    _set("sm-stop-src", r.stop_source || "");
+    const tgtWk = weakStop(r, r.target_source);
+    _set("sm-target", r.target ? fmt$(r.target) : "—", `font-semibold ${tgtWk ? "text-amber-400" : ""}`);
+    _set("sm-tgt-src", r.target_source || "");
+    _set("sm-rr", r.risk_ratio != null ? r.risk_ratio.toFixed(2) : "—");
+
+    // Chaikin signals
+    _set("sm-mf", r.money_flow || "—");
+    _set("sm-obos", r.obos || "—");
+    _set("sm-lt", r.lt_trend || "—");
+    _set("sm-pat", r.patterns ? renderPatternsHTML(r.patterns) : "—");
+
+    // Holding
+    const holdSec = $("sm-holding-section");
+    if (h) {
+        $("sm-holding-badge").classList.remove("hidden");
+        holdSec.classList.remove("hidden");
+        _set("sm-acct", h.account_label || h.account_id);
+        _set("sm-entry", fmt$(h.buy));
+        _set("sm-qty", h.qty != null ? h.qty : "—");
+        _set("sm-pnl", h.pnl_pct != null ? fmtPct(h.pnl_pct) : "—", `font-semibold ${cls(h.pnl_pct)}`);
+        _set("sm-entry-stop", h.stop ? fmt$(h.stop) : "—", `font-semibold ${weakStop(h, h.stop_source) ? "text-amber-400" : ""}`);
+        _set("sm-entry-stop-src", h.stop_source || "");
+        _set("sm-entry-tgt", h.target ? fmt$(h.target) : "—");
+        _set("sm-buy-date", h.buy_date || "—");
+    } else {
+        holdSec.classList.add("hidden");
+        $("sm-holding-badge").classList.add("hidden");
+    }
+
+    // Price chart
+    const chartWrap = $("sm-chart-wrap");
+    const chartData = d.chart || [];
+    if (chartData.length > 0) {
+        chartWrap.classList.remove("hidden");
+        const labels = chartData.map(p => p.date.slice(5));   // MM-DD
+        const closes = chartData.map(p => p.close);
+        const first = closes[0], last = closes[closes.length - 1];
+        const up = last >= first;
+        const ctx = $("sm-chart").getContext("2d");
+        if (_symChart) { _symChart.destroy(); _symChart = null; }
+        _symChart = new Chart(ctx, {
+            type: "line",
+            data: {
+                labels,
+                datasets: [{
+                    data: closes,
+                    borderColor: up ? "#4ade80" : "#f87171",
+                    backgroundColor: up ? "rgba(74,222,128,0.07)" : "rgba(248,113,113,0.07)",
+                    fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+                }],
+            },
+            options: {
+                plugins: { legend: { display: false }, tooltip: { mode: "index", intersect: false } },
+                scales: {
+                    x: { ticks: { color: "#64748b", maxTicksLimit: 8 }, grid: { display: false } },
+                    y: { ticks: { color: "#64748b" }, grid: { color: "rgba(51,65,85,0.3)" } },
+                },
+                animation: false,
+            },
+        });
+    } else {
+        chartWrap.classList.add("hidden");
+    }
+
+    // Backtest
+    const btWrap = $("sm-bt-wrap");
+    const sup = bt.support, res = bt.resistance, o = bt.outcome;
+    if (bt.samples > 0) {
+        btWrap.classList.remove("hidden");
+        _set("sm-bt-n", bt.samples);
+        _set("sm-bt-sup", sup ? sup.hold_rate + "%" : "—", `font-semibold ${sup && sup.hold_rate >= 50 ? "pos" : "neg"}`);
+        _set("sm-bt-tgt", res ? res.hit_rate + "%" : "—", `font-semibold ${res && res.hit_rate >= 50 ? "pos" : "neg"}`);
+        _set("sm-bt-wr", o && o.win_rate != null ? o.win_rate + "%" : "—", `font-semibold ${o && o.win_rate >= 50 ? "pos" : "neg"}`);
+    } else {
+        btWrap.classList.add("hidden");
+    }
+}
+
+function closeSymbolModal() {
+    $("sym-modal").classList.add("hidden");
+    if (_symChart) { _symChart.destroy(); _symChart = null; }
+}
+
+$("sm-close").addEventListener("click", closeSymbolModal);
+$("sym-modal").addEventListener("click", (e) => { if (e.target === $("sym-modal")) closeSymbolModal(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSymbolModal(); });
+
+// Wire every rendered data-sym row/cell to open the symbol modal on click.
+// Uses event delegation on document since rows are re-rendered frequently.
+document.addEventListener("click", (e) => {
+    const td = e.target.closest("td");
+    if (!td) return;
+    const tr = td.closest("tr[data-sym]");
+    if (!tr) return;
+    // Only open on click of the first cell (symbol name) — not the whole row,
+    // so live-price cells, P&L cells, etc. still select/copy normally.
+    if (td !== tr.firstElementChild) return;
+    openSymbol(tr.dataset.sym);
+});
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 setAdminUI(null);   // default to logged-out UI until whoami confirms
 refreshAuth();

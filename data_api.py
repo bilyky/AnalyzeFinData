@@ -568,6 +568,53 @@ def read_scorecard(horizon_days: int = 10) -> dict:
     return _cached(f"scorecard:{horizon_days}", 300.0, _load)
 
 
+def read_symbol(symbol: str) -> dict:
+    """Aggregate all available data for one symbol: research row, 90-day price
+    series for charting, backtest accuracy, and account holding if held."""
+    sym = (symbol or "").upper().strip()
+    def _load():
+        import json
+        import risk_utils
+        out: dict = {"symbol": sym}
+
+        # ── Research row ──────────────────────────────────────────────────────
+        research = read_research()
+        row = next((r for r in research.get("rows", []) if r["symbol"] == sym), None)
+        out["research"] = row
+
+        # ── 90-day price series (closes + volume) for the mini-chart ──────────
+        path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
+        chart = []
+        if path.exists():
+            try:
+                ts = json.load(open(path)).get("Time Series (Daily)", {})
+                dates = sorted(ts.keys())[-90:]
+                chart = [{"date": d,
+                          "close": round(float(ts[d]["4. close"]), 2),
+                          "volume": int(float(ts[d].get("5. volume", 0)))} for d in dates]
+            except Exception:
+                pass
+        out["chart"] = chart
+
+        # ── Backtest accuracy ─────────────────────────────────────────────────
+        import backtest_levels
+        out["backtest"] = backtest_levels.backtest_symbol(sym)
+
+        # ── Account holding (any real account or game) ───────────────────────
+        holding = None
+        for acct in read_accounts().get("accounts", []):
+            for h in acct.get("holdings", []):
+                if h.get("symbol") == sym:
+                    holding = {"account_id": acct["id"], "account_label": acct["label"], **h}
+                    break
+            if holding:
+                break
+        out["holding"] = holding
+
+        return out
+    return _cached(f"symbol:{sym}", 60.0, _load)
+
+
 def read_backtest(symbol: str, horizon: int = 20) -> dict:
     """Walk-forward accuracy of the support/resistance levels for one symbol
     (backtest_levels.backtest_symbol). Cached 10 min — it scans full history."""

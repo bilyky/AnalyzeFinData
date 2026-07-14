@@ -225,6 +225,13 @@ def create_app():
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, data_api.read_research)
 
+    # ── Symbol detail (all-in-one for the symbol modal) ──────────────────────
+
+    @app.get("/api/symbol/{symbol}")
+    async def symbol_detail(symbol: str):
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, data_api.read_symbol, symbol)
+
     # ── Level backtest (support/resistance accuracy) ──────────────────────────
 
     @app.get("/api/backtest")
