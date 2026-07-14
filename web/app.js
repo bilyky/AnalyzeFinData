@@ -172,7 +172,7 @@ async function loadDashboard() {
         pb.innerHTML = dashPicks.map((p, i) => `
             <tr data-sym="${p.Symbol}">
                 <td>${i + 1}</td>
-                <td class="font-semibold">${p.Symbol}<div class="text-xs mut">${p.Industry || ""}</div></td>
+                <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${p.Symbol}">${p.Symbol}<div class="text-xs mut">${p.Industry || ""}</div></td>
                 <td>${p.PGR || "—"}</td>
                 <td class="px-live">${fmt$(p.Price)}</td>
                 <td>${fmt$(p.Stop)}</td>
@@ -193,7 +193,7 @@ async function loadDashboard() {
     } else {
         posb.innerHTML = dashPositions.map((p) => `
             <tr data-sym="${p.symbol}">
-                <td class="font-semibold">${p.symbol}</td>
+                <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${p.symbol}">${p.symbol}</td>
                 <td>${p.qty}</td>
                 <td>${fmt$(p.cost)}</td>
                 <td class="px-live">${fmt$(p.current_price)}</td>
@@ -288,7 +288,7 @@ async function loadAccounts() {
             const stopTitle = h.stop_source ? `stop source: ${h.stop_source}${h.buy_date ? " (as of " + h.buy_date + ")" : ""}` : "";
             const tgtTitle = h.target_source ? `target source: ${h.target_source}` : "";
             return `<tr data-acct="${a.id}" data-sym="${sym}" data-buy="${entry ?? ""}" data-qty="${h.qty ?? ""}">
-                <td class="font-semibold">${sym}${instrumentBadge(h.instrument)}</td>
+                <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${sym}">${sym}${instrumentBadge(h.instrument)}</td>
                 <td>${h.qty ?? "—"}</td>
                 <td>${fmt$(entry)}</td>
                 <td class="px-live">${fmt$(cur)}</td>
@@ -387,7 +387,7 @@ async function loadRotation() {
     const rv = res.reserves || [];
     resb.innerHTML = rv.length ? rv.map((r) => `
         <tr>
-            <td class="font-semibold">${r.Symbol}</td>
+            <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${r.Symbol}">${r.Symbol}</td>
             <td class="text-xs">${r.Industry || ""}</td>
             <td>${r.PGR || "—"}</td>
             <td class="${cls(r.S10)}">${Number(r.S10).toFixed(1)}</td>
@@ -541,7 +541,7 @@ async function loadScorecard() {
     const misses = sc.winner_selling_misses || [];
     $("misses-body").innerHTML = misses.length ? misses.map((m) => `
         <tr>
-            <td class="font-semibold">${m.symbol}</td>
+            <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${m.symbol}">${m.symbol}</td>
             <td class="text-xs mut">${m.date || "—"}</td>
             <td class="text-xs mut">${m.reason || "—"}</td>
             <td class="neg">+${m.fwd_return_pct}%</td>
@@ -662,7 +662,7 @@ function renderResearch() {
     const num = (v, d = 2) => (v == null ? "—" : Number(v).toFixed(d));
     $("research-body").innerHTML = rows.length ? rows.map((r) => `
         <tr>
-            <td class="font-semibold">${r.symbol}${instrumentBadge(r.instrument)}</td>
+            <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${r.symbol}">${r.symbol}${instrumentBadge(r.instrument)}</td>
             <td><div class="truncate text-xs ${industryColor(r.industry_strength)}" style="max-width:70px"
                      title="${(r.industry || "")}${r.industry_strength ? " — " + r.industry_strength : ""}">${r.industry || "—"}</div></td>
             <td class="text-xs whitespace-nowrap">${pgrCell(r.prev_pgr, r.pgr)}</td>
@@ -891,17 +891,13 @@ $("sm-close").addEventListener("click", closeSymbolModal);
 $("sym-modal").addEventListener("click", (e) => { if (e.target === $("sym-modal")) closeSymbolModal(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSymbolModal(); });
 
-// Wire every rendered data-sym row/cell to open the symbol modal on click.
-// Uses event delegation on document since rows are re-rendered frequently.
+// Wire every rendered data-sym row to open the symbol modal when the symbol
+// name cell is clicked. Uses event delegation — works for any table re-rendered
+// after page load. The symbol cell must carry data-open="sym" (added in each
+// row template) so we don't accidentally open on price/P&L cell clicks.
 document.addEventListener("click", (e) => {
-    const td = e.target.closest("td");
-    if (!td) return;
-    const tr = td.closest("tr[data-sym]");
-    if (!tr) return;
-    // Only open on click of the first cell (symbol name) — not the whole row,
-    // so live-price cells, P&L cells, etc. still select/copy normally.
-    if (td !== tr.firstElementChild) return;
-    openSymbol(tr.dataset.sym);
+    const cell = e.target.closest("[data-open]");
+    if (cell) { openSymbol(cell.dataset.open); return; }
 });
 
 // ── Init ─────────────────────────────────────────────────────────────────────
