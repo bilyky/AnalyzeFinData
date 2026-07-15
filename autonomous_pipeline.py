@@ -88,9 +88,16 @@ def get_top_5_picks():
         ws = wb["Research"]
         
         candidates = []
+        seen_symbols = set()
         for row in ws.iter_rows(min_row=2, values_only=True):
             sym = row[3]
             if not sym: continue
+            
+            # De-duplicate: Ensure each symbol is only processed once
+            sym_clean = str(sym).strip().upper()
+            if sym_clean in seen_symbols:
+                continue
+            seen_symbols.add(sym_clean)
             
             pgr = str(row[6] or "")
             price = row[10] or 0.0
