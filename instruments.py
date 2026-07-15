@@ -15,7 +15,6 @@ algorithm is built for these instruments (see CLAUDE.md R&D roadmap).
 
 import json
 from pathlib import Path
-import ai_client
 
 _SCARCITY_CACHE_FILE = Path(__file__).resolve().parent / "Data" / "scarcity_cache.json"
 
@@ -96,6 +95,7 @@ def is_scarcity_asset(symbol: str, industry_str: str) -> bool:
     Does '{s}' ({ind}) belong to this group? Respond with exactly 'YES' or 'NO'. No explanation.
     """
     try:
+        import ai_client
         res = ai_client.evaluate(system, user, max_tokens=5, temperature=0.0)
         is_scarcity = "YES" in (res or "").strip().upper()
     except Exception as e:

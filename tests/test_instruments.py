@@ -58,7 +58,7 @@ class TestExcludeSwingRouting(unittest.TestCase):
         mock_cache = {}
         with mock.patch("instruments._load_scarcity_cache", return_value=mock_cache), \
              mock.patch("instruments._save_scarcity_cache") as mock_save, \
-             mock.patch("instruments.ai_client.evaluate", return_value="YES") as mock_eval:
+             mock.patch("ai_client.evaluate", return_value="YES") as mock_eval:
             
             is_scarcity = instruments.is_scarcity_asset("GLD", "Gold Mining")
             self.assertTrue(is_scarcity)
@@ -78,7 +78,7 @@ class TestExcludeSwingRouting(unittest.TestCase):
         mock_cache = {}
         with mock.patch("instruments._load_scarcity_cache", return_value=mock_cache), \
              mock.patch("instruments._save_scarcity_cache") as mock_save, \
-             mock.patch("instruments.ai_client.evaluate", return_value="NO") as mock_eval:
+             mock.patch("ai_client.evaluate", return_value="NO") as mock_eval:
             
             is_scarcity = instruments.is_scarcity_asset("AAPL", "Technology")
             self.assertFalse(is_scarcity)

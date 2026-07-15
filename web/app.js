@@ -276,7 +276,7 @@ $("login-form").addEventListener("submit", async (e) => {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 let activeTab = "dashboard";
-const VALID_TABS = ["dashboard", "research", "accounts", "rotation", "history", "system", "about"];
+const VALID_TABS = ["dashboard", "research", "accounts", "rotation", "history", "scorecard", "system", "about"];
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
