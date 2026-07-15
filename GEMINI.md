@@ -47,3 +47,28 @@ To maximize data accuracy while eliminating API rate-limits, suspended sessions,
 *   **Active Trading Hours:** During active market hours (weekdays 6:30 AM - 1:15 PM PST), bypass the static local workbook and execute the **regular live process**:
     1.  **Primary:** Query the live E*TRADE Production API for real-time streaming quotes.
     2.  **Agnostic Fallback:** If E*TRADE fails or is missing specific ticker quotes, immediately fallback to scrape Google Finance.
+
+### 🛡️ State-Aware Persistent Profile Modes (MANUAL vs. ADAPTIVE)
+To guarantee predictability across automated daily executions:
+*   **Manual Override Lock:** Executing a run with an explicit `--profile <PROFILE>` CLI parameter locks the state into **`"profile_mode": "MANUAL"`**. Subsequent automated morning tasks (which run with no CLI parameters) will **strictly respect and run under your locked profile**, completely disabling automatic overrides.
+*   **Adaptive Restoration:** To hand control back to the autopilot, execute a manual run with `--profile ADAPTIVE`. This restores **`"profile_mode": "ADAPTIVE"`**, enabling dynamic regime selectors on all subsequent automated daily runs.
+
+### ⚙️ Adaptive Cash-Deployment Upgrade Gate (Capital Efficiency Rule)
+To prevent the portfolio from holding excessive, non-productive cash buffer during high-conviction bottoming opportunities:
+*   **The Trigger:** When on autopilot (`ADAPTIVE` mode) and the market regime evaluates to `DEFENSIVE`, the system automatically audits your local state:
+    1.  **Cash Check:** Is your cash balance greater than **40.0%** of your total portfolio equity?
+    2.  **Setup Check:** Do we detect **2 or more strong, safe, and verified bottom setups** (`Setup == 1`, combined momentum score `>= 9.5`, and 500-day Z-Score `< 2.5` to avoid bubble-chasing)?
+*   **The Action:** If both conditions are met, the autopilot **automatically upgrades today's strategy profile from DEFENSIVE to BALANCED for this daily session**, opening up 2 additional slots to deploy idle cash safely.
+
+### 🕒 Two-Factor Dynamic Market Hours Check (Stale-Price Prevention)
+To completely prevent executing orders on stale weekend or holiday prices:
+*   **The Check:** Before proceeding to execute any trades, the system performs a **two-factor live validation**:
+    1.  **Official Clock:** Pings E*TRADE's `/v1/market/clock.json` to verify `currentStatus == "REGULAR"`.
+    2.  **Empirical SPY Ticker:** Pings a live quote for the `SPY` ETF and converts its `dateTimeUTC` to NY Time. If the last trade did NOT occur today, the market is treated as closed (Holiday/Weekend).
+*   **Dynamic Fallback:** If the network or E*TRADE API is offline, the check seamlessly falls back to our local weekend and static NYSE holiday filters, ensuring the system remains indestructible and never blocks.
+
+### 🧠 The Custom `aether-copilot` Workspace Agent Skill
+This repository has been augmented with a custom **Gemini CLI Agent Skill** located at `.gemini/skills/aether-copilot`. 
+*   **Core Philosophy:** The skill strictly enforces that **the LLM is only used for qualitative reasoning and decision-making** (grading setups, exit second-opinions, and summaries), while **all heavy lifting (fetches, sizing, and trading) is handled deterministically by Python scripts.**
+*   **Activation:** To load the skill into your interactive Gemini CLI session, you must manually run `/skills reload`. Verify it is active by running `/skills list`.
+
