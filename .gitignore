@@ -21,3 +21,5 @@ venv/
 Thumbs.db
 .DS_Store
 .env
+aether-copilot/
+aether-copilot.skill

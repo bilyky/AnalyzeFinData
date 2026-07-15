@@ -30,6 +30,16 @@ _CRYPTO = frozenset({
     "BITO", "BITI", "BITX", "ETHU", "ETHD", "ETHE", "GBTC", "BTF", "YBTC", "ETHA",
 })
 
+# In-process cache so repeated calls within one run never re-read the JSON file.
+_scarcity_mem: dict | None = None
+
+
+def _mem_cache() -> dict:
+    global _scarcity_mem
+    if _scarcity_mem is None:
+        _scarcity_mem = _load_scarcity_cache()
+    return _scarcity_mem
+
 
 def classify(symbol) -> str:
     """Return 'crypto', 'leveraged_inverse', or 'normal'."""
@@ -67,42 +77,35 @@ def _save_scarcity_cache(cache: dict):
 
 
 def is_scarcity_asset(symbol: str, industry_str: str) -> bool:
-    """
-    Dynamically use AI to classify if an asset fits Grantham's 'Hard Asset' Scarcity Core.
-    We classify assets as Scarcity if they represent metals, mining, agricultural commodities,
-    farming inputs/fertilizers, water, grid/power transmission, uranium, or energy.
-    """
+    """True when the symbol belongs to Grantham's 'Hard Asset' Scarcity Core
+    (metals, mining, agriculture, water, grid utilities, primary energy). Result
+    is cached in-process and persisted to Data/scarcity_cache.json so AI is only
+    called once per symbol across the lifetime of a run."""
     s = (symbol or "").upper().strip()
     ind = (industry_str or "").strip()
-    
-    # Exclude leveraged and crypto immediately
+
     if classify(s) != "normal":
         return False
-        
-    cache = _load_scarcity_cache()
+
+    cache = _mem_cache()
     if s in cache:
         return cache[s]
-        
-    system = "You are Project AETHER's elite financial asset classifier. Output exactly the string 'YES' or 'NO'."
-    user = f"""
-    Evaluate if the stock '{s}' (Industry: '{ind}') represents a 'Hard Asset' / 'Scarcity Core' commodity or utility play.
-    This includes:
-    1. Metals & Mining: Gold, silver, copper, base metals, steel, lithium, iron, metallurgical coal, uranium, rare earths.
-    2. Agriculture & Water: Farming, crop production, timber, forestry, agricultural fertilizers/chemicals, water utilities.
-    3. Grid & Energy Utilities: Power generation, electric grid transmission, regulated gas/water utilities.
-    4. Primary Energy: Oil, gas, coal extraction.
 
-    Does '{s}' ({ind}) belong to this group? Respond with exactly 'YES' or 'NO'. No explanation.
-    """
+    system = "You are a financial asset classifier. Output exactly 'YES' or 'NO'."
+    user = (
+        f"Does '{s}' (Industry: '{ind}') belong to the Hard Asset / Scarcity Core group?\n"
+        "Group includes: metals, mining, agriculture, water utilities, grid/power transmission, "
+        "uranium, rare earths, oil, gas, coal extraction.\n"
+        "Respond with exactly YES or NO."
+    )
     try:
         import ai_client
         res = ai_client.evaluate(system, user, max_tokens=5, temperature=0.0)
-        is_scarcity = "YES" in (res or "").strip().upper()
+        result = "YES" in (res or "").strip().upper()
     except Exception as e:
-        print(f"Warning: AI classification failed for {s}: {e}. Defaulting to NO.")
-        is_scarcity = False
-        
-    cache[s] = is_scarcity
-    _save_scarcity_cache(cache)
-    return is_scarcity
+        print(f"Warning: AI classification failed for {s}: {e}. Not caching — will retry next run.")
+        return False   # don't persist a transient failure as a permanent NO
 
+    cache[s] = result
+    _save_scarcity_cache(cache)
+    return result

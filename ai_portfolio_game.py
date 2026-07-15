@@ -125,8 +125,10 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
     current_standard_usd = sum(pos["qty"] * prices.get(sym, pos["cost"]) 
                                for sym, pos in state["positions"].items() if not pos.get("is_scarcity", False))
                                
-    print(f"  [AETHER Buckets] Total Scarcity Value: ${current_scarcity_usd:.2f} (Limit: ${scarcity_limit_usd:.2f})")
-    print(f"  [AETHER Buckets] Total Standard Value: ${current_standard_usd:.2f} (Limit: ${standard_limit_usd:.2f})")
+    import logging as _log
+    _log.debug("[Buckets] Scarcity $%.2f / $%.2f  Standard $%.2f / $%.2f",
+               current_scarcity_usd, scarcity_limit_usd,
+               current_standard_usd, standard_limit_usd)
 
     buys_executed = 0
     for buy in top_buys:
@@ -796,8 +798,8 @@ def _has_strong_setups_today(min_score=9.5) -> bool:
             sym = row[3]
             if not sym:
                 continue
-            setup = row[20]
-            if setup == 1 or setup == 'OK' or setup == '1':
+            setup = str(row[20] or "").strip()
+            if setup in ('1', 'OK'):
                 try:
                     s10 = float(row[24] or 0)
                     l60 = float(row[25] or 0)
@@ -865,7 +867,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
             print("Workbook not found. AI Management deferred.")
             return
 
-        wb = openpyxl.load_workbook(XLSX_FILE, data_only=True)
+        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
         ws = wb["Research"]
         
         symbols_to_check = list(state["positions"].keys())
