@@ -450,11 +450,40 @@ async function refreshPrices() {
 let acctHoldings = [];   // flat [{acctId, symbol, buy, qty}] for live-price refresh
 let gameCashBalance = 0;
 
+// Accounts tab sorting state
+let accountsSort = { key: "symbol", dir: 1 };
+const ACCTS_TEXT_COLS = ["symbol", "status"];
+
+function accountsSortValue(h, key) {
+    if (key === "symbol") return h.symbol || "";
+    if (key === "status") return h.status || "";
+    if (key === "buy") return h.buy == null ? -999999 : Number(h.buy);
+    if (key === "current") return h.current == null ? -999999 : Number(h.current);
+    if (key === "stop") return h.stop == null ? -999999 : Number(h.stop);
+    if (key === "target") return h.target == null ? -999999 : Number(h.target);
+    return h[key] == null ? -999999 : Number(h[key]);
+}
+
 async function loadAccounts() {
     const data = await api("/api/accounts");
     const box = $("accounts-container");
     const accts = data.accounts || [];
     acctHoldings = [];
+
+    // Sort holdings for each account dynamically before mapping
+    const { key, dir } = accountsSort;
+    accts.forEach((a) => {
+        if (a.holdings) {
+            a.holdings.sort((x, y) => {
+                let xv = accountsSortValue(x, key);
+                let yv = accountsSortValue(y, key);
+                if (typeof xv === "string") {
+                    return xv.localeCompare(yv) * dir;
+                }
+                return (xv - yv) * dir;
+            });
+        }
+    });
 
     box.innerHTML = accts.map((a) => {
         const isGame = a.type === "game";
@@ -470,8 +499,8 @@ async function loadAccounts() {
 
         const rows = (a.holdings || []).map((h) => {
             const sym = h.symbol;
-            const entry = isGame ? h.cost : h.buy;
-            const cur   = isGame ? h.current_price : h.current;
+            const entry = h.buy;
+            const cur   = h.current;
             acctHoldings.push({ acctId: a.id, symbol: sym, buy: entry, qty: h.qty });
             const s10 = h.s10, l60 = h.l60, total = h.total;
             const scoreCells = isGame ? "" :
@@ -488,15 +517,20 @@ async function loadAccounts() {
                 <td class="px-live">${fmt$(cur)}</td>
                 <td class="pnl-$ ${cls(h.pnl)}">${fmt$(h.pnl)}</td>
                 <td class="pnl-pct ${cls(h.pnl_pct)}">${fmtPct(h.pnl_pct)}</td>
-                <td class="${weakStop(h, h.stop_source) ? "text-amber-400" : ""}" title="${stopTitle}">${fmt$(h.stop ?? h.stop_loss)}</td>
+                <td class="${weakStop(h, h.stop_source) ? "text-amber-400" : ""}" title="${stopTitle}">${fmt$(h.stop)}</td>
                 ${isGame ? `<td>${h.days_held ?? "—"} d</td>` : `<td class="${weakStop(h, h.target_source) ? "text-amber-400" : ""}" title="${tgtTitle}">${fmt$(h.target)}</td>`}
                 ${scoreCells}
             </tr>`;
         }).join("");
 
         const scoreHdr = isGame
-            ? `<th>Stop</th><th>Days</th>`
-            : `<th>Stop</th><th>Target</th><th>S10</th><th>L60</th><th>Score</th><th>Status</th>`;
+            ? `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th><th data-sort="days_held" class="cursor-pointer hover:text-blue-400">Days</th>`
+            : `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th>
+               <th data-sort="target" class="cursor-pointer hover:text-blue-400">Target</th>
+               <th data-sort="s10" class="cursor-pointer hover:text-blue-400">S10</th>
+               <th data-sort="l60" class="cursor-pointer hover:text-blue-400">L60</th>
+               <th data-sort="total" class="cursor-pointer hover:text-blue-400">Score</th>
+               <th data-sort="status" class="cursor-pointer hover:text-blue-400">Status</th>`;
 
         return `
         <div>
@@ -507,10 +541,15 @@ async function loadAccounts() {
             <div class="overflow-x-auto">
                 <table class="data-table">
                     <thead><tr>
-                        <th>Symbol</th><th>Qty</th><th>Entry</th><th>Current</th>
-                        <th>P&amp;L $</th><th>P&amp;L %</th>${scoreHdr}
+                        <th data-sort="symbol" class="cursor-pointer hover:text-blue-400">Symbol</th>
+                        <th data-sort="qty" class="cursor-pointer hover:text-blue-400">Qty</th>
+                        <th data-sort="buy" class="cursor-pointer hover:text-blue-400">Entry</th>
+                        <th data-sort="current" class="cursor-pointer hover:text-blue-400">Current</th>
+                        <th data-sort="pnl" class="cursor-pointer hover:text-blue-400">P&amp;L $</th>
+                        <th data-sort="pnl_pct" class="cursor-pointer hover:text-blue-400">P&amp;L %</th>
+                        ${scoreHdr}
                     </tr></thead>
-                    <tbody>${rows || `<tr><td colspan="10" class="text-center text-slate-500 py-4">No holdings.</td></tr>`}</tbody>
+                    <tbody>${rows || `<tr><td colspan="12" class="text-center text-slate-500 py-4">No holdings.</td></tr>`}</tbody>
                 </table>
             </div>
         </div>`;
@@ -518,6 +557,20 @@ async function loadAccounts() {
 
     refreshAccountPrices();
 }
+
+// Delegate table header clicks for accounts-container sorting
+$("accounts-container").addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    const key = th.dataset.sort;
+    if (accountsSort.key === key) {
+        accountsSort.dir *= -1;
+    } else {
+        accountsSort.dir = ACCTS_TEXT_COLS.includes(key) ? 1 : -1;
+    }
+    accountsSort.key = key;
+    loadAccounts();
+});
 
 async function refreshAccountPrices() {
     if (!acctHoldings.length) return;

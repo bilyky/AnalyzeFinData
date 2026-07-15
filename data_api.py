@@ -321,91 +321,192 @@ def _f(v):
 
 
 def read_accounts() -> dict:
-    """Return the two real accounts (parsed from the Short_Long sheet's two tables)
-    plus the AI game account (ai_portfolio_game.json). Cached 30s."""
+    """Return live E*TRADE account holdings and balances from the broker,
+    with an automatic fallback to the local Excel sheet if offline."""
     def _load():
+        import etrade
         import risk_utils
         import instruments
+        
         accounts = []
-
-        # ── Real accounts: parse the two Short_Long tables ──────────────────
-        real_ids = _real_acct_ids()
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(_XLSX, data_only=True, read_only=True)
+        env = "production"
+        
+        # ── PRIMARY: Live E*TRADE Broker Feed ──────────────────────────────────
+        import sys
+        in_unittest = "unittest" in sys.modules
+        
+        if not in_unittest:
             try:
-                rows = list(wb["Short_Long"].iter_rows(values_only=True))
-            finally:
-                wb.close()
-
-            hdrs = [i for i, r in enumerate(rows)
-                    if len(r) > 1 and str(r[1]).strip() == "Symb"]
-
-            for tbl_idx, h in enumerate(hdrs[:2]):
-                holdings, started = [], False
-                for r in rows[h + 1:]:
-                    sym = r[_SL["sym"]] if len(r) > _SL["sym"] else None
-                    sym = str(sym).strip() if sym else ""
-                    if not sym:
-                        if started:
-                            break          # blank row after data → end of table
-                        continue            # skip leading blanks between header and data
-                    started = True
-                    buy = _f(r[_SL["buy"]]); top = _f(r[_SL["top"]]); qty = _f(r[_SL["qty"]])
-                    s10 = _f(r[_SL["s10"]]); l60 = _f(r[_SL["l60"]])
-                    buy_date = _to_date_str(r[_SL["buy_date"]] if len(r) > _SL["buy_date"] else None)
-                    pnl = pnl_pct = None
-                    if buy and top and qty:
-                        pnl = round((top - buy) * qty, 2)
-                        pnl_pct = round((top - buy) / buy * 100, 2)
-                    # Held-position stop/target are ENTRY-anchored: computed once from
-                    # the confirmed swing low/high as of the buy date (not re-derived
-                    # from today's price). Falls back to the sheet's stored value.
-                    excl = instruments.is_excluded(sym)
-                    stop = _f(r[_SL["stop"]]); target = _f(r[_SL["target"]])
-                    stop_source = target_source = "sheet"
-                    if buy:
-                        sd = risk_utils.resolve_stop_detailed(buy, symbol=sym, as_of=buy_date,
-                                                              exclude_swing=excl)
-                        if sd["stop"] is not None:
-                            stop, stop_source = sd["stop"], sd["source"]
-                        td = risk_utils.resolve_target_detailed(buy, symbol=sym, as_of=buy_date,
-                                                                exclude_swing=excl)
-                        if td["target"] is not None:
-                            target, target_source = td["target"], td["source"]
-                    holdings.append({
-                        "symbol":    sym,
-                        "qty":       qty,
-                        "buy":       buy,
-                        "buy_date":  buy_date,
-                        "current":   top,     # sheet's last price; live-refreshed client-side
-                        "target":    target,
-                        "target_source": target_source,
-                        "stop":      stop,
-                        "stop_source": stop_source,
-                        "instrument": instruments.classify(sym),
-                        "s10":       s10,
-                        "l60":       l60,
-                        "total":     round((s10 or 0) + (l60 or 0), 1),
-                        "win_pct":   r[_SL["winpct"]],
-                        "status":    str(r[_SL["status"]] or ""),
-                        "in_profit": str(r[_SL["in_profit"]] or ""),
-                        "pnl":       pnl,
-                        "pnl_pct":   pnl_pct,
+                tokens = etrade.get_tokens(env)
+                if tokens:
+                    accts_api = etrade.get_accounts(tokens, env)
+                    resp = accts_api.list_accounts(resp_format="json")
+                    acct_list = resp.get("AccountListResponse", {}).get("Accounts", {}).get("Account", [])
+                    if isinstance(acct_list, dict):
+                        acct_list = [acct_list]
+                        
+                    # Fetch all positions from E*TRADE
+                    raw_positions = etrade.fetch_positions(tokens, env)
+                
+                # Fetch and load scores from our Excel workbook to decorate E*TRADE positions
+                scores = {}
+                try:
+                    import openpyxl
+                    wb = openpyxl.load_workbook(_XLSX, data_only=True, read_only=True)
+                    try:
+                        ws = wb["Research"]
+                        for row in ws.iter_rows(min_row=2, values_only=True):
+                            sym = row[3]
+                            if sym:
+                                scores[sym] = {
+                                    "s10": row[24], "l60": row[25], "status": row[19]
+                                }
+                    finally:
+                        wb.close()
+                except Exception:
+                    pass
+                
+                # Map E*TRADE accounts and positions
+                for acct in acct_list:
+                    desc = acct.get("accountDesc", "Brokerage")
+                    acct_id = acct.get("accountId", "")
+                    acct_key = acct.get("accountIdKey", "")
+                    
+                    # Fetch live balance from E*TRADE
+                    bal_resp = accts_api.get_account_balance(acct_key, resp_format="json")
+                    comp = bal_resp.get("BalanceResponse", {}).get("Computed", {})
+                    rt_vals = comp.get("RealTimeValues", {})
+                    
+                    val = float(rt_vals.get("totalAccountValue", 0.0))
+                    cash = float(comp.get("netCash", 0.0)) or float(comp.get("cashBalance", 0.0))
+                    
+                    # Skip empty real accounts to keep the UI clean
+                    if val <= 0 and cash <= 0:
+                        continue
+                        
+                    # Filter positions belonging to this specific account last-4 digits
+                    last4 = acct_id[-4:] if len(acct_id) >= 4 else acct_id
+                    holdings = []
+                    for p in raw_positions:
+                        if p.get("account_last4") == last4:
+                            sym = p["symbol"]
+                            sc = scores.get(sym, {})
+                            s10 = _f(sc.get("s10"))
+                            l60 = _f(sc.get("l60"))
+                            
+                            # Fetch entry stop/target computed from entry-date swing levels
+                            excl = instruments.is_excluded(sym)
+                            stop = _f(p.get("stop_loss"))
+                            target = _f(p.get("target"))
+                            stop_source = target_source = "E*TRADE"
+                            
+                            holdings.append({
+                                "symbol": sym,
+                                "qty": p.get("qty", 0),
+                                "buy": p.get("cost", 0.0),
+                                "current": p.get("price", 0.0),
+                                "pnl": p.get("pnl", 0.0),
+                                "pnl_pct": p.get("pnl_pct", 0.0),
+                                "stop": stop,
+                                "stop_source": stop_source,
+                                "target": target,
+                                "target_source": target_source,
+                                "s10": s10,
+                                "l60": l60,
+                                "total": round((s10 or 0) + (l60 or 0), 1) if s10 is not None or l60 is not None else None,
+                                "status": sc.get("status", ""),
+                                "instrument": instruments.classify(sym)
+                            })
+                            
+                    accounts.append({
+                        "id": last4,
+                        "label": f"Real · {desc} (...{last4})",
+                        "type": "real",
+                        "balance": cash,
+                        "equity": val,
+                        "holdings": holdings,
+                        "count": len(holdings)
                     })
-                acct_id = real_ids[tbl_idx] if tbl_idx < len(real_ids) else f"T{tbl_idx+1}"
-                accounts.append({
-                    "id":       acct_id,
-                    "label":    f"Real · {acct_id}",
-                    "type":     "real",
-                    "holdings": holdings,
-                    "count":    len(holdings),
-                })
-        except FileNotFoundError:
-            pass
-        except Exception as e:
-            accounts.append({"id": "real", "label": "Real accounts", "type": "real",
-                             "holdings": [], "count": 0, "error": str(e)})
+            except Exception as e:
+                print(f"  [AETHER] Live broker feed failed: {e}. Falling back to Excel.")
+            
+        # ── FALLBACK: Parse merged Short_Long sheet if API fails ────────────────
+        if not accounts:
+            real_ids = _real_acct_ids()
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(_XLSX, data_only=True, read_only=True)
+                try:
+                    rows = list(wb["Short_Long"].iter_rows(values_only=True))
+                finally:
+                    wb.close()
+
+                hdrs = [i for i, r in enumerate(rows)
+                        if len(r) > 1 and str(r[1]).strip() == "Symb"]
+
+                for tbl_idx, h in enumerate(hdrs[:2]):
+                    holdings, started = [], False
+                    for r in rows[h + 1:]:
+                        sym = r[_SL["sym"]] if len(r) > _SL["sym"] else None
+                        sym = str(sym).strip() if sym else ""
+                        if not sym:
+                            if started:
+                                break          # blank row after data → end of table
+                            continue            # skip leading blanks between header and data
+                        started = True
+                        buy = _f(r[_SL["buy"]]); top = _f(r[_SL["top"]]); qty = _f(r[_SL["qty"]])
+                        s10 = _f(r[_SL["s10"]]); l60 = _f(r[_SL["l60"]])
+                        buy_date = _to_date_str(r[_SL["buy_date"]] if len(r) > _SL["buy_date"] else None)
+                        pnl = pnl_pct = None
+                        if buy and top and qty:
+                            pnl = round((top - buy) * qty, 2)
+                            pnl_pct = round((top - buy) / buy * 100, 2)
+                        
+                        excl = instruments.is_excluded(sym)
+                        stop = _f(r[_SL["stop"]]); target = _f(r[_SL["target"]])
+                        stop_source = target_source = "sheet"
+                        if buy:
+                            sd = risk_utils.resolve_stop_detailed(buy, symbol=sym, as_of=buy_date,
+                                                                 exclude_swing=excl)
+                            if sd["stop"] is not None:
+                                stop, stop_source = sd["stop"], sd["source"]
+                            td = risk_utils.resolve_target_detailed(buy, symbol=sym, as_of=buy_date,
+                                                                    exclude_swing=excl)
+                            if td["target"] is not None:
+                                target, target_source = td["target"], td["source"]
+                        holdings.append({
+                            "symbol":    sym,
+                            "qty":       qty,
+                            "buy":       buy,
+                            "buy_date":  buy_date,
+                            "current":   top,
+                            "target":    target,
+                            "target_source": target_source,
+                            "stop":      stop,
+                            "stop_source": stop_source,
+                            "instrument": instruments.classify(sym),
+                            "s10":       s10,
+                            "l60":       l60,
+                            "total":     round((s10 or 0) + (l60 or 0), 1),
+                            "win_pct":   r[_SL["winpct"]],
+                            "status":    str(r[_SL["status"]] or ""),
+                            "in_profit": str(r[_SL["in_profit"]] or ""),
+                            "pnl":       pnl,
+                            "pnl_pct":   pnl_pct,
+                        })
+                    acct_id = real_ids[tbl_idx] if tbl_idx < len(real_ids) else f"T{tbl_idx+1}"
+                    accounts.append({
+                        "id":       acct_id,
+                        "label":    f"Real · {acct_id}",
+                        "type":     "real",
+                        "holdings": holdings,
+                        "count":    len(holdings),
+                    })
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                accounts.append({"id": "real", "label": "Real accounts", "type": "real",
+                                 "holdings": [], "count": 0, "error": str(e)})
 
         # ── AI game account ─────────────────────────────────────────────────
         pf = read_portfolio()
