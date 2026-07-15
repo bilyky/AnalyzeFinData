@@ -5,6 +5,200 @@ const fmt$ = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString(undefine
 const fmtPct = (n) => (n == null ? "—" : (n >= 0 ? "+" : "") + Number(n).toFixed(2) + "%");
 const cls = (n) => (n > 0 ? "pos" : n < 0 ? "neg" : "mut");
 
+// ── central aether wiki database ───────────────────────────────────────────
+const AETHER_WIKI = {
+    "buying_ratio": {
+        title: "Marc Chaikin Buying Ratio (BR) Model",
+        origin: "Marc Chaikin - Founder of Chaikin Analytics, creator of Chaikin Money Flow.",
+        body: "Compiles relative volume, Money Flow, oscillators, and weekly seasonality into a unified momentum score in the range <code>[-10.0, +10.0]</code>. Sourced directly from Chaikin's PowerGauge rating parameters.",
+        config: [
+            "PGR Rating Weight: 1=Be- (-2) to 5=Bu+ (+2)",
+            "Risk/Reward Weight: R/R < 0 (-1), >=1.0 (+1), >=3.0 (+2)",
+            "LT Trend Weight: Weak/Recovery (+1), Strong/Extended (-1)",
+            "Institutional Money Flow: Strong (+0.75), Weak (-0.75)",
+            "Overbought/Oversold: Optimal (+1.0), Wait (-0.25)",
+            "Industry Strength: Weak/Contrarian (+0.5), Strong (-0.5)"
+        ]
+    },
+    "s10_score": {
+        title: "S10 Short-Term Entry Score",
+        origin: "Project AETHER Core Team (Calibration Backtest, 336k observations, 2023-2025).",
+        body: "Standardizes short-term entry quality over a 10-day trading horizon. Aggregates volume spikes, momentum exhaustion oscillators, and contrarian overlays.",
+        config: [
+            "Relative Volume Weight: High (+2.5), Very High (+0.5), Low (-2.0)",
+            "OB/OS Zone Weight: Optimal (+3.0), Early (+1.0), Wait (-2.0)",
+            "Money Flow Weight: Strong (+3.0), Weak (-2.0)",
+            "Contrarian Industry Strength: Weak (+2.0), Strong (-2.0)",
+            "Contrarian LT Trend: Weak (+1.5), Strong (-1.5)",
+            "Overlays: Seasonality (+-1.0) | Regime (+-1.0) | Fibonacci (+-1.0)"
+        ]
+    },
+    "l60_score": {
+        title: "L60 Long-Term Position Score",
+        origin: "Project AETHER Core Team (Calibration Backtest, 336k observations, 2023-2025).",
+        body: "Measures intermediate-to-long-term trend strength and durability over a rolling 60-day horizon, focusing on core moving average alignments and trend stability.",
+        config: [
+            "Contrarian LT Trend Weight: Weak (+4.0), Strong (-3.0)",
+            "Relative Volume Weight: High (+2.0), Low (-1.0)",
+            "Money Flow Weight: Strong (+2.5), Weak (-2.0)",
+            "Contrarian Industry Strength: Weak (+2.0), Strong (-1.5)",
+            "OB/OS Weight: Optimal (+1.5), Early (+0.5), Wait (-0.5)",
+            "Overlays: Seasonality (+-0.5) | Regime (+-1.5) | Fibonacci (+-0.5)"
+        ]
+    },
+    "seasonality_engine": {
+        title: "Weekly Seasonality Detection Engine",
+        origin: "Quantitative Research standard, analyzing 25 years of historical closes.",
+        body: "Groups historical closing prices by month and week-of-month, calculating the historical 10-day forward return of that calendar week to apply weighted tailwinds or headwinds.",
+        config: [
+            "Strong Tailwind: +1.0 score boost",
+            "Mild Tailwind: +0.5 score boost",
+            "Neutral Week: 0.0 score impact",
+            "Headwind: -0.5 to -1.0 score reduction",
+            "Required History: Minimum 3 years of OHLCV daily data"
+        ]
+    },
+    "fibonacci_rsi": {
+        title: "Fibonacci Channels & RSI Divergences",
+        origin: "J. Welles Wilder Jr. (RSI, 1978) & Classical Fibonacci Standards.",
+        body: "Maps price relative to Fibonacci retracement levels (23.6%, 38.2%, 50.0%, 61.8%) computed from historical high-low channels and tracks price-RSI(14) momentum divergences to spot bottoms.",
+        config: [
+            "Fibonacci Channel: Based on 100-day High/Low range",
+            "RSI Length: 14-period daily standard",
+            "RSI Divergence: Bullish divergence (lower price low + higher RSI low) triggers +1.0 score boost."
+        ]
+    },
+    "candlestick_engine": {
+        title: "Japanese Candlestick Recognition Engine",
+        origin: "Munehisa Homma (1700s, original Japanese rice-trading methodology).",
+        body: "Aggregates 17 distinct candlestick patterns over a rolling 5-day lookback window. Based on traditional Japanese pattern configurations.",
+        config: [
+            "Patterns Scanned: Engulfing, Harami, Star, Doji, Piercing, Tasuki, Hikkake, Slingshot, Double Trouble, etc.",
+            "Body Threshold: > 1% of 30-day average close to differentiate meaningful bodies from flat noise."
+        ]
+    },
+    "chart_formations": {
+        title: "Classical Chart Formations",
+        origin: "Classical technical analysis standards.",
+        body: "Identifies structural technical formations including Head & Shoulders (bearish), Inverse Head & Shoulders (bullish bottoming), Double Tops/Bottoms, Cup & Handle, and Bull/Bear Flags.",
+        config: [
+            "Inverse H&S (Bullish): Score boost of +1.5",
+            "Double Bottom (Bullish): Score boost of +1.0",
+            "Double Top / H&S (Bearish): Score reduction of -1.5"
+        ]
+    },
+    "trend_crossovers": {
+        title: "Trend Momentum Crossovers",
+        origin: "Classical moving average crossover standards.",
+        body: "Monitors moving average crossings (Golden/Death Crosses) and MACD crossings (signal line and trend crossovers) to lock in entry direction and confirm trend reversals.",
+        config: [
+            "Golden Cross (Bullish): 20 SMA crossing above 50 SMA.",
+            "Death Cross (Bearish): 20 SMA crossing below 50 SMA.",
+            "MACD Standard: 12-period EMA, 26-period EMA, and 9-period signal line."
+        ]
+    },
+    "contrarian_calibration": {
+        title: "Contrarian Calibration Override",
+        origin: "AETHER Backtest Calibration Research (Phase A).",
+        body: "Programmatically negates the combined pattern score (multiplying it by -1.0) because backtests prove overbought patterns act as contrarian indicators, prioritizing oversold, bottoming, and recovery plays.",
+        config: [
+            "Multiplier: -1.0 x raw pattern score",
+            "Prioritization: Depreciates overbought momentum and prioritizes deeply oversold, coiled springs."
+        ]
+    },
+    "strategy_profiles": {
+        title: "Regime-Adaptive Strategy Profiles",
+        origin: "Modern Portfolio Theory (MPT) & Adaptive Capital Sizing standards.",
+        body: "Auto-scales risk parameters based on the broad market's intermediate trend score (SPY Long60): Defensive, Balanced, and Aggressive profiles.",
+        config: [
+            "Defensive: Max 3 positions, 10% trade size, 50% cash buffer (Active when SPY L60 < -2)",
+            "Balanced: Max 5 positions, 15% trade size, 20% cash buffer (Active when -2 <= SPY L60 <= 2)",
+            "Aggressive: Max 6 positions, 15% trade size, 0% cash buffer (Active when SPY L60 > 2)"
+        ]
+    },
+    "vic_snipers": {
+        title: "Trader Vic Reversal Bottom Snipers",
+        origin: "Victor Sperandeo ('Trader Vic') - Principles of Professional Speculation.",
+        body: "Mathematically scans trailing 80-bar price action to identify Trader Vic's legendary bottom-reconstruction setups, completely eliminating false breakout traps.",
+        config: [
+            "1-2-3 Reversal: Price breaks trendline, test of low establishes a HIGHER low, then price breaks above intermediate peak.",
+            "2B Pattern (Bear Trap): Price breaks below a major previous low, then immediately closes back ABOVE the low (reclaims support) in 1-6 bars.",
+            "Score Boost: +2.0 to overall Pattern Score"
+        ]
+    },
+    "breadth_filter": {
+        title: "S&P Market Breadth Filter",
+        origin: "John Bollinger (Volatility & Index Breadth) & S&P Equal-Weight Delta standards.",
+        body: "Monitors the score gap between Cap-Weighted SPY and Equal-Weighted RSP. If SPY is rising but RSP is weak, it flags a technology-concentrated, narrow market top and automatically downgrades the active risk profile.",
+        config: [
+            "Breadth Gap: SPY Long60 - RSP Long60",
+            "Trigger Delta: > 4.0",
+            "Action: Automatically downgrades the active strategy profile by 1 level (e.g. BALANCED -> DEFENSIVE) to preserve cash cushion."
+        ]
+    },
+    "bubble_guard": {
+        title: "2.5-Sigma Bubble Guard",
+        origin: "Standard Deviation Volatility Band standards.",
+        body: "Calculates standard deviation distance from the 500-day moving average. If a stock exceeds 2.5 standard deviations above its 500 SMA, it is blacklisted from new purchases, avoiding overextended parabolic peaks.",
+        config: [
+            "Length: 500-day Simple Moving Average",
+            "Z-Score Threshold: > 2.5 (Super-Bubble Zone)",
+            "Action: Automatic buy blacklist"
+        ]
+    },
+    "scarcity_core": {
+        title: "Dynamic Structural Scarcity Core (80/20)",
+        origin: "Jeremy Grantham - Founder of Grantham, Mayo, & van Otterloo (GMO), 'Hard Asset Secular Supercycle'.",
+        body: "Enforces a strict 20% portfolio allocation cap reserved strictly for metals, agriculture, and grid utility assets to insulate cash from tech-led market downturns. Employs a dynamic LLM-powered asset classifier.",
+        config: [
+            "Core Allocation: 20% of total portfolio equity strictly reserved for Scarcity plays.",
+            "Satellite Allocation: 80% for standard equities (Tech, Consumer, Energy).",
+            "Classifier: Dynamic LLM evaluation with local cache (Data/scarcity_cache.json).",
+            "Shrink-Ray Sizer: Dynamically downsizes the order quantity to fit exactly under the remaining room in the 20% bucket, rather than rejecting the buy."
+        ]
+    },
+    "flower_protection": {
+        title: "Unified Exit Policy & Flower Protection",
+        origin: "Peter Lynch - Famous manager of Fidelity Magellan Fund (14-year +29% CAGR), 'Weed Cutting'.",
+        body: "Enforces Peter Lynch's core philosophy of 'watering your flowers and cutting your weeds'. Hard ATR stop-loss floors always override soft exit signals. Soft exits on profitable, above-50-DMA positions are downgraded to REVIEW to let winners run.",
+        config: [
+            "Hard Exit: Close price <= Stop-Loss floor (Enforced immediately, 1.5x/2.5x/3.5x ATR by profile).",
+            "Soft Exit: S10+L60 < 0 (Triggers sell unless protected).",
+            "Flower Protection: Bypasses soft exit if position is in profit AND trades above its 50 SMA (downgrades to REVIEW)."
+        ]
+    },
+    "gap_guard": {
+        title: "Catastrophic Gap Guard (CNXC Trap)",
+        origin: "Project AETHER Loss Minimization Heuristic.",
+        body: "Instantly rejects any buy order if today's price is more than 8% below yesterday's workbook close, protecting capital from waterfall crashes on earnings panics.",
+        config: [
+            "Trigger: Today's Price <= 0.92 x Yesterday's Close",
+            "Action: Instant buy order rejection",
+            "Bypass: If Trader Vic bottom sniper confirms a volume-backed, capitulation exhaustion gap."
+        ]
+    },
+    "antifragile_gate": {
+        title: "Antifragile Safety Gates",
+        origin: "Nassim Nicholas Taleb - Author of 'Fooled by Randomness', 'The Black Swan', 'Antifragile'.",
+        body: "Employs zero-trust risk safety gates. Logs a 'Failure DNA' ledger of closed losses, programmatically adjusting model coefficients over future runs to prevent repeating errors.",
+        config: [
+            "Failure DNA: Tracks indicators, setups, and scores on the day of closed losses.",
+            "Vulnerability Ledger: Saved locally to Data/vulnerability_ledger.json.",
+            "Action: Programmatically penalizes identical fragile setups in future rating calculations."
+        ]
+    },
+    "decision_eval": {
+        title: "Systematic Sell & Decision Quality Evaluation",
+        origin: "Decision Quality Theory & Backtracking Analytics standards.",
+        body: "Evaluates exits with a hybrid qualitative rubric combining fundamental risks with technical charts. Automatically logs, scores, and audits decision quality for both closed trades and active reviews.",
+        config: [
+            "Logging: Data/decision_log.jsonl updated on every run.",
+            "Scorecard: Runs decision_eval.py scoring all mature decisions after a 10-day forward window.",
+            "Verification: Automatically emails the Retrospective Scorecard directly to your inbox daily."
+        ]
+    }
+};
+
 async function api(path, opts) {
     const r = await fetch(path, opts);
     if (!r.ok) throw new Error(`${path} → ${r.status}`);
@@ -732,6 +926,7 @@ function loadTab(tab) {
     else if (tab === "history") loadHistory();
     else if (tab === "scorecard") loadScorecard();
     else if (tab === "system") loadSystem();
+    else if (tab === "about") {} // No API data to load for static about tab
 }
 
 // ── Polling loops ──────────────────────────────────────────────────────────────
@@ -900,8 +1095,80 @@ document.addEventListener("click", (e) => {
     if (cell) { openSymbol(cell.dataset.open); return; }
 });
 
+// Wiki Modal Interactive Logic
+let AETHER_LIVE_RULES = null;
+async function fetchLiveRules() {
+    try {
+        AETHER_LIVE_RULES = await api("/api/wiki/config");
+        console.log("  [AETHER Wiki] Live rules hook connected successfully:", AETHER_LIVE_RULES);
+    } catch (e) {
+        console.log("  [AETHER Wiki] Live rules hook offline, falling back to static defaults:", e);
+    }
+}
+
+function initWiki() {
+    fetchLiveRules(); // Fetch on startup
+    document.querySelectorAll("[data-wiki]").forEach((card) => {
+        card.classList.add("cursor-pointer", "transition", "duration-200", "hover:scale-[1.01]");
+        card.addEventListener("click", () => {
+            const key = card.getAttribute("data-wiki");
+            const entry = AETHER_WIKI[key];
+            if (entry) {
+                $("wiki-title").textContent = entry.title;
+                $("wiki-origin").innerHTML = "<b>Origin:</b> " + entry.origin;
+                $("wiki-body").innerHTML = entry.body;
+
+                let configs = entry.config;
+                // Hook dynamic configurations from the live Python backend if available!
+                if (key === "strategy_profiles" && AETHER_LIVE_RULES) {
+                    configs = [
+                        `Defensive: Max ${AETHER_LIVE_RULES.DEFENSIVE.max_positions} positions, ${AETHER_LIVE_RULES.DEFENSIVE.max_allocation_pct * 100}% trade size, ${AETHER_LIVE_RULES.DEFENSIVE.cash_buffer_pct * 100}% cash buffer (Active when SPY L60 < -2)`,
+                        `Balanced: Max ${AETHER_LIVE_RULES.BALANCED.max_positions} positions, ${AETHER_LIVE_RULES.BALANCED.max_allocation_pct * 100}% trade size, ${AETHER_LIVE_RULES.BALANCED.cash_buffer_pct * 100}% cash buffer (Active when -2 <= SPY L60 <= 2)`,
+                        `Aggressive: Max ${AETHER_LIVE_RULES.AGGRESSIVE.max_positions} positions, ${AETHER_LIVE_RULES.AGGRESSIVE.max_allocation_pct * 100}% trade size, ${AETHER_LIVE_RULES.AGGRESSIVE.cash_buffer_pct * 100}% cash buffer (Active when SPY L60 > 2)`
+                    ];
+                } else if (key === "scarcity_core" && AETHER_LIVE_RULES) {
+                    configs = [
+                        `Core Allocation: ${AETHER_LIVE_RULES.BALANCED.scarcity_allocation_pct * 100}% of total portfolio equity strictly reserved for Scarcity plays.`,
+                        `Satellite Allocation: ${(1.0 - AETHER_LIVE_RULES.BALANCED.scarcity_allocation_pct) * 100}% for standard equities (Tech, Consumer, Energy).`,
+                        "Classifier: Dynamic LLM evaluation with local cache (Data/scarcity_cache.json).",
+                        "Shrink-Ray Sizer: Dynamically downsizes the order quantity to fit exactly under the remaining room in the scarcity bucket, rather than rejecting the buy."
+                    ];
+                } else if (key === "flower_protection" && AETHER_LIVE_RULES) {
+                    configs = [
+                        `Hard Exit: Close price <= Stop-Loss floor (Enforced immediately, ${AETHER_LIVE_RULES.DEFENSIVE.atr_multiplier}x/${AETHER_LIVE_RULES.BALANCED.atr_multiplier}x/${AETHER_LIVE_RULES.AGGRESSIVE.atr_multiplier}x ATR by profile).`,
+                        "Soft Exit: S10+L60 < 0 (Triggers sell unless protected).",
+                        "Flower Protection: Bypasses soft exit if position is in profit AND trades above its 50 SMA (downgrades to REVIEW)."
+                    ];
+                }
+
+                const configList = $("wiki-config");
+                configList.innerHTML = "";
+                configs.forEach((cfg) => {
+                    const li = document.createElement("li");
+                    li.className = "flex items-start gap-2 text-slate-300";
+                    li.innerHTML = `<span class="text-purple-400 font-semibold">•</span> <span>${cfg}</span>`;
+                    configList.appendChild(li);
+                });
+
+                $("wiki-modal").classList.remove("hidden");
+                document.body.style.overflow = "hidden";
+            }
+        });
+    });
+}
+
+$("wiki-close-btn").addEventListener("click", closeWiki);
+$("wiki-modal").addEventListener("click", (e) => {
+    if (e.target === $("wiki-modal")) closeWiki();
+});
+
+function closeWiki() {
+    $("wiki-modal").classList.add("hidden");
+    document.body.style.overflow = "";
+}
 // ── Init ─────────────────────────────────────────────────────────────────────
 setAdminUI(null);   // default to logged-out UI until whoami confirms
 refreshAuth();
 switchTab("dashboard");
 startPolling();
+initWiki();

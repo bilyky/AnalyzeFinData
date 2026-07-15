@@ -10,8 +10,10 @@ import unittest
 import tempfile
 import json
 import openpyxl
+import pytz
 from unittest import mock
 from pathlib import Path
+from datetime import datetime as real_datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -140,6 +142,140 @@ class TestBubbleZScoreCalculation(unittest.TestCase):
 
     def test_missing_file_returns_none(self):
         self.assertIsNone(game.calculate_bubble_z_score("NOPE"))
+
+
+class TestCoreSatelliteAllocation(unittest.TestCase):
+    def test_scarcity_asset_downsizing_and_caps(self):
+        # Scenario: Portfolio equity = $10,000. Scarcity Cap = 20% ($2,000). Standard Cap = 80% ($8,000).
+        # Cash = $5,000. Min Cash required = $0.
+        state = {
+            "balance": 5000.0,
+            "equity": 10000.0,
+            "positions": {
+                # Already hold $1,500 of scarcity assets (75 shares * $20)
+                "GLD": {"qty": 75, "cost": 20.0, "is_scarcity": True}
+            },
+            "history": []
+        }
+        
+        # We try to buy a scarcity asset (SLV) which costs $10 per share.
+        # Max additional room in scarcity bucket is $2,000 - $1,500 = $500.
+        # With $5,000 cash and 1 available slot, dynamic sizing wants to buy $5,000 worth (500 shares).
+        # But the 20% scarcity cap should restrict/downsize this to exactly 50 shares ($500).
+        rules = {"scarcity_allocation_pct": 0.20, "max_allocation_pct": 0.50, "atr_multiplier": 2.5}
+        top_buys = [{"sym": "SLV", "price": 10.0, "total": 12.0, "industry": "Gold Mining", "bottom_desc": ""}]
+        new_tx = []
+        
+        # Mock instruments classification so SLV is treated as scarcity
+        with mock.patch("instruments.is_scarcity_asset", return_value=True), \
+             mock.patch.object(game, "calculate_bubble_z_score", return_value=None), \
+             mock.patch.object(game, "backtrack_verify", return_value=(True, "Verified")), \
+             mock.patch("risk_utils.calculate_atr", return_value=1.0):
+            
+            n = game._execute_buys(state, top_buys, 1, 0.0, rules, "2026-07-11", "11:30", new_tx, prices={"GLD": 20.0, "SLV": 10.0})
+            
+        self.assertEqual(n, 1)
+        self.assertIn("SLV", state["positions"])
+        # Verified: Downsized to exactly 50 shares to fit the $500 remaining room in the 20% scarcity bucket!
+        self.assertEqual(state["positions"]["SLV"]["qty"], 50)
+        self.assertEqual(state["positions"]["SLV"]["is_scarcity"], True)
+
+
+class TestAfterHoursOrderQueuing(unittest.TestCase):
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=False)
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("openpyxl.load_workbook")
+    def test_after_hours_orders_are_queued(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Research"
+        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
+        ws.append([1, None, None, "TSLA", "Technology", None, "Bu", None, None, None, 400.0, None, None, None, None, None, None, None, None, None, "1", None, None, 0.65, 5.0, 5.0])
+        mock_load_wb.return_value = wb
+        
+        state = {
+            "balance": 5000.0,
+            "equity": 10000.0,
+            "positions": {},
+            "queued_orders": []
+        }
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"TSLA": 400.0}
+        
+        game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+        
+        # Verify that TSLA was queued for buying instead of executed immediately
+        self.assertEqual(len(state["queued_orders"]), 1)
+        self.assertEqual(state["queued_orders"][0]["symbol"], "TSLA")
+        self.assertEqual(state["queued_orders"][0]["type"], "BUY")
+        self.assertNotIn("TSLA", state["positions"])
+
+
+class TestMarketHolidayChecks(unittest.TestCase):
+    @mock.patch("ai_portfolio_game.etrade.get_tokens", return_value=None)
+    @mock.patch("ai_portfolio_game.datetime.datetime")
+    def test_market_hours_returns_false_on_holiday(self, mock_datetime, mock_get_tokens):
+        # Friday, July 3, 2026 (Independence Day Observed) at 10:00 AM
+        tz_la = pytz.timezone("America/Los_Angeles")
+        mock_now = tz_la.localize(real_datetime(2026, 7, 3, 10, 0, 0))
+        mock_datetime.now.return_value = mock_now
+        
+        hours_ok = game.is_market_hours()
+        self.assertFalse(hours_ok)
+        
+    @mock.patch("ai_portfolio_game.etrade.get_tokens", return_value=None)
+    @mock.patch("ai_portfolio_game.datetime.datetime")
+    def test_market_hours_returns_true_on_standard_day(self, mock_datetime, mock_get_tokens):
+        # Tuesday, July 14, 2026 at 10:00 AM PST (Standard market session)
+        tz_la = pytz.timezone("America/Los_Angeles")
+        mock_now = tz_la.localize(real_datetime(2026, 7, 14, 10, 0, 0))
+        mock_datetime.now.return_value = mock_now
+        
+        hours_ok = game.is_market_hours()
+        self.assertTrue(hours_ok)
+
+
+class TestPersistentProfileModes(unittest.TestCase):
+    @mock.patch("ai_portfolio_game.get_market_regime", return_value="DEFENSIVE")
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("openpyxl.load_workbook")
+    def test_persistent_manual_profile_override(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_regime):
+        # 1. First run: Explicit manual override via CLI should lock into MANUAL mode
+        state = {
+            "balance": 5000.0,
+            "equity": 10000.0,
+            "positions": {},
+            "queued_orders": [],
+            "profile": "DEFENSIVE",
+            "profile_mode": "ADAPTIVE"
+        }
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {}
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Research"
+        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
+        mock_load_wb.return_value = wb
+
+        game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+        self.assertEqual(state["profile"], "BALANCED")
+        self.assertEqual(state["profile_mode"], "MANUAL")
+        
+        # 2. Second run: Automated run (no manual_profile CLI arg passed)
+        # It must respect the MANUAL locked profile, even though get_market_regime() is returning "DEFENSIVE"!
+        game.run_daily_ai_management(force=True, manual_profile=None)
+        self.assertEqual(state["profile"], "BALANCED")
+        self.assertEqual(state["profile_mode"], "MANUAL")
+        
+        # 3. Third run: Restore adaptive pilot via manual_profile="ADAPTIVE"
+        game.run_daily_ai_management(force=True, manual_profile="ADAPTIVE")
+        self.assertEqual(state["profile"], "DEFENSIVE")
+        self.assertEqual(state["profile_mode"], "ADAPTIVE")
 
 
 if __name__ == "__main__":

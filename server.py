@@ -175,6 +175,17 @@ def create_app():
             fresh = {}
         return {s: _price_cache.get(s, 0) for s in sym_list}
 
+    # ── Wiki Config Hook ──────────────────────────────────────────────────────
+
+    @app.get("/api/wiki/config")
+    async def wiki_config():
+        import ai_portfolio_game
+        return {
+            "DEFENSIVE": ai_portfolio_game.get_strategy_rules("DEFENSIVE"),
+            "BALANCED": ai_portfolio_game.get_strategy_rules("BALANCED"),
+            "AGGRESSIVE": ai_portfolio_game.get_strategy_rules("AGGRESSIVE")
+        }
+
     # ── Picks ─────────────────────────────────────────────────────────────────
 
     @app.get("/api/picks")

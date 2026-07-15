@@ -39,3 +39,11 @@ To completely eliminate calendar, date-stamping, or virtual machine clock-lag di
 *   **The Mandate:** Whenever the user asks ANY question regarding account balances, portfolio equity, active holdings, performance progress, or daily trading status:
     *   **Action 1 (Mandatory First Step):** You **MUST** execute an empirical system clock check (e.g., running `Get-Date` via a shell tool) as the very first action in that turn.
     *   **No Exceptions:** Never guess, assume, or trust your memory or the loaded context for the current date, time, or weekday. Always verify the active system clock first before compiling any data, generating any reports, or answering any inquiries.
+
+### 🌐 Price Fetching & Fallback Hierarchy (Zero-Trust Data Rule)
+To maximize data accuracy while eliminating API rate-limits, suspended sessions, and sequential network latency:
+
+*   **The Rule:** If local workbook data (`state_of_the_day.xlsx`) is available and we are outside of active market hours (after-hours and weekends), **always** read prices directly from this local file first (near-instant 0.1-second lookup).
+*   **Active Trading Hours:** During active market hours (weekdays 6:30 AM - 1:15 PM PST), bypass the static local workbook and execute the **regular live process**:
+    1.  **Primary:** Query the live E*TRADE Production API for real-time streaming quotes.
+    2.  **Agnostic Fallback:** If E*TRADE fails or is missing specific ticker quotes, immediately fallback to scrape Google Finance.

@@ -106,16 +106,34 @@ def _active_setup_symbols(ws):
 
 
 def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
-                  today, now_time, new_transactions):
+                  today, now_time, new_transactions, prices=None):
     """Fill up to available_slots from ranked top_buys while preserving the cash
     buffer. Rejects super-bubble names (>2.5σ over the 500-day mean) and unverified
     setups, falling through to the next candidate so a slot isn't wasted. Mutates
     state (balance/positions/history) and appends to new_transactions; returns the
-    number of buys executed."""
+    number of buys executed. Enforces Core-Satellite allocation limits for Scarcity/Standard plays."""
+    if prices is None:
+        prices = {}
+    
+    # 20% Scarcity bucket and 80% Standard bucket allocations
+    scarcity_allocation_pct = rules.get("scarcity_allocation_pct", 0.20)
+    scarcity_limit_usd = state["equity"] * scarcity_allocation_pct
+    standard_limit_usd = state["equity"] * (1.0 - scarcity_allocation_pct)
+    
+    current_scarcity_usd = sum(pos["qty"] * prices.get(sym, pos["cost"]) 
+                               for sym, pos in state["positions"].items() if pos.get("is_scarcity", False))
+    current_standard_usd = sum(pos["qty"] * prices.get(sym, pos["cost"]) 
+                               for sym, pos in state["positions"].items() if not pos.get("is_scarcity", False))
+                               
+    print(f"  [AETHER Buckets] Total Scarcity Value: ${current_scarcity_usd:.2f} (Limit: ${scarcity_limit_usd:.2f})")
+    print(f"  [AETHER Buckets] Total Standard Value: ${current_standard_usd:.2f} (Limit: ${standard_limit_usd:.2f})")
+
     buys_executed = 0
     for buy in top_buys:
         if buys_executed >= available_slots:
             break
+
+        is_scarcity = instruments.is_scarcity_asset(buy["sym"], buy.get("industry", ""))
 
         # Re-calculate cash buffer dynamically based on remaining available slots
         current_available = available_slots - buys_executed
@@ -134,8 +152,41 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                 print(f"🛑 AI BUY REJECTED: {buy['sym']} - {v_msg}")
                 continue
 
+            # Core-Satellite Allocation Checking & Downsizing logic
             cost = qty * buy["price"]
+            if is_scarcity:
+                remaining_scarcity_room_usd = scarcity_limit_usd - current_scarcity_usd
+                if remaining_scarcity_room_usd <= 0:
+                    print(f"🛑 AI BUY REJECTED (Scarcity Limit Full): {buy['sym']} is scarcity play, but 20% scarcity bucket is fully allocated.")
+                    continue
+                if cost > remaining_scarcity_room_usd:
+                    old_qty = qty
+                    qty = int(remaining_scarcity_room_usd // buy["price"])
+                    print(f"⚠️ Downsizing scarcity buy {buy['sym']} from {old_qty} to {qty} shares to fit 20% scarcity cap.")
+                    if qty <= 0:
+                        print(f"🛑 AI BUY REJECTED (Scarcity Limit Full): Remaining room is less than 1 share of {buy['sym']}.")
+                        continue
+                    cost = qty * buy["price"]
+            else:
+                remaining_standard_room_usd = standard_limit_usd - current_standard_usd
+                if remaining_standard_room_usd <= 0:
+                    print(f"🛑 AI BUY REJECTED (Standard Cap Full): {buy['sym']} is standard play, but 80% standard bucket is fully allocated.")
+                    continue
+                if cost > remaining_standard_room_usd:
+                    old_qty = qty
+                    qty = int(remaining_standard_room_usd // buy["price"])
+                    print(f"⚠️ Downsizing standard buy {buy['sym']} from {old_qty} to {qty} shares to fit 80% standard cap.")
+                    if qty <= 0:
+                        print(f"🛑 AI BUY REJECTED (Standard Cap Full): Remaining room is less than 1 share of {buy['sym']}.")
+                        continue
+                    cost = qty * buy["price"]
+
             state["balance"] -= cost
+            # Update cumulative bucket counts for sequence
+            if is_scarcity:
+                current_scarcity_usd += cost
+            else:
+                current_standard_usd += cost
 
             atr = risk_utils.calculate_atr(buy["sym"])
             if atr and atr > 0:
@@ -145,12 +196,17 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                 stop_loss = round(buy["price"] * 0.92, 2)
                 stop_desc = f"8% Fallback{buy.get('bottom_desc', '')}"
 
-            state["positions"][buy["sym"]] = {"qty": qty, "cost": buy["price"], "stop_loss": stop_loss}
+            state["positions"][buy["sym"]] = {
+                "qty": qty, 
+                "cost": buy["price"], 
+                "stop_loss": stop_loss,
+                "is_scarcity": is_scarcity
+            }
             tx = {"date": today, "time": now_time, "type": "BUY", "symbol": buy["sym"], "price": buy["price"], "qty": qty}
             state["history"].append(tx)
             new_transactions.append(tx)
             buys_executed += 1
-            print(f"🤖 AI LIVE BUY: {qty} shares of {buy['sym']} at ${buy['price']} ({stop_desc})")
+            print(f"🤖 AI LIVE BUY: {qty} shares of {buy['sym']} at ${buy['price']} ({stop_desc}, Scarcity={is_scarcity})")
     return buys_executed
 
 
@@ -286,6 +342,7 @@ def get_strategy_rules(profile):
         return {
             "max_positions": 6,
             "max_allocation_pct": 0.15, # Optimized from 0.25 to minimize drawdowns
+            "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite hard asset cap
             "atr_multiplier": 3.5,       # Loose stop to avoid shakeouts in high-beta stocks
             "min_score_threshold": 2.0,  
             "cash_buffer_pct": 0.10      
@@ -294,6 +351,7 @@ def get_strategy_rules(profile):
         return {
             "max_positions": 3,          # Restrict to top 3 ultra-conviction plays
             "max_allocation_pct": 0.10, # Optimized from 0.15 for maximum capital preservation (Capped at $1,000 per trade)
+            "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite hard asset cap
             "atr_multiplier": 1.5,       # Tight stop-loss to preserve capital
             "min_score_threshold": 10.0, 
             "cash_buffer_pct": 0.50      
@@ -302,6 +360,7 @@ def get_strategy_rules(profile):
         return {
             "max_positions": 5,
             "max_allocation_pct": 0.15, # Optimized from 0.20 (Perfect sweet spot between risk and growth)
+            "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite hard asset cap
             "atr_multiplier": 2.5,
             "min_score_threshold": 5.0,
             "cash_buffer_pct": 0.20
@@ -452,29 +511,96 @@ def get_live_google_price(symbol):
     return None
 
 def is_market_hours():
-    """Return True if current time is within active US equity market hours (6:30 AM - 1:15 PM PST, weekdays)."""
+    """Return True if current time is within active US equity market hours (6:30 AM - 1:15 PM PST, weekdays) and NOT a market holiday."""
     try:
         tz_la = pytz.timezone("America/Los_Angeles")
         now_la = datetime.datetime.now(tz_la)
         
-        # Check if weekend (Saturday=5, Sunday=6)
+        # 1. Hard Time-Window check: Must be within 6:30 AM - 1:15 PM PST
+        start_time = now_la.replace(hour=6, minute=30, second=0, microsecond=0)
+        end_time = now_la.replace(hour=13, minute=15, second=0, microsecond=0)
+        if not (start_time <= now_la <= end_time):
+            return False
+            
+        # 2. Dynamic Live Verification (Clock API + SPY Ticker)
+        try:
+            tokens = etrade.get_tokens("production")
+            if tokens:
+                is_open = etrade.is_market_open_now(tokens, "production")
+                if is_open is not None:
+                    if not is_open:
+                        print("  [AETHER] Dynamic Market Checks confirm market is CLOSED (Holiday/Weekend).")
+                    return is_open
+        except Exception as e:
+            print(f"  [AETHER] Dynamic market clock failed: {e}. Falling back to static datetime checks.")
+            
+        # 3. Fallback: Weekend check (Saturday=5, Sunday=6)
         if now_la.weekday() in (5, 6):
             return False
             
-        start_time = now_la.replace(hour=6, minute=30, second=0, microsecond=0)
-        end_time = now_la.replace(hour=13, minute=15, second=0, microsecond=0)
-        return start_time <= now_la <= end_time
+        # 4. Fallback: Static US Stock Market Holiday (NYSE)
+        holidays_2026 = {
+            "2026-01-01",  # New Year's Day
+            "2026-01-19",  # Martin Luther King Jr. Day
+            "2026-02-16",  # Presidents' Day
+            "2026-04-03",  # Good Friday
+            "2026-05-25",  # Memorial Day
+            "2026-06-19",  # Juneteenth National Independence Day
+            "2026-07-03",  # Independence Day (Observed)
+            "2026-09-07",  # Labor Day
+            "2026-11-26",  # Thanksgiving Day
+            "2026-12-25",  # Christmas Day
+            
+            # Future Years Support (2027)
+            "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+            "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24"
+        }
+        
+        today_str = now_la.strftime("%Y-%m-%d")
+        if today_str in holidays_2026:
+            return False
+            
+        return True
     except Exception:
         # Fallback to True if timezone check fails, to prevent blocking active hours
         return True
+
+def get_workbook_prices_fallback(symbols):
+    """Instantly map closing prices directly from the local workbook to bypass web scraping."""
+    quotes = {}
+    if not XLSX_FILE.exists():
+        return quotes
+    try:
+        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
+        ws = wb["Research"]
+        # Map all prices in one fast pass
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            sym = row[3]
+            price = row[10]
+            if sym and price and isinstance(price, (int, float)):
+                quotes[sym] = float(price)
+        wb.close()
+        
+        # Filter down to the requested symbols
+        return {s: quotes[s] for s in symbols if s in quotes and quotes[s] > 0}
+    except Exception as e:
+        print(f"  [AETHER] Failed to load local workbook prices: {e}")
+        return {}
 
 def get_live_prices(symbols):
     """Fetch real-time market prices via E*TRADE safely with automated recovery."""
     try:
         # Trading Hours Gate: If after hours or weekends, bypass E*TRADE entirely to prevent login lockouts!
         if not is_market_hours():
-            print("  [AETHER] After-hours detected — bypassing E*TRADE login to prevent lockout. Scraping Google Finance directly.")
-            return get_google_prices_fallback(symbols)
+            print("  [AETHER] After-hours detected — bypassing E*TRADE login to prevent lockout.")
+            print("  [AETHER] Attempting instant local price extraction from state_of_the_day.xlsx...")
+            quotes = get_workbook_prices_fallback(symbols)
+            # Find any missing gaps (symbols not in our local workbook)
+            missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
+            if missing:
+                print(f"  [AETHER] Local workbook missing prices for {missing}. Falling back to Google Finance.")
+                quotes.update(get_google_prices_fallback(missing))
+            return quotes
 
         # Call the hardened get_tokens() which is safe and has an active headless safety gate.
         # This ensures we always actively attempt to re-authenticate when tokens expire.
@@ -586,6 +712,20 @@ def send_daily_summary():
         state["equity"] = round(live_equity, 2)
         save_game(state)
 
+    # Build decision log reflection card
+    try:
+        sc = decision_eval.score_log(decision_eval.read_log())
+        refl = decision_eval.reflection(sc)
+        refl_html = f"""
+        <h3 style="color: #2c3e50; margin-top: 35px;">🔬 AI Decision Scorecard (Retrospective)</h3>
+        <div style="background: #fcf8e3; border: 1px solid #fbeed5; border-radius: 4px; padding: 15px; font-family: monospace; white-space: pre-wrap; font-size: 13px; line-height: 1.5; color: #c09853;">
+{refl}
+        </div>
+        """
+    except Exception as e:
+        print(f"Failed to include retrospective reflection in email: {e}")
+        refl_html = ""
+
     html = f"""
     <html>
     <body style="font-family: sans-serif; color: #333; max-width: 700px; margin: 0 auto; padding: 20px;">
@@ -633,6 +773,8 @@ def send_daily_summary():
             </tr>
         </table>
         
+        {refl_html}
+        
         <p style="margin-top: 35px; border-top: 1px solid #eee; padding-top: 15px; font-size: 11px; color: #7f8c8d;">
             🤖 <i>This is an automated performance report from your autonomous Project AETHER trading desk. All figures represent live, verified production-grade data.</i>
         </p>
@@ -657,10 +799,26 @@ def run_daily_ai_management(force=False, manual_profile=None):
         new_transactions = []
         
         # Determine strategy profile (Adaptive vs. Manual Override)
-        profile = manual_profile or get_market_regime()
+        if manual_profile and manual_profile.upper() == "ADAPTIVE":
+            profile = get_market_regime()
+            state["profile"] = profile
+            state["profile_mode"] = "ADAPTIVE"
+            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive pilot restored)")
+        elif manual_profile:
+            profile = manual_profile
+            state["profile"] = profile
+            state["profile_mode"] = "MANUAL"
+            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Manual Override - Locked)")
+        elif state.get("profile_mode") == "MANUAL":
+            profile = state.get("profile", "BALANCED")
+            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Manual Override - Locked)")
+        else:
+            profile = get_market_regime()
+            state["profile"] = profile
+            state["profile_mode"] = "ADAPTIVE"
+            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive)")
+            
         rules = get_strategy_rules(profile)
-        state["profile"] = profile
-        print(f"🤖 AI ACTIVE STRATEGY: {profile} ({'Manual' if manual_profile else 'Adaptive'})")
 
         if not XLSX_FILE.exists():
             print("Workbook not found. AI Management deferred.")
@@ -670,6 +828,15 @@ def run_daily_ai_management(force=False, manual_profile=None):
         ws = wb["Research"]
         
         symbols_to_check = list(state["positions"].keys())
+        # Dynamically heal/classify legacy positions
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            sym = row[3]
+            if sym in state["positions"] and "is_scarcity" not in state["positions"][sym]:
+                industry_str = row[4] or ""
+                is_scarcity = instruments.is_scarcity_asset(sym, industry_str)
+                state["positions"][sym]["is_scarcity"] = is_scarcity
+                print(f"  [AETHER State Healer] Classified existing position {sym} as scarcity={is_scarcity}")
+
         research_symbols = _active_setup_symbols(ws)
 
         queued = state.get("queued_orders", [])
@@ -776,7 +943,15 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 date=today, run_shadow=None)
             decision_entries.append(entry)
             if entry["rules_action"] == "SELL":
-                symbols_to_sell.append(sym)
+                if not is_market_hours():
+                    # Queue the sell instead of executing immediately
+                    if not any(q["symbol"] == sym and q["type"] == "SELL" for q in state.get("queued_orders", [])):
+                        state.setdefault("queued_orders", []).append({
+                            "type": "SELL", "symbol": sym, "reason": f"Exit triggered: {entry['rules_reason'] or 'Technical exit'}"
+                        })
+                        print(f"📝 [Queued] After-hours SELL queued for {sym}: {entry['rules_reason']}")
+                else:
+                    symbols_to_sell.append(sym)
             elif entry["rules_action"] == "REVIEW":
                 # Winner above its 50-DMA on a soft signal — hold, don't dump.
                 print(f"🌸 AI HOLD (winner-protected): {sym} — {entry['rules_reason']}")
@@ -834,13 +1009,23 @@ def run_daily_ai_management(force=False, manual_profile=None):
                             "sym": sym,
                             "price": price,
                             "total": total_score,
-                            "bottom_desc": bottom_desc
+                            "bottom_desc": bottom_desc,
+                            "industry": row[4]
                         })
             
             top_buys.sort(key=lambda x: x["total"], reverse=True)
 
-            _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
-                          today, now_time, new_transactions)
+            if not is_market_hours():
+                # Queue the buys up to available slots
+                for buy in top_buys[:available_slots]:
+                    if not any(q["symbol"] == buy["sym"] and q["type"] == "BUY" for q in state.get("queued_orders", [])):
+                        state.setdefault("queued_orders", []).append({
+                            "type": "BUY", "symbol": buy["sym"], "reason": "Top-ranked quantitative pick (After-Hours)"
+                        })
+                        print(f"📝 [Queued] After-hours BUY queued for {buy['sym']}")
+            else:
+                _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
+                              today, now_time, new_transactions, prices)
 
     except Exception as e:
         print(f"⚠️ SCRIPT ERROR: {e}")

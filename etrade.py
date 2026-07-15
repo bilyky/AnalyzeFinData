@@ -86,6 +86,16 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
     E*TRADE tokens are valid until midnight ET. Renew extends the session by 2 h.
     Call this before every API session to avoid mid-day expiry.
     """
+    # Proactive Age Check:
+    # E*TRADE tokens are valid for 2 hours (120 minutes) from last activity.
+    # To prevent redundant renewals (which E*TRADE may reject with a 401, resulting
+    # in immediate session revocation), we skip calling the actual renew endpoint
+    # if the token was saved less than 75 minutes ago.
+    age_min = (time.time() - tokens.get("saved_at", 0)) / 60
+    if age_min < 75:
+        print(f"  [AETHER] Token is only {age_min:.1f} min old. Skipping E*TRADE renewal endpoint and reusing token.")
+        return tokens
+
     from requests_oauthlib import OAuth1Session
     ck, cs, _, _ = _load_config(env)
     session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
@@ -562,6 +572,51 @@ def get_market(tokens, env="sandbox"):
 def get_accounts(tokens, env="sandbox"):
     ck, cs, _, _ = _load_config(env)
     return pyetrade.ETradeAccounts(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"], dev=(env == "sandbox"))
+
+
+def is_market_open_now(tokens, env="production") -> bool | None:
+    """
+    Antifragile market status check. Uses a two-factor verification:
+    1. Queries the official E*TRADE /v1/market/clock.json API.
+    2. Empirically verifies that the SPY ETF has traded today.
+    Returns True (Open), False (Closed/Holiday), or None on network failure.
+    """
+    from requests_oauthlib import OAuth1Session
+    import datetime
+    import pytz
+    
+    ck, cs, _, _ = _load_config(env)
+    session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
+    
+    try:
+        # Factor 1: Official Market Clock API
+        clock_url = "https://api.etrade.com/v1/market/clock.json"
+        clock_r = session.get(clock_url, verify=False, timeout=10)
+        if clock_r.ok:
+            clock_data = clock_r.json()
+            status = clock_data.get("ClockResponse", {}).get("currentStatus")
+            if status and status != "REGULAR":
+                return False  # Clock explicitly says closed, pre-market, or after-hours
+        
+        # Factor 2: Empirical SPY Quote Timestamp Check
+        quote_url = "https://api.etrade.com/v1/market/quote/SPY.json"
+        quote_r = session.get(quote_url, verify=False, timeout=10)
+        if quote_r.ok:
+            quote_data = quote_r.json().get("QuoteResponse", {}).get("QuoteData", [])
+            if quote_data:
+                dt_utc = quote_data[0].get("dateTimeUTC")
+                if dt_utc:
+                    trade_time = datetime.datetime.fromtimestamp(dt_utc, pytz.timezone("America/New_York"))
+                    now_ny = datetime.datetime.now(pytz.timezone("America/New_York"))
+                    
+                    # If the trade did NOT happen today, the market is closed (e.g. holiday)
+                    if trade_time.date() != now_ny.date():
+                        return False
+                        
+        # If both checks pass (Clock is REGULAR and SPY traded today), the market is truly open!
+        return True
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------

@@ -452,16 +452,6 @@ def main():
     log("Drafting and sending HTML report...")
     html = format_html_report(msg, picks, replacements, intel_ideas)
     notify.send_email(f"Daily Trade Report: {datetime.date.today()}", html, is_html=True)
-    # 8. Run AI Game Routine
-    log("Executing AI Portfolio Manager routine...")
-    try:
-        game_script = str(BASE_DIR / "ai_portfolio_game.py")
-        result = subprocess.run([sys.executable, game_script, "--run"], check=True, capture_output=True, encoding="utf-8", errors="replace")
-        log("AI Game Routine complete.")
-    except subprocess.CalledProcessError as e:
-        log(f"AI Game failed (Exit {e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}")
-    except Exception as e:
-        log(f"AI Game failed with unexpected error: {e}")
 
     log("Pipeline completed successfully.")
 

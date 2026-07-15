@@ -188,6 +188,66 @@ def chart_pattern_score(ohlcv_ts: dict, date_str: str, lookback: int = 250):
                         score += 1.5
                         names.append('InvH&S↑')
 
+    # ── Trader Vic 1-2-3 Reversal (bullish bottom) ──
+    # 1. Break of trendline (price closes above intermediate peak)
+    # 2. Test of low: Higher Low (Trough 2 > Trough 1)
+    # 3. Breakout above intermediate Peak
+    if len(closes) >= 80:
+        c80 = closes[-80:]
+        l80 = lows[-80:]
+        h80 = highs[-80:]
+        
+        # Local peaks and troughs (3 neighbors)
+        peaks_vic, _ = _find_peaks_troughs(h80, n=3)
+        _, troughs_vic = _find_peaks_troughs(l80, n=3)
+        
+        if len(troughs_vic) >= 2 and len(peaks_vic) >= 1:
+            # Look back to find a valid Trough1 < Peak < Trough2 sequence
+            # where Trough2 > Trough1 (Higher Low) and current close breaks above Peak
+            for i in range(len(troughs_vic) - 1, 0, -1):
+                t2_idx, t2_val = troughs_vic[i]
+                t1_idx, t1_val = troughs_vic[i - 1]
+                
+                if t2_val > t1_val:  # Higher Low (Test of Low)
+                    # Find highest peak between t1 and t2
+                    c_peaks = [p for p in peaks_vic if t1_idx < p[0] < t2_idx]
+                    if c_peaks:
+                        p_idx, p_val = max(c_peaks, key=lambda x: x[1])
+                        # Breakout: current close is above Peak high, and Trough2 occurred after Peak
+                        if t2_idx > p_idx and closes[-1] > p_val:
+                            # Peak shouldn't be too stale (within last 30 bars)
+                            if (len(c80) - 1 - p_idx) <= 30:
+                                score += 2.0
+                                names.append('Vic123↑')
+                                break
+
+    # ── Trader Vic 2B Reversal (bullish bear-trap) ──
+    # 1. Price breaks below previous support trough (Trough 1)
+    # 2. Immediate reversal closing back above Trough 1 (Bear Trap / Liquidity Reclaim)
+    if len(closes) >= 80:
+        c80 = closes[-80:]
+        l80 = lows[-80:]
+        
+        # Locate significant troughs (5 neighbors on each side)
+        _, troughs_vic2b = _find_peaks_troughs(l80, n=5)
+        
+        if troughs_vic2b:
+            for t_idx, prev_low in troughs_vic2b:
+                if t_idx < len(l80) - 5:  # Trough must be at least 5 bars old
+                    # Check if price broke below this trough recently (in the last 6 bars)
+                    break_idx = None
+                    for j in range(t_idx + 3, len(l80)):
+                        if l80[j] < prev_low:
+                            break_idx = j
+                            break
+                    
+                    if break_idx is not None and break_idx >= len(l80) - 6:
+                        # Price broke support. Has it closed back above today?
+                        if closes[-1] > prev_low and any(c80[k] < prev_low for k in range(break_idx, len(c80))):
+                            score += 2.0
+                            names.append('Vic2B↑')
+                            break
+
     # ── Double Top (bearish) ──
     if len(closes) >= 40:
         peaks, _ = _find_peaks_troughs(closes)

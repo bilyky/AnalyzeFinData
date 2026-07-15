@@ -13,6 +13,12 @@ This is a stopgap until a proper mean-reversion / volatility-band / inverse-awar
 algorithm is built for these instruments (see CLAUDE.md R&D roadmap).
 """
 
+import json
+from pathlib import Path
+import ai_client
+
+_SCARCITY_CACHE_FILE = Path(__file__).resolve().parent / "Data" / "scarcity_cache.json"
+
 # Curated, extensible set of common leveraged / inverse ETFs.
 _LEVERAGED_INVERSE = frozenset({
     "SQQQ", "TQQQ", "SPXU", "UPRO", "SPXL", "SPXS", "SDS", "SSO", "QID", "QLD",
@@ -40,3 +46,63 @@ def is_excluded(symbol) -> bool:
     """TEMPORARY: True for instruments where the long swing-low framework doesn't
     apply. They keep an ATR stop/target and are skipped only for new buys."""
     return classify(symbol) != "normal"
+
+
+def _load_scarcity_cache() -> dict:
+    if _SCARCITY_CACHE_FILE.exists():
+        try:
+            with open(_SCARCITY_CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_scarcity_cache(cache: dict):
+    try:
+        _SCARCITY_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_SCARCITY_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=4)
+    except Exception as e:
+        print(f"Warning: Failed to save scarcity cache: {e}")
+
+
+def is_scarcity_asset(symbol: str, industry_str: str) -> bool:
+    """
+    Dynamically use AI to classify if an asset fits Grantham's 'Hard Asset' Scarcity Core.
+    We classify assets as Scarcity if they represent metals, mining, agricultural commodities,
+    farming inputs/fertilizers, water, grid/power transmission, uranium, or energy.
+    """
+    s = (symbol or "").upper().strip()
+    ind = (industry_str or "").strip()
+    
+    # Exclude leveraged and crypto immediately
+    if classify(s) != "normal":
+        return False
+        
+    cache = _load_scarcity_cache()
+    if s in cache:
+        return cache[s]
+        
+    system = "You are Project AETHER's elite financial asset classifier. Output exactly the string 'YES' or 'NO'."
+    user = f"""
+    Evaluate if the stock '{s}' (Industry: '{ind}') represents a 'Hard Asset' / 'Scarcity Core' commodity or utility play.
+    This includes:
+    1. Metals & Mining: Gold, silver, copper, base metals, steel, lithium, iron, metallurgical coal, uranium, rare earths.
+    2. Agriculture & Water: Farming, crop production, timber, forestry, agricultural fertilizers/chemicals, water utilities.
+    3. Grid & Energy Utilities: Power generation, electric grid transmission, regulated gas/water utilities.
+    4. Primary Energy: Oil, gas, coal extraction.
+
+    Does '{s}' ({ind}) belong to this group? Respond with exactly 'YES' or 'NO'. No explanation.
+    """
+    try:
+        res = ai_client.evaluate(system, user, max_tokens=5, temperature=0.0)
+        is_scarcity = "YES" in (res or "").strip().upper()
+    except Exception as e:
+        print(f"Warning: AI classification failed for {s}: {e}. Defaulting to NO.")
+        is_scarcity = False
+        
+    cache[s] = is_scarcity
+    _save_scarcity_cache(cache)
+    return is_scarcity
+
