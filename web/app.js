@@ -276,17 +276,33 @@ $("login-form").addEventListener("submit", async (e) => {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 let activeTab = "dashboard";
+const VALID_TABS = ["dashboard", "accounts", "rotation", "history", "system", "about"];
+
 document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
 });
-function switchTab(tab) {
+
+function switchTab(tab, updateHash = true) {
+    if (!VALID_TABS.includes(tab)) tab = "dashboard";
     activeTab = tab;
     document.querySelectorAll(".tab-btn").forEach((b) =>
         b.classList.toggle("active", b.dataset.tab === tab));
     document.querySelectorAll(".tab-panel").forEach((p) =>
         p.classList.toggle("hidden", p.id !== `tab-${tab}`));
     loadTab(tab);
+    
+    if (updateHash) {
+        window.location.hash = tab;
+    }
 }
+
+// Support browser Back/Forward navigation and direct URL sharing!
+window.addEventListener("hashchange", () => {
+    const tab = window.location.hash.substring(1);
+    if (VALID_TABS.includes(tab) && tab !== activeTab) {
+        switchTab(tab, false);
+    }
+});
 
 // ── Market-hours detection (ET, 9:30–16:00 weekdays) ────────────────────────────
 function marketOpen() {
@@ -1222,6 +1238,10 @@ function closeWiki() {
 // ── Init ─────────────────────────────────────────────────────────────────────
 setAdminUI(null);   // default to logged-out UI until whoami confirms
 refreshAuth();
-switchTab("dashboard");
+
+// Initialize the active tab from the URL hash if present, otherwise default to dashboard
+const initialTab = window.location.hash.substring(1);
+switchTab(VALID_TABS.includes(initialTab) ? initialTab : "dashboard", true);
+
 startPolling();
 initWiki();
