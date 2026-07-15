@@ -114,57 +114,81 @@ def analyze_email_content(subject, body):
     return []
 
 def fetch_idea_emails():
-    """Check inbox for all stock-oriented emails from the last 24h and analyze their content."""
+    """Check inbox, Promotions, and Trash for stock-oriented emails from the last 24h.
+    Returns standard ticker ideas (analyze_email_content) AND structural intel
+    (extract_email_intel.extract) per email as 'intel' key."""
     if not EMAIL_PASS:
         print("Error: SMTP_PASSWORD not set. Cannot check emails.")
         return []
+
+    # Gmail IMAP folder names (Promotions is nested; Trash differs by locale)
+    FOLDERS = [
+        "INBOX",
+        "[Gmail]/Promotions",
+        "[Gmail]/Spam",
+        "[Gmail]/Trash",
+    ]
+
+    import extract_email_intel
 
     ideas = []
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
         mail.login(EMAIL_USER, EMAIL_PASS)
-        mail.select("inbox")
 
         date = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%d-%b-%Y")
-        status, messages = mail.search(None, f'(SINCE "{date}")')
 
-        if status == "OK":
+        for folder in FOLDERS:
+            try:
+                status, _ = mail.select(f'"{folder}"', readonly=True)
+                if status != "OK":
+                    continue
+            except Exception:
+                continue
+
+            status, messages = mail.search(None, f'(SINCE "{date}")')
+            if status != "OK" or not messages[0].split():
+                continue
+
             for num in messages[0].split():
-                # Use BODY.PEEK[] instead of RFC822 to fetch the email content 
-                # WITHOUT marking the email as SEEN (read) in the inbox.
                 status, data = mail.fetch(num, "(BODY.PEEK[])")
-                if status == "OK":
-                    raw_email = data[0][1]
-                    msg = email.message_from_bytes(raw_email)
-                    
-                    subject = str(msg["subject"] or "")
-                    
-                    body = ""
-                    if msg.is_multipart():
-                        for part in msg.walk():
-                            if part.get_content_type() == "text/plain":
-                                body = part.get_payload(decode=True).decode(errors='ignore')
-                                break
-                    else:
-                        body = msg.get_payload(decode=True).decode(errors='ignore')
-                    
-                    # Perform deep semantic analysis instead of primitive regex matching
-                    content_to_check = (subject + " " + body).upper()
-                    if any(k in content_to_check for k in STOCK_KEYWORDS) or "$" in content_to_check:
-                        parsed_ideas = analyze_email_content(subject, body)
-                        for idea in parsed_ideas:
-                            ideas.append({
-                                "from": msg["from"],
-                                "subject": msg["subject"],
-                                "symbol": idea["symbol"],
-                                "sentiment": idea["sentiment"],
-                                "thesis": idea["thesis"]
-                            })
+                if status != "OK":
+                    continue
+                raw_email = data[0][1]
+                msg = email.message_from_bytes(raw_email)
+
+                subject = str(msg["subject"] or "")
+                body = ""
+                if msg.is_multipart():
+                    for part in msg.walk():
+                        if part.get_content_type() == "text/plain":
+                            body = part.get_payload(decode=True).decode(errors="ignore")
+                            break
+                else:
+                    body = msg.get_payload(decode=True).decode(errors="ignore")
+
+                content_to_check = (subject + " " + body).upper()
+                if not (any(k in content_to_check for k in STOCK_KEYWORDS) or "$" in content_to_check):
+                    continue
+
+                # 1. Standard ticker extraction (BUY/SELL/HOLD)
+                parsed_ideas = analyze_email_content(subject, body)
+                # 2. Structural intelligence extraction (catalysts, supply facts, missing symbols)
+                intel = extract_email_intel.extract(subject, body)
+
+                base = {"from": msg["from"], "subject": subject, "folder": folder, "intel": intel}
+                if parsed_ideas:
+                    for idea in parsed_ideas:
+                        ideas.append({**base, "symbol": idea["symbol"],
+                                      "sentiment": idea["sentiment"], "thesis": idea["thesis"]})
+                elif intel:
+                    # Intel found but no explicit ticker recs — still worth surfacing
+                    ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
 
         mail.logout()
     except Exception as e:
         print(f"Failed to fetch emails: {e}")
-    
+
     return ideas
 
 def get_market_news(symbols):
