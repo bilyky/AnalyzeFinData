@@ -239,28 +239,78 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
     today = datetime.date.today()
     regime, color = get_market_regime()
     
-    # 0. Format External Ideas
+    # 0. Format External Ideas + Structural Intel
     intel_section = ""
     if intel_ideas:
         idea_list = ""
         for i in intel_ideas:
-            color = "#27ae60" if i["sentiment"] == "BUY" else ("#c0392b" if i["sentiment"] == "SELL" else "#f39c12")
-            sentiment_badge = f'<span style="background: {color}; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 11px;">{i["sentiment"]}</span>'
-            
-            idea_list += f"""
-            <li style="margin-bottom: 15px; border-bottom: 1px dashed #eee; padding-bottom: 10px;">
-                <b>Source:</b> {i['from']}<br>
-                <b>Topic:</b> {i['subject']}<br>
-                <b>Decision:</b> {sentiment_badge} <b>{i['symbol']}</b><br>
-                <b>AI Semantic Summary:</b> <span style="color: #555; font-style: italic;">"{i['thesis']}"</span>
-            </li>"""
-        
+            if i.get("symbol") and i.get("sentiment"):
+                c = "#27ae60" if i["sentiment"] == "BUY" else ("#c0392b" if i["sentiment"] == "SELL" else "#f39c12")
+                badge = f'<span style="background:{c};color:white;padding:2px 6px;border-radius:3px;font-weight:bold;font-size:11px;">{i["sentiment"]}</span>'
+                idea_list += f"""
+                <li style="margin-bottom:12px;border-bottom:1px dashed #eee;padding-bottom:10px;">
+                    <b>Source:</b> {i['from']}<br>
+                    <b>Topic:</b> {i['subject']}<br>
+                    <b>Decision:</b> {badge} <b>{i['symbol']}</b>
+                    {f"<br><b>Thesis:</b> <i>{i['thesis']}</i>" if i.get('thesis') else ''}
+                </li>"""
+
+        # Structural intel section: aggregate dated catalysts, missing symbols, R&D across all emails
+        all_catalysts, all_missing, all_rd, all_facts = [], [], [], []
+        for i in intel_ideas:
+            iv = i.get("intel") or {}
+            all_catalysts.extend(iv.get("dated_catalysts", []))
+            all_missing.extend(iv.get("missing_symbols", []))
+            all_rd.extend(iv.get("rd_topics", []))
+            all_facts.extend(iv.get("supply_chain_facts", []))
+
+        structural = ""
+        if all_catalysts:
+            rows = "".join(
+                f"<tr><td style='padding:4px 8px;color:#555;'>{c.get('date','?')}</td>"
+                f"<td style='padding:4px 8px;'>{c.get('event','')}</td>"
+                f"<td style='padding:4px 8px;color:#777;font-style:italic;'>{c.get('impact','')}</td></tr>"
+                for c in all_catalysts)
+            structural += f"""
+            <p style="font-weight:bold;margin:12px 0 4px;color:#555;font-size:11px;text-transform:uppercase;">
+                Dated Catalysts</p>
+            <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">
+                <thead><tr style="background:#f5f5f5;">
+                    <th style="padding:4px 8px;text-align:left;">Date</th>
+                    <th style="padding:4px 8px;text-align:left;">Event</th>
+                    <th style="padding:4px 8px;text-align:left;">Why it matters</th>
+                </tr></thead><tbody>{rows}</tbody></table>"""
+
+        if all_missing:
+            seen = set()
+            badges = ""
+            for m in all_missing:
+                sym = m.get("symbol", "")
+                if sym and sym not in seen:
+                    seen.add(sym)
+                    tip = m.get("reason", "").replace('"', "&quot;")
+                    badges += (f'<span title="{tip}" style="display:inline-block;margin:2px 4px;'
+                               f'padding:2px 8px;background:#fff3e0;border:1px solid #ffb74d;'
+                               f'border-radius:3px;font-size:12px;cursor:help;"><b>{sym}</b></span>')
+            structural += f"""
+            <p style="font-weight:bold;margin:12px 0 4px;color:#555;font-size:11px;text-transform:uppercase;">
+                Not in Our Watchlist (hover for reason)</p>
+            <div style="margin-bottom:10px;">{badges}</div>"""
+
+        if all_rd:
+            items = "".join(f"<li style='margin-bottom:4px;font-size:12px;color:#555;'>{r}</li>" for r in all_rd[:4])
+            structural += f"""
+            <p style="font-weight:bold;margin:12px 0 4px;color:#555;font-size:11px;text-transform:uppercase;">
+                R&D Topics Implied</p>
+            <ul style="margin:0;padding-left:18px;">{items}</ul>"""
+
         intel_section = f"""
-        <div style="background: #fff8e1; border-left: 5px solid #ffc107; padding: 15px; margin-bottom: 30px; border-radius: 4px;">
-            <h4 style="margin: 0; color: #ffa000; text-transform: uppercase; font-size: 11px; padding-bottom: 5px; border-bottom: 1px solid #ffe082;">💡 Semantic Newsletter Scraper (External Intelligence)</h4>
-            <ul style="margin: 10px 0 0 0; font-size: 13px; padding-left: 20px; list-style-type: none;">{idea_list}</ul>
-        </div>
-        """
+        <div style="background:#fff8e1;border-left:5px solid #ffc107;padding:15px;margin-bottom:30px;border-radius:4px;">
+            <h4 style="margin:0;color:#ffa000;text-transform:uppercase;font-size:11px;padding-bottom:5px;border-bottom:1px solid #ffe082;">
+                External Intelligence ({len(intel_ideas)} emails scanned)</h4>
+            {f'<ul style="margin:10px 0 0;font-size:13px;padding-left:20px;list-style:none;">{idea_list}</ul>' if idea_list else ''}
+            {structural}
+        </div>"""
     
     picks_rows = ""
     for i, p in enumerate(picks, 1):
