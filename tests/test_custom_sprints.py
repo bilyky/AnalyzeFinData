@@ -277,6 +277,36 @@ class TestPersistentProfileModes(unittest.TestCase):
         self.assertEqual(state["profile"], "DEFENSIVE")
         self.assertEqual(state["profile_mode"], "ADAPTIVE")
 
+    @mock.patch("ai_portfolio_game._has_strong_setups_today", return_value=True)
+    @mock.patch("ai_portfolio_game.get_market_regime", return_value="DEFENSIVE")
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("openpyxl.load_workbook")
+    def test_adaptive_cash_deployment_upgrade(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_regime, mock_strong_setups):
+        # Autopilot run: profile is DEFENSIVE but cash is 50% and we have strong setups!
+        state = {
+            "balance": 5000.0,
+            "equity": 10000.0,
+            "positions": {},
+            "queued_orders": [],
+            "profile": "DEFENSIVE",
+            "profile_mode": "ADAPTIVE"
+        }
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {}
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Research"
+        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
+        mock_load_wb.return_value = wb
+
+        game.run_daily_ai_management(force=True, manual_profile=None)
+        # It must adaptively upgrade today's strategy profile to BALANCED!
+        self.assertEqual(state["profile"], "BALANCED")
+        self.assertEqual(state["profile_mode"], "ADAPTIVE")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -785,6 +785,33 @@ def send_daily_summary():
     notify.send_email(f"AI Portfolio Summary: {today}", html, is_html=True)
     print(f"Summary email sent for {today}.")
 
+def _has_strong_setups_today(min_score=9.5) -> bool:
+    """Return True if we have 2 or more strong, verified bottom setups in the workbook today."""
+    try:
+        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
+        ws = wb["Research"]
+        count = 0
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            sym = row[3]
+            if not sym: continue
+            setup = row[20]
+            if setup == 1 or setup == 'OK' or setup == '1':
+                s10 = row[24] or 0.0
+                l60 = row[25] or 0.0
+                if (s10 + l60) >= min_score:
+                    # Double-check bubble guard so we only count safe setups!
+                    z_score = calculate_bubble_z_score(sym)
+                    if z_score is None or z_score < 2.5:
+                        count += 1
+                        if count >= 2:
+                            wb.close()
+                            return True
+        wb.close()
+    except Exception:
+        pass
+    return False
+
+
 def run_daily_ai_management(force=False, manual_profile=None):
     state = None
     try:
@@ -797,7 +824,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
         today = str(datetime.date.today())
         now_time = datetime.datetime.now().strftime("%H:%M:%S")
         new_transactions = []
-        
+
         # Determine strategy profile (Adaptive vs. Manual Override)
         if manual_profile and manual_profile.upper() == "ADAPTIVE":
             profile = get_market_regime()
@@ -814,10 +841,18 @@ def run_daily_ai_management(force=False, manual_profile=None):
             print(f"🤖 AI ACTIVE STRATEGY: {profile} (Manual Override - Locked)")
         else:
             profile = get_market_regime()
-            state["profile"] = profile
             state["profile_mode"] = "ADAPTIVE"
+
+            # Adaptive Cash-Deployment Upgrade Gate (Only for Autopilot!)
+            cash_ratio = state.get("balance", 0) / state.get("equity", 10000.0) if state.get("equity", 10000.0) else 0
+            if profile == "DEFENSIVE" and cash_ratio > 0.40 and _has_strong_setups_today(min_score=9.5):
+                print(f"  [AETHER] Cash is plentiful ({cash_ratio*100:.1f}%) and strong bottom setups are detected.")
+                print("  -> Adaptively upgrading today's strategy profile from DEFENSIVE to BALANCED to deploy cash safely!")
+                profile = "BALANCED"
+
+            state["profile"] = profile
             print(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive)")
-            
+
         rules = get_strategy_rules(profile)
 
         if not XLSX_FILE.exists():
