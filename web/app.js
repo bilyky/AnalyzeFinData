@@ -731,6 +731,47 @@ const TASK_CATEGORY_LABELS = {
     research: "Research", monitoring: "Monitoring", system: "System",
 };
 
+// ── Task output panel ────────────────────────────────────────────────────────
+let _pollTimer = null;
+
+function _openOutputPanel(label) {
+    $("top-task-label").textContent = label;
+    $("top-task-status").textContent = "running…";
+    $("top-task-status").className = "text-xs px-2 py-0.5 rounded bg-blue-900/60 text-blue-300";
+    $("task-output-log").textContent = "";
+    $("task-output-panel").classList.remove("hidden");
+}
+
+function _closeOutputPanel() {
+    $("task-output-panel").classList.add("hidden");
+    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+function _startPolling(runId) {
+    if (_pollTimer) clearInterval(_pollTimer);
+    let offset = 0;
+    const log = $("task-output-log");
+    _pollTimer = setInterval(async () => {
+        try {
+            const d = await api(`/api/tasks/output/${runId}?offset=${offset}`);
+            if (d.lines) {
+                log.textContent += d.lines;
+                log.scrollTop = log.scrollHeight;
+                offset = d.offset;
+            }
+            if (d.done) {
+                clearInterval(_pollTimer); _pollTimer = null;
+                const ok = d.exit_code === 0;
+                $("top-task-status").textContent = ok ? `done (exit 0)` : `failed (exit ${d.exit_code})`;
+                $("top-task-status").className = `text-xs px-2 py-0.5 rounded ${ok ? "bg-green-900/60 text-green-300" : "bg-red-900/60 text-red-400"}`;
+            }
+        } catch { /* network blip — keep polling */ }
+    }, 800);
+}
+
+$("top-task-close").addEventListener("click", _closeOutputPanel);
+$("top-task-clear").addEventListener("click", () => { $("task-output-log").textContent = ""; });
+
 async function runManualTask(taskId, label, confirm_msg, adminOnly, inputEl) {
     const msg = $("run-msg");
     if (adminOnly && !isAdmin()) { $("login-btn").click(); return; }
@@ -749,6 +790,8 @@ async function runManualTask(taskId, label, confirm_msg, adminOnly, inputEl) {
         if (d.status === "started") {
             msg.textContent = `"${label}" started (pid ${d.pid}).`;
             msg.className = "text-xs mb-3 pos";
+            _openOutputPanel(`${d.label}${inputValue ? " · " + inputValue : ""}`);
+            _startPolling(d.run_id);
         } else {
             msg.textContent = d.message || d.status;
             msg.className = "text-xs mb-3 neg";

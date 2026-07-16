@@ -320,12 +320,16 @@ def create_app():
     async def manual_tasks():
         return {"tasks": data_api.read_manual_tasks()}
 
+    # In-memory run registry: run_id -> {log_path, pid, done}
+    _runs: dict = {}
+
     @app.post("/api/tasks/run")
     async def run_task(
         task_id: str = Body(...),
         input_value: str = Body(default=""),
         authorization: str = Header(default=""),
     ):
+        import uuid, tempfile, os as _os
         registry = {t["id"]: t for t in data_api.MANUAL_TASKS}
         task = registry.get(task_id)
         if not task:
@@ -335,7 +339,6 @@ def create_app():
         script = _DIR / task["script"]
         if not script.exists():
             raise HTTPException(status_code=404, detail=f"Script not found: {task['script']}")
-        # Build args: inject user input at the declared position (upper-cased for symbols).
         args = list(task.get("args", []))
         inp = task.get("input")
         if inp:
@@ -343,16 +346,43 @@ def create_app():
                    else (inp.get("default") or "")).upper()
             if not val:
                 return {"status": "error", "message": "Input value required."}
-            pos = inp.get("arg_position", len(args))
-            args.insert(pos, val)
+            args.insert(inp.get("arg_position", len(args)), val)
+        run_id = str(uuid.uuid4())[:8]
+        log_dir = _DIR / "Data" / "task_runs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"{run_id}.log"
         try:
-            proc = subprocess.Popen(
-                [_PYTHON, str(script)] + args,
-                cwd=str(_DIR),
-            )
-            return {"status": "started", "pid": proc.pid, "task_id": task_id, "label": task["label"]}
+            with open(log_path, "w", encoding="utf-8") as lf:
+                proc = subprocess.Popen(
+                    [_PYTHON, str(script)] + args,
+                    stdout=lf, stderr=subprocess.STDOUT,
+                    cwd=str(_DIR),
+                )
+            _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc}
+            return {"status": "started", "pid": proc.pid, "run_id": run_id,
+                    "task_id": task_id, "label": task["label"]}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+    @app.get("/api/tasks/output/{run_id}")
+    async def task_output(run_id: str, offset: int = Query(0, ge=0)):
+        """Stream lines from a task's log file starting at byte `offset`.
+        Returns {lines, offset, done} so the client can poll incrementally."""
+        run = _runs.get(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        log_path = run["log"]
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                f.seek(offset)
+                chunk = f.read(32768)   # max 32 KB per poll
+                new_offset = f.tell()
+        except FileNotFoundError:
+            chunk, new_offset = "", offset
+        proc = run["proc"]
+        done = proc.poll() is not None
+        return {"lines": chunk, "offset": new_offset, "done": done,
+                "exit_code": proc.returncode if done else None}
 
     @app.post("/api/tasks/heal")
     async def heal_tasks(authorization: str = Header(default="")):
