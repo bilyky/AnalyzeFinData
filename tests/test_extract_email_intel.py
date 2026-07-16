@@ -91,5 +91,18 @@ class TestReport(unittest.TestCase):
         self.assertIn("HALEU", report)
 
 
+class TestEscape(unittest.TestCase):
+    def test_esc_html_chars(self):
+        self.assertEqual(ex._esc("<script>"), "&lt;script&gt;")
+        self.assertEqual(ex._esc('"hello"'), "&quot;hello&quot;")
+        self.assertEqual(ex._esc("a & b"), "a &amp; b")
+
+    def test_esc_none_safe(self):
+        self.assertEqual(ex._esc(None), "")
+
+    def test_esc_normal_string_unchanged(self):
+        self.assertEqual(ex._esc("HALEU enrichment"), "HALEU enrichment")
+
+
 if __name__ == "__main__":
     unittest.main()

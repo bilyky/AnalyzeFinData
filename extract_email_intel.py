@@ -11,11 +11,18 @@ The rubric lives in prompts/email_intel_extraction.md and is versioned
 alongside the code.
 """
 
+import html as _html
 import json
 import os
 from pathlib import Path
 
 import ai_client
+
+
+def _esc(v) -> str:
+    """HTML-escape a value for safe insertion into email HTML.
+    All AI-extracted or email-sourced strings must go through this."""
+    return _html.escape(str(v or ""), quote=True)
 
 _RUBRIC_PATH = Path(__file__).resolve().parent / "prompts" / "email_intel_extraction.md"
 _rubric_cache: str | None = None

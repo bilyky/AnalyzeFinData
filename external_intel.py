@@ -113,6 +113,8 @@ def analyze_email_content(subject, body):
         print(f"Semantic email analysis failed: {e}")
     return []
 
+_MAX_INTEL_EMAILS = 10   # cap AI calls: extract() makes 2 calls per email
+
 def fetch_idea_emails():
     """Check inbox, Promotions, and Trash for stock-oriented emails from the last 24h.
     Returns standard ticker ideas (analyze_email_content) AND structural intel
@@ -121,22 +123,24 @@ def fetch_idea_emails():
         print("Error: SMTP_PASSWORD not set. Cannot check emails.")
         return []
 
-    # Gmail IMAP folder names (Promotions is nested; Trash differs by locale)
+    # Gmail IMAP folder names. Spam is deliberately excluded — financial newsletters
+    # rarely land there legitimately and it adds noise.
     FOLDERS = [
         "INBOX",
         "[Gmail]/Promotions",
-        "[Gmail]/Spam",
         "[Gmail]/Trash",
     ]
 
     import extract_email_intel
 
     ideas = []
+    mail = None
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
         mail.login(EMAIL_USER, EMAIL_PASS)
 
         date = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%d-%b-%Y")
+        intel_count = 0   # track how many AI extractions we've run
 
         for folder in FOLDERS:
             try:
@@ -173,8 +177,13 @@ def fetch_idea_emails():
 
                 # 1. Standard ticker extraction (BUY/SELL/HOLD)
                 parsed_ideas = analyze_email_content(subject, body)
-                # 2. Structural intelligence extraction (catalysts, supply facts, missing symbols)
-                intel = extract_email_intel.extract(subject, body)
+                # 2. Structural intel extraction — capped to avoid runaway AI costs
+                intel = {}
+                if intel_count < _MAX_INTEL_EMAILS:
+                    intel = extract_email_intel.extract(subject, body)
+                    intel_count += 1
+                else:
+                    print(f"[intel] cap of {_MAX_INTEL_EMAILS} emails reached; skipping deep extraction for: {subject[:60]}")
 
                 base = {"from": msg["from"], "subject": subject, "folder": folder, "intel": intel}
                 if parsed_ideas:
@@ -182,12 +191,16 @@ def fetch_idea_emails():
                         ideas.append({**base, "symbol": idea["symbol"],
                                       "sentiment": idea["sentiment"], "thesis": idea["thesis"]})
                 elif intel:
-                    # Intel found but no explicit ticker recs — still worth surfacing
                     ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
 
-        mail.logout()
     except Exception as e:
         print(f"Failed to fetch emails: {e}")
+    finally:
+        if mail:
+            try:
+                mail.logout()
+            except Exception:
+                pass
 
     return ideas
 

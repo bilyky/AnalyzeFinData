@@ -240,36 +240,40 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
     regime, color = get_market_regime()
     
     # 0. Format External Ideas + Structural Intel
+    # All email-sourced strings (from/subject) and AI-extracted text (event/impact/rd_topics)
+    # are HTML-escaped before insertion to prevent injection into the email report.
+    import html as _html
+    def _e(v): return _html.escape(str(v or ""), quote=True)
+
     intel_section = ""
     if intel_ideas:
         idea_list = ""
         for i in intel_ideas:
             if i.get("symbol") and i.get("sentiment"):
                 c = "#27ae60" if i["sentiment"] == "BUY" else ("#c0392b" if i["sentiment"] == "SELL" else "#f39c12")
-                badge = f'<span style="background:{c};color:white;padding:2px 6px;border-radius:3px;font-weight:bold;font-size:11px;">{i["sentiment"]}</span>'
+                badge = f'<span style="background:{c};color:white;padding:2px 6px;border-radius:3px;font-weight:bold;font-size:11px;">{_e(i["sentiment"])}</span>'
                 idea_list += f"""
                 <li style="margin-bottom:12px;border-bottom:1px dashed #eee;padding-bottom:10px;">
-                    <b>Source:</b> {i['from']}<br>
-                    <b>Topic:</b> {i['subject']}<br>
-                    <b>Decision:</b> {badge} <b>{i['symbol']}</b>
-                    {f"<br><b>Thesis:</b> <i>{i['thesis']}</i>" if i.get('thesis') else ''}
+                    <b>Source:</b> {_e(i['from'])}<br>
+                    <b>Topic:</b> {_e(i['subject'])}<br>
+                    <b>Decision:</b> {badge} <b>{_e(i['symbol'])}</b>
+                    {f"<br><b>Thesis:</b> <i>{_e(i['thesis'])}</i>" if i.get('thesis') else ''}
                 </li>"""
 
-        # Structural intel section: aggregate dated catalysts, missing symbols, R&D across all emails
-        all_catalysts, all_missing, all_rd, all_facts = [], [], [], []
+        # Structural intel: aggregate catalysts, missing symbols, R&D across all emails
+        all_catalysts, all_missing, all_rd = [], [], []
         for i in intel_ideas:
             iv = i.get("intel") or {}
             all_catalysts.extend(iv.get("dated_catalysts", []))
             all_missing.extend(iv.get("missing_symbols", []))
             all_rd.extend(iv.get("rd_topics", []))
-            all_facts.extend(iv.get("supply_chain_facts", []))
 
         structural = ""
         if all_catalysts:
             rows = "".join(
-                f"<tr><td style='padding:4px 8px;color:#555;'>{c.get('date','?')}</td>"
-                f"<td style='padding:4px 8px;'>{c.get('event','')}</td>"
-                f"<td style='padding:4px 8px;color:#777;font-style:italic;'>{c.get('impact','')}</td></tr>"
+                f"<tr><td style='padding:4px 8px;color:#555;'>{_e(c.get('date','?'))}</td>"
+                f"<td style='padding:4px 8px;'>{_e(c.get('event',''))}</td>"
+                f"<td style='padding:4px 8px;color:#777;font-style:italic;'>{_e(c.get('impact',''))}</td></tr>"
                 for c in all_catalysts)
             structural += f"""
             <p style="font-weight:bold;margin:12px 0 4px;color:#555;font-size:11px;text-transform:uppercase;">
@@ -288,17 +292,17 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
                 sym = m.get("symbol", "")
                 if sym and sym not in seen:
                     seen.add(sym)
-                    tip = m.get("reason", "").replace('"', "&quot;")
+                    tip = _e(m.get("reason", ""))
                     badges += (f'<span title="{tip}" style="display:inline-block;margin:2px 4px;'
                                f'padding:2px 8px;background:#fff3e0;border:1px solid #ffb74d;'
-                               f'border-radius:3px;font-size:12px;cursor:help;"><b>{sym}</b></span>')
+                               f'border-radius:3px;font-size:12px;cursor:help;"><b>{_e(sym)}</b></span>')
             structural += f"""
             <p style="font-weight:bold;margin:12px 0 4px;color:#555;font-size:11px;text-transform:uppercase;">
                 Not in Our Watchlist (hover for reason)</p>
             <div style="margin-bottom:10px;">{badges}</div>"""
 
         if all_rd:
-            items = "".join(f"<li style='margin-bottom:4px;font-size:12px;color:#555;'>{r}</li>" for r in all_rd[:4])
+            items = "".join(f"<li style='margin-bottom:4px;font-size:12px;color:#555;'>{_e(r)}</li>" for r in all_rd[:4])
             structural += f"""
             <p style="font-weight:bold;margin:12px 0 4px;color:#555;font-size:11px;text-transform:uppercase;">
                 R&D Topics Implied</p>
