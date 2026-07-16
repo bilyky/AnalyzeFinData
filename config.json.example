@@ -27,19 +27,30 @@
     "max_intel_emails": 20,
     "providers": {
       "github_gpt": {
+        "_note": "Free via GitHub personal access token — github.com/settings/tokens. Set GITHUB_TOKEN env var or paste the ghp_... token as api_key_source literal.",
         "enabled": true,
         "type": "openai_compatible",
         "model": "gpt-4o-mini",
         "endpoint": "https://models.inference.ai.azure.com/chat/completions",
         "api_key_source": "env:GITHUB_TOKEN"
       },
+      "gemini_oai": {
+        "_note": "Free tier via Google AI Studio — aistudio.google.com. Get GEMINI_API_KEY there (no credit card). Uses OpenAI-compatible REST so no extra dependencies.",
+        "enabled": false,
+        "type": "openai_compatible",
+        "model": "gemini-2.5-flash",
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "api_key_source": "env:GEMINI_API_KEY"
+      },
       "claude": {
+        "_note": "Anthropic API — console.anthropic.com. Set ANTHROPIC_API_KEY env var.",
         "enabled": false,
         "type": "anthropic",
         "model": "claude-opus-4-8",
         "api_key_source": "env:ANTHROPIC_API_KEY"
       },
-      "gemini": {
+      "gemini_cli": {
+        "_note": "Gemini via the gemini CLI binary (gemini.google.com/app — install gemini CLI). No API key needed but requires the CLI installed.",
         "enabled": false,
         "type": "gemini_cli",
         "model": "gemini-2.5-flash"
