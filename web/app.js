@@ -276,7 +276,7 @@ $("login-form").addEventListener("submit", async (e) => {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 let activeTab = "dashboard";
-const VALID_TABS = ["dashboard", "research", "accounts", "rotation", "history", "scorecard", "system", "about"];
+const VALID_TABS = ["dashboard", "research", "accounts", "rotation", "history", "chat", "scorecard", "system", "about"];
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
@@ -921,6 +921,83 @@ $("heal-tasks-btn").addEventListener("click", async () => {
     } catch (e) { $("action-msg").textContent = "Error: " + e.message; }
 });
 
+// ── Chat tab ──────────────────────────────────────────────────────────────────
+let _chatHistory = [];  // [{role, content}]
+
+function _appendMessage(role, content) {
+    const wrap = $("chat-messages");
+    const isUser = role === "user";
+    const div = document.createElement("div");
+    div.className = `flex ${isUser ? "justify-end" : "justify-start"}`;
+    // Render newlines and escape HTML in assistant output
+    const safe = content.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+                         .replace(/\n/g,"<br>");
+    div.innerHTML = `<div class="max-w-[80%] px-4 py-2 rounded-xl text-sm leading-relaxed
+        ${isUser ? "bg-blue-600 text-white" : "bg-slate-800 text-slate-200 border border-slate-700"}">${safe}</div>`;
+    wrap.appendChild(div);
+    wrap.scrollTop = wrap.scrollHeight;
+    // Hide starters once conversation starts
+    if (_chatHistory.length > 0) $("chat-starters").classList.add("hidden");
+}
+
+function _appendThinking() {
+    const wrap = $("chat-messages");
+    const div = document.createElement("div");
+    div.id = "chat-thinking";
+    div.className = "flex justify-start";
+    div.innerHTML = `<div class="px-4 py-2 rounded-xl text-sm bg-slate-800 border border-slate-700 text-slate-400 italic">
+        AETHER is thinking…</div>`;
+    wrap.appendChild(div);
+    wrap.scrollTop = wrap.scrollHeight;
+}
+
+function _removeThinking() {
+    const el = $("chat-thinking");
+    if (el) el.remove();
+}
+
+async function sendChatMessage(text) {
+    text = (text || "").trim();
+    if (!text) return;
+    _chatHistory.push({ role: "user", content: text });
+    _appendMessage("user", text);
+    $("chat-input").value = "";
+    $("chat-send-btn").disabled = true;
+    _appendThinking();
+    try {
+        const r = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(_chatHistory),
+        });
+        const d = await r.json();
+        _removeThinking();
+        const reply = d.reply || "(no response)";
+        _chatHistory.push({ role: "assistant", content: reply });
+        _appendMessage("assistant", reply);
+        if (d.provider) $("chat-provider").textContent = d.provider;
+    } catch (e) {
+        _removeThinking();
+        _appendMessage("assistant", "Error: " + e.message);
+    } finally {
+        $("chat-send-btn").disabled = false;
+        $("chat-input").focus();
+    }
+}
+
+$("chat-send-btn").addEventListener("click", () => sendChatMessage($("chat-input").value));
+$("chat-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage($("chat-input").value); }
+});
+$("chat-clear-btn").addEventListener("click", () => {
+    _chatHistory = [];
+    $("chat-messages").innerHTML = "";
+    $("chat-starters").classList.remove("hidden");
+});
+document.querySelectorAll(".chat-starter").forEach((btn) => {
+    btn.addEventListener("click", () => sendChatMessage(btn.textContent));
+});
+
 // ── Scorecard tab ──────────────────────────────────────────────────────────────
 async function loadScorecard() {
     const sc = await api("/api/scorecard");
@@ -1136,6 +1213,7 @@ function loadTab(tab) {
     else if (tab === "accounts") loadAccounts();
     else if (tab === "rotation") loadRotation();
     else if (tab === "history") loadHistory();
+    else if (tab === "chat") setTimeout(() => $("chat-input").focus(), 50);
     else if (tab === "scorecard") loadScorecard();
     else if (tab === "system") loadSystem();
     else if (tab === "about") {} // No API data to load for static about tab

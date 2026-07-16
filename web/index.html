@@ -48,6 +48,7 @@
             <button data-tab="accounts"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Accounts</button>
             <button data-tab="rotation"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Rotation</button>
             <button data-tab="history"   class="tab-btn px-4 py-2 border-b-2 border-transparent">History</button>
+            <button data-tab="chat"      class="tab-btn px-4 py-2 border-b-2 border-transparent">Chat</button>
             <button data-tab="scorecard" class="tab-btn px-4 py-2 border-b-2 border-transparent">Scorecard</button>
             <button data-tab="system"    class="tab-btn px-4 py-2 border-b-2 border-transparent">System</button>
             <button data-tab="about"     class="tab-btn px-4 py-2 border-b-2 border-transparent">About</button>
@@ -278,6 +279,32 @@
         </section>
 
         <!-- ======================= SCORECARD TAB ======================= -->
+        <!-- ======================= CHAT TAB ======================= -->
+        <section id="tab-chat" class="tab-panel hidden flex flex-col" style="height:calc(100vh - 160px)">
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="section-title mb-0">AETHER AI Chat</h2>
+                <div class="flex items-center gap-2">
+                    <span id="chat-provider" class="text-xs mut"></span>
+                    <button id="chat-clear-btn" class="btn text-xs">Clear</button>
+                </div>
+            </div>
+            <!-- message history -->
+            <div id="chat-messages" class="flex-1 overflow-y-auto space-y-3 mb-3 pr-1"></div>
+            <!-- suggested starters -->
+            <div id="chat-starters" class="flex flex-wrap gap-2 mb-3">
+                <button class="chat-starter btn text-xs">What should I do with my current positions?</button>
+                <button class="chat-starter btn text-xs">Summarize today's market regime and top picks.</button>
+                <button class="chat-starter btn text-xs">Explain the stop for INTC.</button>
+                <button class="chat-starter btn text-xs">Is the breadth divergence guard active?</button>
+            </div>
+            <!-- input row -->
+            <div class="flex gap-2">
+                <textarea id="chat-input" rows="2" placeholder="Ask AETHER anything about the portfolio, signals, or strategy…"
+                    class="flex-1 bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm resize-none"></textarea>
+                <button id="chat-send-btn" class="btn-primary px-5 self-end">Send</button>
+            </div>
+        </section>
+
         <section id="tab-scorecard" class="tab-panel hidden">
             <p class="text-xs mut mb-3">Backtracked exit-selector performance (rules vs each AI provider), scored against
                 the 10-day forward close. A winner-selling miss is a SELL of a position in profit that then rose — the

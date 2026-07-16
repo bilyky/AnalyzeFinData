@@ -251,6 +251,54 @@ def create_app():
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, data_api.read_backtest, symbol, horizon)
 
+    # ── AI Chat ───────────────────────────────────────────────────────────────
+
+    @app.post("/api/chat")
+    async def chat_endpoint(
+        messages: list = Body(...),
+        authorization: str = Header(default=""),
+    ):
+        """Multi-turn chat with the configured AI provider, augmented with live
+        AETHER context (portfolio state, regime, top picks, OHLCV freshness).
+        messages: [{role: user|assistant, content: str}]"""
+        import ai_client
+        if not ai_client.primary():
+            return {"reply": "No AI provider configured. Enable one in config.json under ai.providers.", "provider": None}
+
+        # Build live system prompt
+        try:
+            pf = data_api.read_portfolio()
+            health = data_api.get_system_health()
+            picks_d = data_api.read_picks()
+            positions_str = ", ".join(
+                f"{p['symbol']} (cost ${p['cost']}, stop ${p['stop_loss']})"
+                for p in pf.get("positions", [])
+            ) or "none"
+            top_picks = ", ".join(p.get("Symbol","") for p in picks_d.get("picks",[])[:5]) or "none"
+            system = (
+                "You are AETHER, an expert quantitative trading assistant embedded in a live portfolio dashboard.\n"
+                f"Current portfolio state:\n"
+                f"  Profile: {pf.get('profile','?')} | Equity: ${pf.get('equity',0):,.2f} "
+                f"| Cash: ${pf.get('balance',0):,.2f} | Return: {pf.get('return_pct',0):+.2f}%\n"
+                f"  Open positions: {positions_str}\n"
+                f"  Market regime: {health.get('market_regime', picks_d.get('market_regime','?'))}\n"
+                f"  Top screener picks: {top_picks}\n"
+                f"  Data fresh: {'yes' if health.get('data_fresh') else 'NO — data may be stale'}\n\n"
+                "Answer concisely. For trade decisions follow: hard ATR stop > soft momentum signal "
+                "> winner-protection (Flower Protection — never sell winners on a momentum dip). "
+                "Capital preservation is the absolute priority."
+            )
+        except Exception:
+            system = "You are AETHER, a quantitative trading assistant. Live portfolio data is currently unavailable."
+
+        loop = asyncio.get_event_loop()
+        reply = await loop.run_in_executor(
+            None, lambda: ai_client.chat(messages, system=system, max_tokens=800)
+        )
+        if not reply:
+            return {"reply": "AI provider returned no response. Check your API key and provider config.", "provider": ai_client.primary()}
+        return {"reply": reply, "provider": ai_client.primary()}
+
     # ── Selector scorecard (backtracked) ──────────────────────────────────────
 
     @app.get("/api/scorecard")

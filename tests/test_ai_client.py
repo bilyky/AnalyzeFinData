@@ -120,5 +120,44 @@ class TestEvaluateDispatch(_Base):
         self.assertEqual(out, "claude-said")
 
 
+class TestChat(unittest.TestCase):
+    """chat() passes the full message history — tests are independent of evaluate()."""
+
+    def test_multi_turn_openai(self):
+        _set_providers("gh", {"gh": GH})
+        os.environ["TESTKEY"] = "k"
+        messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"},
+                    {"role": "user", "content": "what's my regime?"}]
+        fake = mock.Mock(status_code=200)
+        fake.json.return_value = {"choices": [{"message": {"content": "Balanced"}}]}
+        fake.raise_for_status = mock.Mock()
+        with mock.patch("ai_client.requests.post", return_value=fake) as post:
+            reply = ai_client.chat(messages, system="You are AETHER.")
+        self.assertEqual(reply, "Balanced")
+        payload = post.call_args.kwargs["json"]
+        # system message should be prepended, then all 3 turns
+        self.assertEqual(payload["messages"][0]["role"], "system")
+        self.assertEqual(len(payload["messages"]), 4)
+
+    def test_multi_turn_anthropic(self):
+        _set_providers("c", {"c": CLAUDE})
+        os.environ["ANTHROPIC_TESTKEY"] = "k"
+        messages = [{"role": "user", "content": "explain the stop"}]
+        fake = mock.Mock(status_code=200)
+        fake.json.return_value = {"content": [{"type": "text", "text": "stop is ATR-based"}]}
+        fake.raise_for_status = mock.Mock()
+        with mock.patch("ai_client.requests.post", return_value=fake) as post:
+            reply = ai_client.chat(messages, system="You are AETHER.")
+        self.assertEqual(reply, "stop is ATR-based")
+        payload = post.call_args.kwargs["json"]
+        # Anthropic: system is top-level, messages list is user turns only
+        self.assertEqual(payload["system"], "You are AETHER.")
+        self.assertEqual(payload["messages"], messages)
+
+    def test_no_provider_returns_empty(self):
+        _set_providers("", {})
+        self.assertEqual(ai_client.chat([{"role": "user", "content": "hi"}]), "")
+
+
 if __name__ == "__main__":
     unittest.main()

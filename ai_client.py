@@ -129,6 +129,63 @@ def _call_gemini_cli(pcfg, system, user, max_tokens, temperature) -> str:
 
 # ── Public entry point ─────────────────────────────────────────────────────────
 
+def chat(messages: list, system: str = "", provider: str | None = None,
+         max_tokens: int = 1000, temperature: float = 0.5) -> str:
+    """Multi-turn chat: `messages` is [{role: user|assistant, content: str}].
+    The last message must be role=user. Returns the assistant reply or "" on failure."""
+    name = provider or primary()
+    if not name:
+        return ""
+    pcfg = _providers().get(name)
+    if not pcfg or not pcfg.get("enabled"):
+        return ""
+    ptype = pcfg.get("type")
+    try:
+        if ptype == "openai_compatible":
+            key = _resolve_key(pcfg.get("api_key_source", ""))
+            if not key:
+                return ""
+            payload_msgs = ([{"role": "system", "content": system}] if system else []) + messages
+            resp = requests.post(
+                pcfg.get("endpoint", ""),
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"model": pcfg.get("model", ""), "messages": payload_msgs,
+                      "max_tokens": max_tokens, "temperature": temperature},
+                timeout=_TIMEOUT,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        if ptype == "anthropic":
+            key = _resolve_key(pcfg.get("api_key_source", ""))
+            if not key:
+                return ""
+            resp = requests.post(
+                _ANTHROPIC_URL,
+                headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                         "content-type": "application/json"},
+                json={"model": pcfg.get("model", "claude-opus-4-8"),
+                      "max_tokens": max_tokens,
+                      **({"system": system} if system else {}),
+                      "messages": messages},
+                timeout=_TIMEOUT,
+            )
+            resp.raise_for_status()
+            blocks = resp.json().get("content", [])
+            return "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+        if ptype == "gemini_cli":
+            # Gemini CLI: flatten history into a single prompt
+            turns = "\n\n".join(f"[{m['role'].upper()}]: {m['content']}" for m in messages)
+            prompt = (f"{system}\n\n{turns}" if system else turns)
+            out = subprocess.run(
+                ["gemini", "-m", pcfg.get("model", "gemini-2.5-flash"), "-p", prompt],
+                capture_output=True, text=True, timeout=_TIMEOUT,
+            )
+            return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+    return ""
+
+
 def evaluate(system: str, user: str, provider: str | None = None,
              max_tokens: int = 200, temperature: float = 0.3) -> str:
     """Run one advisory evaluation on `provider` (defaults to primary()).
