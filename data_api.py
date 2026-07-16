@@ -654,6 +654,137 @@ _KNOWN_TASKS = [
     "Project_AETHER_Watchdog",
 ]
 
+# Registry of manually-runnable scripts exposed in the dashboard.
+# Each entry: id (unique slug), label, description, script, args list,
+# admin_only (requires admin token to run), confirm (prompt user first).
+MANUAL_TASKS = [
+    {
+        "id": "pipeline",
+        "label": "Morning Pipeline",
+        "description": "Full daily screener + workbook refresh + email report (autonomous_pipeline.py).",
+        "script": "autonomous_pipeline.py",
+        "args": [],
+        "admin_only": True,
+        "confirm": "Run the full morning pipeline? This fetches fresh data and emails a report.",
+        "category": "pipeline",
+    },
+    {
+        "id": "ai_game_run",
+        "label": "AI Game — Daily Moves",
+        "description": "Run the AI portfolio game's daily buy/sell logic (ai_portfolio_game.py --run).",
+        "script": "ai_portfolio_game.py",
+        "args": ["--run"],
+        "admin_only": True,
+        "confirm": "Execute today's AI game moves?",
+        "category": "ai_game",
+    },
+    {
+        "id": "ai_game_summary",
+        "label": "AI Game — Email Summary",
+        "description": "Send the daily performance summary email (ai_portfolio_game.py --summary).",
+        "script": "ai_portfolio_game.py",
+        "args": ["--summary"],
+        "admin_only": True,
+        "confirm": "Send the AI game summary email?",
+        "category": "ai_game",
+    },
+    {
+        "id": "ai_game_force",
+        "label": "AI Game — Force Run (After-Hours)",
+        "description": "Force the AI game to run outside market hours for testing (ai_portfolio_game.py --run --force).",
+        "script": "ai_portfolio_game.py",
+        "args": ["--run", "--force"],
+        "admin_only": True,
+        "confirm": "Force-run the AI game outside market hours?",
+        "category": "ai_game",
+    },
+    {
+        "id": "ohlcv_recovery",
+        "label": "OHLCV Recovery",
+        "description": "Repair missing/stale OHLCV history for all symbols via RapidAPI (rapidapi.py).",
+        "script": "rapidapi.py",
+        "args": [],
+        "admin_only": True,
+        "confirm": "Run OHLCV recovery? This calls the RapidAPI for stale symbols (rate-limited).",
+        "category": "data",
+    },
+    {
+        "id": "run_history",
+        "label": "History Backfill (5d)",
+        "description": "Backfill the last 5 days of price history into the OHLCV cache (run_history.py 5).",
+        "script": "run_history.py",
+        "args": ["5"],
+        "admin_only": True,
+        "confirm": "Backfill 5 days of history?",
+        "category": "data",
+    },
+    {
+        "id": "backtest_levels",
+        "label": "Backtest Levels (INTC)",
+        "description": "Walk-forward accuracy test of support/resistance levels for INTC (backtest_levels.py INTC).",
+        "script": "backtest_levels.py",
+        "args": ["INTC"],
+        "admin_only": False,
+        "confirm": None,
+        "category": "research",
+    },
+    {
+        "id": "backtest_levels_all",
+        "label": "Backtest Levels — Universe",
+        "description": "Walk-forward accuracy across all 500+ cached symbols (backtest_levels.py --all --step 20). Takes ~2 min.",
+        "script": "backtest_levels.py",
+        "args": ["--all", "--step", "20"],
+        "admin_only": False,
+        "confirm": "Run full universe backtest? This takes ~2 minutes.",
+        "category": "research",
+    },
+    {
+        "id": "decision_eval",
+        "label": "Decision Scorecard",
+        "description": "Backtrack exit decisions against forward prices and print the selector scorecard (decision_eval.py).",
+        "script": "decision_eval.py",
+        "args": [],
+        "admin_only": False,
+        "confirm": None,
+        "category": "research",
+    },
+    {
+        "id": "intraday_monitor",
+        "label": "Intraday Stop Monitor",
+        "description": "Run one pass of the intraday stop-loss monitor and email alerts for breaches (intraday_monitor.py).",
+        "script": "intraday_monitor.py",
+        "args": [],
+        "admin_only": True,
+        "confirm": "Run the intraday monitor? This will email alerts for any stop breaches.",
+        "category": "monitoring",
+    },
+    {
+        "id": "real_copilot",
+        "label": "Real Account Shadow Copilot",
+        "description": "Scan real E*TRADE holdings overnight and email trade tickets (real_copilot.py).",
+        "script": "real_copilot.py",
+        "args": [],
+        "admin_only": True,
+        "confirm": "Run the real-account copilot? This emails trade recommendations for your real positions.",
+        "category": "monitoring",
+    },
+    {
+        "id": "watchdog",
+        "label": "Watchdog / Self-Healer",
+        "description": "Run one watchdog cycle: check logs, heal tasks, refresh E*TRADE session (watchdog.py).",
+        "script": "watchdog.py",
+        "args": [],
+        "admin_only": True,
+        "confirm": "Run the watchdog healer?",
+        "category": "system",
+    },
+]
+
+
+def read_manual_tasks() -> list[dict]:
+    """Return the registry of manually-runnable scripts for the dashboard."""
+    return MANUAL_TASKS
+
 
 def read_scorecard(horizon_days: int = 10) -> dict:
     """Backtracked selector scorecard (rules vs each AI provider) + winner-selling

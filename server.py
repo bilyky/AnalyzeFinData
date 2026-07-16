@@ -316,6 +316,30 @@ def create_app():
         result = await loop.run_in_executor(None, data_api.read_scheduled_tasks)
         return {"tasks": result}
 
+    @app.get("/api/tasks/manual")
+    async def manual_tasks():
+        return {"tasks": data_api.read_manual_tasks()}
+
+    @app.post("/api/tasks/run")
+    async def run_task(task_id: str = Body(...), authorization: str = Header(default="")):
+        registry = {t["id"]: t for t in data_api.MANUAL_TASKS}
+        task = registry.get(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"Unknown task: {task_id}")
+        if task.get("admin_only"):
+            _require_admin(authorization)
+        script = _DIR / task["script"]
+        if not script.exists():
+            raise HTTPException(status_code=404, detail=f"Script not found: {task['script']}")
+        try:
+            proc = subprocess.Popen(
+                [_PYTHON, str(script)] + task.get("args", []),
+                cwd=str(_DIR),
+            )
+            return {"status": "started", "pid": proc.pid, "task_id": task_id, "label": task["label"]}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     @app.post("/api/tasks/heal")
     async def heal_tasks(authorization: str = Header(default="")):
         _require_admin(authorization)

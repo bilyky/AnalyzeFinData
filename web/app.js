@@ -725,9 +725,43 @@ async function loadEquityCurve() {
 }
 
 // ── System tab ─────────────────────────────────────────────────────────────────
+// Category display names for the manual tasks grid
+const TASK_CATEGORY_LABELS = {
+    pipeline: "Pipeline", ai_game: "AI Game", data: "Data",
+    research: "Research", monitoring: "Monitoring", system: "System",
+};
+
+async function runManualTask(taskId, label, confirm_msg, adminOnly) {
+    const msg = $("run-msg");
+    if (adminOnly && !isAdmin()) { $("login-btn").click(); return; }
+    if (confirm_msg && !confirm(confirm_msg)) return;
+    msg.textContent = `Starting "${label}"…`;
+    msg.className = "text-xs mb-3 text-slate-400";
+    try {
+        const r = await fetch("/api/tasks/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+            body: JSON.stringify(taskId),
+        });
+        if (r.status === 401) { logout(); msg.textContent = "Session expired — log in again."; return; }
+        const d = await r.json();
+        if (d.status === "started") {
+            msg.textContent = `"${label}" started (pid ${d.pid}).`;
+            msg.className = "text-xs mb-3 pos";
+        } else {
+            msg.textContent = d.message || d.status;
+            msg.className = "text-xs mb-3 neg";
+        }
+    } catch (e) {
+        msg.textContent = "Error: " + e.message;
+        msg.className = "text-xs mb-3 neg";
+    }
+}
+
 async function loadSystem() {
-    const [health, tasks, logs] = await Promise.all([
+    const [health, tasks, logs, manual] = await Promise.all([
         api("/api/health"), api("/api/tasks"), api("/api/pipeline/logs?lines=100"),
+        api("/api/tasks/manual"),
     ]);
 
     $("health-body").innerHTML = `
@@ -737,16 +771,70 @@ async function loadSystem() {
         <div>Pipeline status: <b class="${health.pipeline_status === "OK" ? "pos" : "mut"}">${health.pipeline_status}</b></div>
         <div>Server time: <span class="mut">${health.server_time || "—"}</span></div>`;
 
+    // Scheduled tasks — with a "Run Now" button that triggers the matching manual task
+    const manualById = Object.fromEntries((manual.tasks || []).map((t) => [t.id, t]));
+    const SCHED_TO_MANUAL = {
+        "AnalyzeFinData_Morning":    "pipeline",
+        "AnalyzeFinData_AI_Game":    "ai_game_run",
+        "AnalyzeFinData_AI_Summary": "ai_game_summary",
+        "AnalyzeFinData_Evening":    null,
+        "Project_AETHER_Watchdog":   "watchdog",
+    };
     const tb = $("tasks-body");
     const ts = tasks.tasks || [];
-    tb.innerHTML = ts.length ? ts.map((t) => `
-        <tr>
+    tb.innerHTML = ts.length ? ts.map((t) => {
+        const manualId = SCHED_TO_MANUAL[t.name];
+        const mt = manualId ? manualById[manualId] : null;
+        const btn = mt
+            ? `<button onclick="runManualTask('${mt.id}','${mt.label.replace(/'/g,"\\'")}',${mt.confirm ? `'${mt.confirm.replace(/'/g,"\\'")}'` : "null"},${mt.admin_only})"
+                       class="btn text-xs ${mt.admin_only ? "admin-action" : ""}"
+                       ${mt.admin_only && !isAdmin() ? "title='Admin required'" : ""}>
+                 ▶ Run
+               </button>`
+            : "";
+        return `<tr>
             <td class="font-semibold">${t.name}</td>
             <td>${t.status || "—"}</td>
             <td class="text-xs mut">${t.last_run || "—"}</td>
             <td class="text-xs mut">${t.next_run || "—"}</td>
-        </tr>`).join("")
-        : `<tr><td colspan="4" class="text-center text-slate-500 py-6">No tasks found.</td></tr>`;
+            <td class="text-right">${btn}</td>
+        </tr>`;
+    }).join("")
+        : `<tr><td colspan="5" class="text-center text-slate-500 py-6">No tasks found.</td></tr>`;
+
+    // Manual tasks grid — grouped by category
+    const allTasks = manual.tasks || [];
+    if (allTasks.length) {
+        const byCategory = {};
+        allTasks.forEach((t) => { (byCategory[t.category] = byCategory[t.category] || []).push(t); });
+        let grid = "";
+        for (const [cat, items] of Object.entries(byCategory)) {
+            const catLabel = TASK_CATEGORY_LABELS[cat] || cat;
+            grid += `<div class="col-span-full mt-3 mb-1">
+                <span class="card-label">${catLabel}</span></div>`;
+            grid += items.map((t) => {
+                const needsAdmin = t.admin_only;
+                const disabled = needsAdmin && !isAdmin();
+                const title = disabled ? "Admin login required" : (t.confirm || "");
+                return `<div class="card flex flex-col gap-2">
+                    <div class="flex items-start justify-between gap-2">
+                        <span class="font-semibold text-sm">${t.label}</span>
+                        ${needsAdmin ? '<span class="text-[9px] px-1 rounded bg-slate-700 mut">ADMIN</span>' : ""}
+                    </div>
+                    <p class="text-xs mut flex-1">${t.description}</p>
+                    <button title="${title}"
+                        onclick="runManualTask('${t.id}','${t.label.replace(/'/g,"\\'")}',${t.confirm ? `'${t.confirm.replace(/'/g,"\\'")}'` : "null"},${t.admin_only})"
+                        class="btn text-xs w-full ${needsAdmin ? "admin-action" : ""}"
+                        ${disabled ? "disabled" : ""}>
+                        ▶ Run
+                    </button>
+                </div>`;
+            }).join("");
+        }
+        $("manual-tasks-grid").innerHTML = grid;
+    } else {
+        $("manual-tasks-grid").innerHTML = `<div class="col-span-3 text-center text-slate-500 py-4">No manual tasks configured.</div>`;
+    }
 
     const lv = $("log-view");
     lv.textContent = (logs.lines || []).join("\n");

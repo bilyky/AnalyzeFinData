@@ -259,12 +259,18 @@
             <div class="overflow-x-auto mb-8">
                 <table class="data-table">
                     <thead>
-                        <tr><th>Task</th><th>Status</th><th>Last Run</th><th>Next Run</th></tr>
+                        <tr><th>Task</th><th>Status</th><th>Last Run</th><th>Next Run</th><th class="text-right">Action</th></tr>
                     </thead>
                     <tbody id="tasks-body">
-                        <tr><td colspan="4" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                        <tr><td colspan="5" class="text-center text-slate-500 py-6">Loading…</td></tr>
                     </tbody>
                 </table>
+            </div>
+
+            <h2 class="section-title">Manual Tasks</h2>
+            <div id="run-msg" class="text-xs mb-3 text-slate-400 min-h-[1.25rem]"></div>
+            <div id="manual-tasks-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mb-8">
+                <div class="card text-center text-slate-500 py-4 col-span-3">Loading…</div>
             </div>
 
             <h2 class="section-title">Pipeline Log</h2>
