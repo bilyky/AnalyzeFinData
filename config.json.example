@@ -24,6 +24,7 @@
   },
   "ai": {
     "primary": "github_gpt",
+    "max_intel_emails": 20,
     "providers": {
       "github_gpt": {
         "enabled": true,

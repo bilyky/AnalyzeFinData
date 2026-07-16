@@ -113,7 +113,13 @@ def analyze_email_content(subject, body):
         print(f"Semantic email analysis failed: {e}")
     return []
 
-_MAX_INTEL_EMAILS = 10   # cap AI calls: extract() makes 2 calls per email
+def _max_intel_emails() -> int:
+    try:
+        from config import CFG
+        return CFG.ai_max_intel_emails
+    except Exception:
+        return 20
+
 
 def fetch_idea_emails():
     """Check inbox, Promotions, and Trash for stock-oriented emails from the last 24h.
@@ -140,6 +146,7 @@ def fetch_idea_emails():
         mail.login(EMAIL_USER, EMAIL_PASS)
 
         date = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%d-%b-%Y")
+        max_intel = _max_intel_emails()
         intel_count = 0   # track how many AI extractions we've run
 
         for folder in FOLDERS:
@@ -179,11 +186,11 @@ def fetch_idea_emails():
                 parsed_ideas = analyze_email_content(subject, body)
                 # 2. Structural intel extraction — capped to avoid runaway AI costs
                 intel = {}
-                if intel_count < _MAX_INTEL_EMAILS:
+                if intel_count < max_intel:
                     intel = extract_email_intel.extract(subject, body)
                     intel_count += 1
                 else:
-                    print(f"[intel] cap of {_MAX_INTEL_EMAILS} emails reached; skipping deep extraction for: {subject[:60]}")
+                    print(f"[intel] cap of {max_intel} emails reached; skipping deep extraction for: {subject[:60]}")
 
                 base = {"from": msg["from"], "subject": subject, "folder": folder, "intel": intel}
                 if parsed_ideas:

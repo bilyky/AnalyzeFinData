@@ -59,8 +59,11 @@ class _Config:
 
         # ── AI evaluation backends (multiple named providers, each toggleable) ──
         ai = raw.get("ai") or {}
-        self.ai_primary   = os.environ.get("AI_PRIMARY") or ai.get("primary", "")
-        self.ai_providers = ai.get("providers") or {}
+        self.ai_primary       = os.environ.get("AI_PRIMARY") or ai.get("primary", "")
+        self.ai_providers     = ai.get("providers") or {}
+        self.ai_max_intel_emails = int(
+            os.environ.get("AI_MAX_INTEL_EMAILS", "") or ai.get("max_intel_emails", 20)
+        )
 
         # ── Real brokerage accounts (last-4 IDs; PII — never hardcode in source) ─
         # Ordered: [0] = top Short_Long table (T1), [1] = bottom table (T2).
