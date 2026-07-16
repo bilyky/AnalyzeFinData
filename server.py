@@ -275,18 +275,51 @@ def create_app():
                 for p in pf.get("positions", [])
             ) or "none"
             top_picks = ", ".join(p.get("Symbol","") for p in picks_d.get("picks",[])[:5]) or "none"
+
+            # Scan the latest user message for any symbol mentions and inject their
+            # Research row so the AI answers from AETHER data, not from a web-search
+            # disclaimer. Only inject if the Research sheet is available.
+            symbol_context = ""
+            try:
+                last_user = next(
+                    (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
+                )
+                research_rows = {r["symbol"]: r for r in data_api.read_research().get("rows", [])}
+                import re as _re
+                mentioned = [w.upper() for w in _re.findall(r'\b[A-Z]{2,5}\b', last_user.upper())
+                             if w.upper() in research_rows][:3]
+                if mentioned:
+                    lines = []
+                    for sym in mentioned:
+                        r = research_rows[sym]
+                        lines.append(
+                            f"  {sym}: PGR={r.get('pgr','?')} S10={r.get('s10','?')} "
+                            f"L60={r.get('l60','?')} Combined={r.get('combined','?')} "
+                            f"Status={r.get('status','?')} Setup={'YES' if r.get('setup') else 'no'} "
+                            f"Price=${r.get('price','?')} Stop=${r.get('stop','?')}({r.get('stop_source','?')}) "
+                            f"Target=${r.get('target','?')} WinPct={r.get('win_pct','?')}% "
+                            f"MoneyFlow={r.get('money_flow','?')} Patterns={r.get('patterns','?') or 'none'}"
+                        )
+                    symbol_context = "\nLive AETHER data for mentioned symbols:\n" + "\n".join(lines)
+            except Exception:
+                pass
+
             system = (
                 "You are AETHER, an expert quantitative trading assistant embedded in a live portfolio dashboard.\n"
-                f"Current portfolio state:\n"
+                "IMPORTANT: All the data you need is provided below in this system prompt. "
+                "Never say you cannot access real-time data — you already have it. "
+                "Answer from the data provided; do not suggest the user check external sites.\n\n"
+                f"Portfolio state:\n"
                 f"  Profile: {pf.get('profile','?')} | Equity: ${pf.get('equity',0):,.2f} "
                 f"| Cash: ${pf.get('balance',0):,.2f} | Return: {pf.get('return_pct',0):+.2f}%\n"
                 f"  Open positions: {positions_str}\n"
                 f"  Market regime: {health.get('market_regime', picks_d.get('market_regime','?'))}\n"
-                f"  Top screener picks: {top_picks}\n"
-                f"  Data fresh: {'yes' if health.get('data_fresh') else 'NO — data may be stale'}\n\n"
-                "Answer concisely. For trade decisions follow: hard ATR stop > soft momentum signal "
-                "> winner-protection (Flower Protection — never sell winners on a momentum dip). "
-                "Capital preservation is the absolute priority."
+                f"  Top screener picks today: {top_picks}\n"
+                f"  Data fresh: {'yes' if health.get('data_fresh') else 'NO — stale'}"
+                f"{symbol_context}\n\n"
+                "Rules: hard ATR stop > soft momentum signal > winner-protection "
+                "(Flower Protection — never sell a winner above its 50-DMA on a momentum dip). "
+                "Capital preservation is the absolute priority. Answer concisely."
             )
         except Exception:
             system = "You are AETHER, a quantitative trading assistant. Live portfolio data is currently unavailable."
