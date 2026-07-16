@@ -321,7 +321,11 @@ def create_app():
         return {"tasks": data_api.read_manual_tasks()}
 
     @app.post("/api/tasks/run")
-    async def run_task(task_id: str = Body(...), authorization: str = Header(default="")):
+    async def run_task(
+        task_id: str = Body(...),
+        input_value: str = Body(default=""),
+        authorization: str = Header(default=""),
+    ):
         registry = {t["id"]: t for t in data_api.MANUAL_TASKS}
         task = registry.get(task_id)
         if not task:
@@ -331,9 +335,19 @@ def create_app():
         script = _DIR / task["script"]
         if not script.exists():
             raise HTTPException(status_code=404, detail=f"Script not found: {task['script']}")
+        # Build args: inject user input at the declared position (upper-cased for symbols).
+        args = list(task.get("args", []))
+        inp = task.get("input")
+        if inp:
+            val = (input_value.strip().upper() if input_value.strip()
+                   else (inp.get("default") or "")).upper()
+            if not val:
+                return {"status": "error", "message": "Input value required."}
+            pos = inp.get("arg_position", len(args))
+            args.insert(pos, val)
         try:
             proc = subprocess.Popen(
-                [_PYTHON, str(script)] + task.get("args", []),
+                [_PYTHON, str(script)] + args,
                 cwd=str(_DIR),
             )
             return {"status": "started", "pid": proc.pid, "task_id": task_id, "label": task["label"]}

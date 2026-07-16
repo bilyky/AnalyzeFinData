@@ -731,17 +731,18 @@ const TASK_CATEGORY_LABELS = {
     research: "Research", monitoring: "Monitoring", system: "System",
 };
 
-async function runManualTask(taskId, label, confirm_msg, adminOnly) {
+async function runManualTask(taskId, label, confirm_msg, adminOnly, inputEl) {
     const msg = $("run-msg");
     if (adminOnly && !isAdmin()) { $("login-btn").click(); return; }
     if (confirm_msg && !confirm(confirm_msg)) return;
-    msg.textContent = `Starting "${label}"…`;
+    const inputValue = inputEl ? inputEl.value.trim().toUpperCase() : "";
+    msg.textContent = `Starting "${label}"${inputValue ? " (" + inputValue + ")" : ""}…`;
     msg.className = "text-xs mb-3 text-slate-400";
     try {
         const r = await fetch("/api/tasks/run", {
             method: "POST",
             headers: { "Content-Type": "application/json", ...authHeaders() },
-            body: JSON.stringify(taskId),
+            body: JSON.stringify({ task_id: taskId, input_value: inputValue }),
         });
         if (r.status === 401) { logout(); msg.textContent = "Session expired — log in again."; return; }
         const d = await r.json();
@@ -786,7 +787,7 @@ async function loadSystem() {
         const manualId = SCHED_TO_MANUAL[t.name];
         const mt = manualId ? manualById[manualId] : null;
         const btn = mt
-            ? `<button onclick="runManualTask('${mt.id}','${mt.label.replace(/'/g,"\\'")}',${mt.confirm ? `'${mt.confirm.replace(/'/g,"\\'")}'` : "null"},${mt.admin_only})"
+            ? `<button onclick="runManualTask('${mt.id}','${mt.label.replace(/'/g,"\\'")}',${mt.confirm ? `'${mt.confirm.replace(/'/g,"\\'")}'` : "null"},${mt.admin_only},null)"
                        class="btn text-xs ${mt.admin_only ? "admin-action" : ""}"
                        ${mt.admin_only && !isAdmin() ? "title='Admin required'" : ""}>
                  ▶ Run
@@ -816,14 +817,25 @@ async function loadSystem() {
                 const needsAdmin = t.admin_only;
                 const disabled = needsAdmin && !isAdmin();
                 const title = disabled ? "Admin login required" : (t.confirm || "");
+                const inputId = `task-input-${t.id}`;
+                const inputHtml = t.input
+                    ? `<input id="${inputId}" type="text" placeholder="${t.input.placeholder || ""}"
+                               value="${t.input.default || ""}"
+                               class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs w-full uppercase"
+                               onkeydown="if(event.key==='Enter') document.getElementById('task-btn-${t.id}').click()" />`
+                    : "";
+                const onclickArgs = t.input
+                    ? `'${t.id}','${t.label.replace(/'/g,"\\'")}',${t.confirm ? `'${t.confirm.replace(/'/g,"\\'")}'` : "null"},${t.admin_only},document.getElementById('${inputId}')`
+                    : `'${t.id}','${t.label.replace(/'/g,"\\'")}',${t.confirm ? `'${t.confirm.replace(/'/g,"\\'")}'` : "null"},${t.admin_only},null`;
                 return `<div class="card flex flex-col gap-2">
                     <div class="flex items-start justify-between gap-2">
                         <span class="font-semibold text-sm">${t.label}</span>
                         ${needsAdmin ? '<span class="text-[9px] px-1 rounded bg-slate-700 mut">ADMIN</span>' : ""}
                     </div>
                     <p class="text-xs mut flex-1">${t.description}</p>
-                    <button title="${title}"
-                        onclick="runManualTask('${t.id}','${t.label.replace(/'/g,"\\'")}',${t.confirm ? `'${t.confirm.replace(/'/g,"\\'")}'` : "null"},${t.admin_only})"
+                    ${inputHtml}
+                    <button id="task-btn-${t.id}" title="${title}"
+                        onclick="runManualTask(${onclickArgs})"
                         class="btn text-xs w-full ${needsAdmin ? "admin-action" : ""}"
                         ${disabled ? "disabled" : ""}>
                         ▶ Run
