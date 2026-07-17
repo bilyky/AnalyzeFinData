@@ -21,7 +21,7 @@ import requests
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-_TIMEOUT = 30
+_TIMEOUT = 60   # generous for chat; context build can take ~9s on cold Research cache
 
 
 # ── Key resolution ─────────────────────────────────────────────────────────────

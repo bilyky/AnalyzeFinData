@@ -274,71 +274,77 @@ def create_app():
                     if isinstance(m, dict) and m.get("role") in VALID_ROLES
                     and isinstance(m.get("content"), str)][:50]  # cap history length
 
-        # Build live system prompt
-        try:
-            pf = data_api.read_portfolio()
-            health = data_api.get_system_health()
-            picks_d = data_api.read_picks()
-            positions_str = ", ".join(
-                f"{p['symbol']} (status: held)"
-                for p in pf.get("positions", [])
-            ) or "none"
-            top_picks = ", ".join(p.get("Symbol","") for p in picks_d.get("picks",[])[:5]) or "none"
+        import re as _re
 
-            # Inject Research data for symbols explicitly mentioned in the latest message.
-            # Match only tokens the user typed AS UPPERCASE (deliberate ticker references)
-            # to avoid false positives on English words like ON, ALL, GO, NOW, RUN that
-            # happen to be valid symbols in our universe.
-            symbol_context = ""
+        # Detect uppercase ticker candidates in the last user message BEFORE
+        # building context — this gates the 9-second read_research() cold load.
+        last_user = next(
+            (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
+        )
+        raw_candidates = _re.findall(r'\b[A-Z]{2,5}\b', last_user)
+
+        def _build_context():
+            """Build the system prompt. Runs in a thread via run_in_executor so
+            it does not block the event loop while loading OHLCV data."""
             try:
-                last_user = next(
-                    (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
-                )
-                import re as _re
-                raw_candidates = _re.findall(r'\b[A-Z]{2,5}\b', last_user)
-                mentioned = []
+                pf = data_api.read_portfolio()
+                health = data_api.get_system_health()
+                picks_d = data_api.read_picks()
+                positions_str = ", ".join(
+                    f"{p['symbol']} (status: held)"
+                    for p in pf.get("positions", [])
+                ) or "none"
+                top_picks = ", ".join(
+                    p.get("Symbol", "") for p in picks_d.get("picks", [])[:5]
+                ) or "none"
+
+                symbol_context = ""
                 if raw_candidates:
-                    research_rows = {r["symbol"]: r for r in data_api.read_research().get("rows", [])}
-                    mentioned = [w for w in raw_candidates if w in research_rows][:3]
-                if mentioned:
-                    lines = []
-                    for sym in mentioned:
-                        r = research_rows[sym]
-                        lines.append(
-                            f"  {sym}: PGR={r.get('pgr','?')} S10={r.get('s10','?')} "
-                            f"L60={r.get('l60','?')} Combined={r.get('combined','?')} "
-                            f"Status={r.get('status','?')} Setup={'YES' if r.get('setup') else 'no'} "
-                            f"Price=${r.get('price','?')} Stop=${r.get('stop','?')}({r.get('stop_source','?')}) "
-                            f"Target=${r.get('target','?')} WinPct={r.get('win_pct','?')}% "
-                            f"MoneyFlow={r.get('money_flow','?')} Patterns={r.get('patterns','?') or 'none'}"
-                        )
-                    symbol_context = "\nLive AETHER data for mentioned symbols:\n" + "\n".join(lines)
-            except Exception as _sym_err:
-                _log.warning("Symbol context build failed", extra={"error": str(_sym_err)})
+                    try:
+                        research_rows = {r["symbol"]: r
+                                         for r in data_api.read_research().get("rows", [])}
+                        mentioned = [w for w in raw_candidates if w in research_rows][:3]
+                        if mentioned:
+                            lines = [
+                                f"  {sym}: PGR={r.get('pgr','?')} S10={r.get('s10','?')} "
+                                f"L60={r.get('l60','?')} Combined={r.get('combined','?')} "
+                                f"Status={r.get('status','?')} Setup={'YES' if r.get('setup') else 'no'} "
+                                f"Price=${r.get('price','?')} Stop=${r.get('stop','?')}({r.get('stop_source','?')}) "
+                                f"Target=${r.get('target','?')} WinPct={r.get('win_pct','?')}% "
+                                f"MoneyFlow={r.get('money_flow','?')} Patterns={r.get('patterns','?') or 'none'}"
+                                for sym in mentioned
+                                for r in [research_rows[sym]]
+                            ]
+                            symbol_context = "\nLive AETHER data for mentioned symbols:\n" + "\n".join(lines)
+                    except Exception as _sym_err:
+                        _log.warning("Symbol context build failed", extra={"error": str(_sym_err)})
 
-            system = (
-                "You are AETHER, an expert quantitative trading assistant embedded in a live portfolio dashboard.\n"
-                "IMPORTANT: All the data you need is provided below in this system prompt. "
-                "Never say you cannot access real-time data — you already have it. "
-                "Answer from the data provided; do not suggest the user check external sites.\n\n"
-                f"Portfolio state:\n"
-                f"  Profile: {pf.get('profile','?')} | Equity: ${pf.get('equity',0):,.2f} "
-                f"| Cash: ${pf.get('balance',0):,.2f} | Return: {pf.get('return_pct',0):+.2f}%\n"
-                f"  Open positions: {positions_str}\n"
-                f"  Market regime: {health.get('market_regime', picks_d.get('market_regime','?'))}\n"
-                f"  Top screener picks today: {top_picks}\n"
-                f"  Data fresh: {'yes' if health.get('data_fresh') else 'NO — stale'}"
-                f"{symbol_context}\n\n"
-                "Rules: hard ATR stop > soft momentum signal > winner-protection "
-                "(Flower Protection — never sell a winner above its 50-DMA on a momentum dip). "
-                "Capital preservation is the absolute priority. Answer concisely."
-            )
-        except Exception as _ctx_err:
-            _log.error("Chat context build failed — using minimal system prompt",
-                       extra={"error": str(_ctx_err)}, exc_info=True)
-            system = "You are AETHER, a quantitative trading assistant. Live portfolio data is currently unavailable."
+                return (
+                    "You are AETHER, an expert quantitative trading assistant embedded in a live portfolio dashboard.\n"
+                    "IMPORTANT: All the data you need is provided below in this system prompt. "
+                    "Never say you cannot access real-time data — you already have it. "
+                    "Answer from the data provided; do not suggest the user check external sites.\n\n"
+                    f"Portfolio state:\n"
+                    f"  Profile: {pf.get('profile','?')} | Equity: ${pf.get('equity',0):,.2f} "
+                    f"| Cash: ${pf.get('balance',0):,.2f} | Return: {pf.get('return_pct',0):+.2f}%\n"
+                    f"  Open positions: {positions_str}\n"
+                    f"  Market regime: {health.get('market_regime', picks_d.get('market_regime','?'))}\n"
+                    f"  Top screener picks today: {top_picks}\n"
+                    f"  Data fresh: {'yes' if health.get('data_fresh') else 'NO — stale'}"
+                    f"{symbol_context}\n\n"
+                    "Rules: hard ATR stop > soft momentum signal > winner-protection "
+                    "(Flower Protection — never sell a winner above its 50-DMA on a momentum dip). "
+                    "Capital preservation is the absolute priority. Answer concisely."
+                )
+            except Exception as _ctx_err:
+                _log.error("Chat context build failed", extra={"error": str(_ctx_err)}, exc_info=True)
+                return "You are AETHER, a quantitative trading assistant. Live portfolio data is currently unavailable."
 
+        # Build context in executor (off the event loop), then call AI with
+        # the full system prompt. read_research() is cached 60s so only the
+        # first ticker-bearing message per minute pays the OHLCV load cost.
         loop = asyncio.get_running_loop()
+        system = await loop.run_in_executor(None, _build_context)
         reply = await loop.run_in_executor(
             None, lambda: ai_client.chat(messages, system=system, max_tokens=800)
         )
