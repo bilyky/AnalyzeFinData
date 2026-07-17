@@ -43,6 +43,8 @@ import risk_utils
 import sell_rules
 import decision_eval
 import instruments
+from aether_logger import get_logger as _get_logger
+_log = _get_logger("ai_game")
 
 
 def _load_closes(symbol):

@@ -96,6 +96,8 @@ def create_app():
     from fastapi.staticfiles import StaticFiles
 
     import data_api
+    from aether_logger import get_logger
+    _log = get_logger("server")
 
     # Signing secret: configured value survives restarts; otherwise ephemeral.
     _secret = _cfg().web_secret or secrets.token_hex(32)
@@ -292,7 +294,6 @@ def create_app():
                 last_user = next(
                     (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
                 )
-                # Pre-check: skip the xlsx load if no plausible ticker candidates
                 import re as _re
                 raw_candidates = _re.findall(r'\b[A-Z]{2,5}\b', last_user)
                 mentioned = []
@@ -312,8 +313,8 @@ def create_app():
                             f"MoneyFlow={r.get('money_flow','?')} Patterns={r.get('patterns','?') or 'none'}"
                         )
                     symbol_context = "\nLive AETHER data for mentioned symbols:\n" + "\n".join(lines)
-            except Exception:
-                pass
+            except Exception as _sym_err:
+                _log.warning("Symbol context build failed", extra={"error": str(_sym_err)})
 
             system = (
                 "You are AETHER, an expert quantitative trading assistant embedded in a live portfolio dashboard.\n"
@@ -332,7 +333,9 @@ def create_app():
                 "(Flower Protection — never sell a winner above its 50-DMA on a momentum dip). "
                 "Capital preservation is the absolute priority. Answer concisely."
             )
-        except Exception:
+        except Exception as _ctx_err:
+            _log.error("Chat context build failed — using minimal system prompt",
+                       extra={"error": str(_ctx_err)}, exc_info=True)
             system = "You are AETHER, a quantitative trading assistant. Live portfolio data is currently unavailable."
 
         loop = asyncio.get_running_loop()
@@ -340,6 +343,8 @@ def create_app():
             None, lambda: ai_client.chat(messages, system=system, max_tokens=800)
         )
         if not reply:
+            _log.warning("ai_client.chat() returned empty reply",
+                         extra={"provider": ai_client.primary(), "msg_count": len(messages)})
             return {"reply": "AI provider returned no response. Check your API key and provider config.", "provider": ai_client.primary()}
         return {"reply": reply, "provider": ai_client.primary()}
 

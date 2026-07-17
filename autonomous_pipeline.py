@@ -7,6 +7,9 @@ import notify
 import traceback
 import json
 from pathlib import Path
+from aether_logger import get_logger as _get_logger
+
+_pipeline_log = _get_logger("pipeline")
 
 # --- Windows UTF-8 Hardening ---
 # Prevents UnicodeEncodeError when printing emojis (🤖, 🚨) in headless environments
@@ -46,14 +49,16 @@ LOG_FILE_PATH = BASE_DIR / "Data" / "autonomous_run.log"
 ACCOUNT_RISK_USD = 500  # Amount to lose if stop is hit
 
 def log(msg):
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    formatted_msg = f"[{timestamp}] {msg}"
-    print(formatted_msg)
+    """Pipeline log — routes through the AETHER logger (txt + jsonl + stdout)
+    and keeps appending to the legacy LOG_FILE_PATH for backward compatibility
+    with the dashboard's Pipeline Log viewer."""
+    _pipeline_log.info(msg)
     try:
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
-            f.write(formatted_msg + "\n")
+            f.write(f"[{timestamp}] {msg}\n")
     except Exception as e:
-        print(f"Failed to write to log file: {e}")
+        _pipeline_log.warning("Failed to write to legacy log file", extra={"error": str(e)})
 
 def verify_data_freshness():
     if not XLSX_FILE.exists():
