@@ -260,11 +260,22 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
                     {f"<br><b>Thesis:</b> <i>{_e(i['thesis'])}</i>" if i.get('thesis') else ''}
                 </li>"""
 
-        # Structural intel: aggregate catalysts, missing symbols, R&D across all emails
+        # Structural intel: aggregate catalysts, missing symbols, R&D across all emails.
+        # Catalysts older than 15 days are historical filler, not action signals — drop them.
+        _cutoff = (datetime.date.today() - datetime.timedelta(days=15)).isoformat()
         all_catalysts, all_missing, all_rd = [], [], []
         for i in intel_ideas:
             iv = i.get("intel") or {}
-            all_catalysts.extend(iv.get("dated_catalysts", []))
+            for c in iv.get("dated_catalysts", []):
+                d = str(c.get("date") or "")
+                # Keep: future/near dates (>= cutoff) OR year-only entries like "2026"
+                # Drop: specific past dates older than 15 days
+                try:
+                    if len(d) >= 10 and d[:10] < _cutoff:
+                        continue
+                except Exception:
+                    pass
+                all_catalysts.append(c)
             all_missing.extend(iv.get("missing_symbols", []))
             all_rd.extend(iv.get("rd_topics", []))
 

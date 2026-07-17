@@ -156,7 +156,10 @@ def report(intel: dict) -> str:
     if v.get("missing_from_universe"):
         lines.append(f"Not in our 506-symbol universe: {', '.join(v['missing_from_universe'])}")
 
-    cats = intel.get("dated_catalysts", [])
+    import datetime as _dt
+    _cutoff = (_dt.date.today() - _dt.timedelta(days=15)).isoformat()
+    cats = [c for c in intel.get("dated_catalysts", [])
+            if not (len(str(c.get("date") or "")) >= 10 and str(c.get("date",""))[:10] < _cutoff)]
     vcat = {c.get("claim", ""): c for c in intel.get("_verification", {}).get("dated_catalysts", [])}
     if cats:
         lines.append(f"\nDated catalysts ({len(cats)}):")
