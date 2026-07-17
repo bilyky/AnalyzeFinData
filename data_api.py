@@ -595,6 +595,28 @@ def read_log_tail(n_lines: int = 100) -> list[str]:
 
 # ── System health ─────────────────────────────────────────────────────────────
 
+def _server_needs_restart() -> bool:
+    """True when the running server's git commit differs from HEAD on disk —
+    i.e. code was updated after the server started and needs a restart."""
+    try:
+        pid_path = _DATA_DIR / "webserver.pid"
+        if not pid_path.exists():
+            return False
+        # git HEAD on disk
+        head = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(_DIR), text=True, timeout=3,
+        ).strip()
+        # commit baked into a stamp file written at server start
+        stamp = _DIR / "Data" / "server_commit.txt"
+        if not stamp.exists():
+            return False
+        running = stamp.read_text().strip()
+        return running != head
+    except Exception:
+        return False
+
+
 def get_system_health() -> dict:
     """Check file freshness and last pipeline status."""
     now = datetime.now()
@@ -635,12 +657,13 @@ def get_system_health() -> dict:
     watchdog_ok = True  # default optimistic; future: check watchdog log
 
     return {
-        "data_fresh":        data_fresh,
-        "last_refresh":      last_refresh,
-        "last_pipeline_run": last_pipeline_run,
-        "pipeline_status":   pipeline_status,
-        "watchdog_ok":       watchdog_ok,
-        "server_time":       now.isoformat(timespec="seconds"),
+        "data_fresh":           data_fresh,
+        "last_refresh":         last_refresh,
+        "last_pipeline_run":    last_pipeline_run,
+        "pipeline_status":      pipeline_status,
+        "watchdog_ok":          watchdog_ok,
+        "server_time":          now.isoformat(timespec="seconds"),
+        "server_needs_restart": _server_needs_restart(),
     }
 
 

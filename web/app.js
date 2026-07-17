@@ -331,8 +331,16 @@ async function loadHeader() {
         $("positions-big").textContent = `${pf.open_positions} / ${pf.max_positions}`;
 
         const dot = $("fresh-dot"), txt = $("fresh-text");
-        if (health.data_fresh) { dot.className = "w-2.5 h-2.5 rounded-full bg-green-500"; txt.textContent = "Data fresh"; }
-        else { dot.className = "w-2.5 h-2.5 rounded-full bg-red-500"; txt.textContent = "Data STALE"; }
+        if (health.server_needs_restart) {
+            dot.className = "w-2.5 h-2.5 rounded-full bg-amber-400";
+            txt.textContent = "Server outdated — restart needed";
+        } else if (health.data_fresh) {
+            dot.className = "w-2.5 h-2.5 rounded-full bg-green-500";
+            txt.textContent = "Data fresh";
+        } else {
+            dot.className = "w-2.5 h-2.5 rounded-full bg-red-500";
+            txt.textContent = "Data STALE";
+        }
     } catch (e) { console.error(e); }
 }
 

@@ -597,9 +597,21 @@ def cmd_upgrade():
     cmd_restart()
 
 
+def _write_commit_stamp():
+    """Stamp the git HEAD at server start so health checks can detect stale processes."""
+    try:
+        import subprocess as _sp
+        head = _sp.check_output(["git", "rev-parse", "--short", "HEAD"],
+                                 cwd=str(_DIR), text=True, timeout=3).strip()
+        (_DIR / "Data" / "server_commit.txt").write_text(head)
+    except Exception:
+        pass
+
+
 def cmd_serve(host: str, port: int):
     """Run uvicorn in-process (called by cmd_start subprocess)."""
     import uvicorn
+    _write_commit_stamp()
     app = create_app()
     uvicorn.run(app, host=host, port=port, log_level="info")
 
