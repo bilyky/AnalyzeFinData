@@ -165,7 +165,7 @@ def create_app():
         if cached_all and now - _price_ts < 60:
             return {s: _price_cache[s] for s in sym_list}
         # Fetch live (blocking call — run in thread to avoid blocking event loop)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             from ai_portfolio_game import get_live_prices
             fresh = await loop.run_in_executor(None, get_live_prices, sym_list)
@@ -233,14 +233,14 @@ def create_app():
 
     @app.get("/api/research")
     async def research():
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, data_api.read_research)
 
     # ── Symbol detail (all-in-one for the symbol modal) ──────────────────────
 
     @app.get("/api/symbol/{symbol}")
     async def symbol_detail(symbol: str):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, data_api.read_symbol, symbol)
 
     # ── Level backtest (support/resistance accuracy) ──────────────────────────
@@ -248,7 +248,7 @@ def create_app():
     @app.get("/api/backtest")
     async def backtest(symbol: str = Query(..., min_length=1, max_length=8),
                        horizon: int = Query(20, ge=5, le=60)):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, data_api.read_backtest, symbol, horizon)
 
     # ── AI Chat ───────────────────────────────────────────────────────────────
@@ -265,29 +265,40 @@ def create_app():
         if not ai_client.primary():
             return {"reply": "No AI provider configured. Enable one in config.json under ai.providers.", "provider": None}
 
+        # Sanitise incoming history: allow only known roles with string content.
+        # Strips role=system injections that could override our system prompt.
+        VALID_ROLES = {"user", "assistant"}
+        messages = [m for m in messages
+                    if isinstance(m, dict) and m.get("role") in VALID_ROLES
+                    and isinstance(m.get("content"), str)][:50]  # cap history length
+
         # Build live system prompt
         try:
             pf = data_api.read_portfolio()
             health = data_api.get_system_health()
             picks_d = data_api.read_picks()
             positions_str = ", ".join(
-                f"{p['symbol']} (cost ${p['cost']}, stop ${p['stop_loss']})"
+                f"{p['symbol']} (status: held)"
                 for p in pf.get("positions", [])
             ) or "none"
             top_picks = ", ".join(p.get("Symbol","") for p in picks_d.get("picks",[])[:5]) or "none"
 
-            # Scan the latest user message for any symbol mentions and inject their
-            # Research row so the AI answers from AETHER data, not from a web-search
-            # disclaimer. Only inject if the Research sheet is available.
+            # Inject Research data for symbols explicitly mentioned in the latest message.
+            # Match only tokens the user typed AS UPPERCASE (deliberate ticker references)
+            # to avoid false positives on English words like ON, ALL, GO, NOW, RUN that
+            # happen to be valid symbols in our universe.
             symbol_context = ""
             try:
                 last_user = next(
                     (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
                 )
-                research_rows = {r["symbol"]: r for r in data_api.read_research().get("rows", [])}
+                # Pre-check: skip the xlsx load if no plausible ticker candidates
                 import re as _re
-                mentioned = [w.upper() for w in _re.findall(r'\b[A-Z]{2,5}\b', last_user.upper())
-                             if w.upper() in research_rows][:3]
+                raw_candidates = _re.findall(r'\b[A-Z]{2,5}\b', last_user)
+                mentioned = []
+                if raw_candidates:
+                    research_rows = {r["symbol"]: r for r in data_api.read_research().get("rows", [])}
+                    mentioned = [w for w in raw_candidates if w in research_rows][:3]
                 if mentioned:
                     lines = []
                     for sym in mentioned:
@@ -324,7 +335,7 @@ def create_app():
         except Exception:
             system = "You are AETHER, a quantitative trading assistant. Live portfolio data is currently unavailable."
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         reply = await loop.run_in_executor(
             None, lambda: ai_client.chat(messages, system=system, max_tokens=800)
         )
@@ -336,7 +347,7 @@ def create_app():
 
     @app.get("/api/scorecard")
     async def scorecard(horizon: int = Query(10, ge=1, le=60)):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, data_api.read_scorecard, horizon)
 
     # ── Run pipeline (protected) ──────────────────────────────────────────────
@@ -393,7 +404,7 @@ def create_app():
 
     @app.get("/api/tasks")
     async def tasks():
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, data_api.read_scheduled_tasks)
         return {"tasks": result}
 
@@ -468,7 +479,7 @@ def create_app():
     @app.post("/api/tasks/heal")
     async def heal_tasks(authorization: str = Header(default="")):
         _require_admin(authorization)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         def _heal():
             import watchdog
             watchdog.heal_tasks([], force=True)
