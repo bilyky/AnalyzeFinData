@@ -284,6 +284,7 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 
 function switchTab(tab, updateHash = true) {
     if (!VALID_TABS.includes(tab)) tab = "dashboard";
+    if (tab !== "system") _stopLogRefresh();   // stop log refresh when leaving system tab
     activeTab = tab;
     document.querySelectorAll(".tab-btn").forEach((b) =>
         b.classList.toggle("active", b.dataset.tab === tab));
@@ -732,6 +733,91 @@ async function loadEquityCurve() {
     else equityChart = new Chart(ctx, cfg);
 }
 
+// ── Log viewer ───────────────────────────────────────────────────────────────────
+let _logSource = "pipeline";   // pipeline | txt | json
+let _logRefreshTimer = null;
+const LEVEL_COLORS = { DEBUG: "text-slate-500", INFO: "text-slate-300",
+                       WARNING: "text-amber-400", ERROR: "text-red-400" };
+
+function _logLevelClass(level) {
+    return LEVEL_COLORS[(level || "").toUpperCase()] || "text-slate-300";
+}
+
+async function fetchAndRenderLog() {
+    const lv = $("log-view"), st = $("log-status");
+    const q = ($("log-search").value || "").toLowerCase();
+    const lvlFilter = $("log-level-filter").value;
+    try {
+        if (_logSource === "pipeline") {
+            const d = await api("/api/pipeline/logs?lines=300");
+            let lines = d.lines || [];
+            if (q) lines = lines.filter(l => l.toLowerCase().includes(q));
+            lv.textContent = lines.join("\n");
+            st.textContent = `${lines.length} lines · Pipeline Log`;
+        } else if (_logSource === "txt") {
+            const d = await api("/api/logs/aether?lines=300");
+            let lines = d.lines || [];
+            if (q) lines = lines.filter(l => l.toLowerCase().includes(q));
+            lv.textContent = lines.join("\n");
+            st.textContent = `${lines.length} lines · aether.log`;
+        } else {
+            const qs = lvlFilter ? `&level=${lvlFilter}` : "";
+            const d = await api(`/api/logs/aether/json?lines=300${qs}`);
+            let entries = d.entries || [];
+            if (q) entries = entries.filter(e =>
+                JSON.stringify(e).toLowerCase().includes(q));
+            // Render as coloured lines
+            lv.innerHTML = entries.map(e => {
+                const lvl = (e.level || "").toUpperCase();
+                const cls = _logLevelClass(lvl);
+                const ts = (e.ts || "").substring(11, 19);  // HH:MM:SS
+                const mod = (e.module || "").replace("aether.", "");
+                const extra = e.extra ? " " + JSON.stringify(e.extra) : "";
+                const exc = e.exc ? `\n  ${e.exc.split("\n").slice(-2).join(" ")}` : "";
+                return `<span class="${cls}">[${ts}] ${lvl.padEnd(7)} ${mod}: ${e.msg}${extra}${exc}</span>`;
+            }).join("\n") || "<span class='mut'>No entries.</span>";
+            st.textContent = `${entries.length} entries · aether.jsonl${lvlFilter ? " (" + lvlFilter + ")" : ""}`;
+        }
+    } catch (err) {
+        lv.textContent = "Error loading logs: " + err.message;
+    }
+    // Auto-scroll only if already at the bottom
+    if (lv.scrollHeight - lv.scrollTop < lv.clientHeight + 40)
+        lv.scrollTop = lv.scrollHeight;
+}
+
+function renderLogView() { fetchAndRenderLog(); }
+
+function _startLogRefresh() {
+    _stopLogRefresh();
+    if ($("log-auto-refresh").checked)
+        _logRefreshTimer = setInterval(fetchAndRenderLog, 5000);
+}
+
+function _stopLogRefresh() {
+    if (_logRefreshTimer) { clearInterval(_logRefreshTimer); _logRefreshTimer = null; }
+}
+
+document.querySelectorAll(".log-src-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+        _logSource = btn.dataset.log;
+        document.querySelectorAll(".log-src-btn").forEach(b => {
+            b.classList.toggle("bg-slate-700", b === btn);
+            b.classList.toggle("text-slate-200", b === btn);
+            b.classList.toggle("bg-slate-900", b !== btn);
+            b.classList.toggle("mut", b !== btn);
+        });
+        $("log-level-filter").classList.toggle("hidden", _logSource !== "json");
+        fetchAndRenderLog();
+    });
+});
+$("log-level-filter").addEventListener("change", fetchAndRenderLog);
+$("log-search").addEventListener("input", fetchAndRenderLog);
+$("log-refresh-btn").addEventListener("click", fetchAndRenderLog);
+$("log-auto-refresh").addEventListener("change", () => {
+    if ($("log-auto-refresh").checked) _startLogRefresh(); else _stopLogRefresh();
+});
+
 // ── System tab ─────────────────────────────────────────────────────────────────
 // Category display names for the manual tasks grid
 const TASK_CATEGORY_LABELS = {
@@ -899,9 +985,7 @@ async function loadSystem() {
         $("manual-tasks-grid").innerHTML = `<div class="col-span-3 text-center text-slate-500 py-4">No manual tasks configured.</div>`;
     }
 
-    const lv = $("log-view");
-    lv.textContent = (logs.lines || []).join("\n");
-    lv.scrollTop = lv.scrollHeight;
+    renderLogView();
 }
 
 $("run-pipeline-btn").addEventListener("click", async () => {
@@ -1223,7 +1307,7 @@ function loadTab(tab) {
     else if (tab === "history") loadHistory();
     else if (tab === "chat") setTimeout(() => $("chat-input").focus(), 50);
     else if (tab === "scorecard") loadScorecard();
-    else if (tab === "system") loadSystem();
+    else if (tab === "system") { loadSystem(); _startLogRefresh(); }
     else if (tab === "about") {} // No API data to load for static about tab
 }
 

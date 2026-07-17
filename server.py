@@ -231,6 +231,46 @@ def create_app():
     async def pipeline_logs(lines: int = Query(100, ge=1, le=1000)):
         return {"lines": data_api.read_log_tail(lines)}
 
+    @app.get("/api/logs/aether")
+    async def aether_log_txt(lines: int = Query(200, ge=1, le=2000)):
+        """Last N lines from Data/logs/aether.log (plain text, newest-last)."""
+        from pathlib import Path
+        p = _DIR / "Data" / "logs" / "aether.log"
+        if not p.exists():
+            return {"lines": []}
+        try:
+            all_lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+            return {"lines": all_lines[-lines:]}
+        except Exception as e:
+            return {"lines": [], "error": str(e)}
+
+    @app.get("/api/logs/aether/json")
+    async def aether_log_json(lines: int = Query(200, ge=1, le=2000),
+                              level: str = Query("", description="Filter by level: DEBUG INFO WARNING ERROR")):
+        """Last N JSONL entries from Data/logs/aether.jsonl, optionally filtered by level."""
+        import json as _json
+        from pathlib import Path
+        p = _DIR / "Data" / "logs" / "aether.jsonl"
+        if not p.exists():
+            return {"entries": []}
+        try:
+            raw = p.read_text(encoding="utf-8", errors="replace").splitlines()
+            entries = []
+            for line in raw:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = _json.loads(line)
+                    if level and obj.get("level", "").upper() != level.upper():
+                        continue
+                    entries.append(obj)
+                except Exception:
+                    continue
+            return {"entries": entries[-lines:]}
+        except Exception as e:
+            return {"entries": [], "error": str(e)}
+
     # ── Research sheet (full screener output) ─────────────────────────────────
 
     @app.get("/api/research")

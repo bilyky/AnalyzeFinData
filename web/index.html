@@ -274,8 +274,38 @@
                 <div class="card text-center text-slate-500 py-4 col-span-3">Loading…</div>
             </div>
 
-            <h2 class="section-title">Pipeline Log</h2>
-            <pre id="log-view" class="bg-black/50 border border-slate-800 rounded p-3 text-xs text-slate-300 h-80 overflow-auto font-mono">Loading…</pre>
+            <h2 class="section-title">Log Viewer</h2>
+
+            <!-- Log viewer controls -->
+            <div class="flex items-center gap-2 flex-wrap mb-2">
+                <!-- Source tabs -->
+                <div class="flex rounded overflow-hidden border border-slate-700 text-xs">
+                    <button data-log="pipeline" class="log-src-btn px-3 py-1.5 bg-slate-700 text-slate-200">Pipeline</button>
+                    <button data-log="txt"      class="log-src-btn px-3 py-1.5 bg-slate-900 mut">AETHER Log</button>
+                    <button data-log="json"     class="log-src-btn px-3 py-1.5 bg-slate-900 mut">Structured</button>
+                </div>
+                <!-- Level filter (only for json mode) -->
+                <select id="log-level-filter" class="hidden bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs">
+                    <option value="">All levels</option>
+                    <option value="DEBUG">DEBUG</option>
+                    <option value="INFO">INFO</option>
+                    <option value="WARNING">WARNING</option>
+                    <option value="ERROR">ERROR</option>
+                </select>
+                <!-- Search -->
+                <input id="log-search" type="text" placeholder="Filter…"
+                       class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs w-40" />
+                <label class="text-xs mut flex items-center gap-1">
+                    <input id="log-auto-refresh" type="checkbox" checked class="accent-blue-500" /> Auto-refresh
+                </label>
+                <button id="log-refresh-btn" class="btn text-xs ml-auto">↻ Refresh</button>
+            </div>
+
+            <!-- Log output -->
+            <div id="log-view-wrap" class="bg-black/60 border border-slate-800 rounded overflow-hidden" style="height:400px">
+                <pre id="log-view" class="p-3 text-xs text-slate-300 font-mono h-full overflow-auto whitespace-pre-wrap">Loading…</pre>
+            </div>
+            <div id="log-status" class="text-xs mut mt-1"></div>
         </section>
 
         <!-- ======================= SCORECARD TAB ======================= -->
