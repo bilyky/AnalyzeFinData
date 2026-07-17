@@ -5,6 +5,9 @@ import subprocess
 import notify
 import json
 from pathlib import Path
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("watchdog")
 
 # --- Windows UTF-8 Hardening ---
 # Prevents UnicodeEncodeError when printing emojis (🤖, 🚨, 🧠) in headless environments
@@ -34,8 +37,9 @@ if sys.platform == "win32":
 BASE_DIR = Path(__file__).resolve().parent
 LOG_FILES = [
     BASE_DIR / "Data" / "autonomous_run.log",
-    BASE_DIR / "daily_task.log"
+    BASE_DIR / "daily_task.log",
 ]
+AETHER_JSONL = BASE_DIR / "Data" / "logs" / "aether.jsonl"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 TASKS = ["AnalyzeFinData_Morning", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_Summary", "AnalyzeFinData_Evening"]
 SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
@@ -50,26 +54,85 @@ HEALER_CMD_TEMPLATE = os.environ.get(
     'npx --yes @google/gemini-cli --approval-mode auto_edit -p "{prompt_file}"'
 )
 
-def check_logs():
-    """Audit logs for 'Error', 'Failed', or 'Fatal' entries in the last 24h."""
+def _within_window(ts_str: str, now: datetime.datetime, window_seconds: int = 3600) -> bool:
+    """True if the ISO-like timestamp string is within window_seconds of now."""
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            t = datetime.datetime.strptime(ts_str[:19], fmt)
+            return (now - t).total_seconds() < window_seconds
+        except ValueError:
+            continue
+    return False
+
+
+def _check_plain_logs(now: datetime.datetime) -> list[str]:
+    """Scan plain-text log files for error keywords in the last hour."""
     errors = []
-    now = datetime.datetime.now()
+    _error_words = {"ERROR", "FAILED", "FATAL", "CRASH", "TRACEBACK",
+                    "UNBOUNDLOCALERROR", "UNICODEENCODEERROR", "SYMBOLOGY ERROR",
+                    "PORTFOLIO ERROR"}
+    _skip_words = {"0 ERRORS", "NO ERRORS"}
     for log_path in LOG_FILES:
         if not log_path.exists():
             continue
-        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+            for line in lines[-50:]:
+                upper = line.upper()
+                if not any(w in upper for w in _error_words):
+                    continue
+                if any(w in upper for w in _skip_words):
+                    continue
+                # Try to parse the timestamp from [YYYY-MM-DD HH:MM:SS] prefix
+                ts_raw = line.split("]")[0].strip("[")
+                if _within_window(ts_raw, now):
+                    errors.append(f"[{log_path.name}] {line.strip()}")
+        except Exception as e:
+            _log.warning("Failed to read log file", extra={"path": str(log_path), "error": str(e)})
+    return errors
+
+
+def _check_structured_log(now: datetime.datetime) -> list[str]:
+    """Scan aether.jsonl for ERROR entries in the last hour."""
+    errors = []
+    if not AETHER_JSONL.exists():
+        return errors
+    try:
+        with open(AETHER_JSONL, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
-            for line in lines[-50:]: # Check last 50 lines
-                if any(word in line.upper() for word in ["ERROR", "FAILED", "FATAL", "CRASH", "TRACEBACK", "UNBOUNDLOCALERROR", "UNICODEENCODEERROR"]):
-                    if "0 ERRORS" in line.upper() or "NO ERRORS" in line.upper():
-                        continue
-                    try:
-                        log_date_str = line.split("]")[0].strip("[")
-                        log_date = datetime.datetime.strptime(log_date_str, "%Y-%m-%d %H:%M:%S")
-                        if (now - log_date).total_seconds() < 3600:
-                            errors.append(f"[{log_path.name}] {line.strip()}")
-                    except:
-                        errors.append(f"[{log_path.name}] {line.strip()}")
+        for line in lines[-200:]:  # recent enough window for structured log
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("level", "").upper() != "ERROR":
+                continue
+            if not _within_window(entry.get("ts", ""), now):
+                continue
+            module = entry.get("module", "")
+            msg = entry.get("msg", "")
+            extra = entry.get("extra", {})
+            exc = entry.get("exc", "")
+            detail = f" | {json.dumps(extra)}" if extra else ""
+            if exc:
+                # Include just the last line of the traceback
+                detail += f" | {exc.strip().splitlines()[-1]}"
+            errors.append(f"[{module}] {msg}{detail}")
+    except Exception as e:
+        _log.warning("Failed to scan structured log", extra={"error": str(e)})
+    return errors
+
+
+def check_logs():
+    """Audit all AETHER logs (plain text + structured JSONL) for errors in the last hour."""
+    now = datetime.datetime.now()
+    errors = _check_plain_logs(now) + _check_structured_log(now)
+    if errors:
+        _log.warning("check_logs found issues", extra={"count": len(errors)})
     return errors
 
 def extract_latest_traceback():
