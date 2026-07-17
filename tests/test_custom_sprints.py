@@ -186,7 +186,7 @@ class TestAfterHoursOrderQueuing(unittest.TestCase):
     @mock.patch("ai_portfolio_game.get_live_prices")
     @mock.patch("ai_portfolio_game.load_game")
     @mock.patch("ai_portfolio_game.save_game")
-    @mock.patch("openpyxl.load_workbook")
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")  # patch at point-of-use
     def test_after_hours_orders_are_queued(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -242,7 +242,7 @@ class TestPersistentProfileModes(unittest.TestCase):
     @mock.patch("ai_portfolio_game.get_live_prices")
     @mock.patch("ai_portfolio_game.load_game")
     @mock.patch("ai_portfolio_game.save_game")
-    @mock.patch("openpyxl.load_workbook")
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
     def test_persistent_manual_profile_override(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_regime):
         # 1. First run: Explicit manual override via CLI should lock into MANUAL mode
         state = {
@@ -282,7 +282,7 @@ class TestPersistentProfileModes(unittest.TestCase):
     @mock.patch("ai_portfolio_game.get_live_prices")
     @mock.patch("ai_portfolio_game.load_game")
     @mock.patch("ai_portfolio_game.save_game")
-    @mock.patch("openpyxl.load_workbook")
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
     def test_adaptive_upgrade_fires_above_cash_threshold(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_regime, mock_strong_setups):
         # 50% cash (>40% threshold) + strong setups -> upgrade DEFENSIVE -> BALANCED.
         state = {"balance": 5000.0, "equity": 10000.0, "positions": {}, "queued_orders": [],
@@ -301,7 +301,7 @@ class TestPersistentProfileModes(unittest.TestCase):
     @mock.patch("ai_portfolio_game.get_live_prices")
     @mock.patch("ai_portfolio_game.load_game")
     @mock.patch("ai_portfolio_game.save_game")
-    @mock.patch("openpyxl.load_workbook")
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
     def test_adaptive_upgrade_does_not_fire_below_cash_threshold(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_regime, mock_strong_setups):
         # 30% cash (<40% threshold) -> gate must NOT upgrade even with strong setups.
         state = {"balance": 3000.0, "equity": 10000.0, "positions": {}, "queued_orders": [],

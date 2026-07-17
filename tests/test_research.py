@@ -90,47 +90,45 @@ class TestReadResearch(unittest.TestCase):
         self.assertEqual(aaa["prev_pgr"], "Bu")
         self.assertEqual(aaa["industry_strength"], "Strong")
 
-    def _detailed(self, **kw):
-        d = {"stop": None, "source": "none", "support": None, "age": None, "stale": False}
-        d.update(kw)
-        return mock.patch("risk_utils.resolve_stop_detailed", return_value=d)
-
-    def test_ohlcv_authoritative_ignores_sheet_when_fresh(self):
-        # Fresh cache yields a support stop -> used for both, even AAA's sheet=90.
-        with self._detailed(stop=44.0, source="support", support=44.0, age=1):
-            rows = {r["symbol"]: r for r in data_api.read_research()["rows"]}
-        self.assertEqual(rows["AAA"]["stop"], 44.0)         # sheet 90 ignored
-        self.assertEqual(rows["BBB"]["stop"], 44.0)
-        self.assertEqual(rows["AAA"]["stop_source"], "support")
-
-    def test_sheet_fallback_when_no_ohlcv(self):
-        # Cache can't produce a stop (source none) -> fall back to the sheet value.
-        with self._detailed(stop=None, source="none"):
-            rows = {r["symbol"]: r for r in data_api.read_research()["rows"]}
-        self.assertEqual(rows["AAA"]["stop"], 90.0)         # sheet
-        self.assertEqual(rows["AAA"]["stop_source"], "sheet")
-        self.assertIsNone(rows["BBB"]["stop"])              # sheet was 0
-
-    def test_stale_flagged_in_summary(self):
-        with self._detailed(stop=44.0, source="stale", stale=True, age=999):
-            res = data_api.read_research()
-        self.assertEqual(res["summary"]["stale_stops"], 2)
-        self.assertEqual(res["summary"]["ohlcv_max_age_days"], 999)
-
-    def test_support_miss_flagged_in_summary(self):
-        with self._detailed(stop=44.0, source="atr"):
-            res = data_api.read_research()
-        self.assertEqual(res["summary"]["support_misses"], 2)
-
+    # ── Shared patch helpers ──────────────────────────────────────────────────
     def _stop_d(self, **kw):
+        """Patch resolve_stop_detailed with a fresh-support result by default."""
         d = {"stop": 90.0, "source": "support", "support": 90.0, "age": 1, "stale": False}
         d.update(kw)
         return mock.patch("risk_utils.resolve_stop_detailed", return_value=d)
 
     def _target_d(self, **kw):
+        """Patch resolve_target_detailed with a no-target result by default."""
         d = {"target": None, "source": "none", "resistance": None, "age": None, "stale": False}
         d.update(kw)
         return mock.patch("risk_utils.resolve_target_detailed", return_value=d)
+
+    def test_ohlcv_authoritative_ignores_sheet_when_fresh(self):
+        # Fresh cache yields a support stop -> used for both, even AAA's sheet=90.
+        with self._stop_d(stop=44.0, source="support", support=44.0, age=1):
+            rows = {r["symbol"]: r for r in data_api.read_research()["rows"]}
+        self.assertEqual(rows["AAA"]["stop"], 44.0)
+        self.assertEqual(rows["BBB"]["stop"], 44.0)
+        self.assertEqual(rows["AAA"]["stop_source"], "support")
+
+    def test_sheet_fallback_when_no_ohlcv(self):
+        # Cache can't produce a stop (source none) -> fall back to the sheet value.
+        with self._stop_d(stop=None, source="none"):
+            rows = {r["symbol"]: r for r in data_api.read_research()["rows"]}
+        self.assertEqual(rows["AAA"]["stop"], 90.0)
+        self.assertEqual(rows["AAA"]["stop_source"], "sheet")
+        self.assertIsNone(rows["BBB"]["stop"])
+
+    def test_stale_flagged_in_summary(self):
+        with self._stop_d(stop=44.0, source="stale", stale=True, age=999):
+            res = data_api.read_research()
+        self.assertEqual(res["summary"]["stale_stops"], 2)
+        self.assertEqual(res["summary"]["ohlcv_max_age_days"], 999)
+
+    def test_support_miss_flagged_in_summary(self):
+        with self._stop_d(stop=44.0, source="atr"):
+            res = data_api.read_research()
+        self.assertEqual(res["summary"]["support_misses"], 2)
 
     def test_target_and_rr_recomputed(self):
         with self._stop_d(stop=90.0), \

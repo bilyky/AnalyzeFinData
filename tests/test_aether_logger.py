@@ -84,10 +84,29 @@ class TestLoggerInit(unittest.TestCase):
     def test_double_init_is_idempotent(self):
         import aether_logger
         aether_logger._init()
+        count_before = len(logging.getLogger("aether").handlers)
+        aether_logger._init()  # second call must be a no-op
+        count_after = len(logging.getLogger("aether").handlers)
+        self.assertEqual(count_before, count_after)
+        rotating = [h for h in logging.getLogger("aether").handlers
+                    if isinstance(h, logging.handlers.RotatingFileHandler)]
+        self.assertEqual(len(rotating), 2)
+
+    def test_exc_info_captured_in_jsonl(self):
+        import aether_logger
         aether_logger._init()
-        root = logging.getLogger("aether")
-        self.assertEqual(len([h for h in root.handlers
-                               if isinstance(h, logging.handlers.RotatingFileHandler)]), 2)
+        log = aether_logger.get_logger("test_exc")
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            log.error("something broke", exc_info=True)
+        jsonl_path = Path(self.tmp.name) / "aether.jsonl"
+        lines = jsonl_path.read_text(encoding="utf-8").strip().splitlines()
+        obj = json.loads(lines[-1])
+        self.assertEqual(obj["level"], "ERROR")
+        self.assertIn("exc", obj)
+        self.assertIn("ValueError", obj["exc"])
+        self.assertIn("boom", obj["exc"])
 
     def test_log_level_env_var_respected(self):
         with mock.patch.dict(os.environ, {"LOG_LEVEL": "WARNING"}):
