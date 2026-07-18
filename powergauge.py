@@ -1,4 +1,5 @@
 import datetime
+import sys
 import re
 import requests
 import json
@@ -75,7 +76,7 @@ def _build_cache_index():
     print(f"Cache index built: {len(_cache_file_index)} symbols")
 
 
-SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.txt")
+SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
 _PROXY_URL = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 _PROXIES = {"http": _PROXY_URL, "https": _PROXY_URL} if _PROXY_URL else {}
 
@@ -352,23 +353,46 @@ class PowerGauge:
         return self
 
 
-def _load_session_from_file() -> str:
-    if not os.path.exists(SESSION_FILE):
-        return ""
-    with open(SESSION_FILE, "r") as f:
-        return f.read().strip()
+def _load_session_from_file() -> dict:
+    session_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
+    if not os.path.exists(session_file):
+        txt_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.txt")
+        if os.path.exists(txt_file):
+            with open(txt_file, "r") as f:
+                sid = f.read().strip()
+                return {
+                    "jsessionid": sid,
+                    "jwttoken": "",
+                    "uuid": "bilyky@gmail.com"
+                }
+        return {}
+    with open(session_file, "r") as f:
+        try:
+            return json.load(f)
+        except Exception:
+            return {}
 
 
-def _save_session_to_file(session_id: str):
-    os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
-    with open(SESSION_FILE, "w") as f:
-        f.write(session_id)
+def _save_session_to_file(session_data: dict):
+    session_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
+    os.makedirs(os.path.dirname(session_file), exist_ok=True)
+    with open(session_file, "w") as f:
+        json.dump(session_data, f, indent=2)
 
 
-def _validate_session(session_id: str) -> bool:
-    test_url = "https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData" \
-               "?uid=1101733&symbol=AAPL&components=pgr"
-    headers = {'Cookie': f'JSESSIONID={session_id};'}
+def _validate_session(session_data: dict) -> bool:
+    if not session_data or not session_data.get("jsessionid"):
+        return False
+    test_url = "https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid=1101733&symbol=AAPL&components=pgr"
+    headers = {
+        'jsessionid': session_data['jsessionid'],
+        'x-session-id': session_data['jsessionid'],
+        'uuid': session_data.get('uuid', 'bilyky@gmail.com'),
+        'jwttoken': session_data.get('jwttoken', ''),
+        'x-api-key': '76J!7fb?jhEtz/hd7i6rHPKklawGZb5VLReDQXa0?4-jGCqQFi74xYCsb0H-hqUC',
+        'x-app-id': 'omni',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+    }
     try:
         r = _get_http_session().get(test_url, headers=headers, timeout=(5, 15))
         return r.status_code == 200
@@ -406,22 +430,23 @@ def _load_credentials() -> tuple[str, str]:
     return email, password
 
 
-def _login_via_browser() -> str:
+def _login_via_browser() -> dict:
     from playwright.sync_api import sync_playwright
 
     print("Opening browser for login (a window will appear)...")
-    session_id = [None]
+    session_data = [None]
 
-    def on_response(response):
-        if 'getJWTAuthorization' in response.url and response.status == 200:
-            try:
-                data = response.json()
-                sid = data.get('sessionId')
-                if sid and sid != 'NULL':
-                    session_id[0] = sid
-                    print(f"  Session ID captured from browser.")
-            except Exception as ex:
-                print(f"  getJWTAuthorization parse error: {ex}")
+    def on_request(request):
+        if 'members-backend.chaikinanalytics.com' in request.url:
+            jsid = request.headers.get('jsessionid') or request.headers.get('x-session-id')
+            jwt = request.headers.get('jwttoken')
+            uuid = request.headers.get('uuid') or 'bilyky@gmail.com'
+            if jsid and jsid != 'NULL' and len(jsid) > 10 and jwt:
+                session_data[0] = {
+                    "jsessionid": jsid,
+                    "jwttoken": jwt,
+                    "uuid": uuid
+                }
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -431,7 +456,7 @@ def _login_via_browser() -> str:
         )
         context = browser.new_context()
         page = context.new_page()
-        page.on('response', on_response)
+        page.on('request', on_request)
 
         page.goto('https://members.chaikinanalytics.com/login', wait_until='domcontentloaded', timeout=60000)
 
@@ -453,31 +478,34 @@ def _login_via_browser() -> str:
         except Exception:
             pass
 
-        # Wait for the React app to complete the JWT→session exchange internally
+        # Navigate to app.chaikinanalytics.com to fully activate the session
+        print("Navigating to app.chaikinanalytics.com to activate the session...")
         try:
+            page.goto('https://app.chaikinanalytics.com', timeout=30000)
             page.wait_for_timeout(5000)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Navigation to app.chaikinanalytics.com failed or timed out: {e}")
+
         browser.close()
 
-    if not session_id[0]:
+    if not session_data[0]:
         raise EnvironmentError(
             "Browser login completed but session ID was not captured. "
             "Fall back to manual session: " + SESSION_FILE
         )
 
-    _save_session_to_file(session_id[0])
+    _save_session_to_file(session_data[0])
     print(f"Session saved to {SESSION_FILE}")
-    return session_id[0]
+    return session_data[0]
 
 
-def login() -> str:
-    session_id = _load_session_from_file()
-    if session_id:
+def login(interactive=True) -> dict:
+    session_data = _load_session_from_file()
+    if session_data:
         print("Loaded session from file, validating...")
-        if _validate_session(session_id):
+        if _validate_session(session_data):
             print("Session is valid.")
-            return session_id
+            return session_data
         print("Saved session has expired — re-authenticating via browser.")
 
     try:
@@ -485,26 +513,53 @@ def login() -> str:
     except Exception as e:
         print(f"Browser login failed: {e}")
 
+    if not interactive or not sys.stdin or not sys.stdin.isatty():
+        return {}
+
     print(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
     try:
         raw = input("Or paste a JSESSIONID here and press Enter (leave blank to abort): ").strip()
     except (EOFError, KeyboardInterrupt):
         raw = ""
     if raw:
-        _save_session_to_file(raw)
+        data = {
+            "jsessionid": raw,
+            "jwttoken": "",
+            "uuid": "bilyky@gmail.com"
+        }
+        _save_session_to_file(data)
         print(f"Session saved to {SESSION_FILE}")
-        return raw
+        return data
     raise EnvironmentError(
         f"No valid session available. Save a JSESSIONID to: {SESSION_FILE}"
     )
 
 
-def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id: str) -> PowerGauge:
+def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id) -> PowerGauge:
     if not _SYMBOL_RE.match(symbol):
         raise ValueError(f"Invalid symbol format: {symbol!r}")
+    
+    if isinstance(session_id, str):
+        session_data = {
+            "jsessionid": session_id,
+            "jwttoken": "",
+            "uuid": "bilyky@gmail.com"
+        }
+    else:
+        session_data = session_id
+
     industry_url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getChecklistStocks?symbol={symbol}"
     url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid=1101733&symbol={symbol}&components=pgr,metaInfo,EPSData,fundamentalData,technical"
-    headers = {'Cookie': f'JSESSIONID={session_id};'}
+    
+    headers = {
+        'jsessionid': session_data.get('jsessionid', ''),
+        'x-session-id': session_data.get('jsessionid', ''),
+        'uuid': session_data.get('uuid', 'bilyky@gmail.com'),
+        'jwttoken': session_data.get('jwttoken', ''),
+        'x-api-key': '76J!7fb?jhEtz/hd7i6rHPKklawGZb5VLReDQXa0?4-jGCqQFi74xYCsb0H-hqUC',
+        'x-app-id': 'omni',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+    }
     pg = PowerGauge(symbol, date)
     data_jsn = {}
     ind_data_jsn = {}

@@ -50,8 +50,9 @@ To maximize data accuracy while eliminating API rate-limits, suspended sessions,
 
 ### 🛡️ State-Aware Persistent Profile Modes (MANUAL vs. ADAPTIVE)
 To guarantee predictability across automated daily executions:
-*   **Manual Override Lock:** Executing a run with an explicit `--profile <PROFILE>` CLI parameter locks the state into **`"profile_mode": "MANUAL"`**. Subsequent automated morning tasks (which run with no CLI parameters) will **strictly respect and run under your locked profile**, completely disabling automatic overrides.
-*   **Adaptive Restoration:** To hand control back to the autopilot, execute a manual run with `--profile ADAPTIVE`. This restores **`"profile_mode": "ADAPTIVE"`**, enabling dynamic regime selectors on all subsequent automated daily runs.
+*   **One-Time Tactical Override:** Executing a manual run with an explicit `--profile <PROFILE>` CLI parameter sets the system state to `"profile_mode": "MANUAL"`. This overrides the autopilot for *that specific session only*.
+*   **Automatic Autopilot Restoration:** Subsequent automated daily tasks (which run with no CLI parameters) will **automatically detect the manual override state, print an auto-reset warning, and restore the `"profile_mode": "ADAPTIVE"` autopilot**, safely falling back to the dynamic regime selector with zero manual intervention required.
+*   **Manual Restoration:** To manually restore the autopilot immediately at any time, execute a run with `--profile ADAPTIVE`. This restores `"profile_mode": "ADAPTIVE"`, enabling the dynamic regime selectors for that session.
 
 ### ⚙️ Adaptive Cash-Deployment Upgrade Gate (Capital Efficiency Rule)
 To prevent the portfolio from holding excessive, non-productive cash buffer during high-conviction bottoming opportunities:
@@ -71,4 +72,16 @@ To completely prevent executing orders on stale weekend or holiday prices:
 This repository has been augmented with a custom **Gemini CLI Agent Skill** located at `.gemini/skills/aether-copilot`. 
 *   **Core Philosophy:** The skill strictly enforces that **the LLM is only used for qualitative reasoning and decision-making** (grading setups, exit second-opinions, and summaries), while **all heavy lifting (fetches, sizing, and trading) is handled deterministically by Python scripts.**
 *   **Activation:** To load the skill into your interactive Gemini CLI session, you must manually run `/skills reload`. Verify it is active by running `/skills list`.
+
+### 🧪 The Rigorous No-Fake-Testing & Red-Green Mandate (TDD & Quality Rules)
+To maintain the high technical integrity of Project AETHER and prevent the introduction of "fake", useless, or fragile tests:
+
+*   **Absolute Ban on Fake Mocking:** Writing tests that do nothing but assert that a mocked network request, API client, or server endpoint was called is **strictly prohibited**. Mocking must never be used to mask actual API behaviors or create a false sense of test-coverage security.
+*   **The Hybrid Testing Standard (All Tests Must Have Value):**
+    1.  **Pure Mathematical & Logical Tests:** Core trend calculations (Short10, Long60), Peter Lynch soft exit reviews, ATR stop-loss sizing, and Victor Sperandeo bottom reversals must be tested **deterministically with zero mocks** to guarantee absolute mathematical correctness on real pricing arrays.
+    2.  **Live-Network API Contract Tests:** All network, credentials, and API-key integrations must be validated by **real-world unmocked contract tests** (like `tests/test_live_api_contract.py`). They must actively query Chaikin and E*TRADE production endpoints once to guarantee that connections are 100% online, authorized, and unblocked by firewalls.
+    3.  **Executable Compilation Smoke Tests:** Standalone entry-point scripts (like `run_history.py` or `daily_task.py`) must be validated by automated smoke tests to guarantee they compile and have perfect type and signature compatibility.
+*   **The Strict Red-Green TDD Mandate:** 
+    *   **Bug Fixes:** For every reported bug, a reproducing test case must be authored first. This test case **must fail (RED) on the broken codebase** to empirically prove the failure condition, before any code fix is applied. The fix is only complete when the test case successfully passes (**GREEN**) with zero regressions.
+    *   **New Features:** For any new features, tests defining the expected input/output contract must be written and fail (**RED**) first, before the feature is implemented and passes (**GREEN**).
 

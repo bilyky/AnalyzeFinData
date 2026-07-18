@@ -1,19 +1,14 @@
 import os
-import sys
 import datetime
 import re
-import requests
 import json
 import imaplib
 import email
 import openpyxl
-from email.header import decode_header
 from pathlib import Path
+from config import CFG
 
 # --- CONFIGURATION ---
-IMAP_SERVER = "imap.gmail.com"
-EMAIL_USER = "bilyky@gmail.com"
-EMAIL_PASS = os.environ.get("SMTP_PASSWORD")
 BASE_DIR = Path(__file__).resolve().parent
 
 # Keywords that signal a stock-oriented email
@@ -123,12 +118,9 @@ def _max_intel_emails() -> int:
 
 def fetch_idea_emails():
     """Check inbox, Promotions, and Trash for stock-oriented emails from the last 24h.
+    Supports scanning multiple mailboxes defined in config.json.
     Returns standard ticker ideas (analyze_email_content) AND structural intel
     (extract_email_intel.extract) per email as 'intel' key."""
-    if not EMAIL_PASS:
-        print("Error: SMTP_PASSWORD not set. Cannot check emails.")
-        return []
-
     # Gmail IMAP folder names. Spam is deliberately excluded — financial newsletters
     # rarely land there legitimately and it adds noise.
     FOLDERS = [
@@ -140,74 +132,99 @@ def fetch_idea_emails():
     import extract_email_intel
 
     ideas = []
-    mail = None
-    try:
-        mail = imaplib.IMAP4_SSL(IMAP_SERVER)
-        mail.login(EMAIL_USER, EMAIL_PASS)
+    processed_msg_ids = set()
+    max_intel = _max_intel_emails()
+    intel_count = 0   # track how many AI extractions we've run
 
-        date = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%d-%b-%Y")
-        max_intel = _max_intel_emails()
-        intel_count = 0   # track how many AI extractions we've run
+    for mb in CFG.mailboxes:
+        email_user = mb["email"]
+        pass_env = mb["password_env"]
+        imap_server = mb["imap_server"]
+        email_pass = os.environ.get(pass_env)
 
-        for folder in FOLDERS:
-            try:
-                status, _ = mail.select(f'"{folder}"', readonly=True)
-                if status != "OK":
-                    continue
-            except Exception:
-                continue
+        if not email_pass:
+            print(f"Warning: Environment variable '{pass_env}' for mailbox '{email_user}' is not set. Skipping.")
+            continue
 
-            status, messages = mail.search(None, f'(SINCE "{date}")')
-            if status != "OK" or not messages[0].split():
-                continue
+        print(f"Scanning mailbox: {email_user} on {imap_server}...")
+        mail = None
+        try:
+            mail = imaplib.IMAP4_SSL(imap_server)
+            mail.login(email_user, email_pass)
 
-            for num in messages[0].split():
-                status, data = mail.fetch(num, "(BODY.PEEK[])")
-                if status != "OK":
-                    continue
-                raw_email = data[0][1]
-                msg = email.message_from_bytes(raw_email)
+            date = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%d-%b-%Y")
 
-                subject = str(msg["subject"] or "")
-                body = ""
-                if msg.is_multipart():
-                    for part in msg.walk():
-                        if part.get_content_type() == "text/plain":
-                            body = part.get_payload(decode=True).decode(errors="ignore")
-                            break
-                else:
-                    body = msg.get_payload(decode=True).decode(errors="ignore")
-
-                content_to_check = (subject + " " + body).upper()
-                if not (any(k in content_to_check for k in STOCK_KEYWORDS) or "$" in content_to_check):
+            for folder in FOLDERS:
+                try:
+                    status, _ = mail.select(f'"{folder}"', readonly=True)
+                    if status != "OK":
+                        continue
+                except Exception:
                     continue
 
-                # 1. Standard ticker extraction (BUY/SELL/HOLD)
-                parsed_ideas = analyze_email_content(subject, body)
-                # 2. Structural intel extraction — capped to avoid runaway AI costs
-                intel = {}
-                if intel_count < max_intel:
-                    intel = extract_email_intel.extract(subject, body)
-                    intel_count += 1
-                else:
-                    print(f"[intel] cap of {max_intel} emails reached; skipping deep extraction for: {subject[:60]}")
+                status, messages = mail.search(None, f'(SINCE "{date}")')
+                if status != "OK" or not messages[0].split():
+                    continue
 
-                base = {"from": msg["from"], "subject": subject, "folder": folder, "intel": intel}
-                if parsed_ideas:
-                    for idea in parsed_ideas:
-                        ideas.append({**base, "symbol": idea["symbol"],
-                                      "sentiment": idea["sentiment"], "thesis": idea["thesis"]})
-                elif intel:
-                    ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
+                for num in messages[0].split():
+                    try:
+                        status, data = mail.fetch(num, "(BODY.PEEK[])")
+                        if status != "OK":
+                            continue
+                        raw_email = data[0][1]
+                        msg = email.message_from_bytes(raw_email)
 
-    except Exception as e:
-        print(f"Failed to fetch emails: {e}")
-    finally:
-        if mail:
-            try:
-                mail.logout()
-            except Exception:
-                pass
+                        # Deduplicate identical emails across folders or mailboxes
+                        msg_id = msg.get("Message-ID", "")
+                        if msg_id:
+                            if msg_id in processed_msg_ids:
+                                continue
+                            processed_msg_ids.add(msg_id)
+
+                        subject = str(msg["subject"] or "")
+                        body = ""
+                        if msg.is_multipart():
+                            for part in msg.walk():
+                                if part.get_content_type() == "text/plain":
+                                    body = part.get_payload(decode=True).decode(errors="ignore")
+                                    break
+                        else:
+                            body = msg.get_payload(decode=True).decode(errors="ignore")
+
+                        content_to_check = (subject + " " + body).upper()
+                        if not (any(k in content_to_check for k in STOCK_KEYWORDS) or "$" in content_to_check):
+                            continue
+
+                        # 1. Standard ticker extraction (BUY/SELL/HOLD)
+                        parsed_ideas = analyze_email_content(subject, body)
+                        # 2. Structural intel extraction — capped to avoid runaway AI costs
+                        intel = {}
+                        if intel_count < max_intel:
+                            intel = extract_email_intel.extract(subject, body)
+                            intel_count += 1
+                        else:
+                            print(f"[intel] cap of {max_intel} emails reached; skipping deep extraction for: {subject[:60]}")
+
+                        base = {"from": msg["from"], "subject": subject, "folder": folder, "intel": intel}
+                        if parsed_ideas:
+                            for idea in parsed_ideas:
+                                ideas.append({**base, "symbol": idea["symbol"],
+                                              "sentiment": idea["sentiment"], "thesis": idea["thesis"]})
+                        elif intel:
+                            # Intel found but no explicit ticker recs — still worth surfacing
+                            ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
+                    except Exception as e:
+                        print(f"Failed to process message {num}: {e}")
+
+            mail.logout()
+        except Exception as e:
+            print(f"Failed to fetch emails for {email_user}: {e}")
+        finally:
+            if mail:
+                try:
+                    mail.logout()
+                except Exception:
+                    pass
 
     return ideas
 
@@ -219,4 +236,4 @@ if __name__ == "__main__":
     print("Checking for new AETHER ideas...")
     new_ideas = fetch_idea_emails()
     for idea in new_ideas:
-        print(f"💡 Idea from {idea['from']}: {idea['body']}")
+        print(f"💡 Idea from {idea['from']}: {idea['subject']} (Symbol: {idea.get('symbol')}, Sentiment: {idea.get('sentiment')})")

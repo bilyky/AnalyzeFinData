@@ -267,12 +267,15 @@ class TestPersistentProfileModes(unittest.TestCase):
         self.assertEqual(state["profile_mode"], "MANUAL")
         
         # 2. Second run: Automated run (no manual_profile CLI arg passed)
-        # It must respect the MANUAL locked profile, even though get_market_regime() is returning "DEFENSIVE"!
+        # Under our new auto-reset spec, it must automatically reset back to ADAPTIVE autopilot
+        # and fall back to the dynamic regime selector (returning "DEFENSIVE"!)
         game.run_daily_ai_management(force=True, manual_profile=None)
-        self.assertEqual(state["profile"], "BALANCED")
-        self.assertEqual(state["profile_mode"], "MANUAL")
+        self.assertEqual(state["profile"], "DEFENSIVE")
+        self.assertEqual(state["profile_mode"], "ADAPTIVE")
         
-        # 3. Third run: Restore adaptive pilot via manual_profile="ADAPTIVE"
+        # 3. Third run: Explicit manual restoration via CLI still works
+        state["profile_mode"] = "MANUAL"
+        state["profile"] = "BALANCED"
         game.run_daily_ai_management(force=True, manual_profile="ADAPTIVE")
         self.assertEqual(state["profile"], "DEFENSIVE")
         self.assertEqual(state["profile_mode"], "ADAPTIVE")

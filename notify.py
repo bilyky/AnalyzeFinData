@@ -7,10 +7,14 @@ from email.mime.multipart import MIMEMultipart
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SENDER_EMAIL = "bilyky@gmail.com"
-# For Gmail, use an "App Password" (https://myaccount.google.com/apppasswords)
-# Set this in your environment as SMTP_PASSWORD
-SENDER_PASSWORD = os.environ.get("SMTP_PASSWORD", "your_app_password_here")
 RECIPIENT_EMAIL = "bilyky@gmail.com"
+
+# Load credentials securely from config, fallback to system environment variables
+try:
+    from config import CFG
+    SENDER_PASSWORD = CFG.smtp_password or os.environ.get("SMTP_PASSWORD", "your_app_password_here")
+except Exception:
+    SENDER_PASSWORD = os.environ.get("SMTP_PASSWORD", "your_app_password_here")
 
 def send_email(subject, body, is_html=False):
     msg = MIMEMultipart()
@@ -31,6 +35,8 @@ def send_email(subject, body, is_html=False):
     except Exception as e:
         # Avoid printing the full exception which might contain parts of the password/email in some SMTP implementations
         print("Error sending email: [Redacted for security]")
+        # Raise an exception so the caller script is actively alerted of the failure
+        raise RuntimeError("SMTP email dispatch failed. Check your config credentials or environment variables.") from e
 
 if __name__ == "__main__":
     # Test

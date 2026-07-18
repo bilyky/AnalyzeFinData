@@ -186,9 +186,14 @@ AnalyzeFinData/
 ├── backtest.py            # Full factor backtest (336k obs, 2023-2025)
 ├── sync_data.py           # Sync OHLCV files from a secondary Data folder
 ├── organize_symbol_files.py  # Organise cached Symbol/ files
+├── autonomous_pipeline.py # Pre-open daily execution pipeline (5:30 AM PST cron)
+├── ai_portfolio_game.py   # Virtual portfolio simulation & adaptive risk manager
+├── real_copilot.py        # Live E*TRADE production portfolio shadow auditor
+├── external_intel.py      # Gmail newsletter scanner (Inbox/Promotions/Trash/Spam)
+├── extract_email_intel.py # Structural intelligence newsletter parser and adversarial verifier
 ├── chaikin_config.json.example
 │
-├── tests/                 # 187 tests total (python -m unittest discover tests)
+├── tests/                 # 277 tests total (python -m unittest discover tests)
 │   ├── conftest.py            # make_ohlcv() fixture helper
 │   ├── test_scoring.py        # scoring pure functions
 │   ├── test_compute.py        # PowerGauge compute helpers

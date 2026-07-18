@@ -13,7 +13,6 @@ alongside the code.
 
 import html as _html
 import json
-import os
 from pathlib import Path
 
 import ai_client
@@ -192,7 +191,7 @@ def report(intel: dict) -> str:
 
     topics = intel.get("rd_topics", [])
     if topics:
-        lines.append(f"\nR&D topics implied:")
+        lines.append("\nR&D topics implied:")
         for t in topics:
             lines.append(f"  • {t}")
 

@@ -62,6 +62,17 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 *   **The "Catastrophic Gap Guard" (CNXC Trap Protection):** Instantly rejects any BUY order if today's live price is more than 8% below yesterday's workbook close, protecting capital from waterfall crashes on earnings panics.
 *   **The 2.5-Sigma Bubble Guard:** Dynamically calculates any asset's Z-score distance from its 500-day moving average. If the Z-score `> 2.5` (Super-Bubble Zone), the asset is blacklisted from new purchases, avoiding overextended parabolic peaks.
 
+### D. Structural Email Intelligence Scraper (`extract_email_intel.py` & `external_intel.py`)
+*   **Multi-Folder Newsletter Scanning:** Scans your Gmail `INBOX`, `[Gmail]/Promotions`, `[Gmail]/Spam`, and `[Gmail]/Trash` to aggregate financial newsletter research, capturing ideas that bypass your standard inbox.
+*   **Deep Signal Extraction Pass (`extract_email_intel.py`):** Uses custom rubrics (`prompts/email_intel_extraction.md`) to extract high-cognitive parameters:
+    *   **Dated Catalysts:** Contract expirations, regulatory deadlines, and earnings dates.
+    *   **Supply Chain Facts:** Physical capacity constraints, tonnage, and GW volume constraints.
+    *   **Missing Tickers:** Outlooked downstream or upstream plays the newsletter author did not explicitly highlight.
+    *   **Implied R&D Topics:** Analytical ideas implied by data trends to enrich ongoing R&D.
+*   **Adversarial Claim Verification (`_verify`):** Runs an isolated Zero-Trust second-pass verifier LLM on extracted claims, categorizing them as `VERIFIED`, `PLAUSIBLE`, or `QUESTIONABLE` to protect your decision loop from typical newsletter exaggeration.
+*   **Symbology Cross-Referencing (`verify_symbols`):** Validates extracted symbols against your active 506-symbol Research universe, automatically attaching the Power Gauge Rating (PGR) and combined technical score to matching symbols, and isolating unlisted plays.
+*   **Rich Structural Layout rendering:** Aggregates and displays catalysts, watchlist omissions (with interactive hover reasons), and bulleted R&D ideas in your Daily Trade Report HTML emails.
+
 ---
 
 ## 🧱 3. System Resilience & Headless Safety Gates

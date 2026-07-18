@@ -371,7 +371,21 @@ def get_strategy_rules(profile):
         }
 
 def load_game():
-    if not AI_GAME_FILE.exists():
+    if not AI_GAME_FILE.exists() or AI_GAME_FILE.stat().st_size == 0:
+        # Try to find a backup to restore from
+        backup_dir = BASE_DIR / "Data" / "Backup" / "Game"
+        if backup_dir.exists():
+            backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
+            for b in backups:
+                try:
+                    with open(b, "r", encoding="utf-8") as bf:
+                        state = json.load(bf)
+                        # Succeeded! Copy it back to repair AI_GAME_FILE
+                        shutil.copy2(b, AI_GAME_FILE)
+                        print(f"  [⚠️ AETHER SELF-HEALER] AI game file was missing or empty. Successfully restored from backup: {b.name}")
+                        return state
+                except Exception:
+                    continue
         return {
             "balance": INITIAL_BALANCE,
             "equity": INITIAL_BALANCE,
@@ -383,8 +397,30 @@ def load_game():
     with open(AI_GAME_FILE, "r", encoding="utf-8") as f:
         try:
             return json.load(f)
-        except:
-            return {"balance": INITIAL_BALANCE, "equity": INITIAL_BALANCE, "positions": {}, "history": [], "start_date": str(datetime.date.today()), "profile": "BALANCED"}
+        except Exception as e:
+            # Corruption detected! Try to restore from backup
+            print(f"  [⚠️ AETHER SELF-HEALER] Error loading {AI_GAME_FILE.name}: {e}. Attempting automated recovery from backup...")
+            backup_dir = BASE_DIR / "Data" / "Backup" / "Game"
+            if backup_dir.exists():
+                backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
+                for b in backups:
+                    try:
+                        with open(b, "r", encoding="utf-8") as bf:
+                            state = json.load(bf)
+                            shutil.copy2(b, AI_GAME_FILE)
+                            print(f"  [⚠️ AETHER SELF-HEALER] Successfully restored corrupted file from backup: {b.name}")
+                            return state
+                    except Exception:
+                        continue
+            # Fallback to default state if all else fails
+            return {
+                "balance": INITIAL_BALANCE,
+                "equity": INITIAL_BALANCE,
+                "positions": {},
+                "history": [],
+                "start_date": str(datetime.date.today()),
+                "profile": "BALANCED"
+            }
 
 import shutil
 
@@ -846,8 +882,22 @@ def run_daily_ai_management(force=False, manual_profile=None):
             state["profile_mode"] = "MANUAL"
             print(f"🤖 AI ACTIVE STRATEGY: {profile} (Manual Override - Locked)")
         elif state.get("profile_mode") == "MANUAL":
-            profile = state.get("profile", "BALANCED")
-            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Manual Override - Locked)")
+            # Auto-Reset Manual Override: A manual override is a one-time tactical choice.
+            # On the next automated run (no CLI profile passed), we automatically reset back to ADAPTIVE autopilot.
+            print("  [AETHER] Manual override expired. Automatically resetting back to Adaptive autopilot...")
+            state["profile_mode"] = "ADAPTIVE"
+            profile = get_market_regime()
+
+            # Adaptive Cash-Deployment Upgrade Gate (Only for Autopilot!)
+            equity = state.get("equity", 0)
+            cash_ratio = state.get("balance", 0) / equity if equity > 1.0 else 0
+            if profile == "DEFENSIVE" and cash_ratio > 0.40 and _has_strong_setups_today(min_score=9.5):
+                print(f"  [AETHER] Cash is plentiful ({cash_ratio*100:.1f}%) and strong bottom setups are detected.")
+                print("  -> Adaptively upgrading today's strategy profile from DEFENSIVE to BALANCED to deploy cash safely!")
+                profile = "BALANCED"
+
+            state["profile"] = profile
+            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive)")
         else:
             profile = get_market_regime()
             state["profile_mode"] = "ADAPTIVE"

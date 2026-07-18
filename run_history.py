@@ -85,7 +85,8 @@ def main():
     print(f"Trading days to check: {days[-1]} -> {days[0]} ({len(days)} days)\n")
 
     session_id = powergauge.login()
-    print(f"Session: {session_id[:8]}...\n")
+    sid_str = session_id.get('jsessionid', '') if isinstance(session_id, dict) else str(session_id)
+    print(f"Session: {sid_str[:8]}...\n")
 
     for day in reversed(days):   # oldest first so prevPG chain builds forward
         missing = days_missing(symbols, day)

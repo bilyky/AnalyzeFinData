@@ -2,8 +2,8 @@ import os
 import sys
 import datetime
 import subprocess
-import notify
 import json
+import notify
 from pathlib import Path
 from aether_logger import get_logger as _get_logger
 
@@ -297,6 +297,26 @@ def run_watchdog():
     except Exception as e:
         print(f"  [Healer] E*TRADE session keep-alive bypassed or failed: {e}")
 
+    # 0b. Chaikin Proactive Session Keeper & Auto-Login
+    try:
+        import sys
+        sys.path.insert(0, str(BASE_DIR))
+        import powergauge
+        session_id = powergauge._load_session_from_file()
+        if not session_id or not powergauge._validate_session(session_id):
+            print("  [Healer] Chaikin Analytics session is expired or missing. Attempting automated re-authentication...")
+            # Trigger the browser login on the user's active desktop!
+            # Since this runs inside the watchdog, we pass interactive=False to avoid blocking prompt hangs.
+            new_session = powergauge.login(interactive=False)
+            if new_session:
+                print("  [Healer] Chaikin Analytics session successfully renewed via automated login!")
+            else:
+                print("  [Healer] Chaikin Analytics automated login failed or was aborted.")
+        else:
+            print("  [Healer] Chaikin Analytics session is fresh and valid.")
+    except Exception as e:
+        print(f"  [Healer] Chaikin session keep-alive bypassed or failed: {e}")
+
     # 1. Gather Initial System Health Data
     initial_errors = check_logs()
     missing_tasks = check_task_scheduler()
@@ -354,7 +374,9 @@ def run_watchdog():
         issues.append(data_issue)
 
     # 7. Construct the Consolidated HTML Recovery Report (The Final Step!)
-    if ai_triggered or recovery_actions or issues:
+    # We only send an email if a healing action occurred, an AI healer triggered, or there are active code errors in the logs.
+    # Stale data alone is a status warning and should not spam your inbox hourly.
+    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered):
         print("Healer cycle complete. Constructing consolidated recovery report...")
         
         # Color badges
@@ -406,9 +428,9 @@ def run_watchdog():
             <div style="background: #fff9db; border-left: 5px solid #f59f00; padding: 15px; margin-bottom: 30px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #f08c00; font-size: 15px;">🏁 4. RESULTS & NEXT STEPS:</h3>
                 <ul style="font-size: 13px; padding-left: 20px; color: #555; line-height: 1.6;">
-                    {f'<li><b>AETHER Self-Healer:</b> Surgically patched the codebase and pushed the fix to the main branch.</li>' if compilation_passed and ai_triggered else ''}
+                    {'<li><b>AETHER Self-Healer:</b> Surgically patched the codebase and pushed the fix to the main branch.</li>' if compilation_passed and ai_triggered else ''}
                     {'<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>' if compilation_passed else ''}
-                    {f'<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>' if ai_triggered else ''}
+                    {'<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>' if ai_triggered else ''}
                     {'<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>' if not compilation_passed else ''}
                 </ul>
             </div>

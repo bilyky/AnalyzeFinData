@@ -57,6 +57,29 @@ class _Config:
         rapidapi = raw.get("rapidapi") or {}
         self.rapidapi_key = os.environ.get("RAPIDAPI_KEY") or rapidapi.get("api_key", "")
 
+        # ── Email Intelligence (multiple mailboxes configuration) ────────────
+        email_intel = raw.get("email_intel") or {}
+        mailboxes_list = email_intel.get("mailboxes") or []
+        self.mailboxes = []
+        if not mailboxes_list:
+            primary_email = os.environ.get("SENDER_EMAIL") or os.environ.get("RECIPIENT_EMAIL") or "bilyky@gmail.com"
+            self.mailboxes.append({
+                "email": primary_email,
+                "password_env": "SMTP_PASSWORD",
+                "imap_server": "imap.gmail.com"
+            })
+        else:
+            for mb in mailboxes_list:
+                self.mailboxes.append({
+                    "email": mb.get("email", ""),
+                    "password_env": mb.get("password_env", "SMTP_PASSWORD"),
+                    "imap_server": mb.get("imap_server", "imap.gmail.com")
+                })
+
+        # ── Email Sender (credentials for dispatching reports) ───────────────
+        email_sender = raw.get("email_sender") or {}
+        self.smtp_password = os.environ.get("SMTP_PASSWORD") or email_sender.get("password", "")
+
         # ── AI evaluation backends (multiple named providers, each toggleable) ──
         ai = raw.get("ai") or {}
         self.ai_primary       = os.environ.get("AI_PRIMARY") or ai.get("primary", "")

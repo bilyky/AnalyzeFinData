@@ -19,6 +19,23 @@
   "rapidapi": {
     "api_key": "your_rapidapi_key_here"
   },
+  "email_intel": {
+    "mailboxes": [
+      {
+        "email": "primary_newsletters@example.com",
+        "password_env": "SMTP_PASSWORD",
+        "imap_server": "imap.gmail.com"
+      },
+      {
+        "email": "secondary_alerts@example.com",
+        "password_env": "SMTP_PASSWORD_ALT",
+        "imap_server": "imap.gmail.com"
+      }
+    ]
+  },
+  "email_sender": {
+    "password": "your_gmail_app_password_here"
+  },
   "accounts": {
     "real": ["XXXX", "YYYY"]
   },

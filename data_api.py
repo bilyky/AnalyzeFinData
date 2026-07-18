@@ -329,6 +329,8 @@ def read_accounts() -> dict:
         import instruments
         
         accounts = []
+        scores = {}
+        sl_decorations = {}
         env = "production"
         
         # ── PRIMARY: Live E*TRADE Broker Feed ──────────────────────────────────
@@ -349,11 +351,11 @@ def read_accounts() -> dict:
                     raw_positions = etrade.fetch_positions(tokens, env)
                 
                 # Fetch and load scores from our Excel workbook to decorate E*TRADE positions
-                scores = {}
                 try:
                     import openpyxl
                     wb = openpyxl.load_workbook(_XLSX, data_only=True, read_only=True)
                     try:
+                        # 1. Load Research scores
                         ws = wb["Research"]
                         for row in ws.iter_rows(min_row=2, values_only=True):
                             sym = row[3]
@@ -361,10 +363,45 @@ def read_accounts() -> dict:
                                 scores[sym] = {
                                     "s10": row[24], "l60": row[25], "status": row[19]
                                 }
+                        
+                        # 2. Load Short_Long stops and targets from the consolidated table
+                        ws_sl = wb["Short_Long"]
+                        sl_rows = list(ws_sl.iter_rows(values_only=True))
+                        hdrs = [i for i, r in enumerate(sl_rows)
+                                if len(r) > 1 and str(r[1]).strip() == "Symb"]
+                        
+                        if hdrs:
+                            h = hdrs[0]
+                            started = False
+                            for r in sl_rows[h + 1:]:
+                                sym = r[_SL["sym"]] if len(r) > _SL["sym"] else None
+                                sym = str(sym).strip().upper() if sym else ""
+                                if not sym:
+                                    if started:
+                                        break
+                                    continue
+                                started = True
+                                buy = _f(r[_SL["buy"]])
+                                buy_date = _to_date_str(r[_SL["buy_date"]] if len(r) > _SL["buy_date"] else None)
+                                excl = instruments.is_excluded(sym)
+                                stop = _f(r[_SL["stop"]])
+                                target = _f(r[_SL["target"]])
+                                stop_src = target_src = "sheet"
+                                if buy:
+                                    sd = risk_utils.resolve_stop_detailed(buy, symbol=sym, as_of=buy_date, exclude_swing=excl)
+                                    if sd["stop"] is not None:
+                                        stop, stop_src = sd["stop"], sd["source"]
+                                    td = risk_utils.resolve_target_detailed(buy, symbol=sym, as_of=buy_date, exclude_swing=excl)
+                                    if td["target"] is not None:
+                                        target, target_src = td["target"], td["source"]
+                                sl_decorations[sym] = {
+                                    "stop": stop, "stop_source": stop_src,
+                                    "target": target, "target_source": target_src
+                                }
                     finally:
                         wb.close()
-                except Exception:
-                    pass
+                except Exception as ex:
+                    print(f"  [AETHER] Error loading Excel decorations: {ex}")
                 
                 # Map E*TRADE accounts and positions
                 for acct in acct_list:
@@ -395,18 +432,29 @@ def read_accounts() -> dict:
                             l60 = _f(sc.get("l60"))
                             
                             # Fetch entry stop/target computed from entry-date swing levels
-                            excl = instruments.is_excluded(sym)
-                            stop = _f(p.get("stop_loss"))
-                            target = _f(p.get("target"))
-                            stop_source = target_source = "E*TRADE"
+                            dec = sl_decorations.get(sym.strip().upper(), {})
+                            stop = dec.get("stop")
+                            stop_source = dec.get("stop_source", "E*TRADE")
+                            target = dec.get("target")
+                            target_source = dec.get("target_source", "E*TRADE")
+                            
+                            buy = p.get("cost", 0.0)
+                            current = p.get("price", 0.0)
+                            qty = p.get("qty", 0)
+                            
+                            pnl = 0.0
+                            pnl_pct = 0.0
+                            if buy and buy > 0:
+                                pnl = round((current - buy) * qty, 2)
+                                pnl_pct = round((current - buy) / buy * 100, 2)
                             
                             holdings.append({
                                 "symbol": sym,
-                                "qty": p.get("qty", 0),
-                                "buy": p.get("cost", 0.0),
-                                "current": p.get("price", 0.0),
-                                "pnl": p.get("pnl", 0.0),
-                                "pnl_pct": p.get("pnl_pct", 0.0),
+                                "qty": qty,
+                                "buy": buy,
+                                "current": current,
+                                "pnl": pnl,
+                                "pnl_pct": pnl_pct,
                                 "stop": stop,
                                 "stop_source": stop_source,
                                 "target": target,
@@ -510,6 +558,58 @@ def read_accounts() -> dict:
 
         # ── AI game account ─────────────────────────────────────────────────
         pf = read_portfolio()
+        game_holdings = []
+        
+        # Fetch live prices for the game symbols safely
+        game_symbols = [p["symbol"] for p in pf.get("positions", [])]
+        game_prices = {}
+        try:
+            from ai_portfolio_game import get_live_prices
+            game_prices = get_live_prices(game_symbols)
+        except Exception:
+            pass
+            
+        for g_pos in pf.get("positions", []):
+            sym = g_pos["symbol"]
+            qty = g_pos["qty"]
+            buy = g_pos["cost"]
+            days_held = g_pos.get("days_held", 0)
+            
+            # Look up stop and target from Excel or use game fallback
+            dec = sl_decorations.get(sym.upper(), {})
+            stop = dec.get("stop") or g_pos.get("stop_loss", 0.0)
+            stop_source = dec.get("stop_source") or "Game"
+            target = dec.get("target") or round(buy * 1.15, 2)
+            target_source = dec.get("target_source") or "Game"
+            
+            # Retrieve live price and compute P&L
+            current = game_prices.get(sym) or buy
+            pnl = round((current - buy) * qty, 2)
+            pnl_pct = round((current - buy) / buy * 100, 2) if buy > 0 else 0.0
+            
+            sc = scores.get(sym, {})
+            s10 = _f(sc.get("s10"))
+            l60 = _f(sc.get("l60"))
+            
+            game_holdings.append({
+                "symbol": sym,
+                "qty": qty,
+                "buy": buy,
+                "current": current,
+                "pnl": pnl,
+                "pnl_pct": pnl_pct,
+                "stop": stop,
+                "stop_source": stop_source,
+                "target": target,
+                "target_source": target_source,
+                "days_held": days_held,
+                "s10": s10,
+                "l60": l60,
+                "total": round((s10 or 0) + (l60 or 0), 1) if s10 is not None or l60 is not None else None,
+                "status": sc.get("status", ""),
+                "instrument": instruments.classify(sym)
+            })
+
         accounts.append({
             "id":       "game",
             "label":    "AI Game",
@@ -518,7 +618,7 @@ def read_accounts() -> dict:
             "equity":   pf["equity"],
             "return_pct": pf["return_pct"],
             "profile":  pf["profile"],
-            "holdings": pf["positions"],
+            "holdings": game_holdings,
             "count":    pf["open_positions"],
         })
 
