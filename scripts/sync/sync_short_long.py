@@ -8,6 +8,10 @@ Does NOT require a full check_from_xls run. Uses cached production tokens
 (or runs browser auth if not cached). Picks scores come from the last
 Research sheet data already in the workbook.
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 
 import argparse
 import datetime

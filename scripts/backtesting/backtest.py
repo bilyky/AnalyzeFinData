@@ -13,6 +13,10 @@ Usage:
     python backtest.py              # 2023-2025 data
     python backtest.py 2024 2025    # specific years
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 
 import csv
 import json

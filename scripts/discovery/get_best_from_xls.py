@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import openpyxl
 
 xlsx_file = 'Data/state_of_the_day.xlsx'

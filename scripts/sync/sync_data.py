@@ -3,6 +3,10 @@
 Copies files that are missing or newer in the source.
 Never deletes files from the destination.
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 
 import os
 import shutil

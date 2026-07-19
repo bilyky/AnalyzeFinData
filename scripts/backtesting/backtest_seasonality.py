@@ -13,6 +13,10 @@ Outputs:
 
 Usage: python backtest_seasonality.py [min_year]
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 
 import json
 import os
