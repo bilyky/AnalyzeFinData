@@ -1216,6 +1216,18 @@ def run_daily_ai_management(force=False, manual_profile=None):
                             print(f"🛑 AI BUY REJECTED (CNXC Trap): {sym} - Gap-Down {round(gap_pct*100, 1)}% with no confirmed bottom.")
                             continue
 
+                    # Reward-to-Risk Ratio Filter (Risk-Reward Gate):
+                    # Reject if the projected Reward-to-Risk ratio is less than 2:1 (Reward/Risk < 2.0).
+                    stop_val = float(row[9] or 0.0)
+                    target_val = float(row[11] or 0.0)
+                    if stop_val > 0 and target_val > 0:
+                        upside = target_val - price
+                        downside = price - stop_val
+                        rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
+                        if rr_ratio < 2.0:
+                            print(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required 2:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
+                            continue
+
                     if total_score >= rules["min_score_threshold"] or bottom_ok:
                         bottom_desc = f" (Bottom Confirmed: {bottom_msg})" if bottom_ok else ""
                         top_buys.append({

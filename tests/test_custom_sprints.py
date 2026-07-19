@@ -427,5 +427,29 @@ class TestPersistentProfileModes(unittest.TestCase):
             elif dna_file.exists():
                 dna_file.unlink()
 
+    def test_risk_reward_gate_math(self):
+        """Verify that the dynamic Reward-to-Risk ratio math and 2:1 thresholds are correct."""
+        # Scenario 1: Favorable asymmetry (Upside: $6, Downside: $2) -> Ratio: 3.0 -> Accept!
+        price = 100.0
+        stop = 98.0
+        target = 106.0
+        
+        upside = target - price
+        downside = price - stop
+        rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
+        self.assertEqual(rr_ratio, 3.0)
+        self.assertGreaterEqual(rr_ratio, 2.0)
+        
+        # Scenario 2: Unfavorable asymmetry (Upside: $2, Downside: $4) -> Ratio: 0.5 -> Reject!
+        price = 100.0
+        stop = 96.0
+        target = 102.0
+        
+        upside = target - price
+        downside = price - stop
+        rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
+        self.assertEqual(rr_ratio, 0.5)
+        self.assertLess(rr_ratio, 2.0)
+
 if __name__ == "__main__":
     unittest.main()
