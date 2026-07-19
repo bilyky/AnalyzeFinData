@@ -47,6 +47,74 @@ from aether_logger import get_logger as _get_logger
 _log = _get_logger("ai_game")
 
 
+def check_failure_rules(symbol, pgr, score, z_score, industry) -> tuple[bool, str]:
+    """Check if the candidate matches any active toxic rules in Data/failure_dna_rules.json."""
+    rules_file = BASE_DIR / "Data" / "failure_dna_rules.json"
+    if not rules_file.exists() or rules_file.stat().st_size == 0:
+        return False, ""
+    try:
+        with open(rules_file, "r", encoding="utf-8") as f:
+            rules = json.load(f)
+        for r in rules:
+            field = r.get("field")
+            condition = r.get("condition")
+            reason = r.get("reason", "Toxic pattern match")
+            
+            # 1. PGR Match
+            if field == "pgr" and condition == "startswith_Be" and str(pgr).startswith("Be"):
+                return True, reason
+                
+            # 2. Score Match
+            if field == "score" and condition == "less_than_5.0" and score < 5.0:
+                return True, reason
+                
+            # 3. Z-Score Match
+            if field == "z_score" and condition == "greater_than_2.5" and z_score > 2.5:
+                return True, reason
+    except Exception as e:
+        _log.warning(f"Failed to evaluate failure rules: {e}")
+    return False, ""
+
+
+def log_closed_trade_dna(sym, pos, price, today_str):
+    """Log a completed trade's DNA signature to Data/trade_history_dna.json."""
+    try:
+        buy_dna = pos.get("buy_dna")
+        if not buy_dna:
+            return
+        
+        buy_date = buy_dna.get("buy_date", today_str)
+        pnl_pct = round(((price - pos["cost"]) / pos["cost"]) * 100, 2) if pos["cost"] else 0.0
+        
+        dna_file = BASE_DIR / "Data" / "trade_history_dna.json"
+        dna_list = []
+        if dna_file.exists() and dna_file.stat().st_size > 0:
+            with open(dna_file, "r", encoding="utf-8") as f:
+                dna_list = json.load(f)
+                
+        b_date = datetime.date.fromisoformat(buy_date)
+        s_date = datetime.date.fromisoformat(today_str)
+        holding_days = (s_date - b_date).days
+        
+        dna_list.append({
+            "symbol": sym,
+            "buy_date": buy_date,
+            "sell_date": today_str,
+            "buy_price": pos["cost"],
+            "sell_price": price,
+            "qty": pos["qty"],
+            "pnl_pct": pnl_pct,
+            "holding_days": holding_days,
+            "buy_dna": buy_dna
+        })
+        
+        with open(dna_file, "w", encoding="utf-8") as f:
+            json.dump(dna_list, f, indent=4)
+        _log.info(f"Logged closed trade DNA for {sym} to trade_history_dna.json.")
+    except Exception as e:
+        _log.warning(f"Failed to log trade DNA: {e}")
+
+
 def _load_closes(symbol):
     """Sorted daily closes for a symbol from the local OHLCV cache, or [] when the
     file is missing/unreadable. Single loader so the cache path is defined once —
@@ -156,6 +224,14 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                 print(f"🛑 AI BUY REJECTED: {buy['sym']} - {v_msg}")
                 continue
 
+            # Dynamic Feedback Analyzer Guard Check (Anti-Failure DNA)
+            pgr_val = buy.get("pgr", "Neutral")
+            score_val = buy.get("total", 0.0)
+            is_toxic, t_reason = check_failure_rules(buy["sym"], pgr_val, score_val, z_score, buy.get("industry", "Unknown"))
+            if is_toxic:
+                _log.warning(f"AI BUY REJECTED (Feedback Analyzer Rule Match): {buy['sym']} - {t_reason}")
+                continue
+
             # Core-Satellite Allocation Checking & Downsizing logic
             cost = qty * buy["price"]
             if is_scarcity:
@@ -204,7 +280,16 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                 "qty": qty, 
                 "cost": buy["price"], 
                 "stop_loss": stop_loss,
-                "is_scarcity": is_scarcity
+                "is_scarcity": is_scarcity,
+                "buy_dna": {
+                    "buy_date": today,
+                    "pgr": buy.get("pgr", "Neutral"),
+                    "s10": buy.get("s10", 0.0),
+                    "l60": buy.get("l60", 0.0),
+                    "score": buy.get("total", 0.0),
+                    "z_score": z_score,
+                    "industry": buy.get("industry", "Unknown")
+                }
             }
             tx = {"date": today, "time": now_time, "type": "BUY", "symbol": buy["sym"], "price": buy["price"], "qty": qty}
             state["history"].append(tx)
@@ -979,6 +1064,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     state["history"].append(tx)
                     new_transactions.append(tx)
                     print(f"🤖 AI QUEUED SELL EXECUTED: {sym} at ${price} (PnL: ${tx['pnl']})")
+                    log_closed_trade_dna(sym, pos, price, today)
                     
                 elif order["type"] == "BUY" and sym not in state["positions"]:
                     max_positions = rules["max_positions"]
@@ -1001,7 +1087,38 @@ def run_daily_ai_management(force=False, manual_profile=None):
                                 stop_loss = round(price * 0.92, 2)
                                 stop_desc = f"8% Fallback Stop: ${stop_loss}"
                                 
-                            state["positions"][sym] = {"qty": qty, "cost": price, "stop_loss": stop_loss}
+                            # Resolve buy DNA for queued buys
+                            q_pgr = "Neutral"
+                            q_s10 = 0.0
+                            q_l60 = 0.0
+                            q_score = 0.0
+                            q_industry = "Unknown"
+                            for r_row in ws.iter_rows(min_row=2, values_only=True):
+                                if r_row[3] == sym:
+                                    q_pgr = r_row[6] or "Neutral"
+                                    q_industry = r_row[4] or "Unknown"
+                                    try:
+                                        q_s10 = float(r_row[24] or 0.0)
+                                        q_l60 = float(r_row[25] or 0.0)
+                                        q_score = round(q_s10 + q_l60, 1)
+                                    except (ValueError, TypeError):
+                                        pass
+                                    break
+                                    
+                            state["positions"][sym] = {
+                                "qty": qty, 
+                                "cost": price, 
+                                "stop_loss": stop_loss,
+                                "buy_dna": {
+                                    "buy_date": today,
+                                    "pgr": q_pgr,
+                                    "s10": q_s10,
+                                    "l60": q_l60,
+                                    "score": q_score,
+                                    "z_score": 0.0,
+                                    "industry": q_industry
+                                }
+                            }
                             tx = {
                                 "date": today, "time": now_time, "type": "BUY", 
                                 "symbol": sym, "price": price, "qty": qty,
@@ -1062,6 +1179,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
             state["history"].append(tx)
             new_transactions.append(tx)
             print(f"🤖 AI LIVE SELL: {sym} at ${price} (Time: {now_time})")
+            log_closed_trade_dna(sym, pos, price, today)
 
         # BUY logic (filtered by profile momentum threshold)
         max_positions = rules["max_positions"]
@@ -1104,6 +1222,9 @@ def run_daily_ai_management(force=False, manual_profile=None):
                             "sym": sym,
                             "price": price,
                             "total": total_score,
+                            "pgr": row[6] or "Neutral",
+                            "s10": row[24] or 0.0,
+                            "l60": row[25] or 0.0,
                             "bottom_desc": bottom_desc,
                             "industry": row[4]
                         })

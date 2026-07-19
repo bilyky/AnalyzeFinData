@@ -318,6 +318,114 @@ class TestPersistentProfileModes(unittest.TestCase):
         # Below threshold -> profile must stay DEFENSIVE.
         self.assertEqual(state["profile"], "DEFENSIVE")
 
+    def test_check_failure_rules_rejection(self):
+        """Verify that check_failure_rules properly identifies and flags toxic candidates."""
+        # 1. Setup a temporary rules list
+        rules_file = game.BASE_DIR / "Data" / "failure_dna_rules.json"
+
+        # Backup existing rules if any
+        existing_rules = None
+        if rules_file.exists():
+            with open(rules_file, "r", encoding="utf-8") as f:
+                existing_rules = json.load(f)
+
+        test_rules = [
+            {
+                "id": "TOXIC_BEARISH_PGR",
+                "field": "pgr",
+                "condition": "startswith_Be",
+                "reason": "Avoid buying Bearish PGR"
+            },
+            {
+                "id": "TOXIC_LOW_SCORE",
+                "field": "score",
+                "condition": "less_than_5.0",
+                "reason": "Avoid buying low scores"
+            }
+        ]
+
+        # Ensure directory exists and write test rules
+        rules_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(rules_file, "w", encoding="utf-8") as f:
+            json.dump(test_rules, f, indent=4)
+
+        try:
+            # 2. Test Rejections
+            # A Bearish PGR candidate must be rejected
+            is_toxic, reason = game.check_failure_rules("AAPL", "Be-", 9.5, 0.5, "Technology")
+            self.assertTrue(is_toxic)
+            self.assertEqual(reason, "Avoid buying Bearish PGR")
+
+            # A low score candidate must be rejected
+            is_toxic, reason = game.check_failure_rules("MSFT", "Neutral", 3.2, 0.5, "Technology")
+            self.assertTrue(is_toxic)
+            self.assertEqual(reason, "Avoid buying low scores")
+
+            # A healthy candidate must pass (False)
+            is_toxic, reason = game.check_failure_rules("GOOGL", "Bu+", 9.8, 0.5, "Technology")
+            self.assertFalse(is_toxic)
+            self.assertEqual(reason, "")
+        finally:
+            # Restore original rules
+            if existing_rules is not None:
+                with open(rules_file, "w", encoding="utf-8") as f:
+                    json.dump(existing_rules, f, indent=4)
+            elif rules_file.exists():
+                rules_file.unlink()
+
+    def test_log_closed_trade_dna_writing(self):
+        """Verify that log_closed_trade_dna correctly records a closed trade entry."""
+        dna_file = game.BASE_DIR / "Data" / "trade_history_dna.json"
+
+        # Backup existing DNA ledger if any
+        existing_dna = None
+        if dna_file.exists():
+            with open(dna_file, "r", encoding="utf-8") as f:
+                existing_dna = json.load(f)
+
+        # Clear or truncate file for clean test environment
+        if dna_file.exists():
+            dna_file.unlink()
+
+        try:
+            pos = {
+                "qty": 10,
+                "cost": 100.0,
+                "stop_loss": 92.0,
+                "buy_dna": {
+                    "buy_date": "2026-06-01",
+                    "pgr": "Bullish",
+                    "score": 9.5,
+                    "z_score": 1.2,
+                    "industry": "Software"
+                }
+            }
+            # Execute log call
+            game.log_closed_trade_dna("TEST_SYM", pos, 105.0, "2026-06-05")
+
+            # Verify file exists and holds the correct, formatted schema
+            self.assertTrue(dna_file.exists())
+            with open(dna_file, "r", encoding="utf-8") as f:
+                records = json.load(f)
+
+            self.assertEqual(len(records), 1)
+            rec = records[0]
+            self.assertEqual(rec["symbol"], "TEST_SYM")
+            self.assertEqual(rec["buy_date"], "2026-06-01")
+            self.assertEqual(rec["sell_date"], "2026-06-05")
+            self.assertEqual(rec["buy_price"], 100.0)
+            self.assertEqual(rec["sell_price"], 105.0)
+            self.assertEqual(rec["qty"], 10)
+            self.assertEqual(rec["pnl_pct"], 5.0)
+            self.assertEqual(rec["holding_days"], 4)
+            self.assertEqual(rec["buy_dna"]["industry"], "Software")
+        finally:
+            # Restore original DNA ledger
+            if existing_dna is not None:
+                with open(dna_file, "w", encoding="utf-8") as f:
+                    json.dump(existing_dna, f, indent=4)
+            elif dna_file.exists():
+                dna_file.unlink()
 
 if __name__ == "__main__":
     unittest.main()
