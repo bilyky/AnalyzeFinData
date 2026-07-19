@@ -305,6 +305,8 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
             seen = set()
             badges = ""
             for m in all_missing:
+                if m.get("in_universe"):
+                    continue
                 sym = m.get("symbol", "")
                 if sym and sym not in seen:
                     seen.add(sym)
