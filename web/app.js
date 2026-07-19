@@ -178,13 +178,13 @@ const AETHER_WIKI = {
         ]
     },
     "antifragile_gate": {
-        title: "Antifragile Safety Gates",
+        title: "Antifragile Feedback Analyzer & Failure DNA Loop",
         origin: "Nassim Nicholas Taleb - Author of 'Fooled by Randomness', 'The Black Swan', 'Antifragile'.",
-        body: "Employs zero-trust risk safety gates. Logs a 'Failure DNA' ledger of closed losses, programmatically adjusting model coefficients over future runs to prevent repeating errors.",
+        body: "Employs zero-trust risk safety principles. Operates a closed-loop retrospective feedback analyzer that dynamically clusters true losses (bad habits) into active rejections to immunize the portfolio against repeating errors.",
         config: [
-            "Failure DNA: Tracks indicators, setups, and scores on the day of closed losses.",
-            "Vulnerability Ledger: Saved locally to Data/vulnerability_ledger.json.",
-            "Action: Programmatically penalizes identical fragile setups in future rating calculations."
+            "DNA Capture: Freezes PGR, scores, and Z-scores on purchase, logging completed trades to Data/trade_history_dna.json.",
+            "Retrospective Loop: retrospective_analyzer.py runs every Saturday, automatically filtering out market-panic days and statistically clustering failures into failure_dna_rules.json.",
+            "Action: Dynamic buy-rejection guard (check_failure_rules) blocks any new buy candidate matching our toxic clusters on autopilot."
         ]
     },
     "decision_eval": {
