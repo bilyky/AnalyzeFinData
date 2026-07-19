@@ -85,3 +85,12 @@ To maintain the high technical integrity of Project AETHER and prevent the intro
     *   **Bug Fixes:** For every reported bug, a reproducing test case must be authored first. This test case **must fail (RED) on the broken codebase** to empirically prove the failure condition, before any code fix is applied. The fix is only complete when the test case successfully passes (**GREEN**) with zero regressions.
     *   **New Features:** For any new features, tests defining the expected input/output contract must be written and fail (**RED**) first, before the feature is implemented and passes (**GREEN**).
 
+### 🧠 The Antifragile Feedback Analyzer & Failure DNA Loop (Self-Learning Rules)
+To maintain an adaptive, self-correcting quantitative trading desk, Project AETHER operates a closed-loop retrospective feedback system:
+
+*   **Phase 1: Real-Time Buy DNA Freezing:** When the autopilot executes any BUY action (live or queued), it must capture and freeze the candidate's exact buy-state metrics (PGR rating, S10/L60 trend score, combined score, Z-score, and buy date) inside the position's record in `ai_portfolio_game.json`.
+*   **Phase 2: Closed-Trade DNA Logging:** On position exits (sells), the system automatically calls `log_closed_trade_dna()` to calculate holding days, final realized P&L %, and append the completed trade details to `Data/trade_history_dna.json`.
+*   **Phase 3: The Weekly Retrospective Analyzer:** Every Saturday, `retrospective_analyzer.py` must be run (manually or via task scheduler) to scan the raw trade ledger, separate successes from failures, automatically filter out market-panic days (e.g. SPY down > 2%), and run statistical clustering on true failures to isolate bad habits (e.g., buying weak, sub-5.0 combined scores).
+*   **Phase 4: Dynamic Rejection Rules:** The retrospective analyzer automatically writes these toxic patterns to `Data/failure_dna_rules.json` and outputs a rich, human-readable summary in `Data/retrospective_report.txt`.
+*   **Phase 5: The Autopilot Rejection Guard:** During the daily buy cycle (`_execute_buys` in `ai_portfolio_game.py`), the buy-loop must run `check_failure_rules()` on all prospective candidates, immediately rejecting any stock matching our dynamically generated toxic rules on autopilot!
+
