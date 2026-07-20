@@ -495,6 +495,22 @@ async function loadAccounts() {
     const accts = data.accounts || [];
     acctHoldings = [];
 
+    // Dynamically populate our global held symbols set for the Research tab badges
+    heldSymbolsGlobal.clear();
+    accts.forEach((a) => {
+        if (a.holdings) {
+            a.holdings.forEach((h) => {
+                if (h.symbol) {
+                    heldSymbolsGlobal.add(h.symbol.trim().toUpperCase());
+                }
+            });
+        }
+    });
+    // Trigger a live re-render of the Research table if already loaded to overlay badges instantly!
+    if (typeof researchRows !== "undefined" && researchRows.length > 0) {
+        renderResearch();
+    }
+
     // Sort holdings for each account dynamically before mapping
     const { key, dir } = accountsSort;
     accts.forEach((a) => {
@@ -1174,6 +1190,7 @@ function researchSortValue(r, key) {
     return r[key];
 }
 
+let heldSymbolsGlobal = new Set();
 let researchRows = [];
 let researchSort = { key: "combined", dir: -1 };
 // Columns that sort as text (ascending default). PGR and Industry sort by numeric
@@ -1237,7 +1254,9 @@ function renderResearch() {
     const num = (v, d = 2) => (v == null ? "—" : Number(v).toFixed(d));
     $("research-body").innerHTML = rows.length ? rows.map((r) => `
         <tr>
-            <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${r.symbol}">${r.symbol}${instrumentBadge(r.instrument)}</td>
+            <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${r.symbol}">
+                ${r.symbol}${heldSymbolsGlobal.has(r.symbol.toUpperCase()) ? ' <span class="text-[9px] px-1.5 py-0.5 rounded bg-green-900/80 text-green-300 font-bold ml-1" title="Currently held in your accounts">HELD</span>' : ''}${instrumentBadge(r.instrument)}
+            </td>
             <td><div class="truncate text-xs ${industryColor(r.industry_strength)}" style="max-width:70px"
                      title="${(r.industry || "")}${r.industry_strength ? " — " + r.industry_strength : ""}">${r.industry || "—"}</div></td>
             <td class="text-xs whitespace-nowrap">${pgrCell(r.prev_pgr, r.pgr)}</td>
