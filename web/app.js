@@ -1244,6 +1244,7 @@ function renderResearch() {
             <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
             <td class="text-right ${weakStop(r, r.stop_source) ? "text-amber-400" : ""}" title="stop source: ${r.stop_source || "?"}">${!r.stop ? "—" : fmt$(r.stop)}</td>
             <td class="text-right ${weakStop(r, r.target_source) ? "text-amber-400" : ""}" title="target source: ${r.target_source || "?"}">${!r.target ? "—" : fmt$(r.target)}</td>
+            <td class="text-right">${num(r.risk_ratio, 2)}</td>
             <td class="text-right ${cls(r.s10)}">${num(r.s10, 1)}</td>
             <td class="text-right ${cls(r.l60)}">${num(r.l60, 1)}</td>
             <td class="text-right font-semibold ${cls(r.combined)}">${num(r.combined, 1)}</td>
@@ -1254,7 +1255,6 @@ function renderResearch() {
             <td class="text-right text-xs">${r.money_flow || "—"}</td>
             <td class="text-right text-xs">${r.obos || "—"}</td>
             <td class="text-right text-xs">${r.lt_trend || "—"}</td>
-            <td class="text-right">${num(r.risk_ratio, 2)}</td>
             <td>${renderPatternsHTML(r.patterns)}</td>
         </tr>`).join("")
         : `<tr><td colspan="18" class="text-center text-slate-500 py-6">No matching symbols.</td></tr>`;
