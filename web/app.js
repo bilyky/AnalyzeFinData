@@ -1242,7 +1242,10 @@ function renderResearch() {
                      title="${(r.industry || "")}${r.industry_strength ? " — " + r.industry_strength : ""}">${r.industry || "—"}</div></td>
             <td class="text-xs whitespace-nowrap">${pgrCell(r.prev_pgr, r.pgr)}</td>
             <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
-            <td class="text-right ${weakStop(r, r.stop_source) ? "text-amber-400" : ""}" title="stop source: ${r.stop_source || "?"}">${!r.stop ? "—" : fmt$(r.stop)}</td>
+            <td class="text-right ${weakStop(r, r.stop_source) ? "text-amber-400" : ""}" 
+                title="${r.stop_source === "swing" ? "Stop Source: Swing-Low (from spreadsheet). Note: Autopilot will override this with a safe ATR-based stop floor on purchase." : (r.stop_source === "atr" ? "Stop Source: ATR-based (Volatility-buffered stop)." : "Stop Source: " + (r.stop_source || "?"))}">
+                ${!r.stop ? "—" : fmt$(r.stop)}
+            </td>
             <td class="text-right ${weakStop(r, r.target_source) ? "text-amber-400" : ""}" title="target source: ${r.target_source || "?"}">${!r.target ? "—" : fmt$(r.target)}</td>
             <td class="text-right ${r.risk_ratio == null ? "" : (r.risk_ratio < 2.0 ? "text-slate-500" : (r.risk_ratio > 10.0 ? "text-amber-500 font-bold" : "text-green-400 font-semibold"))}"
                 title="${r.risk_ratio == null ? "R:R not calculated" : (r.risk_ratio < 2.0 ? "Poor risk asymmetry. Autopilot will reject buying this candidate." : (r.risk_ratio > 10.0 ? "⚠️ Tight Stop Warning: This high ratio is a paper mirage. Price is extremely close to the swing-low. True ATR stop-loss is wider." : "Favorable R/R: Strong risk asymmetry."))}">
