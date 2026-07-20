@@ -1244,7 +1244,10 @@ function renderResearch() {
             <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
             <td class="text-right ${weakStop(r, r.stop_source) ? "text-amber-400" : ""}" title="stop source: ${r.stop_source || "?"}">${!r.stop ? "—" : fmt$(r.stop)}</td>
             <td class="text-right ${weakStop(r, r.target_source) ? "text-amber-400" : ""}" title="target source: ${r.target_source || "?"}">${!r.target ? "—" : fmt$(r.target)}</td>
-            <td class="text-right">${num(r.risk_ratio, 2)}</td>
+            <td class="text-right ${r.risk_ratio == null ? "" : (r.risk_ratio < 2.0 ? "text-slate-500" : (r.risk_ratio > 10.0 ? "text-amber-500 font-bold" : "text-green-400 font-semibold"))}"
+                title="${r.risk_ratio == null ? "R:R not calculated" : (r.risk_ratio < 2.0 ? "Poor risk asymmetry. Autopilot will reject buying this candidate." : (r.risk_ratio > 10.0 ? "⚠️ Tight Stop Warning: This high ratio is a paper mirage. Price is extremely close to the swing-low. True ATR stop-loss is wider." : "Favorable R/R: Strong risk asymmetry."))}">
+                ${r.risk_ratio == null ? "—" : (r.risk_ratio > 10.0 ? "⚠️ " : "") + num(r.risk_ratio, 2)}
+            </td>
             <td class="text-right ${cls(r.s10)}">${num(r.s10, 1)}</td>
             <td class="text-right ${cls(r.l60)}">${num(r.l60, 1)}</td>
             <td class="text-right font-semibold ${cls(r.combined)}">${num(r.combined, 1)}</td>
