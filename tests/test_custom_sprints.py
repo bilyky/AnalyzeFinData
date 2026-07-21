@@ -470,5 +470,72 @@ class TestPersistentProfileModes(unittest.TestCase):
         self.assertEqual(target_gain_pct, 2.0)
         self.assertLess(target_gain_pct, 5.0) # fails Target Gain %
 
+    def test_circuit_breaker_single_day_crash(self):
+        """Verify that a single-day SPY drop > 2.0% successfully triggers the Circuit Breaker."""
+        import circuit_breaker
+        from unittest import mock
+        
+        # Mock SPY history where yesterday was 100.0 and today is 97.0 (down 3.0%)
+        mock_series = [{"close": 100.0}] * 15
+        mock_series[-2] = {"close": 100.0}
+        mock_series[-1] = {"close": 97.0}
+        
+        with mock.patch("circuit_breaker.load_spy_history", return_value=mock_series):
+            is_active, reason = circuit_breaker.check_systemic_risk(prices={"SPY": 97.0})
+            self.assertTrue(is_active)
+            self.assertIn("Single-Day Capitulation", reason)
+
+    def test_circuit_breaker_rolling_drawdown(self):
+        """Verify that a 10-day rolling drawdown > 5.0% (slow bleed) successfully triggers the Breaker."""
+        import circuit_breaker
+        from unittest import mock
+        
+        # Mock a slow-bleed SPY history: peak was 100.0, we have fallen to 94.0 (down 6.0% drawdown)
+        mock_series = [{"close": 100.0}] * 15
+        # Set a peak at index -10 and bleed down to 94.0
+        for i in range(-10, 0):
+            mock_series[i] = {"close": 100.0 + (i * 0.6)} # index -1 is 99.4, index -10 is 94.0
+        mock_series[-10] = {"close": 100.0} # peak
+        mock_series[-1] = {"close": 94.0} # today's close
+        mock_series[-2] = {"close": 94.6} # yesterday's close
+        
+        with mock.patch("circuit_breaker.load_spy_history", return_value=mock_series):
+            is_active, reason = circuit_breaker.check_systemic_risk(prices={"SPY": 94.0})
+            self.assertTrue(is_active)
+            self.assertIn("Rolling 10-day Drawdown Breach", reason)
+
+    def test_circuit_breaker_stop_tightening(self):
+        """Verify that the breaker successfully freezes buying and tightens stops on satellites."""
+        import circuit_breaker
+        from unittest import mock
+        
+        state = {
+            "balance": 1000.0,
+            "queued_orders": [
+                {"symbol": "AAPL", "type": "BUY", "qty": 10},
+                {"symbol": "MSFT", "type": "SELL", "qty": 5}
+            ],
+            "positions": {
+                "ZS": {"qty": 10, "cost": 150.0, "stop_loss": 135.0, "is_scarcity": False},
+                "HE": {"qty": 81, "cost": 13.57, "stop_loss": 12.72, "is_scarcity": True} # scarcity left alone
+            }
+        }
+        
+        # Mock an active breaker state and 1.50 ATR for ZS
+        with mock.patch("circuit_breaker.check_systemic_risk", return_value=(True, "Single-Day Capitulation")):
+            with mock.patch("risk_utils.calculate_atr", return_value=1.50):
+                circuit_breaker.enforce_circuit_breaker(state, prices={"ZS": 149.0})
+                
+                # 1. Buying must be frozen (queued BUYs cleared, SELLs left alone)
+                self.assertEqual(len(state["queued_orders"]), 1)
+                self.assertEqual(state["queued_orders"][0]["symbol"], "MSFT")
+                
+                # 2. Satellite (ZS) stop must be tightened to 1.0x ATR: 149.0 - 1.50 = 147.50
+                # 147.50 is higher (safer) than original 135.0 stop!
+                self.assertEqual(state["positions"]["ZS"]["stop_loss"], 147.50)
+                
+                # 3. Scarcity (HE) stop must be left alone at 12.72
+                self.assertEqual(state["positions"]["HE"]["stop_loss"], 12.72)
+
 if __name__ == "__main__":
     unittest.main()

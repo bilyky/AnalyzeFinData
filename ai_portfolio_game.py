@@ -4,6 +4,7 @@ import openpyxl
 import pytz
 import etrade
 import sys
+import circuit_breaker
 from pathlib import Path
 
 # --- Windows UTF-8 Hardening ---
@@ -1022,7 +1023,8 @@ def run_daily_ai_management(force=False, manual_profile=None):
         queued = state.get("queued_orders", [])
         queued_syms = [q["symbol"] for q in queued]
         
-        all_syms = list(set(symbols_to_check + research_symbols + queued_syms))
+        # Ensure we always fetch the live price of SPY for our Circuit Breaker
+        all_syms = list(set(symbols_to_check + research_symbols + queued_syms + ["SPY"]))
         prices = get_live_prices(all_syms)
         
         # --- Price Source Gate ---
@@ -1030,6 +1032,9 @@ def run_daily_ai_management(force=False, manual_profile=None):
         # If both fail (prices is empty), crash — no stale workbook prices allowed.
         if not prices:
             raise RuntimeError("Critical Data Failure: Both E*TRADE and Google Finance fallback returned no prices. No live source of truth available!")
+
+        # --- Systemic Crash Circuit Breaker Guard ---
+        circuit_breaker.enforce_circuit_breaker(state, prices)
 
         # Zero-Trust: surface held positions with no live quote, but do NOT abort the
         # run over them — aborting would skip stop-loss enforcement on every *other*
