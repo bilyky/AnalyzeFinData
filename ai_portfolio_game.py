@@ -1142,12 +1142,25 @@ def run_daily_ai_management(force=False, manual_profile=None):
         for sym in list(state["positions"].keys()):
             pos = state["positions"][sym]
             s10 = l60 = 0
+            prev_close = pos.get("cost", 0.0)
             for row in ws.iter_rows(min_row=2, values_only=True):
                 if row[3] == sym:
                     s10 = row[24] or 0
                     l60 = row[25] or 0
+                    try:
+                        prev_close = float(row[8] or pos.get("cost", 0.0))
+                    except Exception:
+                        prev_close = pos.get("cost", 0.0)
                     break
             price = prices.get(sym, pos.get("cost"))
+            
+            # Check Idiosyncratic Single-Stock Gap-Down Guard (Whipsaw protection)
+            is_gap_frozen = False
+            if circuit_breaker.is_single_stock_gap_frozen(sym, price, prev_close):
+                is_gap_frozen = True
+                gap_pct = round(((price - prev_close) / prev_close) * 100, 2) if prev_close > 0 else 0.0
+                print(f"❄️ [Gap Guard] {sym} gapped down {gap_pct}% overnight. Holding stop wide to prevent opening whipsaw.")
+
             # Only pay the OHLCV read when the soft signal actually fires (winner-
             # protection is the only consumer of sma50); HOLD positions skip the I/O.
             sma50 = _sma50(sym) if sell_rules.soft_exit(s10, l60) else None
@@ -1156,7 +1169,8 @@ def run_daily_ai_management(force=False, manual_profile=None):
             # non-HOLD candidates. The action it returns drives the actual sell.
             entry = decision_eval.build_entry(
                 symbol=sym, price=price, cost=pos.get("cost"),
-                stop_loss=pos.get("stop_loss"), s10=s10, l60=l60, sma50=sma50,
+                stop_loss=None if is_gap_frozen else pos.get("stop_loss"), 
+                s10=s10, l60=l60, sma50=sma50,
                 date=today, run_shadow=None)
             decision_entries.append(entry)
             if entry["rules_action"] == "SELL":

@@ -2,8 +2,9 @@
 Project AETHER: Systemic Crash "Circuit Breaker" (Systemic Risk Gate).
 
 Audits broad market conditions (SPY single-day return, rolling 10-day drawdown,
-and opening stabilization windows) to dynamically freeze buying and tighten
-stop-losses to protect capital during systemic market panics.
+VXX Volatility ETF proxy, and opening stabilization windows) to dynamically
+freeze buying, tighten stop-losses, and prevent whipsaws on idiosyncratic
+single-stock gap-downs during systemic market panics.
 """
 
 import json
@@ -17,6 +18,7 @@ _log = _get_logger("circuit_breaker")
 
 BASE_DIR = Path(__file__).resolve().parent
 SPY_FILE = BASE_DIR / "Data" / "Symbol_full" / "SPY_daily.json"
+VXX_FILE = BASE_DIR / "Data" / "Symbol_full" / "VXX_daily.json"
 
 def load_spy_history() -> list[dict]:
     """Load sorted daily price series for the SPY ETF from the local cache."""
@@ -43,6 +45,20 @@ def load_spy_history() -> list[dict]:
         _log.warning(f"Failed to load SPY history for circuit breaker: {e}")
         return []
 
+def load_vxx_prev_close() -> float:
+    """Load yesterday's close for the VXX Volatility ETF from local cache."""
+    if not VXX_FILE.exists():
+        return 30.0  # safe default fallback
+    try:
+        with open(VXX_FILE, "r") as f:
+            ts = json.load(f).get("Time Series (Daily)", {})
+        dates = sorted(ts.keys())
+        if len(dates) >= 2:
+            return float(ts[dates[-2]]["4. close"])
+        return 30.0
+    except Exception:
+        return 30.0
+
 def is_market_opening_window() -> bool:
     """True if we are within the 30-minute opening stabilization window (9:30 AM - 10:00 AM EST)."""
     tz = pytz.timezone("America/New_York")
@@ -57,11 +73,29 @@ def is_market_opening_window() -> bool:
     
     return opening_start <= now <= opening_end
 
+def is_single_stock_gap_frozen(symbol: str, live_price: float, prev_close: float) -> bool:
+    """True if an open position has gapped down > 8% at the open, holding stop wide to prevent whipsaw."""
+    if not is_market_opening_window():
+        return False
+        
+    if not prev_close or prev_close <= 0 or not live_price or live_price <= 0:
+        return False
+        
+    gap_pct = ((live_price - prev_close) / prev_close) * 100
+    return gap_pct <= -8.0
+
 def check_systemic_risk(prices=None) -> tuple[bool, str]:
     """
     Audit systemic risk factors to determine if the Circuit Breaker is active.
     Returns (is_active, reason).
     """
+    # Patch 3: Agnostic Fallback & Caution State
+    # If prices dict is completely empty or missing SPY, trigger protective Caution Freeze.
+    live_spy_price = (prices or {}).get("SPY") if prices else None
+    if prices is not None and (not live_spy_price or live_spy_price <= 0):
+        _log.warning("CRITICAL WARNING: Unable to fetch live price for SPY! Defensively triggering Caution Freeze.")
+        return True, "Data Feed Outage: Live SPY price unavailable. Caution freeze active."
+
     spy_series = load_spy_history()
     if not spy_series:
         return False, ""
@@ -74,10 +108,7 @@ def check_systemic_risk(prices=None) -> tuple[bool, str]:
     prev_day = spy_series[-2]
     
     # 1. Single-Day Price Capitulation (SPY down > 2.0%)
-    # Use live price if passed, else fallback to latest cached close
-    live_spy_price = (prices or {}).get("SPY") if prices else None
     spy_price = live_spy_price if (live_spy_price and live_spy_price > 0) else latest_day["close"]
-    
     prev_close = prev_day["close"]
     spy_return = ((spy_price - prev_close) / prev_close) * 100 if prev_close else 0.0
     
@@ -88,12 +119,19 @@ def check_systemic_risk(prices=None) -> tuple[bool, str]:
     spy_peak = max(recent_closes)
     spy_drawdown = ((spy_price - spy_peak) / spy_peak) * 100 if spy_peak else 0.0
     
+    # Patch 2: Volatility Proxy Check (VXX surges > +15.0%)
+    vxx_prev = load_vxx_prev_close()
+    vxx_price = (prices or {}).get("VXX") if prices else None
+    vxx_return = ((vxx_price - vxx_prev) / vxx_prev) * 100 if (vxx_price and vxx_prev) else 0.0
+    volatility_capitulation = vxx_return >= 15.0
+    
     # 3. Apply Whipsaw Protection (Opening Stabilization Window)
     # If the market opened with a gap-down, we freeze buying immediately,
     # but we DO NOT tighten stops or execute panic-sells during the first 30 minutes!
     if is_market_opening_window():
-        if spy_return <= -2.0 or spy_drawdown <= -5.0:
-            return True, f"Market Open Freeze (SPY: {spy_return:+.2f}%, Drawdown: {spy_drawdown:+.2f}%). Whipsaw protection active: stops held wide."
+        if spy_return <= -2.0 or spy_drawdown <= -5.0 or volatility_capitulation:
+            vxx_desc = f", VXX: {vxx_return:+.1f}%" if volatility_capitulation else ""
+            return True, f"Market Open Freeze (SPY: {spy_return:+.2f}%, Drawdown: {spy_drawdown:+.2f}%{vxx_desc}). Whipsaw protection active: stops held wide."
         return False, ""
 
     # 4. Enforce Systemic Rejection Triggers (Active Session after 10:00 AM EST)
@@ -102,6 +140,9 @@ def check_systemic_risk(prices=None) -> tuple[bool, str]:
         
     if spy_drawdown <= -5.0:
         return True, f"Rolling 10-day Drawdown Breach (SPY is down {spy_drawdown:+.2f}% from its 10-day peak)."
+        
+    if volatility_capitulation:
+        return True, f"Volatility Capitulation (VXX Volatility ETF surged {vxx_return:+.2f}% on systemic panic)."
         
     return False, ""
 
@@ -127,7 +168,7 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
     # We tighten the stops of all open normal/satellite positions to a very conservative 1.0x ATR floor
     # (unless we are in the 30-minute opening window when stops are held wide to prevent whipsaws!)
     tightened_symbols = []
-    if "Whipsaw protection active" not in reason:
+    if "Whipsaw protection active" not in reason and "Data Feed Outage" not in reason:
         positions = state.get("positions", {})
         for sym, pos in positions.items():
             if pos.get("is_scarcity", False):

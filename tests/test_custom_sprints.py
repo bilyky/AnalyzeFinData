@@ -537,5 +537,52 @@ class TestPersistentProfileModes(unittest.TestCase):
                 # 3. Scarcity (HE) stop must be left alone at 12.72
                 self.assertEqual(state["positions"]["HE"]["stop_loss"], 12.72)
 
+    def test_circuit_breaker_caution_state(self):
+        """Verify that an empty or missing SPY price dynamically triggers a defensive Caution Freeze."""
+        import circuit_breaker
+        
+        # Test completely empty prices dictionary
+        is_active, reason = circuit_breaker.check_systemic_risk(prices={})
+        self.assertTrue(is_active)
+        self.assertIn("Caution freeze active", reason)
+        
+        # Test prices dict missing SPY
+        is_active, reason = circuit_breaker.check_systemic_risk(prices={"AAPL": 150.0})
+        self.assertTrue(is_active)
+        self.assertIn("Caution freeze active", reason)
+
+    def test_circuit_breaker_vxx_volatility_capitulation(self):
+        """Verify that a VXX surge > 15.0% successfully triggers the Volatility Capitulation breaker."""
+        import circuit_breaker
+        from unittest import mock
+        
+        # Mock yesterday's VXX close to 100.0, and today's VXX price to 116.0 (up 16.0%!)
+        mock_series = [{"close": 100.0}] * 15
+        
+        with mock.patch("circuit_breaker.load_spy_history", return_value=mock_series):
+            with mock.patch("circuit_breaker.load_vxx_prev_close", return_value=100.0):
+                is_active, reason = circuit_breaker.check_systemic_risk(prices={"SPY": 100.0, "VXX": 116.0})
+                self.assertTrue(is_active)
+                self.assertIn("Volatility Capitulation", reason)
+
+    def test_circuit_breaker_idiosyncratic_gap_guard(self):
+        """Verify that a single-stock gap-down > 8% is successfully detected during opening window."""
+        import circuit_breaker
+        from unittest import mock
+        
+        # Test Case 1: Inside opening window, -10% gap-down -> Must return True!
+        with mock.patch("circuit_breaker.is_market_opening_window", return_value=True):
+            is_frozen = circuit_breaker.is_single_stock_gap_frozen("ZS", 90.0, 100.0) # down 10%
+            self.assertTrue(is_frozen)
+            
+            # -5% gap-down is less than 8.0% threshold -> Must return False
+            is_frozen = circuit_breaker.is_single_stock_gap_frozen("ZS", 95.0, 100.0)
+            self.assertFalse(is_frozen)
+            
+        # Test Case 2: Outside opening window, -10% gap-down -> Must return False!
+        with mock.patch("circuit_breaker.is_market_opening_window", return_value=False):
+            is_frozen = circuit_breaker.is_single_stock_gap_frozen("ZS", 90.0, 100.0)
+            self.assertFalse(is_frozen)
+
 if __name__ == "__main__":
     unittest.main()
