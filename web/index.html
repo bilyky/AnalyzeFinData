@@ -519,9 +519,21 @@
                             </p>
                         </div>
                         <div data-wiki="decision_eval" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Systematic Sell & Decision Quality Evaluation (`decision_eval.py`)</h4>
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Systemic Sell & Decision Quality Evaluation (`decision_eval.py`)</h4>
                             <p class="text-xs text-slate-400 leading-relaxed">
                                 Evaluates exits with a hybrid qualitative rubric combining fundamental risks with charts. Automatically logs, scores, and audits decision quality for both closed trades and active reviews.
+                            </p>
+                        </div>
+                        <div data-wiki="circuit_breaker" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Systemic Crash Circuit Breaker & Elastic Memory</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Enforces a multi-factor systemic risk gate that automatically freezes buying and tightens stop-losses to a tight 1.0x ATR floor during black swans. Features an <b>Elastic Memory</b> restorer to dynamically relax stops back to normal when market panic stabilizes.
+                            </p>
+                        </div>
+                        <div data-wiki="risk_reward_gate" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">2:1 Risk-Reward Gate & 5% Target Gain Filter</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Guarantees capital efficiency by strictly requiring a minimum 2:1 Reward-to-Risk ratio and a minimum 5.0% projected target gain percentage before executing buys on autopilot, completely preventing capital lock-up on flat consolidations.
                             </p>
                         </div>
                     </div>

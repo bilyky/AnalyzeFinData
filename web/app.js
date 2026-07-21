@@ -196,6 +196,27 @@ const AETHER_WIKI = {
             "Scorecard: Runs decision_eval.py scoring all mature decisions after a 10-day forward window.",
             "Verification: Automatically emails the Retrospective Scorecard directly to your inbox daily."
         ]
+    },
+    "circuit_breaker": {
+        title: "Systemic Crash Circuit Breaker & Elastic Memory",
+        origin: "Quantitative Risk Management (QRM) & Black Swan Protection standards.",
+        body: "Erects an indestructible defensive shield around your portfolio during market panic. Features Two-Factor Confirmation (SPY return and VXX Volatility ETF surge), a 30-minute opening stabilization window, dynamic 1.0x ATR stop tightening, and a self-healing 'Elastic Memory' stop-loss restorer upon market recovery.",
+        config: [
+            "Two-Factor Confirmation: Triggers if S&P 500 (SPY) falls > 2.0% OR VXX Volatility ETF surges > 15.0%.",
+            "Whipsaw Protection: Stabilization window blocks stop-tightening or selling during the first 30 minutes of the market open (6:30 AM - 7:00 AM PST).",
+            "Stop Tightening: Dynamically tightens stop-losses to a conservative 1.0x ATR floor on all active satellites.",
+            "Elastic Memory: Automatically caches your original stop under 'original_stop_loss' and restores it once market panic settles!"
+        ]
+    },
+    "risk_reward_gate": {
+        title: "2:1 Risk-Reward Gate & 5% Target Gain Filter",
+        origin: "Professional Risk-Asymmetry & Portfolio Alpha Optimization standards.",
+        body: "Guarantees capital efficiency by blocking low-upside, high-risk trades. The autopilot strictly audits the projected Reward-to-Risk ratio and minimum target gain percentage before deploying any cash.",
+        config: [
+            "Asymmetry Filter: Strictly requires a minimum 2:1 Reward-to-Risk ratio (Reward = Target - Price, Risk = Price - Stop).",
+            "Velocity Filter: Strictly requires a minimum projected target gain percentage of > 5.0% of the current price, preventing cash lock-up on tight-range, flat consolidations.",
+            "Mirage Auditing: Standard ATR cushions override tight paper stop-loss mirages automatically."
+        ]
     }
 };
 
