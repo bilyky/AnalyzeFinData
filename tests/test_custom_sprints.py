@@ -603,5 +603,56 @@ class TestPersistentProfileModes(unittest.TestCase):
             self.assertEqual(state["positions"]["ZS"]["stop_loss"], 135.0)
             self.assertNotIn("original_stop_loss", state["positions"]["ZS"])
 
+    def test_circuit_breaker_backfeed_dna(self):
+        """Verify that the breaker successfully backfeeds the systemic trigger record to the DNA Ledger."""
+        import circuit_breaker
+        from unittest import mock
+        import json
+        
+        state = {
+            "balance": 1000.0,
+            "equity": 10000.0,
+            "profile": "BALANCED",
+            "queued_orders": [],
+            "positions": {
+                "ZS": {"qty": 10, "cost": 150.0, "stop_loss": 135.0, "is_scarcity": False}
+            }
+        }
+        
+        dna_file = circuit_breaker.DNA_FILE
+        existing_dna = None
+        if dna_file.exists():
+            existing_dna = json.load(open(dna_file))
+            dna_file.unlink() # clear it temporarily
+            
+        try:
+            # Mock SPY and VXX returns to trigger the log
+            mock_series = [{"close": 100.0}] * 15
+            with mock.patch("circuit_breaker.load_spy_history", return_value=mock_series):
+                with mock.patch("circuit_breaker.load_vxx_prev_close", return_value=100.0):
+                    circuit_breaker.log_circuit_breaker_trigger_dna("Single-Day Capitulation", state, prices={"SPY": 97.0, "VXX": 116.0})
+                    
+            # Verify file was written and holds correct schema
+            self.assertTrue(dna_file.exists())
+            records = json.load(open(dna_file))
+            self.assertEqual(len(records), 1)
+            
+            rec = records[0]
+            self.assertEqual(rec["type"], "CIRCUIT_BREAKER_TRIGGER")
+            self.assertEqual(rec["reason"], "Single-Day Capitulation")
+            self.assertEqual(rec["spy_return_pct"], -3.0)
+            self.assertEqual(rec["vxx_return_pct"], 16.0)
+            self.assertEqual(rec["portfolio_equity"], 10000.0)
+            self.assertEqual(rec["cash_balance"], 1000.0)
+            self.assertEqual(rec["open_positions"][0]["symbol"], "ZS")
+            self.assertEqual(rec["profile"], "BALANCED")
+        finally:
+            # Restore original DNA ledger
+            if existing_dna is not None:
+                with open(dna_file, "w") as f:
+                    json.dump(existing_dna, f, indent=4)
+            elif dna_file.exists():
+                dna_file.unlink()
+
 if __name__ == "__main__":
     unittest.main()

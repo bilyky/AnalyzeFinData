@@ -5,7 +5,8 @@ Audits broad market conditions (SPY single-day return, rolling 10-day drawdown,
 VXX Volatility ETF proxy, and opening stabilization windows) to dynamically
 freeze buying, tighten stop-losses, and prevent whipsaws on idiosyncratic
 single-stock gap-downs. Features AETHER Elastic Memory to automatically cache and 
-restore stop-losses to their original wide levels once market panic stabilizes.
+restore stop-losses to their original wide levels once market panic stabilizes,
+and backfeeds systemic trigger events to the Failure DNA Ledger for weekly retrospectives.
 """
 
 import json
@@ -20,6 +21,7 @@ _log = _get_logger("circuit_breaker")
 BASE_DIR = Path(__file__).resolve().parent
 SPY_FILE = BASE_DIR / "Data" / "Symbol_full" / "SPY_daily.json"
 VXX_FILE = BASE_DIR / "Data" / "Symbol_full" / "VXX_daily.json"
+DNA_FILE = BASE_DIR / "Data" / "trade_history_dna.json"
 
 def load_spy_history() -> list[dict]:
     """Load sorted daily price series for the SPY ETF from the local cache."""
@@ -147,6 +149,74 @@ def check_systemic_risk(prices=None) -> tuple[bool, str]:
         
     return False, ""
 
+def log_circuit_breaker_trigger_dna(reason: str, state: dict, prices=None):
+    """Backfeed the systemic trigger event directly into the unified Trade History DNA Ledger."""
+    if not DNA_FILE.parent.exists():
+        DNA_FILE.parent.mkdir(parents=True, exist_ok=True)
+        
+    today = str(datetime.date.today())
+    
+    # Load existing DNA records
+    records = []
+    if DNA_FILE.exists():
+        try:
+            with open(DNA_FILE, "r", encoding="utf-8") as f:
+                records = json.load(f)
+        except Exception:
+            records = []
+            
+    # Check if a systemic trigger was already logged today to prevent duplicate spam
+    for r in records:
+        if isinstance(r, dict) and r.get("type") == "CIRCUIT_BREAKER_TRIGGER" and r.get("date") == today:
+            return  # already logged today!
+            
+    # Audit current SPY and VXX returns
+    spy_series = load_spy_history()
+    spy_return = 0.0
+    if spy_series:
+        latest_day = spy_series[-1]
+        prev_close_val = spy_series[-2]["close"] if len(spy_series) >= 2 else latest_day["close"]
+        live_spy = (prices or {}).get("SPY") or latest_day["close"]
+        spy_return = round(((live_spy - prev_close_val) / prev_close_val) * 100, 2) if prev_close_val > 0 else 0.0
+        
+    vxx_prev = load_vxx_prev_close()
+    live_vxx = (prices or {}).get("VXX") or vxx_prev
+    vxx_return = round(((live_vxx - vxx_prev) / vxx_prev) * 100, 2) if vxx_prev > 0 else 0.0
+    
+    # Compile positions and their active momentum states
+    open_positions = []
+    positions = state.get("positions", {})
+    for sym, pos in positions.items():
+        open_positions.append({
+            "symbol": sym,
+            "cost": pos.get("cost", 0.0),
+            "stop_loss": pos.get("stop_loss", 0.0),
+            "is_scarcity": pos.get("is_scarcity", False)
+        })
+        
+    # Build Systemic Trigger DNA Record
+    record = {
+        "type": "CIRCUIT_BREAKER_TRIGGER",
+        "date": today,
+        "time": datetime.datetime.now().strftime("%H:%M:%S"),
+        "reason": reason,
+        "spy_return_pct": spy_return,
+        "vxx_return_pct": vxx_return,
+        "portfolio_equity": state.get("equity", 0.0),
+        "cash_balance": state.get("balance", 0.0),
+        "open_positions": open_positions,
+        "profile": state.get("profile", "DEFENSIVE")
+    }
+    
+    records.append(record)
+    
+    try:
+        with open(DNA_FILE, "w", encoding="utf-8") as f:
+            json.dump(records, f, indent=4)
+        _log.warning(f"  [Breaker Backfeed] Logged systemic trigger DNA to unified ledger (trade_history_dna.json)!")
+    except Exception as e:
+        _log.error(f"Failed to log circuit breaker trigger DNA: {e}")
+
 def enforce_circuit_breaker(state, prices=None) -> list[str]:
     """
     If the Circuit Breaker is active, dynamically freeze buying and tighten stop-losses
@@ -170,6 +240,9 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
         return []
         
     _log.warning(f"CIRCUIT BREAKER TRIGGERED! Reason: {reason}")
+    
+    # Unified Backfeed: Log the trigger event to the Trade History DNA Ledger
+    log_circuit_breaker_trigger_dna(reason, state, prices)
     
     # 1. Freeze all buying (clears any queued buy orders)
     queued = state.get("queued_orders", [])
