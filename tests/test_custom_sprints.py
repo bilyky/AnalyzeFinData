@@ -428,8 +428,8 @@ class TestPersistentProfileModes(unittest.TestCase):
                 dna_file.unlink()
 
     def test_risk_reward_gate_math(self):
-        """Verify that the dynamic Reward-to-Risk ratio math and 2:1 thresholds are correct."""
-        # Scenario 1: Favorable asymmetry (Upside: $6, Downside: $2) -> Ratio: 3.0 -> Accept!
+        """Verify that the dynamic Reward-to-Risk ratio and 5% target gain thresholds are correct."""
+        # Scenario 1: Favorable asymmetry & Gain (Upside: $6, Downside: $2) -> Ratio: 3.0, Gain: 6% -> Accept!
         price = 100.0
         stop = 98.0
         target = 106.0
@@ -437,8 +437,12 @@ class TestPersistentProfileModes(unittest.TestCase):
         upside = target - price
         downside = price - stop
         rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
+        target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
+        
         self.assertEqual(rr_ratio, 3.0)
         self.assertGreaterEqual(rr_ratio, 2.0)
+        self.assertEqual(target_gain_pct, 6.0)
+        self.assertGreaterEqual(target_gain_pct, 5.0)
         
         # Scenario 2: Unfavorable asymmetry (Upside: $2, Downside: $4) -> Ratio: 0.5 -> Reject!
         price = 100.0
@@ -450,6 +454,21 @@ class TestPersistentProfileModes(unittest.TestCase):
         rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
         self.assertEqual(rr_ratio, 0.5)
         self.assertLess(rr_ratio, 2.0)
+        
+        # Scenario 3: Favorable asymmetry but Poor Gain (Upside: $2, Downside: $0.50) -> Ratio: 4.0, Gain: 2% -> Reject!
+        price = 100.0
+        stop = 99.50
+        target = 102.0
+        
+        upside = target - price
+        downside = price - stop
+        rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
+        target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
+        
+        self.assertEqual(rr_ratio, 4.0)
+        self.assertGreaterEqual(rr_ratio, 2.0) # passes R/R
+        self.assertEqual(target_gain_pct, 2.0)
+        self.assertLess(target_gain_pct, 5.0) # fails Target Gain %
 
 if __name__ == "__main__":
     unittest.main()
