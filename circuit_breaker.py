@@ -4,7 +4,8 @@ Project AETHER: Systemic Crash "Circuit Breaker" (Systemic Risk Gate).
 Audits broad market conditions (SPY single-day return, rolling 10-day drawdown,
 VXX Volatility ETF proxy, and opening stabilization windows) to dynamically
 freeze buying, tighten stop-losses, and prevent whipsaws on idiosyncratic
-single-stock gap-downs during systemic market panics.
+single-stock gap-downs. Features AETHER Elastic Memory to automatically cache and 
+restore stop-losses to their original wide levels once market panic stabilizes.
 """
 
 import json
@@ -150,9 +151,22 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
     """
     If the Circuit Breaker is active, dynamically freeze buying and tighten stop-losses
     on all active positions to protect capital.
+    If the Circuit Breaker is inactive, automatically restore any previously tightened stops.
     """
     is_active, reason = check_systemic_risk(prices)
+    positions = state.get("positions", {})
+    
     if not is_active:
+        # AETHER Elastic Memory: If the breaker is inactive, restore original wide stops cleanly!
+        restored_symbols = []
+        for sym, pos in positions.items():
+            if "original_stop_loss" in pos:
+                original = pos.pop("original_stop_loss")
+                pos["stop_loss"] = original
+                restored_symbols.append(sym)
+                
+        if restored_symbols:
+            _log.info(f"  [Breaker Recovery] Market stabilized. Restored stop-losses to original levels on: {', '.join(restored_symbols)}")
         return []
         
     _log.warning(f"CIRCUIT BREAKER TRIGGERED! Reason: {reason}")
@@ -169,7 +183,6 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
     # (unless we are in the 30-minute opening window when stops are held wide to prevent whipsaws!)
     tightened_symbols = []
     if "Whipsaw protection active" not in reason and "Data Feed Outage" not in reason:
-        positions = state.get("positions", {})
         for sym, pos in positions.items():
             if pos.get("is_scarcity", False):
                 continue  # leave utility scarcity holdings wide
@@ -185,6 +198,9 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
                 # Only tighten if the new stop is higher (safer) than the existing stop,
                 # and below the current live price!
                 if tight_stop > cur_stop and tight_stop < live_price:
+                    # Cache the original stop before tightening so we can restore it upon recovery!
+                    if "original_stop_loss" not in pos:
+                        pos["original_stop_loss"] = cur_stop
                     pos["stop_loss"] = tight_stop
                     tightened_symbols.append(sym)
                     

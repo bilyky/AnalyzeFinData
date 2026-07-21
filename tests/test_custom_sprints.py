@@ -584,5 +584,24 @@ class TestPersistentProfileModes(unittest.TestCase):
             is_frozen = circuit_breaker.is_single_stock_gap_frozen("ZS", 90.0, 100.0)
             self.assertFalse(is_frozen)
 
+    def test_circuit_breaker_elastic_memory(self):
+        """Verify that the breaker successfully caches original stops and restores them on stabilization."""
+        import circuit_breaker
+        from unittest import mock
+        
+        state = {
+            "balance": 1000.0,
+            "positions": {
+                "ZS": {"qty": 10, "cost": 150.0, "stop_loss": 147.50, "original_stop_loss": 135.0, "is_scarcity": False}
+            }
+        }
+        
+        # Scenario 1: Market stabilized (inactive breaker) -> Must restore stop to 135.0 and pop original key!
+        with mock.patch("circuit_breaker.check_systemic_risk", return_value=(False, "")):
+            circuit_breaker.enforce_circuit_breaker(state, prices={"ZS": 148.0})
+            
+            self.assertEqual(state["positions"]["ZS"]["stop_loss"], 135.0)
+            self.assertNotIn("original_stop_loss", state["positions"]["ZS"])
+
 if __name__ == "__main__":
     unittest.main()
