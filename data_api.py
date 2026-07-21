@@ -845,7 +845,7 @@ MANUAL_TASKS = [
         "id": "backtest_levels",
         "label": "Backtest Levels",
         "description": "Walk-forward accuracy test of support/resistance levels for any symbol.",
-        "script": "backtest_levels.py",
+        "script": "scripts/backtesting/backtest_levels.py",
         "args": [],
         "input": {"placeholder": "Symbol (e.g. INTC)", "default": "INTC", "arg_position": 0},
         "admin_only": False,
@@ -856,7 +856,7 @@ MANUAL_TASKS = [
         "id": "backtest_levels_all",
         "label": "Backtest Levels — Universe",
         "description": "Walk-forward accuracy across all 500+ cached symbols (backtest_levels.py --all --step 20). Takes ~2 min.",
-        "script": "backtest_levels.py",
+        "script": "scripts/backtesting/backtest_levels.py",
         "args": ["--all", "--step", "20"],
         "admin_only": False,
         "confirm": "Run full universe backtest? This takes ~2 minutes.",
@@ -953,7 +953,7 @@ def read_symbol(symbol: str) -> dict:
         out["chart"] = chart
 
         # ── Backtest accuracy ─────────────────────────────────────────────────
-        import backtest_levels
+        from scripts.backtesting import backtest_levels
         out["backtest"] = backtest_levels.backtest_symbol(sym)
 
         # ── Account holding (any real account or game) ───────────────────────
@@ -975,7 +975,7 @@ def read_backtest(symbol: str, horizon: int = 20) -> dict:
     """Walk-forward accuracy of the support/resistance levels for one symbol
     (backtest_levels.backtest_symbol). Cached 10 min — it scans full history."""
     def _load():
-        import backtest_levels
+        from scripts.backtesting import backtest_levels
         return backtest_levels.backtest_symbol((symbol or "").upper(), horizon=horizon)
     return _cached(f"bt:{(symbol or '').upper()}:{horizon}", 600.0, _load)
 
