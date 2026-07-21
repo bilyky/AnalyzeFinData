@@ -4,6 +4,7 @@ import re
 import json
 import imaplib
 import email
+import extract_email_intel
 import openpyxl
 from pathlib import Path
 from config import CFG
@@ -128,8 +129,6 @@ def fetch_idea_emails():
         "[Gmail]/Promotions",
         "[Gmail]/Trash",
     ]
-
-    import extract_email_intel
 
     ideas = []
     processed_msg_ids = set()

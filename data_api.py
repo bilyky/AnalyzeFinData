@@ -10,6 +10,7 @@ import subprocess
 import time
 from datetime import datetime, date
 from pathlib import Path
+from scripts.backtesting import backtest_levels
 
 _DIR      = Path(__file__).resolve().parent
 _DATA_DIR = _DIR / "Data"
@@ -953,7 +954,6 @@ def read_symbol(symbol: str) -> dict:
         out["chart"] = chart
 
         # ── Backtest accuracy ─────────────────────────────────────────────────
-        from scripts.backtesting import backtest_levels
         out["backtest"] = backtest_levels.backtest_symbol(sym)
 
         # ── Account holding (any real account or game) ───────────────────────
@@ -975,7 +975,6 @@ def read_backtest(symbol: str, horizon: int = 20) -> dict:
     """Walk-forward accuracy of the support/resistance levels for one symbol
     (backtest_levels.backtest_symbol). Cached 10 min — it scans full history."""
     def _load():
-        from scripts.backtesting import backtest_levels
         return backtest_levels.backtest_symbol((symbol or "").upper(), horizon=horizon)
     return _cached(f"bt:{(symbol or '').upper()}:{horizon}", 600.0, _load)
 
