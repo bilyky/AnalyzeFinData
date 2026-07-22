@@ -624,7 +624,7 @@ def is_market_open_now(tokens, env="production") -> bool | None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    tokens = get_tokens(allow_browser=True)
+    tokens = get_tokens()  # raises if tokens expired; use scripts/diagnostics/test_etrade.py to re-auth
 
     print("\n--- Quote: AAPL ---")
     market = get_market(tokens)
