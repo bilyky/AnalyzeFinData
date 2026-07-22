@@ -585,7 +585,7 @@ async function loadAccounts() {
                 ${scoreCells}
                 <td><button class="rq-btn px-2 py-0.5 rounded text-xs bg-slate-700 hover:bg-blue-700 text-slate-200 transition-colors max-w-[6rem] truncate" data-rq-sym="${sym}" data-rq-buy="${entry ?? ""}" title="Click to run live AI analysis">${esc(_statusToRec(h.status))}</button></td>
             </tr>
-            <tr class="rq-result-row hidden" data-rq-for="${sym}"><td colspan="14" class="p-0"></td></tr>`;
+            <tr class="rq-result-row hidden" data-rq-for="${sym}"><td colspan="14" class="p-0" style="white-space: normal !important;"></td></tr>`;
         }).join("");
 
         const scoreHdr = isGame
@@ -1600,12 +1600,12 @@ function _rqPanel(d, sym, newsStatus) {
         ? `<ul class="mt-2 text-xs mut list-disc pl-4 space-y-0.5">${d.news.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "";
     const errLine = d.error ? `<div class="text-xs text-amber-400 mt-1">⚠ ${esc(d.error)}</div>` : "";
     return `
-        <div class="px-4 py-3 bg-slate-800/60 border-t border-slate-700 text-sm space-y-1">
-            <div class="flex items-center gap-2 flex-wrap">
+        <div class="px-4 py-3 bg-slate-800/60 border-t border-slate-700 text-sm space-y-1" style="white-space: normal !important; word-break: break-word;">
+            <div class="flex items-start gap-2 flex-wrap" style="white-space: normal !important;">
                 ${_rqBadge(d.recommendation)}${confBadge}
-                <span class="text-slate-300 flex-1">${esc(d.rationale || "")}</span>
+                <span class="text-slate-300 flex-1" style="white-space: normal !important; word-break: break-word;">${esc(d.rationale || "")}</span>
             </div>
-            ${d.risk ? `<div class="text-xs text-slate-400">Risk: ${esc(d.risk)}</div>` : ""}
+            ${d.risk ? `<div class="text-xs text-slate-400" style="white-space: normal !important; word-break: break-word;">Risk: ${esc(d.risk)}</div>` : ""}
             ${verdictLine}${factGrid}${newsHtml}${errLine}
             <div class="text-xs mut mt-1" id="rq-news-status-${esc(sym)}">${newsStatus}</div>
         </div>`;
