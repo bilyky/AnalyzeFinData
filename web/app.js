@@ -218,6 +218,32 @@ const AETHER_WIKI = {
             "Velocity Filter: Strictly requires a minimum projected target gain percentage of > 5.0% of the current price, preventing cash lock-up on tight-range, flat consolidations.",
             "Mirage Auditing: Standard ATR cushions override tight paper stop-loss mirages automatically."
         ]
+    },
+    "digit_sum_numerology": {
+        title: "Digit-Sum Numerology Factor",
+        origin: "Inspired by W.D. Gann's numerology research (1878–1955). Empirically backtested by AETHER across 522 symbols × 9+ years of daily OHLCV data (2014–2026).",
+        body: `<p>Tests whether the <b>digit-sum of a stock's price</b> predicts short-term direction. Digit-sum collapses any price to a single digit by repeatedly summing its digits: <code>$247.35 → 2+4+7+3+5 = 21 → 2+1 = 3</code>.</p>
+<p class="mt-2">AETHER runs <b>two variants</b> simultaneously:</p>
+<ul class="list-disc pl-4 mt-1 space-y-1 text-sm">
+  <li><b>Integer digit-sum</b> — uses the whole-dollar part only ($247 → digit 4). Simpler; 162/522 symbols show 95%+ confidence signals.</li>
+  <li><b>Full-cents digit-sum</b> — includes the cents ($247.35 → digit 3). Complementary: 106 additional symbols not captured by integer-only.</li>
+</ul>
+<p class="mt-2">Combined coverage: <b>228 unique symbols</b> with at least one statistically significant signal (|z| ≥ 2.0, N ≥ 50 days).</p>
+<p class="mt-2"><b>Two timing modes:</b></p>
+<ul class="list-disc pl-4 mt-1 space-y-1 text-sm">
+  <li><b>Prior-close → next-day</b> (standing factor): yesterday's close digit feeds into the overnight S10 score. Always available from the OHLCV cache.</li>
+  <li><b>Today's open → same-day</b> (real-time): applied in <code>_execute_buys()</code> at buy-decision time using the live open price. Logged as <code>🔢 [Digit-Sum]</code> in the pipeline run log.</li>
+</ul>
+<p class="mt-2">The Symbol detail modal shows a full digit table — bold rows are significant, grey rows are noise. Toggle "Show all digits" to see the full picture.</p>`,
+        config: [
+            "Integer digit-sum (OPEN→same-day): real-time, applied in _execute_buys() at buy time only",
+            "Integer digit-sum (CLOSE→next-day): standing factor in S10 (±1.0) and L60 (±0.5)",
+            "Full-cents digit-sum (OPEN→same-day): same real-time gate, combined with integer",
+            "Full-cents digit-sum (CLOSE→next-day): averaged with integer when both fire",
+            "Minimum N=50 days per bucket; only |z|≥2.0 signals (95%+ confidence) are used",
+            "Score scale: z/3.0, capped at ±1.0 per variant; averaged when both variants fire",
+            "Refreshed monthly: python scripts/backtesting/digit_sum_study.py + digit_sum_full_study.py"
+        ]
     }
 };
 
