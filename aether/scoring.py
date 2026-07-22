@@ -49,25 +49,35 @@ def _price_digit_sum(price: float) -> int:
         s = str(sum(int(c) for c in s))
     return int(s)
 
-def digit_sum_score(symbol: str, open_price: float, close_price: float | None = None) -> float:
+def digit_sum_open_score(symbol: str, live_open_price: float) -> float:
     """
-    Return a score in [-1.0, +1.0] based on the digit-sum of the open price
-    (same-day signal) and optionally the prior close (next-day signal).
-    Only fires when the symbol/digit pair has |z| >= 2.0 in the study.
-    Score magnitude is proportional to z, capped at ±1.0.
+    Real-time tiebreaker: digit-sum of TODAY's live open price → same-day direction.
+    Only valid during an active session when live_open_price is the actual open.
+    Called from _execute_buys() at buy-decision time, NOT from the nightly score.
+    Returns [-1.0, +1.0]; 0.0 if no signal exists for this symbol/digit.
+    """
+    idx = _load_digit_index()
+    if not idx or not live_open_price or live_open_price <= 0:
+        return 0.0
+    sym = (symbol or "").upper().strip()
+    dg = _price_digit_sum(live_open_price)
+    z = idx.get((sym, "OPEN", dg), 0.0)
+    return round(max(-1.0, min(1.0, z / 3.0)), 2)
+
+
+def digit_sum_score(symbol: str, close_price: float | None = None) -> float:
+    """
+    Standing factor: digit-sum of PRIOR CLOSE → next-day direction.
+    This is always available from the OHLCV cache and feeds into short_score().
+    The open-digit signal is NOT included here — it belongs in _execute_buys()
+    as a real-time tiebreaker using the live open price.
+    Returns [-1.0, +1.0]; 0.0 if no signal exists for this symbol/digit.
     """
     idx = _load_digit_index()
     if not idx:
         return 0.0
     score = 0.0
     sym = (symbol or "").upper().strip()
-
-    # Open-digit → same-day direction
-    if open_price and open_price > 0:
-        dg = _price_digit_sum(open_price)
-        z = idx.get((sym, "OPEN", dg), 0.0)
-        if z:
-            score += max(-1.0, min(1.0, z / 3.0))  # z=3 → ±1.0
 
     # Prior-close digit → today's direction
     if close_price and close_price > 0:

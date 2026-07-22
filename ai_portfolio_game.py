@@ -45,6 +45,7 @@ import sell_rules
 import decision_eval
 import instruments
 from aether_logger import get_logger as _get_logger
+from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
 
 
@@ -232,6 +233,13 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
             if is_toxic:
                 _log.warning(f"AI BUY REJECTED (Feedback Analyzer Rule Match): {buy['sym']} - {t_reason}")
                 continue
+
+            # Open-digit real-time signal: log when a strong numerology bias fires
+            _open_digit_z = _digit_open_score(buy["sym"], buy["price"])
+            if abs(_open_digit_z) >= 0.33:  # fires when |z|>=2.0 in study (z/3 threshold)
+                _dir = "UP" if _open_digit_z > 0 else "DOWN"
+                print(f"🔢 [Digit-Sum] {buy['sym']} open digit signal: {_dir} bias "
+                      f"(score={_open_digit_z:+.2f})")
 
             # Core-Satellite Allocation Checking & Downsizing logic
             cost = qty * buy["price"]
