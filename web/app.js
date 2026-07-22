@@ -390,7 +390,7 @@ function renderPatternsHTML(patterns_str) {
     };
     return patterns_str.split(" ").map(p => {
         const desc = desc_map[p] || "Technical Price Action Pattern";
-        return `<span class="text-purple-300 cursor-help hover:underline decoration-dotted" title="${desc}">${p}</span>`;
+        return `<span class="text-purple-300 cursor-help hover:underline decoration-dotted" title="${esc(desc)}">${esc(p)}</span>`;
     }).join(" ");
 }
 

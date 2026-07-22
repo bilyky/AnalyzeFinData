@@ -65,6 +65,16 @@
     4.  *Decay awareness:* Leveraged/inverse ETFs suffer volatility decay over holding periods — fold an explicit time-decay penalty into any hold/target logic so we never treat them as buy-and-hold.
     5.  *Re-validate & lift the exclusion:* Extend `backtest_levels.py` to score this cohort under the new algorithm; only remove the temporary `instruments.is_excluded` gate once the cohort's win-rate matches the broad universe. Until then the exclusion stays.
 
+*   **Session: Saturday, August 15, 2026 (10:00 AM PST) — W.D. Gann Square of Nine as a Price Level Layer:**
+    Research W.D. Gann's Square of Nine theory and backtest whether Gann angle proximity adds statistically significant alpha to AETHER's level-detection stack. The core idea: numbers spiral outward from 1 in a square matrix; rotating 90°/180°/270°/360° around any anchor price (key high or low) produces natural support/resistance levels that many traders watch — creating self-fulfilling order clustering. The "Power of Nine" is that nine's digit-sum always collapses to 9, making it structurally self-completing in Gann's model.
+
+    Implementation plan:
+    1.  *Deep Research First:* Run `/deep-research` on "W.D. Gann Square of Nine: exact construction algorithm, price-to-angle formula, empirical backtest studies, known failure modes" before writing any code.
+    2.  *Core Math (`aether/primal_funcs.py`):* Implement `gann_sq9_levels(anchor_price, rotations=[90,180,270,360])` using the standard shortcut: `√anchor → ± 0.25·n → square`. Anchor on confirmed fractal lows/highs from `risk_utils.detect_support`.
+    3.  *Scoring factor (`aether/scoring.py`):* Add `gann_sq9_score(price, ohlcv_ts)` alongside the existing `fibonacci_retracement_score` — returns a score in the same [-2, +2] range based on proximity to the nearest Gann level.
+    4.  *Backtest via `backtest_ratings.py`:* Measure 10-day forward return spread for the new factor across the full 500-symbol universe. Only add to the S10 composite if the spread is statistically meaningful. If not, document why and park it.
+    5.  *Integration gate:* If alpha is confirmed, wire into `scoring.short_score()` with a weight determined by the optimizer (Jul-18 calibration). Keep the factor independent (not bundled with Fibonacci) so each can be turned on/off separately.
+
 ## Workflow Conventions
 
 When the user asks to "send", "push", "create", or "save" something (e.g., Gmail draft, commit, file), execute the full action — do not just preview or show content for review unless explicitly asked.

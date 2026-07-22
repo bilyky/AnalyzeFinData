@@ -624,7 +624,7 @@ def is_market_open_now(tokens, env="production") -> bool | None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    tokens = get_tokens()
+    tokens = get_tokens(allow_browser=True)
 
     print("\n--- Quote: AAPL ---")
     market = get_market(tokens)
