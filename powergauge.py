@@ -32,6 +32,7 @@ from scoring import (
     rel_volume_bucket    as _rel_volume_bucket,
     fibonacci_retracement_score as _fib_score,
     rsi_divergence_score        as _rsi_div_score,
+    digit_sum_score             as _digit_sum_score,
     short_score          as _short_score_fn,
     long_score           as _long_score_fn,
 )
@@ -896,6 +897,19 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
         'pattern_text':      _pattern_text,
     }
     fields['buying_ratio'] = _buying_ratio(power_g, fields)
+    # Digit-sum numerology: open price → same-day bias; computed before scoring
+    _prev_close = None
+    if ohlcv_ts and _date_str:
+        all_d = sorted(ohlcv_ts.keys())
+        idx_d = next((i for i, d in enumerate(all_d) if d >= _date_str), None)
+        if idx_d and idx_d > 0:
+            try:
+                _prev_close = float(ohlcv_ts[all_d[idx_d - 1]].get('4. close', 0) or 0)
+            except (ValueError, TypeError):
+                _prev_close = None
+    fields['digit_sum'] = _digit_sum_score(
+        power_g.symbol, power_g.price, close_price=_prev_close
+    )
     fields['short_score']  = _short_score_fn(fields)
     fields['long_score']   = _long_score_fn(fields)
     return fields

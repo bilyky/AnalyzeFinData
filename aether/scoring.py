@@ -20,6 +20,64 @@ _regime_cache: dict = {}
 _OHLCV_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "Data", "Symbol_full")
 
+# ── Digit-sum numerology study ────────────────────────────────────────────────
+# Pre-computed from backtest across 500+ symbols × 9 digits.
+# Only signals with |z| >= 2.0 (95%+ confidence) are used.
+_DIGIT_STUDY_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                  "Data", "digit_sum_study.json")
+_digit_index: dict | None = None  # {(symbol, type, digit): z_score}
+
+def _load_digit_index() -> dict:
+    global _digit_index
+    if _digit_index is not None:
+        return _digit_index
+    _digit_index = {}
+    try:
+        with open(_DIGIT_STUDY_PATH, "r") as f:
+            rows = json.load(f)
+        for r in rows:
+            if abs(r.get("z", 0)) >= 2.0:
+                key = (r["symbol"], r["type"], r["digit"])
+                _digit_index[key] = r["z"]
+    except Exception:
+        pass
+    return _digit_index
+
+def _price_digit_sum(price: float) -> int:
+    s = str(int(abs(price)))
+    while len(s) > 1:
+        s = str(sum(int(c) for c in s))
+    return int(s)
+
+def digit_sum_score(symbol: str, open_price: float, close_price: float | None = None) -> float:
+    """
+    Return a score in [-1.0, +1.0] based on the digit-sum of the open price
+    (same-day signal) and optionally the prior close (next-day signal).
+    Only fires when the symbol/digit pair has |z| >= 2.0 in the study.
+    Score magnitude is proportional to z, capped at ±1.0.
+    """
+    idx = _load_digit_index()
+    if not idx:
+        return 0.0
+    score = 0.0
+    sym = (symbol or "").upper().strip()
+
+    # Open-digit → same-day direction
+    if open_price and open_price > 0:
+        dg = _price_digit_sum(open_price)
+        z = idx.get((sym, "OPEN", dg), 0.0)
+        if z:
+            score += max(-1.0, min(1.0, z / 3.0))  # z=3 → ±1.0
+
+    # Prior-close digit → today's direction
+    if close_price and close_price > 0:
+        dg2 = _price_digit_sum(close_price)
+        z2 = idx.get((sym, "CLOSE", dg2), 0.0)
+        if z2:
+            score += max(-1.0, min(1.0, z2 / 3.0))
+
+    return round(max(-1.0, min(1.0, score)), 2)
+
 
 # ── OHLCV streak helpers ─────────────────────────────────────────────────────
 
@@ -361,6 +419,7 @@ def short_score(pg_fields: dict) -> float:
       Candlestick    3.49% spread: contrarian, weight -0.75 (high score = bearish signal)
       Chart Pattern  11.83% spread: contrarian, weight -0.75 (bearish patterns = recovery)
       Momentum       5.76% spread: contrarian, weight -0.75 (bearish momentum = reversal)
+      Digit-sum      symbol-specific numerology (z>=2.0 signals only): +-1.0
     """
     score = 0.0
     rv = pg_fields.get('rel_vol')
@@ -376,6 +435,7 @@ def short_score(pg_fields: dict) -> float:
     score += pg_fields.get('candlestick_score', 0.0) * -0.15
     score += pg_fields.get('chart_score', 0.0)        * -0.15
     score += pg_fields.get('momentum_score', 0.0)     * -0.15
+    score += pg_fields.get('digit_sum', 0.0)
     return round(max(-10.0, min(10.0, score)), 1)
 
 
@@ -396,6 +456,7 @@ def long_score(pg_fields: dict) -> float:
       Candlestick    3.49% spread: contrarian, weight -0.375
       Chart Pattern  11.83% spread: contrarian, weight -0.375
       Momentum       5.76% spread: contrarian, weight -0.375
+      Digit-sum      symbol-specific numerology (z>=2.0 signals only): +-0.5
     """
     score = 0.0
     score += {'Weak': 4.0, 'Neutral': 0.0, 'Strong': -3.0}.get(pg_fields.get('lt_trend', ''), 0.0)
@@ -411,5 +472,6 @@ def long_score(pg_fields: dict) -> float:
     score += pg_fields.get('candlestick_score', 0.0) * -0.075
     score += pg_fields.get('chart_score', 0.0)        * -0.075
     score += pg_fields.get('momentum_score', 0.0)     * -0.075
+    score += pg_fields.get('digit_sum', 0.0) * 0.5
     return round(max(-10.0, min(10.0, score)), 1)
 

@@ -1441,6 +1441,46 @@ async function openSymbol(sym) {
     _set("sm-lt", r.lt_trend || "—");
     _set("sm-pat", r.patterns ? renderPatternsHTML(r.patterns) : "—");
 
+    // Digit-sum numerology table
+    const digitSec = $("sm-digit-section");
+    const digitRows = d.digit_study || [];
+    if (digitRows.length > 0) {
+        digitSec.classList.remove("hidden");
+        const byType = { OPEN: {}, CLOSE: {} };
+        for (const row of digitRows) byType[row.type] && (byType[row.type][row.digit] = row);
+        const digits = [1,2,3,4,5,6,7,8,9,0];
+        let html = `<table class="w-full text-left border-collapse">
+            <thead><tr class="text-slate-500">
+                <th class="pr-3 py-0.5">Digit</th>
+                <th class="pr-3">Open→Day% <span class="text-slate-600">(z)</span></th>
+                <th class="pr-3">Base</th>
+                <th class="pr-3 border-l border-slate-700 pl-3">Close→Next% <span class="text-slate-600">(z)</span></th>
+                <th>Base</th>
+            </tr></thead><tbody>`;
+        for (const dg of digits) {
+            const o = byType.OPEN[dg], c = byType.CLOSE[dg];
+            const sig = (r) => r && Math.abs(r.z) >= 2.0;
+            const fmt = (r) => r
+                ? `<span class="${r.z > 0 ? 'text-green-400' : 'text-red-400'} ${sig(r) ? 'font-bold' : ''}">${(r.up_pct*100).toFixed(1)}% (${r.z > 0 ? '+' : ''}${r.z.toFixed(1)})</span>`
+                : `<span class="mut">—</span>`;
+            const baseO = o ? `${(o.base*100).toFixed(1)}%` : '—';
+            const baseC = c ? `${(c.base*100).toFixed(1)}%` : '—';
+            if (!o && !c) continue;
+            html += `<tr class="border-t border-slate-800">
+                <td class="pr-3 py-0.5 text-slate-300">${dg}</td>
+                <td class="pr-3">${fmt(o)}</td>
+                <td class="pr-3 mut">${baseO}</td>
+                <td class="pr-3 border-l border-slate-700 pl-3">${fmt(c)}</td>
+                <td class="mut">${baseC}</td>
+            </tr>`;
+        }
+        html += `</tbody></table>
+            <div class="mt-1 text-slate-600">Bold = 95%+ confidence. N≥50 per cell. Monthly refresh recommended.</div>`;
+        $("sm-digit-table").innerHTML = html;
+    } else {
+        digitSec.classList.add("hidden");
+    }
+
     // Holding
     const holdSec = $("sm-holding-section");
     if (h) {

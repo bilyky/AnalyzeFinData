@@ -984,6 +984,17 @@ def read_symbol(symbol: str) -> dict:
                 break
         out["holding"] = holding
 
+        # ── Digit-sum study rows for this symbol ─────────────────────────────
+        _study = _DATA_DIR / "digit_sum_study.json"
+        digit_rows = []
+        if _study.exists():
+            try:
+                all_rows = json.load(open(_study))
+                digit_rows = [r for r in all_rows if r.get("symbol") == sym]
+            except Exception:
+                pass
+        out["digit_study"] = digit_rows
+
         return out
     return _cached(f"symbol:{sym}", 60.0, _load)
 
