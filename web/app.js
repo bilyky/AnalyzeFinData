@@ -1506,7 +1506,8 @@ async function openSymbol(sym) {
                     <th class="pr-3">Open→Day% <span class="text-slate-600">(z)</span></th>
                     <th class="pr-3">Base</th>
                     <th class="pr-3 border-l border-slate-700 pl-3">Close→Next% <span class="text-slate-600">(z)</span></th>
-                    <th>Base</th>
+                    <th class="pr-3">Base</th>
+                    <th title="Temporal consistency across 2-year windows">Stability</th>
                 </tr></thead><tbody>`;
             let shown = 0;
             for (const dg of digits) {
@@ -1520,16 +1521,22 @@ async function openSymbol(sym) {
                     : `<span class="mut">—</span>`;
                 const baseO = o ? `${(o.base*100).toFixed(1)}%` : '—';
                 const baseC = c ? `${(c.base*100).toFixed(1)}%` : '—';
+                const tq = (o && sig(o) ? o.temporal : null) || (c && sig(c) ? c.temporal : null);
+                const tqBadge = tq === 'consistent' ? '<span class="text-green-500">stable</span>'
+                    : tq === 'partial' ? '<span class="text-amber-500">mixed</span>'
+                    : tq === 'stale'   ? '<span class="text-red-400" title="Fired mainly in historical data">stale</span>'
+                    : '<span class="mut">—</span>';
                 html += `<tr class="border-t border-slate-800${isSig ? '' : ' opacity-50'}">
                     <td class="pr-3 py-0.5 text-slate-300">${dg}</td>
                     <td class="pr-3">${fmt(o)}</td>
                     <td class="pr-3 mut">${baseO}</td>
                     <td class="pr-3 border-l border-slate-700 pl-3">${fmt(c)}</td>
-                    <td class="mut">${baseC}</td>
+                    <td class="pr-3 mut">${baseC}</td>
+                    <td>${tqBadge}</td>
                 </tr>`;
             }
             if (shown === 0) {
-                html += `<tr><td colspan="5" class="py-1 mut">No significant signals for this symbol.</td></tr>`;
+                html += `<tr><td colspan="6" class="py-1 mut">No significant signals for this symbol.</td></tr>`;
             }
             html += `</tbody></table>`;
             return html;

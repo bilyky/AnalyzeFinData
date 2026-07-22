@@ -23,6 +23,11 @@ OUT_FILE = DATA / "digit_sum_full_study.json"
 
 MIN_N     = 50
 MIN_ABS_Z = 2.0
+MIN_WIN_N = 30
+
+_WINDOWS = [("14-16","2014-01-01","2015-12-31"), ("16-18","2016-01-01","2017-12-31"),
+            ("18-20","2018-01-01","2019-12-31"), ("20-22","2020-01-01","2021-12-31"),
+            ("22-24","2022-01-01","2023-12-31"), ("24-26","2024-01-01","2026-12-31")]
 
 
 def _digit_sum_full(price: float) -> int:
@@ -99,18 +104,62 @@ def analyze(path: Path) -> list[dict]:
     return rows
 
 
+def _temporal_quality(dg: int, overall_z: float, ts: dict) -> str:
+    dates = sorted(ts.keys())
+    all_up = all_n = 0
+    for date in dates:
+        d = ts[date]
+        try: op = float(d["1. open"]); cl = float(d["4. close"])
+        except: continue
+        all_n += 1; all_up += 1 if cl > op else 0
+    base = all_up / all_n if all_n else 0.5
+    sign = 1 if overall_z > 0 else -1
+    cons = 0
+    for _, start, end in _WINDOWS:
+        ups = n = 0
+        for date in dates:
+            if date < start or date > end: continue
+            d = ts[date]
+            try: op = float(d["1. open"]); cl = float(d["4. close"])
+            except: continue
+            if _digit_sum_full(op) == dg:
+                n += 1; ups += 1 if cl > op else 0
+        if n >= MIN_WIN_N:
+            z = _z(ups, n, base)
+            if abs(z) >= 1.0 and (z > 0) == (sign > 0):
+                cons += 1
+    if cons >= 4: return "consistent"
+    if cons >= 2: return "partial"
+    return "stale"
+
+
 def run():
     files = sorted(OHLCV.glob("*_daily.json"))
     print(f"Processing {len(files)} symbols (full-cents digit-sum)...")
+    ts_map: dict = {}
     all_rows = []
     for path in files:
+        sym = path.stem.replace("_daily", "")
+        try:
+            with open(path) as f:
+                ts = json.load(f).get("Time Series (Daily)", {})
+            ts_map[sym] = ts
+        except Exception:
+            continue
         all_rows.extend(analyze(path))
 
     sig = [r for r in all_rows if abs(r["z"]) >= MIN_ABS_Z]
-    print(f"Total signal rows: {len(all_rows)} | 95%+ confidence: {len(sig)}")
+    print(f"Total rows: {len(all_rows)} | 95%+ confidence: {len(sig)} — adding temporal quality...")
+
+    for r in sig:
+        ts = ts_map.get(r["symbol"], {})
+        r["temporal"] = _temporal_quality(r["digit"], r["z"], ts) if ts else "no_data"
 
     with open(OUT_FILE, "w") as f:
         json.dump(all_rows, f)
+    from collections import Counter
+    tq = Counter(r.get("temporal","none") for r in sig)
+    print(f"Temporal: {dict(tq)}")
     print(f"Saved {len(all_rows)} rows to {OUT_FILE}")
 
 

@@ -39,7 +39,9 @@ def _load_digit_index() -> dict:
         with open(_DIGIT_STUDY_PATH, "r") as f:
             rows = json.load(f)
         for r in rows:
-            if abs(r.get("z", 0)) >= 2.0:
+            # Only use signals that persist across time (consistent or partial).
+            # Stale signals fired historically but not in recent windows — exclude.
+            if abs(r.get("z", 0)) >= 2.0 and r.get("temporal") in ("consistent", "partial"):
                 _digit_index[(r["symbol"], r["type"], r["digit"])] = r["z"]
     except Exception:
         pass
@@ -54,7 +56,7 @@ def _load_digit_full_index() -> dict:
         with open(_DIGIT_FULL_STUDY_PATH, "r") as f:
             rows = json.load(f)
         for r in rows:
-            if abs(r.get("z", 0)) >= 2.0:
+            if abs(r.get("z", 0)) >= 2.0 and r.get("temporal") in ("consistent", "partial"):
                 _digit_full_index[(r["symbol"], r["type"], r["digit"])] = r["z"]
     except Exception:
         pass
