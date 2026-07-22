@@ -1449,34 +1449,82 @@ async function openSymbol(sym) {
         const byType = { OPEN: {}, CLOSE: {} };
         for (const row of digitRows) byType[row.type] && (byType[row.type][row.digit] = row);
         const digits = [1,2,3,4,5,6,7,8,9,0];
-        let html = `<table class="w-full text-left border-collapse">
-            <thead><tr class="text-slate-500">
-                <th class="pr-3 py-0.5">Digit</th>
-                <th class="pr-3">Open→Day% <span class="text-slate-600">(z)</span></th>
-                <th class="pr-3">Base</th>
-                <th class="pr-3 border-l border-slate-700 pl-3">Close→Next% <span class="text-slate-600">(z)</span></th>
-                <th>Base</th>
-            </tr></thead><tbody>`;
-        for (const dg of digits) {
-            const o = byType.OPEN[dg], c = byType.CLOSE[dg];
-            const sig = (r) => r && Math.abs(r.z) >= 2.0;
-            const fmt = (r) => r
-                ? `<span class="${r.z > 0 ? 'text-green-400' : 'text-red-400'} ${sig(r) ? 'font-bold' : ''}">${(r.up_pct*100).toFixed(1)}% (${r.z > 0 ? '+' : ''}${r.z.toFixed(1)})</span>`
-                : `<span class="mut">—</span>`;
-            const baseO = o ? `${(o.base*100).toFixed(1)}%` : '—';
-            const baseC = c ? `${(c.base*100).toFixed(1)}%` : '—';
-            if (!o && !c) continue;
-            html += `<tr class="border-t border-slate-800">
-                <td class="pr-3 py-0.5 text-slate-300">${dg}</td>
-                <td class="pr-3">${fmt(o)}</td>
-                <td class="pr-3 mut">${baseO}</td>
-                <td class="pr-3 border-l border-slate-700 pl-3">${fmt(c)}</td>
-                <td class="mut">${baseC}</td>
-            </tr>`;
-        }
-        html += `</tbody></table>
-            <div class="mt-1 text-slate-600">Bold = 95%+ confidence. N≥50 per cell. Monthly refresh recommended.</div>`;
-        $("sm-digit-table").innerHTML = html;
+        const sig = (r) => r && Math.abs(r.z) >= 2.0;
+        const hasSig = digits.some(dg => sig(byType.OPEN[dg]) || sig(byType.CLOSE[dg]));
+
+        const _DIGIT_TOOLTIP = [
+            "How to read this table:",
+            "",
+            "The digit-sum of a price collapses it to a single digit.",
+            "Example: $247 → 2+4+7=13 → 1+3 = digit 4.",
+            "",
+            "Open→Day%: on days this stock opened at that digit,",
+            "what % of those days closed up.",
+            "",
+            "Close→Next%: when the stock closed at that digit,",
+            "what % of the NEXT day's sessions went up.",
+            "",
+            "Base: the stock's overall up-day rate (all digits combined).",
+            "",
+            "Bold = 95%+ confidence (|z|≥2.0, N≥50 days).",
+            "Non-bold rows are within noise — ignore them.",
+            "",
+            "This is a weak tiebreaker factor (±1pt in S10),",
+            "not a standalone buy/sell signal."
+        ].join("\n");
+
+        const buildTable = (showAll) => {
+            let html = `<table class="w-full text-left border-collapse text-xs">
+                <thead><tr class="text-slate-500">
+                    <th class="pr-3 py-0.5">Digit</th>
+                    <th class="pr-3">Open→Day% <span class="text-slate-600">(z)</span></th>
+                    <th class="pr-3">Base</th>
+                    <th class="pr-3 border-l border-slate-700 pl-3">Close→Next% <span class="text-slate-600">(z)</span></th>
+                    <th>Base</th>
+                </tr></thead><tbody>`;
+            let shown = 0;
+            for (const dg of digits) {
+                const o = byType.OPEN[dg], c = byType.CLOSE[dg];
+                if (!o && !c) continue;
+                const isSig = sig(o) || sig(c);
+                if (!showAll && !isSig) continue;
+                shown++;
+                const fmt = (r) => r
+                    ? `<span class="${r.z > 0 ? 'text-green-400' : 'text-red-400'}${sig(r) ? ' font-bold' : ''}">${(r.up_pct*100).toFixed(1)}% (${r.z > 0 ? '+' : ''}${r.z.toFixed(1)})</span>`
+                    : `<span class="mut">—</span>`;
+                const baseO = o ? `${(o.base*100).toFixed(1)}%` : '—';
+                const baseC = c ? `${(c.base*100).toFixed(1)}%` : '—';
+                html += `<tr class="border-t border-slate-800${isSig ? '' : ' opacity-50'}">
+                    <td class="pr-3 py-0.5 text-slate-300">${dg}</td>
+                    <td class="pr-3">${fmt(o)}</td>
+                    <td class="pr-3 mut">${baseO}</td>
+                    <td class="pr-3 border-l border-slate-700 pl-3">${fmt(c)}</td>
+                    <td class="mut">${baseC}</td>
+                </tr>`;
+            }
+            if (shown === 0) {
+                html += `<tr><td colspan="5" class="py-1 mut">No significant signals for this symbol.</td></tr>`;
+            }
+            html += `</tbody></table>`;
+            return html;
+        };
+
+        let _showAllDigits = false;
+        const render = () => {
+            const toggleLabel = _showAllDigits ? "Show significant only" : "Show all digits";
+            $("sm-digit-table").innerHTML = buildTable(_showAllDigits) +
+                `<div class="mt-1 flex items-center gap-3 text-slate-600">
+                    <span>Bold = 95%+ confidence &middot; N≥50 per cell &middot; refresh monthly</span>
+                    ${hasSig ? `<button id="sm-digit-toggle" class="text-blue-500 hover:text-blue-300 underline underline-offset-2">${toggleLabel}</button>` : ''}
+                </div>`;
+            const btn = $("sm-digit-toggle");
+            if (btn) btn.onclick = () => { _showAllDigits = !_showAllDigits; render(); };
+        };
+        render();
+
+        // Tooltip on section label
+        const label = digitSec.querySelector(".card-label");
+        if (label) label.title = _DIGIT_TOOLTIP;
     } else {
         digitSec.classList.add("hidden");
     }
