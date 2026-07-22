@@ -49,10 +49,13 @@ SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 # Supports any AI CLI or custom scripts (Gemini CLI, Claude, local Codex, custom wrappers).
 # Defaults to npx @google/gemini-cli but can be overridden globally via environment variables.
 # Placeholders: {prompt} (inline text) or {prompt_file} (safe text file path, highly recommended for Windows).
-HEALER_CMD_TEMPLATE = os.environ.get(
-    "AETHER_HEALER_CMD",
-    'npx --yes @google/gemini-cli --approval-mode auto_edit -p "{prompt_file}"'
+_CLAUDE_EXE = os.path.expandvars(r"%USERPROFILE%\.gnai\claude\claude.exe")
+_DEFAULT_HEALER = (
+    f'"{_CLAUDE_EXE}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep"'
+    ' --approval-mode acceptEdits'
+    ' -p "{prompt_file}"'
 )
+HEALER_CMD_TEMPLATE = os.environ.get("AETHER_HEALER_CMD", _DEFAULT_HEALER)
 
 def _within_window(ts_str: str, now: datetime.datetime, window_seconds: int = 3600) -> bool:
     """True if the ISO-like timestamp string is within window_seconds of now."""
@@ -166,18 +169,11 @@ def trigger_ai_self_healing(traceback):
         
     print("🧠 [AETHER BRAIN] CRITICAL ERROR DETECTED. ACTIVATING SYNCHRONOUS SELF-HEALER...")
     
-    prompt = f"""[CRITICAL AUTONOMOUS RECOVERY COMMAND]
-Our background AETHER trading pipeline has crashed. 
-You are operating in headless self-healing mode. Your goal is to:
-1. Analyze this traceback.
-2. Identify the bug in our codebase (likely ai_portfolio_game.py or autonomous_pipeline.py).
-3. Modify the files surgically to fix the bug permanently (especially handle platform/Windows/encoding quirks).
-4. Run 'ai_portfolio_game.py --report' or standard commands to verify compilation.
-5. Commit the fix with a commit message starting with '[AI Self-Healed]'.
-
-Here is the exact traceback:
-{traceback}
-"""
+    _prompt_template = BASE_DIR / "prompts" / "self_healing.md"
+    if _prompt_template.exists():
+        prompt = _prompt_template.read_text(encoding="utf-8").replace("{traceback}", traceback)
+    else:
+        prompt = f"[AETHER SELF-HEALER] Pipeline crashed. Traceback:\n{traceback}\n\nRead the failing file, diagnose the root cause, apply a minimal fix, run python -m unittest discover tests, commit only if all tests pass."
     
     try:
         # Write the prompt to a safe text file to avoid Windows escaping issues
@@ -188,16 +184,13 @@ Here is the exact traceback:
             prompt=prompt.replace('"', '\\"').replace('\n', ' '),
             prompt_file=str(SELF_HEAL_PROMPT_FILE)
         )
-        
-        print(f"🚀 [AETHER BRAIN] Dispatching self-healing command: {cmd}")
-        
-        # Run synchronously (blocking) with a 5-minute timeout to let the AI do its work
+        print(f"🚀 [AETHER BRAIN] Dispatching self-healing command (prompt written to file)")
         result = subprocess.run(
-            cmd, 
-            shell=True, 
-            cwd=str(BASE_DIR), 
-            capture_output=True, 
-            text=True, 
+            cmd,
+            shell=True,
+            cwd=str(BASE_DIR),
+            capture_output=True,
+            text=True,
             timeout=300,
             errors="ignore"
         )
@@ -230,7 +223,7 @@ def check_task_scheduler():
             result = subprocess.run(["schtasks", "/query", "/tn", task], capture_output=True, text=True)
             if result.returncode != 0:
                 missing.append(task)
-        except:
+        except OSError:
             missing.append(task)
     return missing
 
@@ -246,26 +239,31 @@ def check_data_freshness():
 
 def heal_tasks(missing_tasks, force=False):
     """Attempt to re-register tasks that have disappeared, failed, or need environment upgrades."""
-    run_as = os.environ.get("USERNAME") or os.environ.get("USER") or os.getlogin()
+    try:
+        run_as = os.getlogin()
+    except Exception:
+        run_as = os.environ.get("USERNAME") or os.environ.get("USER") or "SYSTEM"
     python_exe = sys.executable
+
+    _TASK_DEFS = {
+        "AnalyzeFinData_Morning":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'autonomous_pipeline.py'}\"", "daily", "05:30"),
+        "AnalyzeFinData_Evening":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'daily_task.py'}\"",           "daily", "17:00"),
+        "AnalyzeFinData_AI_Game":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'ai_portfolio_game.py'}\" --run", "daily", "07:00"),
+        "AnalyzeFinData_AI_Summary": (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'ai_portfolio_game.py'}\" --summary", "daily", "18:00"),
+        "Project_AETHER_Watchdog": (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'watchdog.py'}\"",              "hourly", None),
+    }
+
     for task in (TASKS if force else missing_tasks):
         print(f"🔧 Healing/Upgrading scheduled task: {task}")
-        if task == "AnalyzeFinData_Morning":
-            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "autonomous_pipeline.py"}" /sc daily /st 05:30 /f /it /ru {run_as}'
-        elif task == "AnalyzeFinData_Evening":
-            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "daily_task.py"}" /sc daily /st 17:00 /f /it /ru {run_as}'
-        elif task == "AnalyzeFinData_AI_Game":
-            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "ai_portfolio_game.py"} --run" /sc daily /st 07:00 /f /it /ru {run_as}'
-        elif task == "AnalyzeFinData_AI_Summary":
-            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "ai_portfolio_game.py"} --summary" /sc daily /st 18:00 /f /it /ru {run_as}'
-        elif task == "Project_AETHER_Watchdog":
-            cmd = f'schtasks /create /tn "{task}" /tr "cmd.exe /c set PYTHONIOENCODING=utf-8 && {python_exe} {BASE_DIR / "watchdog.py"}" /sc hourly /f /it /ru {run_as}'
-        else:
+        if task not in _TASK_DEFS:
             print(f"⚠️  No registration template for task: {task}")
             continue
-
+        tr, sc, st = _TASK_DEFS[task]
+        args = ["schtasks", "/create", "/tn", task, "/tr", tr, "/sc", sc, "/f", "/it", "/ru", run_as]
+        if st:
+            args += ["/st", st]
         try:
-            result = subprocess.run(cmd, shell=True, capture_output=True)
+            result = subprocess.run(args, capture_output=True)
             if result.returncode == 0:
                 print(f"✅ Task {task} successfully registered with native UTF-8 environment.")
             else:
@@ -299,8 +297,6 @@ def run_watchdog():
 
     # 0b. Chaikin Proactive Session Keeper & Auto-Login
     try:
-        import sys
-        sys.path.insert(0, str(BASE_DIR))
         import powergauge
         session_id = powergauge._load_session_from_file()
         if not session_id or not powergauge._validate_session(session_id):

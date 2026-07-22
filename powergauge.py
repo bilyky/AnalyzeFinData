@@ -50,6 +50,15 @@ def _pgr_str(v: int) -> str:
         return PGR_STR[v]
     return ""
 
+
+def _chaikin_uuid() -> str:
+    """Return the Chaikin account email from config (used as the 'uuid' request header)."""
+    try:
+        from config import CFG
+        return CFG.chaikin_email or ""
+    except Exception:
+        return ""
+
 # Pre-built index of symbol → sorted list of cached JSON paths.
 # None = not yet scanned; {} = scanned but empty directory.
 _cache_file_index: dict | None = None
@@ -363,7 +372,7 @@ def _load_session_from_file() -> dict:
                 return {
                     "jsessionid": sid,
                     "jwttoken": "",
-                    "uuid": "bilyky@gmail.com"
+                    "uuid": _chaikin_uuid()
                 }
         return {}
     with open(session_file, "r") as f:
@@ -387,7 +396,7 @@ def _validate_session(session_data: dict) -> bool:
     headers = {
         'jsessionid': session_data['jsessionid'],
         'x-session-id': session_data['jsessionid'],
-        'uuid': session_data.get('uuid', 'bilyky@gmail.com'),
+        'uuid': session_data.get('uuid') or _chaikin_uuid(),
         'jwttoken': session_data.get('jwttoken', ''),
         'x-api-key': '76J!7fb?jhEtz/hd7i6rHPKklawGZb5VLReDQXa0?4-jGCqQFi74xYCsb0H-hqUC',
         'x-app-id': 'omni',
@@ -440,7 +449,7 @@ def _login_via_browser() -> dict:
         if 'members-backend.chaikinanalytics.com' in request.url:
             jsid = request.headers.get('jsessionid') or request.headers.get('x-session-id')
             jwt = request.headers.get('jwttoken')
-            uuid = request.headers.get('uuid') or 'bilyky@gmail.com'
+            uuid = request.headers.get('uuid') or _chaikin_uuid()
             if jsid and jsid != 'NULL' and len(jsid) > 10 and jwt:
                 session_data[0] = {
                     "jsessionid": jsid,
@@ -525,7 +534,7 @@ def login(interactive=True) -> dict:
         data = {
             "jsessionid": raw,
             "jwttoken": "",
-            "uuid": "bilyky@gmail.com"
+            "uuid": _chaikin_uuid()
         }
         _save_session_to_file(data)
         print(f"Session saved to {SESSION_FILE}")
@@ -543,7 +552,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id) -> PowerG
         session_data = {
             "jsessionid": session_id,
             "jwttoken": "",
-            "uuid": "bilyky@gmail.com"
+            "uuid": _chaikin_uuid()
         }
     else:
         session_data = session_id
@@ -554,7 +563,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id) -> PowerG
     headers = {
         'jsessionid': session_data.get('jsessionid', ''),
         'x-session-id': session_data.get('jsessionid', ''),
-        'uuid': session_data.get('uuid', 'bilyky@gmail.com'),
+        'uuid': session_data.get('uuid') or _chaikin_uuid(),
         'jwttoken': session_data.get('jwttoken', ''),
         'x-api-key': '76J!7fb?jhEtz/hd7i6rHPKklawGZb5VLReDQXa0?4-jGCqQFi74xYCsb0H-hqUC',
         'x-app-id': 'omni',

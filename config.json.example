@@ -34,7 +34,13 @@
     ]
   },
   "email_sender": {
+    "address": "your_sender@example.com",
+    "recipient": "your_recipient@example.com",
     "password": "your_gmail_app_password_here"
+  },
+  "database": {
+    "_note": "Legacy PostgreSQL connector (database.py). Leave url empty if unused.",
+    "url": ""
   },
   "accounts": {
     "real": ["XXXX", "YYYY"]

@@ -182,29 +182,33 @@ AnalyzeFinData/
 ├── scoring.py             # Pure scoring functions (no API dependency)
 ├── excel_output.py        # openpyxl helpers: Research headers, Picks sheet, shapeId fix
 ├── utils.py               # Shared helpers (_to_float)
-├── verify_stops.py        # Backtester: stop/target/filter comparison across symbols
-├── backtest.py            # Full factor backtest (336k obs, 2023-2025)
-├── sync_data.py           # Sync OHLCV files from a secondary Data folder
-├── organize_symbol_files.py  # Organise cached Symbol/ files
 ├── autonomous_pipeline.py # Pre-open daily execution pipeline (5:30 AM PST cron)
 ├── ai_portfolio_game.py   # Virtual portfolio simulation & adaptive risk manager
+├── circuit_breaker.py     # Systemic crash circuit breaker (SPY/VXX/drawdown gates)
+├── bootstrap_dna.py       # Seed trade_history_dna.json from historical game transactions
+├── retrospective_analyzer.py  # Weekly feedback analyzer: toxic patterns + circuit breaker audit
 ├── real_copilot.py        # Live E*TRADE production portfolio shadow auditor
 ├── external_intel.py      # Gmail newsletter scanner (Inbox/Promotions/Trash/Spam)
 ├── extract_email_intel.py # Structural intelligence newsletter parser and adversarial verifier
-├── chaikin_config.json.example
+├── config.json.example    # Config template (copy to config.json and fill in values)
 │
-├── tests/                 # 277 tests total (python -m unittest discover tests)
+├── scripts/
+│   ├── backtesting/       # backtest.py, backtest_ratings.py, backtest_levels.py, verify_stops.py, …
+│   ├── diagnostics/       # capture_intc.py, debug_accounts.py, debug_pgr.py, …
+│   ├── discovery/         # find_best_stocks.py, get_top_br.py, discovery_scanner.py, …
+│   ├── sync/              # sync_data.py, sync_short_long.py
+│   └── utils/             # alpha_challenge.py, archive_manager.py, intraday_monitor.py, …
+│
+├── tests/                 # python -m unittest discover tests
 │   ├── conftest.py            # make_ohlcv() fixture helper
 │   ├── test_scoring.py        # scoring pure functions
 │   ├── test_compute.py        # PowerGauge compute helpers
 │   ├── test_sell_rules.py     # unified exit policy (stop > soft > hold)
-│   ├── test_ai_client.py      # configurable multi-provider AI dispatch
 │   ├── test_sell_eval.py      # advisory exit-rubric layer
 │   ├── test_decision_eval.py  # backtracking selector scorecard
 │   ├── test_config.py         # unified config + env overrides
-│   ├── test_accounts.py       # Short_Long accounts parsing
-│   ├── test_server.py         # dashboard API + auth
 │   ├── test_breadth_filter.py # SPY-RSP breadth divergence guard
+│   ├── test_custom_sprints.py # circuit breaker, bubble z-score, queuing, DNA ledger
 │   └── test_short_long_sync.py
 │
 └── Data/                  # gitignored — local data only
@@ -266,7 +270,7 @@ per-symbol subdirectories. Handles any number of files; safe to re-run (already-
 files are skipped because they don't appear in the flat root any more).
 
 ```bash
-python organize_symbol_files.py
+python scripts/utils/organize_symbol_files.py
 ```
 
 **What it does:**
@@ -327,7 +331,7 @@ path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 Change `"Data", "Symbol_full"` to match your new OHLCV location.
 
-### `sync_data.py`
+### `scripts/sync/sync_data.py`
 
 ```python
 SRC = Path(r"D:\Develop\AnalyzeFinData_1\Data")
@@ -348,7 +352,7 @@ Tests are plain `unittest.TestCase` — no pytest required.
 python -m unittest discover -s tests -v
 ```
 
-Expected output: **187 tests, 0 failures.**
+Expected output: **270 tests, 0 failures.**
 
 ### Run a single file
 

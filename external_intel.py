@@ -215,7 +215,6 @@ def fetch_idea_emails():
                     except Exception as e:
                         print(f"Failed to process message {num}: {e}")
 
-            mail.logout()
         except Exception as e:
             print(f"Failed to fetch emails for {email_user}: {e}")
         finally:

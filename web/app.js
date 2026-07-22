@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id);
 const fmt$ = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const fmtPct = (n) => (n == null ? "—" : (n >= 0 ? "+" : "") + Number(n).toFixed(2) + "%");
 const cls = (n) => (n > 0 ? "pos" : n < 0 ? "neg" : "mut");
+const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 // ── central aether wiki database ───────────────────────────────────────────
 const AETHER_WIKI = {
@@ -582,17 +583,20 @@ async function loadAccounts() {
                 <td class="${weakStop(h, h.stop_source) ? "text-amber-400" : ""}" title="${stopTitle}">${fmt$(h.stop)}</td>
                 ${isGame ? `<td>${h.days_held ?? "—"} d</td>` : `<td class="${weakStop(h, h.target_source) ? "text-amber-400" : ""}" title="${tgtTitle}">${fmt$(h.target)}</td>`}
                 ${scoreCells}
-            </tr>`;
+                <td><button class="rq-btn px-2 py-0.5 rounded text-xs bg-slate-700 hover:bg-blue-700 text-slate-200 transition-colors max-w-[6rem] truncate" data-rq-sym="${sym}" data-rq-buy="${entry ?? ""}" title="Click to run live AI analysis">${esc(_statusToRec(h.status))}</button></td>
+            </tr>
+            <tr class="rq-result-row hidden" data-rq-for="${sym}"><td colspan="14" class="p-0"></td></tr>`;
         }).join("");
 
         const scoreHdr = isGame
-            ? `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th><th data-sort="days_held" class="cursor-pointer hover:text-blue-400">Days</th>`
+            ? `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th><th data-sort="days_held" class="cursor-pointer hover:text-blue-400">Days</th><th>AI</th>`
             : `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th>
                <th data-sort="target" class="cursor-pointer hover:text-blue-400">Target</th>
                <th data-sort="s10" class="cursor-pointer hover:text-blue-400">S10</th>
                <th data-sort="l60" class="cursor-pointer hover:text-blue-400">L60</th>
                <th data-sort="total" class="cursor-pointer hover:text-blue-400">Score</th>
-               <th data-sort="status" class="cursor-pointer hover:text-blue-400">Status</th>`;
+               <th data-sort="status" class="cursor-pointer hover:text-blue-400">Status</th>
+               <th>AI</th>`;
 
         return `
         <div>
@@ -806,12 +810,12 @@ async function fetchAndRenderLog() {
             // Render as coloured lines
             lv.innerHTML = entries.map(e => {
                 const lvl = (e.level || "").toUpperCase();
-                const cls = _logLevelClass(lvl);
-                const ts = (e.ts || "").substring(11, 19);  // HH:MM:SS
-                const mod = (e.module || "").replace("aether.", "");
-                const extra = e.extra ? " " + JSON.stringify(e.extra) : "";
-                const exc = e.exc ? `\n  ${e.exc.split("\n").slice(-2).join(" ")}` : "";
-                return `<span class="${cls}">[${ts}] ${lvl.padEnd(7)} ${mod}: ${e.msg}${extra}${exc}</span>`;
+                const lcls = _logLevelClass(lvl);
+                const ts = esc((e.ts || "").substring(11, 19));
+                const mod = esc((e.module || "").replace("aether.", ""));
+                const extra = e.extra ? " " + esc(JSON.stringify(e.extra)) : "";
+                const exc = e.exc ? `\n  ${esc(e.exc.split("\n").slice(-2).join(" "))}` : "";
+                return `<span class="${lcls}">[${ts}] ${lvl.padEnd(7)} ${mod}: ${esc(e.msg)}${extra}${exc}</span>`;
             }).join("\n") || "<span class='mut'>No entries.</span>";
             st.textContent = `${entries.length} entries · aether.jsonl${lvlFilter ? " (" + lvlFilter + ")" : ""}`;
         }
@@ -1456,6 +1460,19 @@ async function openSymbol(sym) {
         $("sm-holding-badge").classList.add("hidden");
     }
 
+    // Requalify button + result panel (always shown on symbol modal)
+    const smRqWrap = $("sm-rq-wrap");
+    if (smRqWrap) {
+        const _smInitLabel = esc(_statusToRec(r.status));
+        smRqWrap.innerHTML = `
+            <button id="sm-rq-btn" onclick="smRequalify()"
+                class="px-3 py-1 rounded text-sm bg-slate-700 hover:bg-blue-700 text-slate-200 transition-colors max-w-[8rem] truncate"
+                title="Click to run live AI analysis">
+                ${_smInitLabel}
+            </button>
+            <div id="sm-rq-result" class="hidden mt-2"></div>`;
+    }
+
     // Price chart
     const chartWrap = $("sm-chart-wrap");
     const chartData = d.chart || [];
@@ -1521,7 +1538,161 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSymbo
 document.addEventListener("click", (e) => {
     const cell = e.target.closest("[data-open]");
     if (cell) { openSymbol(cell.dataset.open); return; }
+    const rqBtn = e.target.closest(".rq-btn");
+    if (rqBtn) { requalify(rqBtn.dataset.rqSym, parseFloat(rqBtn.dataset.rqBuy) || null, rqBtn); return; }
 });
+
+// ── Requalify ─────────────────────────────────────────────────────────────────
+
+const _STATUS_TO_REC = {
+    "EXIT":        "SELL",
+    "REDUCE":      "REDUCE",
+    "WATCH":       "REVIEW",
+    "HOLD":        "HOLD",
+    "STRONG HOLD": "HOLD",
+    "REVIEW":      "REVIEW",
+    "NEUTRAL":     "HOLD",
+};
+const _statusToRec = (s) => _STATUS_TO_REC[(s || "").toUpperCase().trim()] || s || "⚡ AI";
+
+const _RQ_POLL_INTERVAL_MS = 2000;
+const _RQ_MAX_POLLS = 30;  // 30 × 2s = 60s max
+
+const _RQ_BADGE = {
+    "BUY MORE": "bg-green-800 text-green-200",
+    "HOLD":     "bg-slate-700 text-slate-200",
+    "REVIEW":   "bg-amber-800 text-amber-200",
+    "REDUCE":   "bg-orange-800 text-orange-200",
+    "SELL":     "bg-red-800 text-red-200",
+};
+const _VD_BADGE = {
+    "AGREE":           "text-green-400",
+    "FLAG-FOR-REVIEW": "text-amber-400",
+    "NO-OPINION":      "text-slate-400",
+};
+
+function _rqBadge(rec) {
+    const cls_ = _RQ_BADGE[rec] || "bg-slate-700 text-slate-300";
+    return `<span class="px-2 py-0.5 rounded text-xs font-bold ${cls_}">${esc(rec || "—")}</span>`;
+}
+
+function _rqPanel(d, sym, newsStatus) {
+    const f = d.factors || {};
+    const vdCls = _VD_BADGE[d.verdict] || "text-slate-400";
+    const confBadge = d.confidence
+        ? `<span class="text-xs mut ml-1">(${esc(d.confidence)})</span>` : "";
+    const verdictLine = d.verdict
+        ? `<div class="mt-1 text-xs ${vdCls}">Engine: ${esc(d.verdict)}${d.verdict_note ? " — " + esc(d.verdict_note) : ""}</div>` : "";
+    const factGrid = `
+        <div class="grid grid-cols-4 gap-x-4 gap-y-0.5 text-xs mt-2 mut">
+            <span>PGR: <b class="text-slate-200">${esc(f.pgr || "—")}</b></span>
+            <span>S10: <b class="${cls(f.s10)}">${f.s10 != null ? Number(f.s10).toFixed(1) : "—"}</b></span>
+            <span>L60: <b class="${cls(f.l60)}">${f.l60 != null ? Number(f.l60).toFixed(1) : "—"}</b></span>
+            <span>Score: <b class="${cls(f.combined)}">${f.combined != null ? Number(f.combined).toFixed(1) : "—"}</b></span>
+            <span>BR: <b class="${cls(f.buying_ratio)}">${f.buying_ratio != null ? Number(f.buying_ratio).toFixed(1) : "—"}</b></span>
+            <span>MF: <b class="text-slate-200">${esc(f.money_flow || "—")}</b></span>
+            <span>Stop: <b class="text-slate-200">${f.stop ? "$" + f.stop.toFixed(2) : "—"}</b></span>
+            <span>Target: <b class="text-slate-200">${f.target ? "$" + f.target.toFixed(2) : "—"}</b></span>
+        </div>
+        ${f.patterns ? `<div class="text-xs mut mt-1">Patterns: <b class="text-slate-200">${esc(f.patterns)}</b></div>` : ""}`;
+    const newsHtml = (d.news && d.news.length)
+        ? `<ul class="mt-2 text-xs mut list-disc pl-4 space-y-0.5">${d.news.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "";
+    const errLine = d.error ? `<div class="text-xs text-amber-400 mt-1">⚠ ${esc(d.error)}</div>` : "";
+    return `
+        <div class="px-4 py-3 bg-slate-800/60 border-t border-slate-700 text-sm space-y-1">
+            <div class="flex items-center gap-2 flex-wrap">
+                ${_rqBadge(d.recommendation)}${confBadge}
+                <span class="text-slate-300 flex-1">${esc(d.rationale || "")}</span>
+            </div>
+            ${d.risk ? `<div class="text-xs text-slate-400">Risk: ${esc(d.risk)}</div>` : ""}
+            ${verdictLine}${factGrid}${newsHtml}${errLine}
+            <div class="text-xs mut mt-1" id="rq-news-status-${esc(sym)}">${newsStatus}</div>
+        </div>`;
+}
+
+async function requalify(sym, cost, triggerBtn) {
+    if (!sym) return;
+
+    // Find or create the result row in the accounts table
+    const resultRow = document.querySelector(`tr.rq-result-row[data-rq-for="${CSS.escape(sym)}"]`);
+
+    // Update button state
+    if (triggerBtn) {
+        triggerBtn.disabled = true;
+        triggerBtn.textContent = "⏳ Fetching...";
+    }
+    if (resultRow) {
+        resultRow.classList.remove("hidden");
+        resultRow.firstElementChild.innerHTML =
+            `<div class="px-4 py-2 text-xs mut">Fetching live data for ${esc(sym)}…</div>`;
+    }
+
+    // Also update sym-modal requalify panel if open
+    const smRq = $("sm-rq-result");
+    if (smRq && $("sm-symbol") && $("sm-symbol").textContent === sym) {
+        smRq.innerHTML = `<div class="text-xs mut py-2">Fetching live data…</div>`;
+        smRq.classList.remove("hidden");
+        const smBtn = $("sm-rq-btn");
+        if (smBtn) { smBtn.disabled = true; smBtn.textContent = "⏳ Fetching..."; }
+    }
+
+    let d;
+    try {
+        d = await api("/api/requalify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ symbol: sym, cost }),
+        });
+    } catch (err) {
+        const errHtml = `<div class="px-4 py-2 text-xs text-red-400">Error: ${esc(err.message)}</div>`;
+        if (resultRow) resultRow.firstElementChild.innerHTML = errHtml;
+        if (smRq) smRq.innerHTML = errHtml;
+        if (triggerBtn) { triggerBtn.disabled = false; }
+        return;
+    }
+
+    const _rqLabel = (rec) => rec ? esc(rec) : "⚡ AI";
+    const newsStatus = d.news_pending ? "🔍 Enriching with news…" : "";
+    const panel = _rqPanel(d, sym, newsStatus);
+    if (resultRow) resultRow.firstElementChild.innerHTML = panel;
+    if (smRq && $("sm-symbol") && $("sm-symbol").textContent === sym) {
+        smRq.innerHTML = panel;
+        const smBtn = $("sm-rq-btn");
+        if (smBtn) { smBtn.disabled = false; smBtn.textContent = _rqLabel(d.recommendation); }
+    }
+    if (triggerBtn) { triggerBtn.disabled = false; triggerBtn.textContent = _rqLabel(d.recommendation); }
+
+    // Phase 2 — poll for news-enriched result (max 60s / 30 attempts)
+    if (d.run_id && d.news_pending) {
+        const runId = d.run_id;
+        let attempts = 0;
+        const poll = async () => {
+            if (++attempts > _RQ_MAX_POLLS) {
+                const nsEl = document.getElementById(`rq-news-status-${CSS.escape(sym)}`);
+                if (nsEl) nsEl.textContent = "⚠ News search timed out.";
+                return;
+            }
+            let p2;
+            try { p2 = await api(`/api/requalify/${encodeURIComponent(runId)}`); }
+            catch { return; }
+            if (p2.status === "pending") { setTimeout(poll, _RQ_POLL_INTERVAL_MS); return; }
+            const updated = { ...d, ...p2, news_pending: false };
+            const panel2 = _rqPanel(updated, sym, "✅ Updated with news");
+            const rr2 = document.querySelector(`tr.rq-result-row[data-rq-for="${CSS.escape(sym)}"]`);
+            if (rr2) rr2.firstElementChild.innerHTML = panel2;
+            if (smRq && $("sm-symbol") && $("sm-symbol").textContent === sym) smRq.innerHTML = panel2;
+        };
+        setTimeout(poll, _RQ_POLL_INTERVAL_MS);
+    }
+}
+
+// Symbol modal Requalify button (injected into the modal HTML via openSymbol)
+async function smRequalify() {
+    const sym = $("sm-symbol") ? $("sm-symbol").textContent.trim() : "";
+    const entryEl = $("sm-entry");
+    const cost = entryEl ? parseFloat(entryEl.textContent.replace(/[^0-9.]/g, "")) || null : null;
+    await requalify(sym, cost, $("sm-rq-btn"));
+}
 
 // Wiki Modal Interactive Logic
 let AETHER_LIVE_RULES = null;

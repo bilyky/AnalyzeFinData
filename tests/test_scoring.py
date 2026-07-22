@@ -285,9 +285,8 @@ class TestMarketRegime(unittest.TestCase):
         return str(d - timedelta(days=1))
 
     def _redirect(self, symbol: str = "_TEST"):
-        """Patch abspath so scoring.py resolves files to self.tmpdir."""
-        self._start_patch("scoring.os.path.abspath",
-                          lambda _: os.path.join(self.tmpdir, "scoring.py"))
+        sym_full_dir = os.path.join(self.tmpdir, "Data", "Symbol_full")
+        self._start_patch("scoring._OHLCV_ROOT", sym_full_dir)
         self._start_patch("scoring.REGIME_SYMBOL", symbol)
 
     def test_bull(self):
@@ -323,8 +322,8 @@ class TestMarketRegime(unittest.TestCase):
         """Changing REGIME_SYMBOL must NOT return a cached result for the old symbol."""
         last_a = self._write_file([100.0] * 49 + [110.0], symbol="_A")
         self._write_file([100.0] * 49 + [90.0],  symbol="_B")
-        self._start_patch("scoring.os.path.abspath",
-                          lambda _: os.path.join(self.tmpdir, "scoring.py"))
+        sym_full_dir = os.path.join(self.tmpdir, "Data", "Symbol_full")
+        self._start_patch("scoring._OHLCV_ROOT", sym_full_dir)
         with unittest.mock.patch("scoring.REGIME_SYMBOL", "_A"):
             result_a = market_regime(last_a)
         with unittest.mock.patch("scoring.REGIME_SYMBOL", "_B"):

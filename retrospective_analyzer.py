@@ -68,9 +68,9 @@ def analyze():
         bearish_losses = [t for t in losers if str(t.get("buy_dna", {}).get("pgr", "")).startswith("Be")]
         bearish_winners = [t for t in winners if str(t.get("buy_dna", {}).get("pgr", "")).startswith("Be")]
         total_bearish = len(bearish_losses) + len(bearish_winners)
-        if total_bearish > 0:
+        if total_bearish >= 3:
             bearish_loss_rate = round((len(bearish_losses) / total_bearish) * 100, 2)
-            if bearish_loss_rate >= 50.0 and len(bearish_losses) >= 1:
+            if bearish_loss_rate >= 50.0 and len(bearish_losses) >= 2:
                 toxic_rules.append({
                     "id": "TOXIC_BEARISH_PGR",
                     "field": "pgr",
@@ -83,9 +83,9 @@ def analyze():
         low_score_losses = [t for t in losers if float(t.get("buy_dna", {}).get("score", 0.0)) < 5.0]
         low_score_winners = [t for t in winners if float(t.get("buy_dna", {}).get("score", 0.0)) < 5.0]
         total_low_score = len(low_score_losses) + len(low_score_winners)
-        if total_low_score > 0:
+        if total_low_score >= 3:
             low_score_loss_rate = round((len(low_score_losses) / total_low_score) * 100, 2)
-            if low_score_loss_rate >= 50.0 and len(low_score_losses) >= 1:
+            if low_score_loss_rate >= 50.0 and len(low_score_losses) >= 2:
                 toxic_rules.append({
                     "id": "TOXIC_LOW_SCORE",
                     "field": "score",
@@ -98,9 +98,9 @@ def analyze():
         high_z_losses = [t for t in losers if float(t.get("buy_dna", {}).get("z_score") or 0.0) >= 2.5]
         high_z_winners = [t for t in winners if float(t.get("buy_dna", {}).get("z_score") or 0.0) >= 2.5]
         total_high_z = len(high_z_losses) + len(high_z_winners)
-        if total_high_z > 0:
+        if total_high_z >= 3:
             high_z_loss_rate = round((len(high_z_losses) / total_high_z) * 100, 2)
-            if high_z_loss_rate >= 50.0 and len(high_z_losses) >= 1:
+            if high_z_loss_rate >= 50.0 and len(high_z_losses) >= 2:
                 toxic_rules.append({
                     "id": "TOXIC_HIGH_Z_SCORE",
                     "field": "z_score",
@@ -109,7 +109,6 @@ def analyze():
                 })
                 toxic_patterns_found.append(f"🔴 Buying Overextended Bubble Assets (Z-Score >= 2.5): {len(high_z_losses)} losses, {len(high_z_winners)} wins ({high_z_loss_rate}% loss rate)")
 
-        # Write out dynamically generated toxic failure patterns
         try:
             with open(RULES_FILE, "w", encoding="utf-8") as f:
                 json.dump(toxic_rules, f, indent=4)
@@ -117,9 +116,8 @@ def analyze():
         except Exception as e:
             _log.error(f"Failed to save dynamic rules file: {e}")
 
-    # --- 🛡️ Circuit Breaker Design Gap Meta-Auditing ---
-    # Parse SPY history and scan our losing trades for "boundary near-misses" where SPY was highly volatile
-    # but the Daily Capitulation Breaker did NOT trigger because thresholds were slightly too tight!
+    # Scan losers for sell dates where SPY was in the -1.2% to -2.0% "near-miss" band
+    # (just below the -2.0% breaker threshold) to surface threshold calibration opportunities.
     breaker_audit = []
     breaker_audit.append("======================================================================")
     breaker_audit.append("🛡️ CIRCUIT BREAKER SYSTEMIC GAP AUDIT (Design-Vulnerability Audit):")
@@ -159,7 +157,6 @@ def analyze():
     else:
         breaker_audit.append("  ✅ EXCELLENT! No un-triggered boundary near-misses or systemic design gaps detected.")
 
-    # --- 📝 Compile the Full Retrospective Report ---
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     report = []
     report.append("======================================================================")
@@ -174,7 +171,6 @@ def analyze():
     report.append(f"  - Realised Win-Rate:   {win_rate}%")
     report.append("")
     
-    # Weave in the Circuit Breaker Design Audit
     report.extend(breaker_audit)
     report.append("")
     report.append("======================================================================")
@@ -211,7 +207,6 @@ def analyze():
         report.append(f"     DNA: PGR={t['buy_dna'].get('pgr')} | Score={t['buy_dna'].get('score')} | Setup={t['buy_dna'].get('setup')} | Sector={t['buy_dna'].get('industry')}")
         report.append("")
 
-    # Write report file
     try:
         with open(REPORT_FILE, "w", encoding="utf-8") as f:
             f.write("\n".join(report))

@@ -350,60 +350,64 @@ def read_accounts() -> dict:
                         
                     # Fetch all positions from E*TRADE
                     raw_positions = etrade.fetch_positions(tokens, env)
-                
-                # Fetch and load scores from our Excel workbook to decorate E*TRADE positions
-                try:
-                    import openpyxl
-                    wb = openpyxl.load_workbook(_XLSX, data_only=True, read_only=True)
+
+                    # Load Research scores and Short_Long decorations from the workbook
                     try:
-                        # 1. Load Research scores
-                        ws = wb["Research"]
-                        for row in ws.iter_rows(min_row=2, values_only=True):
-                            sym = row[3]
-                            if sym:
-                                scores[sym] = {
-                                    "s10": row[24], "l60": row[25], "status": row[19]
-                                }
-                        
-                        # 2. Load Short_Long stops and targets from the consolidated table
-                        ws_sl = wb["Short_Long"]
-                        sl_rows = list(ws_sl.iter_rows(values_only=True))
-                        hdrs = [i for i, r in enumerate(sl_rows)
-                                if len(r) > 1 and str(r[1]).strip() == "Symb"]
-                        
-                        if hdrs:
-                            h = hdrs[0]
-                            started = False
-                            for r in sl_rows[h + 1:]:
-                                sym = r[_SL["sym"]] if len(r) > _SL["sym"] else None
-                                sym = str(sym).strip().upper() if sym else ""
-                                if not sym:
-                                    if started:
-                                        break
-                                    continue
-                                started = True
-                                buy = _f(r[_SL["buy"]])
-                                buy_date = _to_date_str(r[_SL["buy_date"]] if len(r) > _SL["buy_date"] else None)
-                                excl = instruments.is_excluded(sym)
-                                stop = _f(r[_SL["stop"]])
-                                target = _f(r[_SL["target"]])
-                                stop_src = target_src = "sheet"
-                                if buy:
-                                    sd = risk_utils.resolve_stop_detailed(buy, symbol=sym, as_of=buy_date, exclude_swing=excl)
-                                    if sd["stop"] is not None:
-                                        stop, stop_src = sd["stop"], sd["source"]
-                                    td = risk_utils.resolve_target_detailed(buy, symbol=sym, as_of=buy_date, exclude_swing=excl)
-                                    if td["target"] is not None:
-                                        target, target_src = td["target"], td["source"]
-                                sl_decorations[sym] = {
-                                    "stop": stop, "stop_source": stop_src,
-                                    "target": target, "target_source": target_src
-                                }
-                    finally:
-                        wb.close()
-                except Exception as ex:
-                    print(f"  [AETHER] Error loading Excel decorations: {ex}")
-                
+                        import openpyxl
+                        wb = openpyxl.load_workbook(_XLSX, data_only=True, read_only=True)
+                        try:
+                            ws = wb["Research"]
+                            for row in ws.iter_rows(min_row=2, values_only=True):
+                                sym = row[3]
+                                if sym:
+                                    scores[sym] = {
+                                        "s10": row[24], "l60": row[25], "status": row[19]
+                                    }
+
+                            ws_sl = wb["Short_Long"]
+                            sl_rows = list(ws_sl.iter_rows(values_only=True))
+                            hdrs = [i for i, r in enumerate(sl_rows)
+                                    if len(r) > 1 and str(r[1]).strip() == "Symb"]
+
+                            if hdrs:
+                                h = hdrs[0]
+                                started = False
+                                for r in sl_rows[h + 1:]:
+                                    sym = r[_SL["sym"]] if len(r) > _SL["sym"] else None
+                                    sym = str(sym).strip().upper() if sym else ""
+                                    if not sym:
+                                        if started:
+                                            break
+                                        continue
+                                    started = True
+                                    buy = _f(r[_SL["buy"]])
+                                    buy_date = _to_date_str(r[_SL["buy_date"]] if len(r) > _SL["buy_date"] else None)
+                                    excl = instruments.is_excluded(sym)
+                                    stop = _f(r[_SL["stop"]])
+                                    target = _f(r[_SL["target"]])
+                                    stop_src = target_src = "sheet"
+                                    if buy:
+                                        sd = risk_utils.resolve_stop_detailed(buy, symbol=sym, as_of=buy_date, exclude_swing=excl)
+                                        if sd["stop"] is not None:
+                                            stop, stop_src = sd["stop"], sd["source"]
+                                        td = risk_utils.resolve_target_detailed(buy, symbol=sym, as_of=buy_date, exclude_swing=excl)
+                                        if td["target"] is not None:
+                                            target, target_src = td["target"], td["source"]
+                                    sl_decorations[sym] = {
+                                        "stop": stop, "stop_source": stop_src,
+                                        "target": target, "target_source": target_src,
+                                        "s10":     _f(r[_SL["s10"]]      if len(r) > _SL["s10"]      else None),
+                                        "l60":     _f(r[_SL["l60"]]      if len(r) > _SL["l60"]      else None),
+                                        "status":  str(r[_SL["status"]]  if len(r) > _SL["status"]   else "") or "",
+                                        "win_pct": r[_SL["winpct"]]      if len(r) > _SL["winpct"]   else None,
+                                        "buy_date": buy_date,
+                                        "in_profit": str(r[_SL["in_profit"]] if len(r) > _SL["in_profit"] else "") or "",
+                                    }
+                        finally:
+                            wb.close()
+                    except Exception as ex:
+                        print(f"  [AETHER] Error loading Excel decorations: {ex}")
+
                 # Map E*TRADE accounts and positions
                 for acct in acct_list:
                     desc = acct.get("accountDesc", "Brokerage")
@@ -429,11 +433,13 @@ def read_accounts() -> dict:
                         if p.get("account_last4") == last4:
                             sym = p["symbol"]
                             sc = scores.get(sym, {})
-                            s10 = _f(sc.get("s10"))
-                            l60 = _f(sc.get("l60"))
-                            
-                            # Fetch entry stop/target computed from entry-date swing levels
                             dec = sl_decorations.get(sym.strip().upper(), {})
+
+                            # Prefer Research sheet scores; fall back to Short_Long sheet
+                            s10 = _f(sc.get("s10")) if sc else _f(dec.get("s10"))
+                            l60 = _f(sc.get("l60")) if sc else _f(dec.get("l60"))
+                            status = sc.get("status", "") or dec.get("status", "")
+
                             stop = dec.get("stop")
                             stop_source = dec.get("stop_source", "E*TRADE")
                             target = dec.get("target")
@@ -463,7 +469,10 @@ def read_accounts() -> dict:
                                 "s10": s10,
                                 "l60": l60,
                                 "total": round((s10 or 0) + (l60 or 0), 1) if s10 is not None or l60 is not None else None,
-                                "status": sc.get("status", ""),
+                                "status": status,
+                                "buy_date": dec.get("buy_date", ""),
+                                "win_pct": dec.get("win_pct"),
+                                "in_profit": dec.get("in_profit", ""),
                                 "instrument": instruments.classify(sym)
                             })
                             
@@ -977,6 +986,170 @@ def read_backtest(symbol: str, horizon: int = 20) -> dict:
     def _load():
         return backtest_levels.backtest_symbol((symbol or "").upper(), horizon=horizon)
     return _cached(f"bt:{(symbol or '').upper()}:{horizon}", 600.0, _load)
+
+
+def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
+    """
+    Fetch live Chaikin data for one symbol and return a structured factor dict
+    ready for the AI prompt. Also runs the deterministic exit engine.
+    Called from the /api/requalify endpoint (Phase 1).
+    """
+    import datetime as _dt, re as _re_sym
+    sym = (symbol or "").upper().strip()
+    if not _re_sym.match(r'^[A-Z0-9.\-]{1,8}$', sym):
+        return {"symbol": sym, "error": f"Invalid symbol: {sym!r}", "factors": {}}
+    today = _dt.date.today()
+    result: dict = {"symbol": sym, "error": None}
+
+    # ── 1. Live price ─────────────────────────────────────────────────────────
+    price = None
+    try:
+        import etrade
+        tokens = etrade.get_tokens("production")
+        if tokens:
+            quotes = etrade.fetch_quotes(tokens, [sym], env="production")
+            price = quotes.get(sym)
+    except Exception:
+        pass
+    if not price:
+        try:
+            from ai_portfolio_game import get_google_prices_fallback
+            goog = get_google_prices_fallback([sym])
+            price = goog.get(sym)
+        except Exception:
+            pass
+
+    # ── 2. Live Chaikin factors ───────────────────────────────────────────────
+    factors: dict = {}
+    try:
+        import powergauge as _pg
+        session = _pg._load_session_from_file()
+        if session and session.get("jsessionid"):
+            pg = _pg.get_symbol_data(sym, today, prefer_cache=False, session_id=session)
+            if pg and pg.price > 0:
+                # Load OHLCV for stop/target computation
+                ohlcv_path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
+                ohlcv_ts: dict = {}
+                if ohlcv_path.exists():
+                    try:
+                        import json as _json
+                        ohlcv_ts = _json.load(open(ohlcv_path)).get("Time Series (Daily)", {})
+                    except Exception:
+                        pass
+                f = _pg._compute_pgr_fields(pg, ohlcv_ts=ohlcv_ts)
+                factors = {
+                    "pgr":          f.get("pgr", "N"),
+                    "s10":          round(f.get("short_score", 0.0), 1),
+                    "l60":          round(f.get("long_score", 0.0), 1),
+                    "combined":     round(f.get("short_score", 0.0) + f.get("long_score", 0.0), 1),
+                    "stop":         f.get("stop_price", 0.0),
+                    "target":       f.get("prev_move_price", 0.0),
+                    "buying_ratio": round(f.get("buying_ratio", 0.0), 1),
+                    "money_flow":   pg.money_flow or "Neutral",
+                    "lt_trend":     pg.lt_trend or "Neutral",
+                    "over_bt_sl":   pg.over_bt_sl or "Neutral",
+                    "patterns":     f.get("pattern_text", ""),
+                    "industry":     pg.industry_name or "",
+                    "price":        price or pg.price,
+                }
+                if price and price > 0:
+                    factors["price"] = price
+    except Exception as ex:
+        result["error"] = f"Chaikin fetch failed: {ex}"
+
+    # Fall back to cached Excel data if live fetch failed
+    if not factors:
+        try:
+            research = read_research()
+            row = next((r for r in research.get("rows", []) if r["symbol"] == sym), None)
+            if row:
+                factors = {
+                    "pgr":          row.get("pgr", "N"),
+                    "s10":          row.get("s10", 0.0),
+                    "l60":          row.get("l60", 0.0),
+                    "combined":     (row.get("s10") or 0) + (row.get("l60") or 0),
+                    "stop":         row.get("stop"),
+                    "target":       row.get("target"),
+                    "buying_ratio": row.get("buying_ratio", 0.0),
+                    "money_flow":   row.get("money_flow", "Neutral"),
+                    "lt_trend":     "Neutral",
+                    "over_bt_sl":   "Neutral",
+                    "patterns":     row.get("patterns", ""),
+                    "industry":     row.get("industry", ""),
+                    "price":        price or row.get("price"),
+                    "_cached":      True,
+                }
+                if not result["error"]:
+                    result["error"] = "Using cached Excel data (no live Chaikin session)"
+        except Exception:
+            pass
+
+    result["factors"] = factors
+
+    # ── 3. Deterministic exit engine ──────────────────────────────────────────
+    det_action = det_reason = ""
+    if cost and factors.get("price") and factors.get("stop"):
+        try:
+            import sell_rules
+            s10 = factors.get("s10", 0.0) or 0.0
+            l60 = factors.get("l60", 0.0) or 0.0
+            det_action, det_reason = sell_rules.exit_decision(
+                price=factors["price"],
+                cost=cost,
+                stop_loss=factors["stop"],
+                s10=s10,
+                l60=l60,
+            )
+        except Exception:
+            pass
+    factors["det_action"] = det_action
+    factors["det_reason"] = det_reason
+
+    # ── 4. Market regime ─────────────────────────────────────────────────────
+    try:
+        health = get_system_health()
+        result["regime"] = health.get("market_regime", "Unknown")
+    except Exception:
+        result["regime"] = "Unknown"
+
+    return result
+
+
+def build_requalify_prompt(sym: str, factors: dict, cost: float | None,
+                           regime: str, news: list[str] | None = None) -> str:
+    """Build the user-turn prompt for the AI requalify call."""
+    price  = factors.get("price", 0.0) or 0.0
+    pnl_pct = ""
+    if cost and cost > 0 and price > 0:
+        pnl_pct = f"{round((price - cost) / cost * 100, 2):+.2f}%"
+
+    lines = [
+        f"SYMBOL: {sym}",
+        f"ENTRY PRICE: {f'${cost:.2f}' if cost else 'n/a'}",
+        f"CURRENT PRICE: ${price:.2f}" + (f"  (PnL: {pnl_pct})" if pnl_pct else ""),
+        f"PGR RATING: {factors.get('pgr', 'N')}",
+        f"S10 (short-term): {factors.get('s10', 0.0)}",
+        f"L60 (long-term):  {factors.get('l60', 0.0)}",
+        f"COMBINED SCORE:   {factors.get('combined', 0.0)}",
+        f"STOP-LOSS: ${factors.get('stop', 0.0):.2f}" if factors.get("stop") else "STOP-LOSS: n/a",
+        f"TARGET:    ${factors.get('target', 0.0):.2f}" if factors.get("target") else "TARGET:    n/a",
+        f"BUYING RATIO: {factors.get('buying_ratio', 0.0)}",
+        f"MONEY FLOW:   {factors.get('money_flow', 'Neutral')}",
+        f"LT TREND:     {factors.get('lt_trend', 'Neutral')}",
+        f"OB/OS ZONE:   {factors.get('over_bt_sl', 'Neutral')}",
+        f"PATTERNS:     {factors.get('patterns') or 'none detected'}",
+        f"INDUSTRY:     {factors.get('industry', '')}",
+        f"MARKET REGIME: {regime}",
+    ]
+    if factors.get("det_action"):
+        lines.append(f"DETERMINISTIC ENGINE: {factors['det_action']} — {factors.get('det_reason', '')}")
+    if factors.get("_cached"):
+        lines.append("NOTE: Chaikin data is from cached Excel sheet (no live session available).")
+    if news:
+        lines.append("\nRECENT NEWS:")
+        for item in news[:5]:
+            lines.append(f"  • {item}")
+    return "\n".join(lines)
 
 
 def read_scheduled_tasks() -> list[dict]:

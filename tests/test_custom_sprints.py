@@ -622,8 +622,9 @@ class TestPersistentProfileModes(unittest.TestCase):
         dna_file = circuit_breaker.DNA_FILE
         existing_dna = None
         if dna_file.exists():
-            existing_dna = json.load(open(dna_file))
-            dna_file.unlink() # clear it temporarily
+            with open(dna_file) as _f:
+                existing_dna = json.load(_f)
+            dna_file.unlink()
             
         try:
             # Mock SPY and VXX returns to trigger the log
@@ -634,7 +635,8 @@ class TestPersistentProfileModes(unittest.TestCase):
                     
             # Verify file was written and holds correct schema
             self.assertTrue(dna_file.exists())
-            records = json.load(open(dna_file))
+            with open(dna_file) as _f:
+                records = json.load(_f)
             self.assertEqual(len(records), 1)
             
             rec = records[0]
@@ -653,6 +655,69 @@ class TestPersistentProfileModes(unittest.TestCase):
                     json.dump(existing_dna, f, indent=4)
             elif dna_file.exists():
                 dna_file.unlink()
+
+class TestRequalifyPromptBuilder(unittest.TestCase):
+    """build_requalify_prompt — pure formatting, no I/O, zero mocks needed."""
+
+    def _factors(self, **overrides):
+        base = {
+            "pgr": "Bu", "s10": 4.2, "l60": 3.1, "combined": 7.3,
+            "stop": 138.50, "target": 162.00, "buying_ratio": 6.5,
+            "money_flow": "Strong", "lt_trend": "Strong", "over_bt_sl": "Optimal",
+            "patterns": "Cup&H↑", "industry": "Semiconductors",
+            "price": 150.0, "det_action": "HOLD", "det_reason": "scores positive",
+        }
+        base.update(overrides)
+        return base
+
+    def test_all_fields_present(self):
+        import data_api
+        prompt = data_api.build_requalify_prompt("AAPL", self._factors(), cost=142.30, regime="BALANCED")
+        self.assertIn("AAPL", prompt)
+        self.assertIn("Bu", prompt)
+        self.assertIn("4.2", prompt)
+        self.assertIn("BALANCED", prompt)
+        self.assertIn("HOLD", prompt)
+        self.assertIn("138.50", prompt)     # stop
+
+    def test_no_cost_omits_pnl(self):
+        import data_api
+        prompt = data_api.build_requalify_prompt("TSLA", self._factors(), cost=None, regime="DEFENSIVE")
+        self.assertIn("n/a", prompt)        # entry price shows n/a
+        self.assertNotIn("PnL", prompt)     # no pnl line
+
+    def test_missing_stop_shows_na(self):
+        import data_api
+        f = self._factors(stop=0, target=0)
+        prompt = data_api.build_requalify_prompt("SPY", f, cost=100.0, regime="BALANCED")
+        self.assertIn("n/a", prompt)        # stop shows n/a when falsy
+
+    def test_news_appended_when_provided(self):
+        import data_api
+        news = ["Earnings beat by 12%.", "Analyst upgrades to Buy at $175."]
+        prompt = data_api.build_requalify_prompt("NVDA", self._factors(), cost=None, regime="AGGRESSIVE", news=news)
+        self.assertIn("Earnings beat", prompt)
+        self.assertIn("Analyst upgrades", prompt)
+
+    def test_cached_flag_adds_note(self):
+        import data_api
+        f = self._factors(_cached=True)
+        prompt = data_api.build_requalify_prompt("XOM", f, cost=None, regime="DEFENSIVE")
+        self.assertIn("cached", prompt.lower())
+
+    def test_invalid_symbol_rejected_by_requalify_symbol(self):
+        import data_api
+        result = data_api.requalify_symbol("../etc/passwd")
+        self.assertIn("error", result)
+        self.assertIn("Invalid symbol", result["error"])
+        self.assertEqual(result["factors"], {})
+
+    def test_valid_symbol_format_passes_validation(self):
+        import data_api
+        # Should not be rejected at the validation gate (may fail later on network/session)
+        result = data_api.requalify_symbol("AAPL")
+        self.assertNotIn("Invalid symbol", result.get("error") or "")
+
 
 if __name__ == "__main__":
     unittest.main()

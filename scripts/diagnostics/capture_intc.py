@@ -3,20 +3,26 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import imaplib
 import email
-import os
 import datetime
 from email.header import decode_header
 from pathlib import Path
 
-# --- CONFIGURATION ---
-IMAP_SERVER = "imap.gmail.com"
-EMAIL_USER = "bilyky@gmail.com"
-EMAIL_PASS = os.environ.get("SMTP_PASSWORD")
+try:
+    from config import CFG
+    _mailbox = CFG.mailboxes[0] if CFG.mailboxes else {}
+    IMAP_SERVER = _mailbox.get("imap_server", "imap.gmail.com")
+    EMAIL_USER = _mailbox.get("email", "")
+    EMAIL_PASS = os.environ.get(_mailbox.get("password_env", "SMTP_PASSWORD"))
+except Exception:
+    IMAP_SERVER = "imap.gmail.com"
+    EMAIL_USER = os.environ.get("SENDER_EMAIL", "")
+    EMAIL_PASS = os.environ.get("SMTP_PASSWORD")
+
 BASE_DIR = Path(__file__).resolve().parent
 
 def capture_intc_emails():
-    if not EMAIL_PASS:
-        print("Error: SMTP_PASSWORD not set.")
+    if not EMAIL_USER or not EMAIL_PASS:
+        print("Error: Email credentials not configured. Set mailboxes in config.json or SENDER_EMAIL/SMTP_PASSWORD env vars.")
         return
     
     try:

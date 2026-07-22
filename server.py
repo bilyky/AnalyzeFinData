@@ -212,6 +212,183 @@ def create_app():
     async def accounts():
         return data_api.read_accounts()
 
+    # ── Requalify — live AI position analysis ────────────────────────────────
+
+    _rq_store: dict = {}
+    _RQ_TTL = 600       # seconds until a completed run is evicted
+    _RQ_P1_TOKENS = 300 # AI tokens for Phase 1 (factors only)
+    _RQ_P2_TOKENS = 350 # AI tokens for Phase 2 (factors + news)
+
+    def _rq_evict():
+        now = time.time()
+        stale = [k for k, v in _rq_store.items() if now - v["ts"] > _RQ_TTL]
+        for k in stale:
+            del _rq_store[k]
+
+    @app.post("/api/requalify")
+    async def requalify(
+        body: dict = Body(...),
+        authorization: str = Header(default=""),
+    ):
+        """Phase 1: fetch live factors + run AI on factors only.
+        Spawns a background thread for Phase 2 (news enrichment)."""
+        import ai_client, threading, time as _time
+        symbol = (body.get("symbol") or "").upper().strip()
+        cost   = body.get("cost")   # float or None
+        if not symbol:
+            return {"error": "symbol required"}
+
+        loop = asyncio.get_running_loop()
+
+        rq_data = await loop.run_in_executor(None, lambda: data_api.requalify_symbol(symbol, cost))
+        factors = rq_data.get("factors", {})
+        regime  = rq_data.get("regime", "Unknown")
+
+        recommendation = rationale = risk = confidence = ""
+        provider = None
+        if ai_client.primary():
+            try:
+                prompt_path = _DIR / "prompts" / "requalify.md"
+                system_prompt = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
+                user_prompt   = data_api.build_requalify_prompt(symbol, factors, cost, regime)
+                raw = await loop.run_in_executor(
+                    None,
+                    lambda: ai_client.evaluate(system_prompt, user_prompt, max_tokens=_RQ_P1_TOKENS)
+                )
+                import json as _json, re as _re
+                m = _re.search(r'\{.*\}', raw, _re.DOTALL)
+                if m:
+                    parsed = _json.loads(m.group())
+                    recommendation = parsed.get("recommendation", "")
+                    rationale      = parsed.get("rationale", "")
+                    risk           = parsed.get("risk", "")
+                    confidence     = parsed.get("confidence", "")
+                provider = ai_client.primary()
+            except Exception as _ai_err:
+                _log.warning("Requalify AI Phase 1 failed", extra={"error": str(_ai_err)})
+
+        verdict = verdict_note = ""
+        if factors.get("det_action") and cost:
+            try:
+                import sell_eval
+                ctx = {
+                    "symbol": symbol,
+                    "action": factors["det_action"],
+                    "reason": factors.get("det_reason", ""),
+                    "cost":   cost,
+                    "price":  factors.get("price", 0),
+                    "pnl_pct": round((factors.get("price", 0) - cost) / cost * 100, 2) if cost else 0,
+                    "s10":    factors.get("s10", 0),
+                    "l60":    factors.get("l60", 0),
+                    "stop":   factors.get("stop"),
+                    "sma50":  None,
+                    "pgr":    factors.get("pgr", "N"),
+                    "patterns": factors.get("patterns", ""),
+                }
+                ev = await loop.run_in_executor(None, lambda: sell_eval.evaluate_exit(ctx))
+                verdict      = ev.get("verdict", "")
+                verdict_note = ev.get("note", "")
+            except Exception:
+                pass
+
+        # Register Phase 2 run
+        run_id = f"rq_{symbol}_{int(_time.time())}"
+        _rq_store[run_id] = {"status": "pending", "ts": _time.time()}
+        _rq_evict()
+
+        def _phase2():
+            import time as _t2
+            _deadline = _t2.time() + 90
+            try:
+                news = []
+                try:
+                    import requests as _req, html as _html
+                    for query in [f'"{symbol}" stock news 2026', f'"{symbol}" earnings analyst 2026']:
+                        if _t2.time() > _deadline:
+                            break
+                        r = _req.get(
+                            "https://html.duckduckgo.com/html/",
+                            params={"q": query},
+                            headers={"User-Agent": "Mozilla/5.0"},
+                            timeout=10,
+                        )
+                        if r.status_code == 200:
+                            import re as _re2
+                            body = r.text[:200_000]  # cap at 200 KB
+                            snippets = _re2.findall(r'class="result__snippet"[^>]*>(.*?)</a>', body, _re2.DOTALL)
+                            for s in snippets[:3]:
+                                clean = _re2.sub(r'<[^>]+>', '', _html.unescape(s)).strip()
+                                if clean and len(clean) > 20:
+                                    news.append(clean)
+                        if len(news) >= 5:
+                            break
+                except Exception:
+                    pass
+
+                # Re-run AI with news appended
+                rec2 = rationale2 = risk2 = ""
+                if ai_client.primary() and news:
+                    try:
+                        prompt_path2 = _DIR / "prompts" / "requalify.md"
+                        sys2 = prompt_path2.read_text(encoding="utf-8") if prompt_path2.exists() else ""
+                        usr2 = data_api.build_requalify_prompt(symbol, factors, cost, regime, news=news)
+                        raw2 = ai_client.evaluate(sys2, usr2, max_tokens=_RQ_P2_TOKENS)
+                        import json as _j2, re as _re3
+                        m2 = _re3.search(r'\{.*\}', raw2, _re3.DOTALL)
+                        if m2:
+                            p2 = _j2.loads(m2.group())
+                            rec2       = p2.get("recommendation", "")
+                            rationale2 = p2.get("rationale", "")
+                            risk2      = p2.get("risk", "")
+                    except Exception:
+                        pass
+
+                _rq_store[run_id] = {
+                    "status":         "done",
+                    "ts":             _t2.time(),
+                    "recommendation": rec2 or recommendation,
+                    "rationale":      rationale2 or rationale,
+                    "risk":           risk2 or risk,
+                    "news":           news,
+                }
+            except Exception as _e2:
+                _rq_store[run_id] = {
+                    "status": "done", "ts": _t2.time(),
+                    "recommendation": recommendation,
+                    "rationale": rationale,
+                    "risk": risk,
+                    "news": [],
+                    "error": str(_e2),
+                }
+
+        import threading as _threading
+        _threading.Thread(target=_phase2, daemon=True).start()
+
+        return {
+            "run_id":         run_id,
+            "symbol":         symbol,
+            "recommendation": recommendation,
+            "rationale":      rationale,
+            "risk":           risk,
+            "confidence":     confidence,
+            "verdict":        verdict,
+            "verdict_note":   verdict_note,
+            "factors":        factors,
+            "news_pending":   True,
+            "provider":       provider,
+            "error":          rq_data.get("error"),
+        }
+
+    @app.get("/api/requalify/{run_id}")
+    async def requalify_poll(run_id: str):
+        """Phase 2 poll — returns pending until news enrichment completes."""
+        entry = _rq_store.get(run_id)
+        if not entry:
+            return {"status": "not_found"}
+        if entry["status"] == "pending":
+            return {"status": "pending"}
+        return {"status": "done", **{k: v for k, v in entry.items() if k not in ("status", "ts")}}
+
     # ── History ───────────────────────────────────────────────────────────────
 
     @app.get("/api/history")

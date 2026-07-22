@@ -77,7 +77,11 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 
 ## 🧱 3. System Resilience & Headless Safety Gates
 
-*   **The "AETHER Healer" (`watchdog.py`):** Headless, synchronously blocking AI self-healing loop. Intercepts script tracebacks, launches Gemini CLI, repairs code defects, and restarts the task while maintaining a `self_healing.lock` circuit breaker.
+*   **Systemic Crash Circuit Breaker (`circuit_breaker.py`):** Audits SPY single-day return (< −2%), rolling 10-day drawdown (< −5%), and VXX surge (> +15%) every run. When triggered: freezes queued BUY orders, tightens non-scarcity stop-losses to 1×ATR, and backfeeds the event to `Data/trade_history_dna.json`. AETHER Elastic Memory caches original stops and restores them automatically once the market stabilizes.
+*   **Trade DNA Bootstrapper (`bootstrap_dna.py`):** One-time setup script. Parses `Data/ai_portfolio_game.json` history, pairs BUY/SELL transactions via FIFO, backfills buy-state DNA (PGR, scores) from Excel backups, and seeds `Data/trade_history_dna.json` with past closed trades.
+*   **Feedback Retrospective Analyzer (`retrospective_analyzer.py`):** Run weekly (manually or scheduled). Separates winners from losers across `trade_history_dna.json`, statistically clusters recurring failure patterns (requires ≥3-trade samples), writes rejection rules to `Data/failure_dna_rules.json`, audits circuit breaker "near-miss" threshold boundaries, and outputs `Data/retrospective_report.txt`.
+*   **The "AETHER Healer" (`watchdog.py`):** Headless, synchronously blocking AI self-healing loop. Intercepts pipeline tracebacks, invokes `claude.exe` (configured via `AETHER_HEALER_CMD` env var) with a structured 6-step diagnostic protocol (`prompts/self_healing.md`), applies a minimal code fix, runs the full test suite, and commits only on green. A `self_healing.lock` circuit breaker prevents recursive loops.
+*   **Live Requalify (`POST /api/requalify`, `GET /api/requalify/{run_id}`):** Two-phase AI position analysis available from the Accounts tab and Symbol detail modal. Phase 1 fetches live Chaikin data (`powergauge.get_symbol_data`), runs the deterministic exit engine (`sell_rules.exit_decision`), and generates an AI recommendation using `prompts/requalify.md` (BUY MORE / HOLD / REVIEW / REDUCE / SELL). Phase 2 runs in a background thread, scrapes recent news, re-runs the AI with news context, and the frontend polls `GET /api/requalify/{run_id}` to update the result in place.
 *   **Proactive E*TRADE Session Keeper (`watchdog.py`):** The watchdog silently executes E*TRADE access token renewals every 1 hour (PT1H) in the background. This keeps the brokerage session permanently active on their servers, completely avoiding slow interactive browser re-auth runs during active trading hours.
 *   **Windows CP1252 Hardening:** Enforces `SafeStreamWrapper` and OS-level `PYTHONIOENCODING=utf-8` environmental variables to completely prevent legacy Windows console encoding crashes during background Task Scheduler runs.
 *   **The RapidAPI "Content Validation & Symbology Gate" (`rapidapi.py`):** 
@@ -97,12 +101,12 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 
 ## 🧪 5. Quality Assurance & Testing Suite
 
-AETHER possesses an automated, rigorous unit-testing suite (**204 tests** across scoring, sell-rules, the AI client, the exit-decision scorecard, config, accounts, auth, breadth filter, and sheet sync) that programmatically verifies the mathematical and operational correctness of all system components.
+AETHER possesses an automated, rigorous unit-testing suite (**270 tests** across scoring, sell-rules, circuit breaker, exit-decision scorecard, config, breadth filter, DNA ledger, and sheet sync) that programmatically verifies the mathematical and operational correctness of all system components.
 
 ### 🚀 How to Execute the QA Suite:
 Before committing any code modifications, always execute the full test suite using our virtual environment:
 ```powershell
-.\venv_new\Scripts\python.exe -m unittest discover tests
+.\venv\Scripts\python.exe -m unittest discover tests
 ```
 *   **Expected Output:** `Ran <N> tests in XXs. OK` (all green)
 *   **Pre-Flight Linter:** `daily_task.py` executes `ruff check` on every single daily run before executing the trading logic, blocking any run if syntax or style issues are detected.
@@ -116,7 +120,7 @@ AETHER's factor weights are fully customizable and backtest-driven:
 1.  **Where Weights Are Stored:** All short-term and long-term weights are centrally configured as lookup dictionaries in **`scoring.py`** and **`patterns.py`**.
 2.  **How to Run the Backtester:** To calculate how predictive our factors are across nearly 300,000 historical data points, run the factor ratings backtester:
     ```powershell
-    .\venv_new\Scripts\python.exe backtest_ratings.py
+    .\venv\Scripts\python.exe scripts\backtesting\backtest_ratings.py
     ```
 3.  **How to Interpret Backtest Output:** The backtester prints the **10-day forward return spread** for each factor and outputs a **Suggested Weight**:
     ```text
@@ -135,7 +139,7 @@ AETHER's factor weights are fully customizable and backtest-driven:
 
 6.  **🗓️ Scheduled Milestone: Saturday, July 18, 2026 — The Autonomic Self-Tuning Optimizer & Retrospective (`calibrate_model.py` & `retrospective.py`):**
     We will develop a fully automated self-calibration and learning engine. 
-    *   **The Optimizer (`calibrate_model.py`):** Headlessly runs `backtest_ratings.py`, parses the generated factor spreads, programmatically writes the newly optimized coefficients directly into `scoring.py` and `patterns.py` (updating designated anchor blocks), automatically runs the **119-test QA suite** to verify 100% code stability, and emails a beautiful comparative audit report to your inbox.
+    *   **The Optimizer (`calibrate_model.py`):** Headlessly runs `backtest_ratings.py`, parses the generated factor spreads, programmatically writes the newly optimized coefficients directly into `scoring.py` and `patterns.py` (updating designated anchor blocks), automatically runs the **270-test QA suite** to verify 100% code stability, and emails a beautiful comparative audit report to your inbox.
     *   **The Post-Mortem Retrospective & Failure DNA Loop (`retrospective_analyzer.py` & `bootstrap_dna.py`):** 🚀 **FULLY IMPLEMENTED, TESTED, AND DEPLOYED!** Successfully built and shipped the complete closed-loop retrospective system. It pairs up closed trades, chronologically backtracks their purchase dates using daily spreadsheet backups, and logs their exact PGR, scores, and Z-scores to `Data/trade_history_dna.json`. Runs every Saturday to statistically cluster true failures, automatically write active rejection rules (`Data/failure_dna_rules.json`), and output a rich human retrospective report (`Data/retrospective_report.txt`). Active rejections are autonomously enforced during buy cycles to block bad-habit trades on autopilot!
 
 7.  **🗓️ Scheduled Milestone: Saturday, July 25, 2026 — Dividend Yield Factors & Cash Dividend Reinvestment (R&D Lab Module):**
@@ -156,10 +160,10 @@ Use this checklist whenever you want to **add, remove, or modify** any system as
 4.  [ ] The next morning at 5:30 AM PST, the pipeline (`run_history.py`) will automatically fetch, backfill, and save the historical OHLCV data to `Data/Symbol_full/` natively.
 
 ### B. When MODIFYING a Factor Weight:
-1.  [ ] Run `.\venv_new\Scripts\python.exe backtest_ratings.py` to extract the empirically suggested weights.
+1.  [ ] Run `.\venv\Scripts\python.exe scripts\backtesting\backtest_ratings.py` to extract the empirically suggested weights.
 2.  [ ] Open **`scoring.py`** or **`patterns.py`**.
 3.  [ ] Modify the target weight coefficient (e.g., `candlestick_score * -0.15`).
-4.  [ ] Execute the test suite `.\venv_new\Scripts\python.exe -m unittest discover tests` to verify no regressions were introduced.
+4.  [ ] Execute the test suite `.\venv\Scripts\python.exe -m unittest discover tests` to verify no regressions were introduced.
 5.  [ ] Commit your changes to git and push to `main`.
 
 ---

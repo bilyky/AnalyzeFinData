@@ -7,8 +7,6 @@ and pre-populates 'Data/trade_history_dna.json' with your past month of trades.
 """
 
 import json
-import os
-import re
 import datetime
 from pathlib import Path
 import openpyxl
@@ -117,7 +115,6 @@ def bootstrap():
                 b_price = float(buy_tx["price"])
                 pnl_pct = round(((price - b_price) / b_price) * 100, 2) if b_price else 0.0
                 
-                # Fetch historical Buy DNA from backup sheet
                 backup_file = find_backup_for_date(buy_tx["date"])
                 if backup_file:
                     _log.info(f"Mapping {sym} closed trade (PnL {pnl_pct:+.1f}%) -> Loading backup for {buy_tx['date']}...")
@@ -139,12 +136,20 @@ def bootstrap():
                 })
                 
     _log.info(f"Successfully paired and recovered {len(closed_trades)} completed trades!")
-    
-    # Save the raw DNA ledger
     OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    # Preserve any non-trade records already in the ledger (e.g. CIRCUIT_BREAKER_TRIGGER entries).
+    existing = []
+    if OUT_FILE.exists():
+        try:
+            with open(OUT_FILE, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = []
+    non_trade = [r for r in existing if isinstance(r, dict) and r.get("type") == "CIRCUIT_BREAKER_TRIGGER"]
+
     with open(OUT_FILE, "w", encoding="utf-8") as f:
-        json.dump(closed_trades, f, indent=4)
-        
+        json.dump(closed_trades + non_trade, f, indent=4)
     _log.info(f"Successfully wrote pre-populated trade ledger to: {OUT_FILE}")
 
 if __name__ == "__main__":
