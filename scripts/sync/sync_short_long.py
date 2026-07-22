@@ -9,7 +9,7 @@ Does NOT require a full check_from_xls run. Uses cached production tokens
 Research sheet data already in the workbook.
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
 

@@ -8,7 +8,7 @@ report avg 10-day forward return + win%.
 Usage: python backtest_components.py [min_year]
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
 

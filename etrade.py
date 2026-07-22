@@ -18,7 +18,7 @@ import pyetrade
 _ET = datetime.timezone(datetime.timedelta(hours=-4))  # Eastern Time (NY)
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-_TOKEN_PATH = os.path.join(_DIR, "Data", "session_etrade.json")
+_TOKEN_PATH = os.path.join(_DIR, "Data", "etrade_tokens.json")
 
 _RENEW_URL = {
     "sandbox":    "https://apisb.etrade.com/oauth/renew_access_token",

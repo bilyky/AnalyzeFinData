@@ -6,17 +6,21 @@ from email.mime.multipart import MIMEMultipart
 # --- CONFIGURATION ---
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SENDER_EMAIL = "yufaua@gmail.com"
-RECIPIENT_EMAIL = "bilyky@gmail.com"
 
 # Load credentials securely from config, fallback to system environment variables
 try:
     from config import CFG
-    SENDER_PASSWORD = CFG.smtp_password or os.environ.get("SMTP_PASSWORD", "your_app_password_here")
+    SENDER_EMAIL = CFG.email_sender_address or os.environ.get("SENDER_EMAIL", "")
+    RECIPIENT_EMAIL = CFG.email_recipient_address or os.environ.get("RECIPIENT_EMAIL", SENDER_EMAIL)
+    SENDER_PASSWORD = CFG.smtp_password or os.environ.get("SMTP_PASSWORD", "")
 except Exception:
-    SENDER_PASSWORD = os.environ.get("SMTP_PASSWORD", "your_app_password_here")
+    SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "")
+    RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", SENDER_EMAIL)
+    SENDER_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 
 def send_email(subject, body, is_html=False):
+    if not SENDER_EMAIL or not SENDER_PASSWORD:
+        raise RuntimeError("Email not configured: set SENDER_EMAIL and SMTP_PASSWORD in config.json or env vars.")
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
     msg['To'] = RECIPIENT_EMAIL

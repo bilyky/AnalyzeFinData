@@ -18,7 +18,7 @@ backtest_symbol() loads from the local cache.
     python backtest_levels.py INTC AAPL --horizon 20 --step 5
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
 import statistics
