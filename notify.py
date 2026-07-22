@@ -6,7 +6,7 @@ from email.mime.multipart import MIMEMultipart
 # --- CONFIGURATION ---
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SENDER_EMAIL = "bilyky@gmail.com"
+SENDER_EMAIL = "yufaua@gmail.com"
 RECIPIENT_EMAIL = "bilyky@gmail.com"
 
 # Load credentials securely from config, fallback to system environment variables
