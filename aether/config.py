@@ -80,7 +80,7 @@ class _Config:
 
         # ── Email Sender (credentials for dispatching reports) ───────────────
         email_sender = raw.get("email_sender") or {}
-        self.smtp_password         = os.environ.get("SMTP_PASSWORD")    or email_sender.get("password",  "")
+        self.smtp_password         = email_sender.get("password", "") or os.environ.get("SMTP_PASSWORD", "")
         self.email_sender_address  = os.environ.get("SENDER_EMAIL")     or email_sender.get("address",   "")
         self.email_recipient_address = os.environ.get("RECIPIENT_EMAIL") or email_sender.get("recipient", self.email_sender_address)
 
