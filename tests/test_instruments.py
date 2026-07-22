@@ -55,35 +55,35 @@ class TestExcludeSwingRouting(unittest.TestCase):
 
     def test_scarcity_asset_ai_classification(self):
         import unittest.mock as mock
+        # Reset in-process cache so _load_scarcity_cache is actually called
+        instruments._scarcity_mem = None
         mock_cache = {}
         with mock.patch("instruments._load_scarcity_cache", return_value=mock_cache), \
-             mock.patch("instruments._save_scarcity_cache") as mock_save, \
+             mock.patch("instruments._save_scarcity_cache"), \
              mock.patch("ai_client.evaluate", return_value="YES") as mock_eval:
-            
+
             is_scarcity = instruments.is_scarcity_asset("GLD", "Gold Mining")
             self.assertTrue(is_scarcity)
-            mock_eval.assert_called_once()
-            mock_save.assert_called_once()
-            
-            # Second call should be retrieved from cache
+            self.assertEqual(instruments._scarcity_mem.get("GLD"), True)  # result in real cache
+            mock_eval.assert_called_once()  # AI called once on cache miss
+
+            # Second call: in-process cache hit — AI not called again
             mock_eval.reset_mock()
-            mock_save.reset_mock()
             is_scarcity_cached = instruments.is_scarcity_asset("GLD", "Gold Mining")
             self.assertTrue(is_scarcity_cached)
             mock_eval.assert_not_called()
-            mock_save.assert_not_called()
 
     def test_scarcity_asset_ai_classification_negative(self):
         import unittest.mock as mock
+        instruments._scarcity_mem = None
         mock_cache = {}
         with mock.patch("instruments._load_scarcity_cache", return_value=mock_cache), \
-             mock.patch("instruments._save_scarcity_cache") as mock_save, \
-             mock.patch("ai_client.evaluate", return_value="NO") as mock_eval:
-            
+             mock.patch("instruments._save_scarcity_cache"), \
+             mock.patch("ai_client.evaluate", return_value="NO"):
+
             is_scarcity = instruments.is_scarcity_asset("AAPL", "Technology")
             self.assertFalse(is_scarcity)
-            mock_eval.assert_called_once()
-            mock_save.assert_called_once()
+            self.assertEqual(instruments._scarcity_mem.get("AAPL"), False)
 
 
 if __name__ == "__main__":

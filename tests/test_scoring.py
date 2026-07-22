@@ -33,12 +33,18 @@ from tests.conftest import make_ohlcv
 # ── _to_float ─────────────────────────────────────────────────────────────────
 
 class TestToFloat(unittest.TestCase):
-    def test_string_number(self):     self.assertEqual(_to_float("3.14", 0), 3.14)
-    def test_none_default(self):      self.assertEqual(_to_float(None, -1), -1)
-    def test_invalid_default(self):   self.assertEqual(_to_float("bad", 0.0), 0.0)
-    def test_int_converts(self):      self.assertEqual(_to_float(42, 0), 42.0)
-    def test_zero_string(self):       self.assertEqual(_to_float("0", 99), 0.0)
-    def test_negative(self):          self.assertAlmostEqual(_to_float("-5.5", 0), -5.5)
+    def test_conversions(self):
+        cases = [
+            ("3.14", 0,    3.14),
+            (None,   -1,   -1),
+            ("bad",  0.0,  0.0),
+            (42,     0,    42.0),
+            ("0",    99,   0.0),
+            ("-5.5", 0,    -5.5),
+        ]
+        for val, default, expected in cases:
+            with self.subTest(val=val):
+                self.assertAlmostEqual(_to_float(val, default), expected)
 
 
 # ── week_of_month ─────────────────────────────────────────────────────────────

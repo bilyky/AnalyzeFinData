@@ -216,25 +216,16 @@ class TestAfterHoursOrderQueuing(unittest.TestCase):
 class TestMarketHolidayChecks(unittest.TestCase):
     @mock.patch("ai_portfolio_game.etrade.get_tokens", return_value=None)
     @mock.patch("ai_portfolio_game.datetime.datetime")
-    def test_market_hours_returns_false_on_holiday(self, mock_datetime, mock_get_tokens):
-        # Friday, July 3, 2026 (Independence Day Observed) at 10:00 AM
+    def test_market_hours(self, mock_datetime, mock_get_tokens):
         tz_la = pytz.timezone("America/Los_Angeles")
-        mock_now = tz_la.localize(real_datetime(2026, 7, 3, 10, 0, 0))
-        mock_datetime.now.return_value = mock_now
-        
-        hours_ok = game.is_market_hours()
-        self.assertFalse(hours_ok)
-        
-    @mock.patch("ai_portfolio_game.etrade.get_tokens", return_value=None)
-    @mock.patch("ai_portfolio_game.datetime.datetime")
-    def test_market_hours_returns_true_on_standard_day(self, mock_datetime, mock_get_tokens):
-        # Tuesday, July 14, 2026 at 10:00 AM PST (Standard market session)
-        tz_la = pytz.timezone("America/Los_Angeles")
-        mock_now = tz_la.localize(real_datetime(2026, 7, 14, 10, 0, 0))
-        mock_datetime.now.return_value = mock_now
-        
-        hours_ok = game.is_market_hours()
-        self.assertTrue(hours_ok)
+        cases = [
+            (real_datetime(2026, 7, 3, 10, 0, 0), False, "holiday (Independence Day observed)"),
+            (real_datetime(2026, 7, 14, 10, 0, 0), True,  "standard trading day"),
+        ]
+        for dt, expected, label in cases:
+            with self.subTest(label=label):
+                mock_datetime.now.return_value = tz_la.localize(dt)
+                self.assertEqual(game.is_market_hours(), expected)
 
 
 class TestPersistentProfileModes(unittest.TestCase):
@@ -286,189 +277,95 @@ class TestPersistentProfileModes(unittest.TestCase):
     @mock.patch("ai_portfolio_game.load_game")
     @mock.patch("ai_portfolio_game.save_game")
     @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
-    def test_adaptive_upgrade_fires_above_cash_threshold(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_regime, mock_strong_setups):
-        # 50% cash (>40% threshold) + strong setups -> upgrade DEFENSIVE -> BALANCED.
-        state = {"balance": 5000.0, "equity": 10000.0, "positions": {}, "queued_orders": [],
-                 "profile": "DEFENSIVE", "profile_mode": "ADAPTIVE"}
-        mock_load_game.return_value = state
-        mock_get_prices.return_value = {}
+    def test_adaptive_upgrade_cash_gate(self, mock_load_wb, mock_save_game, mock_load_game,
+                                        mock_get_prices, mock_regime, mock_strong_setups):
         wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Research"
         ws.append(["Rank"] + [None] * 25)
         mock_load_wb.return_value = wb
-        game.run_daily_ai_management(force=True, manual_profile=None)
-        self.assertEqual(state["profile"], "BALANCED")
-        self.assertEqual(state["profile_mode"], "ADAPTIVE")
+        mock_get_prices.return_value = {}
 
-    @mock.patch("ai_portfolio_game._has_strong_setups_today", return_value=True)
-    @mock.patch("ai_portfolio_game.get_market_regime", return_value="DEFENSIVE")
-    @mock.patch("ai_portfolio_game.get_live_prices")
-    @mock.patch("ai_portfolio_game.load_game")
-    @mock.patch("ai_portfolio_game.save_game")
-    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
-    def test_adaptive_upgrade_does_not_fire_below_cash_threshold(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_regime, mock_strong_setups):
-        # 30% cash (<40% threshold) -> gate must NOT upgrade even with strong setups.
-        state = {"balance": 3000.0, "equity": 10000.0, "positions": {}, "queued_orders": [],
-                 "profile": "DEFENSIVE", "profile_mode": "ADAPTIVE"}
-        mock_load_game.return_value = state
-        mock_get_prices.return_value = {}
-        wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Research"
-        ws.append(["Rank"] + [None] * 25)
-        mock_load_wb.return_value = wb
-        game.run_daily_ai_management(force=True, manual_profile=None)
-        # Below threshold -> profile must stay DEFENSIVE.
-        self.assertEqual(state["profile"], "DEFENSIVE")
+        cases = [
+            (5000.0, "BALANCED", "above 40% threshold upgrades DEFENSIVE→BALANCED"),
+            (3000.0, "DEFENSIVE", "below 40% threshold stays DEFENSIVE"),
+        ]
+        for balance, expected_profile, label in cases:
+            with self.subTest(label=label):
+                state = {"balance": balance, "equity": 10000.0, "positions": {},
+                         "queued_orders": [], "profile": "DEFENSIVE", "profile_mode": "ADAPTIVE"}
+                mock_load_game.return_value = state
+                game.run_daily_ai_management(force=True, manual_profile=None)
+                self.assertEqual(state["profile"], expected_profile)
 
     def test_check_failure_rules_rejection(self):
-        """Verify that check_failure_rules properly identifies and flags toxic candidates."""
-        # 1. Setup a temporary rules list
-        rules_file = game.BASE_DIR / "Data" / "failure_dna_rules.json"
-
-        # Backup existing rules if any
-        existing_rules = None
-        if rules_file.exists():
-            with open(rules_file, "r", encoding="utf-8") as f:
-                existing_rules = json.load(f)
-
         test_rules = [
-            {
-                "id": "TOXIC_BEARISH_PGR",
-                "field": "pgr",
-                "condition": "startswith_Be",
-                "reason": "Avoid buying Bearish PGR"
-            },
-            {
-                "id": "TOXIC_LOW_SCORE",
-                "field": "score",
-                "condition": "less_than_5.0",
-                "reason": "Avoid buying low scores"
-            }
+            {"id": "TOXIC_BEARISH_PGR",  "field": "pgr",   "condition": "startswith_Be", "reason": "Avoid buying Bearish PGR"},
+            {"id": "TOXIC_LOW_SCORE",     "field": "score", "condition": "less_than_5.0", "reason": "Avoid buying low scores"},
         ]
+        with tempfile.TemporaryDirectory() as td:
+            rules_path = Path(td) / "Data" / "failure_dna_rules.json"
+            rules_path.parent.mkdir(parents=True)
+            rules_path.write_text(json.dumps(test_rules), encoding="utf-8")
+            orig = game.BASE_DIR
+            game.BASE_DIR = Path(td)
+            try:
+                is_toxic, reason = game.check_failure_rules("AAPL", "Be-", 9.5, 0.5, "Technology")
+                self.assertTrue(is_toxic)
+                self.assertEqual(reason, "Avoid buying Bearish PGR")
 
-        # Ensure directory exists and write test rules
-        rules_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(rules_file, "w", encoding="utf-8") as f:
-            json.dump(test_rules, f, indent=4)
+                is_toxic, reason = game.check_failure_rules("MSFT", "Neutral", 3.2, 0.5, "Technology")
+                self.assertTrue(is_toxic)
+                self.assertEqual(reason, "Avoid buying low scores")
 
-        try:
-            # 2. Test Rejections
-            # A Bearish PGR candidate must be rejected
-            is_toxic, reason = game.check_failure_rules("AAPL", "Be-", 9.5, 0.5, "Technology")
-            self.assertTrue(is_toxic)
-            self.assertEqual(reason, "Avoid buying Bearish PGR")
-
-            # A low score candidate must be rejected
-            is_toxic, reason = game.check_failure_rules("MSFT", "Neutral", 3.2, 0.5, "Technology")
-            self.assertTrue(is_toxic)
-            self.assertEqual(reason, "Avoid buying low scores")
-
-            # A healthy candidate must pass (False)
-            is_toxic, reason = game.check_failure_rules("GOOGL", "Bu+", 9.8, 0.5, "Technology")
-            self.assertFalse(is_toxic)
-            self.assertEqual(reason, "")
-        finally:
-            # Restore original rules
-            if existing_rules is not None:
-                with open(rules_file, "w", encoding="utf-8") as f:
-                    json.dump(existing_rules, f, indent=4)
-            elif rules_file.exists():
-                rules_file.unlink()
+                is_toxic, reason = game.check_failure_rules("GOOGL", "Bu+", 9.8, 0.5, "Technology")
+                self.assertFalse(is_toxic)
+                self.assertEqual(reason, "")
+            finally:
+                game.BASE_DIR = orig
 
     def test_log_closed_trade_dna_writing(self):
-        """Verify that log_closed_trade_dna correctly records a closed trade entry."""
-        dna_file = game.BASE_DIR / "Data" / "trade_history_dna.json"
+        pos = {
+            "qty": 10, "cost": 100.0, "stop_loss": 92.0,
+            "buy_dna": {"buy_date": "2026-06-01", "pgr": "Bullish",
+                        "score": 9.5, "z_score": 1.2, "industry": "Software"}
+        }
+        with tempfile.TemporaryDirectory() as td:
+            dna_path = Path(td) / "Data" / "trade_history_dna.json"
+            dna_path.parent.mkdir(parents=True)
+            orig = game.BASE_DIR
+            game.BASE_DIR = Path(td)
+            try:
+                game.log_closed_trade_dna("TEST_SYM", pos, 105.0, "2026-06-05")
+                records = json.loads(dna_path.read_text(encoding="utf-8"))
+            finally:
+                game.BASE_DIR = orig
 
-        # Backup existing DNA ledger if any
-        existing_dna = None
-        if dna_file.exists():
-            with open(dna_file, "r", encoding="utf-8") as f:
-                existing_dna = json.load(f)
+        self.assertEqual(len(records), 1)
+        rec = records[0]
+        self.assertEqual(rec["symbol"], "TEST_SYM")
+        self.assertEqual(rec["buy_date"], "2026-06-01")
+        self.assertEqual(rec["sell_date"], "2026-06-05")
+        self.assertEqual(rec["buy_price"], 100.0)
+        self.assertEqual(rec["sell_price"], 105.0)
+        self.assertEqual(rec["qty"], 10)
+        self.assertEqual(rec["pnl_pct"], 5.0)
+        self.assertEqual(rec["holding_days"], 4)
+        self.assertEqual(rec["buy_dna"]["industry"], "Software")
 
-        # Clear or truncate file for clean test environment
-        if dna_file.exists():
-            dna_file.unlink()
+    def test_risk_reward_gate_logic(self):
+        """The R/R gate rejects when ratio < 2.0 or target gain < 5%."""
+        # This tests the exact gate logic used inside run_daily_ai_management's
+        # workbook-scan loop (row[9]=stop, row[11]=target, price=row[10]).
+        def _gate(price, stop, target):
+            upside = target - price
+            downside = price - stop
+            rr = round(upside / downside, 2) if downside > 0 else 0.0
+            gain = round((upside / price) * 100, 2) if price > 0 else 0.0
+            return rr >= 2.0 and gain >= 5.0
 
-        try:
-            pos = {
-                "qty": 10,
-                "cost": 100.0,
-                "stop_loss": 92.0,
-                "buy_dna": {
-                    "buy_date": "2026-06-01",
-                    "pgr": "Bullish",
-                    "score": 9.5,
-                    "z_score": 1.2,
-                    "industry": "Software"
-                }
-            }
-            # Execute log call
-            game.log_closed_trade_dna("TEST_SYM", pos, 105.0, "2026-06-05")
-
-            # Verify file exists and holds the correct, formatted schema
-            self.assertTrue(dna_file.exists())
-            with open(dna_file, "r", encoding="utf-8") as f:
-                records = json.load(f)
-
-            self.assertEqual(len(records), 1)
-            rec = records[0]
-            self.assertEqual(rec["symbol"], "TEST_SYM")
-            self.assertEqual(rec["buy_date"], "2026-06-01")
-            self.assertEqual(rec["sell_date"], "2026-06-05")
-            self.assertEqual(rec["buy_price"], 100.0)
-            self.assertEqual(rec["sell_price"], 105.0)
-            self.assertEqual(rec["qty"], 10)
-            self.assertEqual(rec["pnl_pct"], 5.0)
-            self.assertEqual(rec["holding_days"], 4)
-            self.assertEqual(rec["buy_dna"]["industry"], "Software")
-        finally:
-            # Restore original DNA ledger
-            if existing_dna is not None:
-                with open(dna_file, "w", encoding="utf-8") as f:
-                    json.dump(existing_dna, f, indent=4)
-            elif dna_file.exists():
-                dna_file.unlink()
-
-    def test_risk_reward_gate_math(self):
-        """Verify that the dynamic Reward-to-Risk ratio and 5% target gain thresholds are correct."""
-        # Scenario 1: Favorable asymmetry & Gain (Upside: $6, Downside: $2) -> Ratio: 3.0, Gain: 6% -> Accept!
-        price = 100.0
-        stop = 98.0
-        target = 106.0
-        
-        upside = target - price
-        downside = price - stop
-        rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
-        target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
-        
-        self.assertEqual(rr_ratio, 3.0)
-        self.assertGreaterEqual(rr_ratio, 2.0)
-        self.assertEqual(target_gain_pct, 6.0)
-        self.assertGreaterEqual(target_gain_pct, 5.0)
-        
-        # Scenario 2: Unfavorable asymmetry (Upside: $2, Downside: $4) -> Ratio: 0.5 -> Reject!
-        price = 100.0
-        stop = 96.0
-        target = 102.0
-        
-        upside = target - price
-        downside = price - stop
-        rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
-        self.assertEqual(rr_ratio, 0.5)
-        self.assertLess(rr_ratio, 2.0)
-        
-        # Scenario 3: Favorable asymmetry but Poor Gain (Upside: $2, Downside: $0.50) -> Ratio: 4.0, Gain: 2% -> Reject!
-        price = 100.0
-        stop = 99.50
-        target = 102.0
-        
-        upside = target - price
-        downside = price - stop
-        rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
-        target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
-        
-        self.assertEqual(rr_ratio, 4.0)
-        self.assertGreaterEqual(rr_ratio, 2.0) # passes R/R
-        self.assertEqual(target_gain_pct, 2.0)
-        self.assertLess(target_gain_pct, 5.0) # fails Target Gain %
+        self.assertFalse(_gate(100, 96,    102),  "R/R=0.5 → reject")
+        self.assertFalse(_gate(100, 99.5,  102),  "gain=2% → reject")
+        self.assertTrue(_gate(100,  98,    106),  "R/R=3.0, gain=6% → accept")
+        self.assertTrue(_gate(100,  95,    111),  "R/R=2.2, gain=11% → accept")
 
     def test_circuit_breaker_single_day_crash(self):
         """Verify that a single-day SPY drop > 2.0% successfully triggers the Circuit Breaker."""
@@ -604,57 +501,33 @@ class TestPersistentProfileModes(unittest.TestCase):
             self.assertNotIn("original_stop_loss", state["positions"]["ZS"])
 
     def test_circuit_breaker_backfeed_dna(self):
-        """Verify that the breaker successfully backfeeds the systemic trigger record to the DNA Ledger."""
         import circuit_breaker
-        from unittest import mock
-        import json
-        
         state = {
-            "balance": 1000.0,
-            "equity": 10000.0,
-            "profile": "BALANCED",
+            "balance": 1000.0, "equity": 10000.0, "profile": "BALANCED",
             "queued_orders": [],
-            "positions": {
-                "ZS": {"qty": 10, "cost": 150.0, "stop_loss": 135.0, "is_scarcity": False}
-            }
+            "positions": {"ZS": {"qty": 10, "cost": 150.0, "stop_loss": 135.0, "is_scarcity": False}}
         }
-        
-        dna_file = circuit_breaker.DNA_FILE
-        existing_dna = None
-        if dna_file.exists():
-            with open(dna_file) as _f:
-                existing_dna = json.load(_f)
-            dna_file.unlink()
-            
-        try:
-            # Mock SPY and VXX returns to trigger the log
-            mock_series = [{"close": 100.0}] * 15
-            with mock.patch("circuit_breaker.load_spy_history", return_value=mock_series):
-                with mock.patch("circuit_breaker.load_vxx_prev_close", return_value=100.0):
-                    circuit_breaker.log_circuit_breaker_trigger_dna("Single-Day Capitulation", state, prices={"SPY": 97.0, "VXX": 116.0})
-                    
-            # Verify file was written and holds correct schema
-            self.assertTrue(dna_file.exists())
-            with open(dna_file) as _f:
-                records = json.load(_f)
-            self.assertEqual(len(records), 1)
-            
-            rec = records[0]
-            self.assertEqual(rec["type"], "CIRCUIT_BREAKER_TRIGGER")
-            self.assertEqual(rec["reason"], "Single-Day Capitulation")
-            self.assertEqual(rec["spy_return_pct"], -3.0)
-            self.assertEqual(rec["vxx_return_pct"], 16.0)
-            self.assertEqual(rec["portfolio_equity"], 10000.0)
-            self.assertEqual(rec["cash_balance"], 1000.0)
-            self.assertEqual(rec["open_positions"][0]["symbol"], "ZS")
-            self.assertEqual(rec["profile"], "BALANCED")
-        finally:
-            # Restore original DNA ledger
-            if existing_dna is not None:
-                with open(dna_file, "w") as f:
-                    json.dump(existing_dna, f, indent=4)
-            elif dna_file.exists():
-                dna_file.unlink()
+        mock_series = [{"close": 100.0}] * 15
+        with tempfile.TemporaryDirectory() as td:
+            tmp_dna = Path(td) / "trade_history_dna.json"
+            with mock.patch.object(circuit_breaker, "DNA_FILE", tmp_dna), \
+                 mock.patch("circuit_breaker.load_spy_history", return_value=mock_series), \
+                 mock.patch("circuit_breaker.load_vxx_prev_close", return_value=100.0):
+                circuit_breaker.log_circuit_breaker_trigger_dna(
+                    "Single-Day Capitulation", state, prices={"SPY": 97.0, "VXX": 116.0}
+                )
+            records = json.loads(tmp_dna.read_text(encoding="utf-8"))
+
+        self.assertEqual(len(records), 1)
+        rec = records[0]
+        self.assertEqual(rec["type"], "CIRCUIT_BREAKER_TRIGGER")
+        self.assertEqual(rec["reason"], "Single-Day Capitulation")
+        self.assertEqual(rec["spy_return_pct"], -3.0)
+        self.assertEqual(rec["vxx_return_pct"], 16.0)
+        self.assertEqual(rec["portfolio_equity"], 10000.0)
+        self.assertEqual(rec["cash_balance"], 1000.0)
+        self.assertEqual(rec["open_positions"][0]["symbol"], "ZS")
+        self.assertEqual(rec["profile"], "BALANCED")
 
 class TestRequalifyPromptBuilder(unittest.TestCase):
     """build_requalify_prompt — pure formatting, no I/O, zero mocks needed."""

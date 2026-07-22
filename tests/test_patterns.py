@@ -47,7 +47,6 @@ class TestTraderVicPatterns(unittest.TestCase):
             }
             
         score, names = patterns.chart_pattern_score(ohlcv_ts, "2026-01-80")
-        print("123 REVERSAL TEST:", score, names)
         self.assertIn("Vic123↑", names)
         self.assertGreaterEqual(score, 2.0)
 
@@ -86,7 +85,6 @@ class TestTraderVicPatterns(unittest.TestCase):
             }
             
         score, names = patterns.chart_pattern_score(ohlcv_ts, "2026-01-80")
-        print("2B REVERSAL TEST:", score, names)
         self.assertIn("Vic2B↑", names)
         self.assertGreaterEqual(score, 2.0)
 
