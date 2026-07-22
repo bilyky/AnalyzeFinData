@@ -103,6 +103,10 @@ class _Config:
         else:
             self.accounts_real = accounts.get("real") or []
 
+        # ── Legacy PostgreSQL (database.py — unused in normal operation) ────────
+        db = raw.get("database") or {}
+        self.database_url = os.environ.get("DATABASE_URL") or db.get("url", "")
+
         # ── Web Dashboard ─────────────────────────────────────────────────────
         web = raw.get("web") or {}
         self.web_port   = int(os.environ.get("WEB_PORT", "") or web.get("port", 8888))
