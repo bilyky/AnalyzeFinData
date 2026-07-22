@@ -173,8 +173,8 @@ def log_circuit_breaker_trigger_dna(reason: str, state: dict, prices=None, _spy_
         spy_return = round(((live_spy - prev_close_val) / prev_close_val) * 100, 2) if prev_close_val > 0 else 0.0
 
     vxx_prev = load_vxx_prev_close()
-    live_vxx = (prices or {}).get("VXX") or vxx_prev
-    vxx_return = round(((live_vxx - vxx_prev) / vxx_prev) * 100, 2) if vxx_prev > 0 else 0.0
+    live_vxx = (prices or {}).get("VXX") if vxx_prev else None
+    vxx_return = round(((live_vxx - vxx_prev) / vxx_prev) * 100, 2) if (vxx_prev and live_vxx) else 0.0
     
     open_positions = [
         {"symbol": sym, "cost": pos.get("cost", 0.0),

@@ -23,6 +23,7 @@ import secrets
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -215,7 +216,7 @@ def create_app():
     # ── Requalify — live AI position analysis ────────────────────────────────
 
     _rq_store: dict = {}
-    _rq_lock = __import__("threading").Lock()
+    _rq_lock = threading.Lock()
     _RQ_TTL = 600
     _RQ_P1_TOKENS = 300
     _RQ_P2_TOKENS = 350

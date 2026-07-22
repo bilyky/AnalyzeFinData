@@ -583,9 +583,9 @@ async function loadAccounts() {
                 <td class="${weakStop(h, h.stop_source) ? "text-amber-400" : ""}" title="${stopTitle}">${fmt$(h.stop)}</td>
                 ${isGame ? `<td>${h.days_held ?? "—"} d</td>` : `<td class="${weakStop(h, h.target_source) ? "text-amber-400" : ""}" title="${tgtTitle}">${fmt$(h.target)}</td>`}
                 ${scoreCells}
-                <td><button class="rq-btn px-2 py-0.5 rounded text-xs font-semibold transition-colors max-w-[6rem] truncate ${badgeCls}" data-rq-sym="${sym}" data-rq-buy="${entry ?? ""}" title="Click to run live AI analysis">${esc(h.status || "HOLD")}</button></td>
+                <td><button class="rq-btn px-2 py-0.5 rounded text-xs font-semibold transition-colors max-w-[6rem] truncate ${badgeCls}" data-rq-sym="${sym}" data-rq-buy="${entry ?? ""}" title="Click to run live AI analysis">${esc(_statusToRec(h.status))}</button></td>
             </tr>
-            <tr class="rq-result-row hidden" data-rq-for="${sym}"><td colspan="14" class="p-0" style="white-space: normal !important;"></td></tr>`;
+            <tr class="rq-result-row hidden" data-rq-for="${sym}"><td colspan="14" class="p-0 whitespace-normal"></td></tr>`;
         }).join("");
 
         const scoreHdr = isGame
@@ -1573,10 +1573,12 @@ const _VD_BADGE = {
 
 function _statusBadgeClass(status) {
     const s = (status || "").toUpperCase().trim();
-    if (s === "EXIT" || s === "SELL") return "bg-red-950/70 text-red-300 border border-red-700/60 hover:bg-red-900";
-    if (s === "REDUCE") return "bg-orange-950/70 text-orange-300 border border-orange-700/60 hover:bg-orange-900";
-    if (s === "WATCH" || s === "REVIEW") return "bg-amber-950/70 text-amber-300 border border-amber-700/60 hover:bg-amber-900";
-    if (s === "STRONG HOLD") return "bg-green-950/70 text-green-300 border border-green-700/60 hover:bg-green-900";
+    if (s.startsWith("EXIT") || s === "SELL")  return "bg-red-950/70 text-red-300 border border-red-700/60 hover:bg-red-900";
+    if (s.startsWith("REDUCE"))                return "bg-orange-950/70 text-orange-300 border border-orange-700/60 hover:bg-orange-900";
+    if (s.startsWith("WATCH") || s.startsWith("REVIEW")) return "bg-amber-950/70 text-amber-300 border border-amber-700/60 hover:bg-amber-900";
+    if (s.startsWith("STRONG HOLD"))           return "bg-green-950/70 text-green-300 border border-green-700/60 hover:bg-green-900";
+    if (s.startsWith("HOLD"))                  return "bg-emerald-950/70 text-emerald-300 border border-emerald-700/60 hover:bg-emerald-900";
+    if (s === "BUY MORE")                      return "bg-blue-950/70 text-blue-300 border border-blue-700/60 hover:bg-blue-900";
     return "bg-slate-800 text-slate-300 border border-slate-700/60 hover:bg-slate-700";
 }
 
@@ -1608,12 +1610,12 @@ function _rqPanel(d, sym, newsStatus) {
         ? `<ul class="mt-2 text-xs mut list-disc pl-4 space-y-0.5">${d.news.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "";
     const errLine = d.error ? `<div class="text-xs text-amber-400 mt-1">⚠ ${esc(d.error)}</div>` : "";
     return `
-        <div class="px-4 py-3 bg-slate-800/60 border-t border-slate-700 text-sm space-y-1" style="white-space: normal !important; word-break: break-word;">
-            <div class="flex items-start gap-2 flex-wrap" style="white-space: normal !important;">
+        <div class="px-4 py-3 bg-slate-800/60 border-t border-slate-700 text-sm space-y-1 whitespace-normal break-words">
+            <div class="flex items-start gap-2 flex-wrap">
                 ${_rqBadge(d.recommendation)}${confBadge}
-                <span class="text-slate-300 flex-1" style="white-space: normal !important; word-break: break-word;">${esc(d.rationale || "")}</span>
+                <span class="text-slate-300 flex-1 break-words">${esc(d.rationale || "")}</span>
             </div>
-            ${d.risk ? `<div class="text-xs text-slate-400" style="white-space: normal !important; word-break: break-word;">Risk: ${esc(d.risk)}</div>` : ""}
+            ${d.risk ? `<div class="text-xs text-slate-400 break-words">Risk: ${esc(d.risk)}</div>` : ""}
             ${verdictLine}${factGrid}${newsHtml}${errLine}
             <div class="text-xs mut mt-1" id="rq-news-status-${esc(sym)}">${newsStatus}</div>
         </div>`;
