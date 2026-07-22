@@ -1220,7 +1220,6 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
                 if v and v != "SYMB" and v != "SYMBOL":
                     held_symbols.add(v)
 
-    # Build lookup: symbol → pick dict
     lk = {p["symbol"].upper(): p for p in picks_data if p.get("symbol")}
 
     # ── Sell list: held symbols sorted by combined S10+L60 ascending ─────────

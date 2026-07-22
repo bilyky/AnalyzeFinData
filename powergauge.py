@@ -44,6 +44,12 @@ from patterns import (
 
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
 
+# Chaikin Analytics app-level API key (shared across all members using this client).
+# Override via CHAIKIN_API_KEY env var if the key is rotated.
+_CHAIKIN_API_KEY = os.environ.get(
+    "CHAIKIN_API_KEY", "76J!7fb?jhEtz/hd7i6rHPKklawGZb5VLReDQXa0?4-jGCqQFi74xYCsb0H-hqUC"
+)
+
 
 def _pgr_str(v: int) -> str:
     if 0 <= v < len(PGR_STR):
@@ -398,7 +404,7 @@ def _validate_session(session_data: dict) -> bool:
         'x-session-id': session_data['jsessionid'],
         'uuid': session_data.get('uuid') or _chaikin_uuid(),
         'jwttoken': session_data.get('jwttoken', ''),
-        'x-api-key': '76J!7fb?jhEtz/hd7i6rHPKklawGZb5VLReDQXa0?4-jGCqQFi74xYCsb0H-hqUC',
+        'x-api-key': _CHAIKIN_API_KEY,
         'x-app-id': 'omni',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
     }
@@ -565,7 +571,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id) -> PowerG
         'x-session-id': session_data.get('jsessionid', ''),
         'uuid': session_data.get('uuid') or _chaikin_uuid(),
         'jwttoken': session_data.get('jwttoken', ''),
-        'x-api-key': '76J!7fb?jhEtz/hd7i6rHPKklawGZb5VLReDQXa0?4-jGCqQFi74xYCsb0H-hqUC',
+        'x-api-key': _CHAIKIN_API_KEY,
         'x-app-id': 'omni',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
     }

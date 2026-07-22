@@ -215,15 +215,17 @@ def create_app():
     # ── Requalify — live AI position analysis ────────────────────────────────
 
     _rq_store: dict = {}
-    _RQ_TTL = 600       # seconds until a completed run is evicted
-    _RQ_P1_TOKENS = 300 # AI tokens for Phase 1 (factors only)
-    _RQ_P2_TOKENS = 350 # AI tokens for Phase 2 (factors + news)
+    _rq_lock = __import__("threading").Lock()
+    _RQ_TTL = 600
+    _RQ_P1_TOKENS = 300
+    _RQ_P2_TOKENS = 350
 
     def _rq_evict():
         now = time.time()
-        stale = [k for k, v in _rq_store.items() if now - v["ts"] > _RQ_TTL]
-        for k in stale:
-            del _rq_store[k]
+        with _rq_lock:
+            stale = [k for k, v in _rq_store.items() if now - v["ts"] > _RQ_TTL]
+            for k in stale:
+                del _rq_store[k]
 
     @app.post("/api/requalify")
     async def requalify(
@@ -293,7 +295,8 @@ def create_app():
 
         # Register Phase 2 run
         run_id = f"rq_{symbol}_{int(_time.time())}"
-        _rq_store[run_id] = {"status": "pending", "ts": _time.time()}
+        with _rq_lock:
+            _rq_store[run_id] = {"status": "pending", "ts": _time.time()}
         _rq_evict()
 
         def _phase2():
@@ -343,23 +346,25 @@ def create_app():
                     except Exception:
                         pass
 
-                _rq_store[run_id] = {
-                    "status":         "done",
-                    "ts":             _t2.time(),
-                    "recommendation": rec2 or recommendation,
-                    "rationale":      rationale2 or rationale,
-                    "risk":           risk2 or risk,
-                    "news":           news,
-                }
+                with _rq_lock:
+                    _rq_store[run_id] = {
+                        "status":         "done",
+                        "ts":             _t2.time(),
+                        "recommendation": rec2 or recommendation,
+                        "rationale":      rationale2 or rationale,
+                        "risk":           risk2 or risk,
+                        "news":           news,
+                    }
             except Exception as _e2:
-                _rq_store[run_id] = {
-                    "status": "done", "ts": _t2.time(),
-                    "recommendation": recommendation,
-                    "rationale": rationale,
-                    "risk": risk,
-                    "news": [],
-                    "error": str(_e2),
-                }
+                with _rq_lock:
+                    _rq_store[run_id] = {
+                        "status": "done", "ts": _t2.time(),
+                        "recommendation": recommendation,
+                        "rationale": rationale,
+                        "risk": risk,
+                        "news": [],
+                        "error": str(_e2),
+                    }
 
         import threading as _threading
         _threading.Thread(target=_phase2, daemon=True).start()
@@ -381,8 +386,8 @@ def create_app():
 
     @app.get("/api/requalify/{run_id}")
     async def requalify_poll(run_id: str):
-        """Phase 2 poll — returns pending until news enrichment completes."""
-        entry = _rq_store.get(run_id)
+        with _rq_lock:
+            entry = _rq_store.get(run_id)
         if not entry:
             return {"status": "not_found"}
         if entry["status"] == "pending":

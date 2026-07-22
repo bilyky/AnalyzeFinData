@@ -1544,16 +1544,17 @@ document.addEventListener("click", (e) => {
 
 // ── Requalify ─────────────────────────────────────────────────────────────────
 
-const _STATUS_TO_REC = {
-    "EXIT":        "SELL",
-    "REDUCE":      "REDUCE",
-    "WATCH":       "REVIEW",
-    "HOLD":        "HOLD",
-    "STRONG HOLD": "HOLD",
-    "REVIEW":      "REVIEW",
-    "NEUTRAL":     "HOLD",
+const _statusToRec = (s) => {
+    const u = (s || "").toUpperCase().trim();
+    if (u.startsWith("EXIT"))         return "SELL";
+    if (u.startsWith("REDUCE"))       return "REDUCE";
+    if (u.startsWith("STRONG HOLD"))  return "HOLD";
+    if (u.startsWith("HOLD"))         return "HOLD";
+    if (u.startsWith("WATCH"))        return "REVIEW";
+    if (u.startsWith("REVIEW"))       return "REVIEW";
+    if (u === "NEUTRAL")              return "HOLD";
+    return u || "⚡ AI";
 };
-const _statusToRec = (s) => _STATUS_TO_REC[(s || "").toUpperCase().trim()] || s || "⚡ AI";
 
 const _RQ_POLL_INTERVAL_MS = 2000;
 const _RQ_MAX_POLLS = 30;  // 30 × 2s = 60s max

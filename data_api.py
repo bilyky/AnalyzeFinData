@@ -6,6 +6,7 @@ All functions are safe to call from async FastAPI route handlers.
 
 import json
 import os
+import re
 import subprocess
 import time
 from datetime import datetime, date
@@ -290,16 +291,16 @@ _SL = {"sym": 1, "qty": 2, "buy": 3, "top": 4, "target": 5, "stop": 6, "buy_date
 def _to_date_str(v):
     """Normalize a Short_Long date cell (Excel serial int, datetime, date, or str)
     to 'YYYY-MM-DD', or None."""
-    import datetime
     if v is None:
         return None
-    if isinstance(v, datetime.datetime):
+    if isinstance(v, datetime):
         return v.date().isoformat()
-    if isinstance(v, datetime.date):
+    if isinstance(v, date):
         return v.isoformat()
     if isinstance(v, (int, float)):
         try:
-            return (datetime.date(1899, 12, 30) + datetime.timedelta(days=int(v))).isoformat()
+            from datetime import timedelta
+            return (date(1899, 12, 30) + timedelta(days=int(v))).isoformat()
         except Exception:
             return None
     s = str(v).strip()
@@ -435,10 +436,9 @@ def read_accounts() -> dict:
                             sc = scores.get(sym, {})
                             dec = sl_decorations.get(sym.strip().upper(), {})
 
-                            # Prefer Research sheet scores; fall back to Short_Long sheet
-                            s10 = _f(sc.get("s10")) if sc else _f(dec.get("s10"))
-                            l60 = _f(sc.get("l60")) if sc else _f(dec.get("l60"))
-                            status = sc.get("status", "") or dec.get("status", "")
+                            s10 = _f(sc.get("s10")) if sc.get("s10") is not None else _f(dec.get("s10"))
+                            l60 = _f(sc.get("l60")) if sc.get("l60") is not None else _f(dec.get("l60"))
+                            status = sc.get("status") or dec.get("status", "")
 
                             stop = dec.get("stop")
                             stop_source = dec.get("stop_source", "E*TRADE")
@@ -934,10 +934,14 @@ def read_scorecard(horizon_days: int = 10) -> dict:
     return _cached(f"scorecard:{horizon_days}", 300.0, _load)
 
 
+_SYMBOL_RE = re.compile(r'^[A-Z0-9.\-]{1,10}$')
+
 def read_symbol(symbol: str) -> dict:
     """Aggregate all available data for one symbol: research row, 90-day price
     series for charting, backtest accuracy, and account holding if held."""
     sym = (symbol or "").upper().strip()
+    if not _SYMBOL_RE.match(sym):
+        return {"symbol": sym, "error": f"Invalid symbol: {sym!r}"}
     def _load():
         import json
         import risk_utils
@@ -983,9 +987,12 @@ def read_symbol(symbol: str) -> dict:
 def read_backtest(symbol: str, horizon: int = 20) -> dict:
     """Walk-forward accuracy of the support/resistance levels for one symbol
     (backtest_levels.backtest_symbol). Cached 10 min — it scans full history."""
+    sym = (symbol or "").upper()
+    if not _SYMBOL_RE.match(sym):
+        return {"symbol": sym, "error": f"Invalid symbol: {sym!r}"}
     def _load():
-        return backtest_levels.backtest_symbol((symbol or "").upper(), horizon=horizon)
-    return _cached(f"bt:{(symbol or '').upper()}:{horizon}", 600.0, _load)
+        return backtest_levels.backtest_symbol(sym, horizon=horizon)
+    return _cached(f"bt:{sym}:{horizon}", 600.0, _load)
 
 
 def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
@@ -994,11 +1001,10 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
     ready for the AI prompt. Also runs the deterministic exit engine.
     Called from the /api/requalify endpoint (Phase 1).
     """
-    import datetime as _dt, re as _re_sym
     sym = (symbol or "").upper().strip()
-    if not _re_sym.match(r'^[A-Z0-9.\-]{1,8}$', sym):
+    if not _SYMBOL_RE.match(sym):
         return {"symbol": sym, "error": f"Invalid symbol: {sym!r}", "factors": {}}
-    today = _dt.date.today()
+    today = date.today()
     result: dict = {"symbol": sym, "error": None}
 
     # ── 1. Live price ─────────────────────────────────────────────────────────
