@@ -569,10 +569,10 @@ async function loadAccounts() {
             const scoreCells = isGame ? "" :
                 `<td class="${cls(s10)}">${s10 == null ? "—" : s10.toFixed(1)}</td>
                  <td class="${cls(l60)}">${l60 == null ? "—" : l60.toFixed(1)}</td>
-                 <td class="font-bold ${cls(total)}">${total == null ? "—" : total.toFixed(1)}</td>
-                 <td class="text-xs">${h.status || ""}</td>`;
+                 <td class="font-bold ${cls(total)}">${total == null ? "—" : total.toFixed(1)}</td>`;
             const stopTitle = h.stop_source ? `stop source: ${h.stop_source}${h.buy_date ? " (as of " + h.buy_date + ")" : ""}` : "";
             const tgtTitle = h.target_source ? `target source: ${h.target_source}` : "";
+            const badgeCls = _statusBadgeClass(h.status);
             return `<tr data-acct="${a.id}" data-sym="${sym}" data-buy="${entry ?? ""}" data-qty="${h.qty ?? ""}">
                 <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${sym}">${sym}${instrumentBadge(h.instrument)}</td>
                 <td>${h.qty ?? "—"}</td>
@@ -583,20 +583,19 @@ async function loadAccounts() {
                 <td class="${weakStop(h, h.stop_source) ? "text-amber-400" : ""}" title="${stopTitle}">${fmt$(h.stop)}</td>
                 ${isGame ? `<td>${h.days_held ?? "—"} d</td>` : `<td class="${weakStop(h, h.target_source) ? "text-amber-400" : ""}" title="${tgtTitle}">${fmt$(h.target)}</td>`}
                 ${scoreCells}
-                <td><button class="rq-btn px-2 py-0.5 rounded text-xs bg-slate-700 hover:bg-blue-700 text-slate-200 transition-colors max-w-[6rem] truncate" data-rq-sym="${sym}" data-rq-buy="${entry ?? ""}" title="Click to run live AI analysis">${esc(_statusToRec(h.status))}</button></td>
+                <td><button class="rq-btn px-2 py-0.5 rounded text-xs font-semibold transition-colors max-w-[6rem] truncate ${badgeCls}" data-rq-sym="${sym}" data-rq-buy="${entry ?? ""}" title="Click to run live AI analysis">${esc(h.status || "HOLD")}</button></td>
             </tr>
             <tr class="rq-result-row hidden" data-rq-for="${sym}"><td colspan="14" class="p-0" style="white-space: normal !important;"></td></tr>`;
         }).join("");
 
         const scoreHdr = isGame
-            ? `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th><th data-sort="days_held" class="cursor-pointer hover:text-blue-400">Days</th><th>AI</th>`
+            ? `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th><th data-sort="days_held" class="cursor-pointer hover:text-blue-400">Days</th><th data-sort="status" class="cursor-pointer hover:text-blue-400 text-right">Status</th>`
             : `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th>
                <th data-sort="target" class="cursor-pointer hover:text-blue-400">Target</th>
                <th data-sort="s10" class="cursor-pointer hover:text-blue-400">S10</th>
                <th data-sort="l60" class="cursor-pointer hover:text-blue-400">L60</th>
                <th data-sort="total" class="cursor-pointer hover:text-blue-400">Score</th>
-               <th data-sort="status" class="cursor-pointer hover:text-blue-400">Status</th>
-               <th>AI</th>`;
+               <th data-sort="status" class="cursor-pointer hover:text-blue-400 text-right">Status</th>`;
 
         return `
         <div>
@@ -1571,6 +1570,15 @@ const _VD_BADGE = {
     "FLAG-FOR-REVIEW": "text-amber-400",
     "NO-OPINION":      "text-slate-400",
 };
+
+function _statusBadgeClass(status) {
+    const s = (status || "").toUpperCase().trim();
+    if (s === "EXIT" || s === "SELL") return "bg-red-950/70 text-red-300 border border-red-700/60 hover:bg-red-900";
+    if (s === "REDUCE") return "bg-orange-950/70 text-orange-300 border border-orange-700/60 hover:bg-orange-900";
+    if (s === "WATCH" || s === "REVIEW") return "bg-amber-950/70 text-amber-300 border border-amber-700/60 hover:bg-amber-900";
+    if (s === "STRONG HOLD") return "bg-green-950/70 text-green-300 border border-green-700/60 hover:bg-green-900";
+    return "bg-slate-800 text-slate-300 border border-slate-700/60 hover:bg-slate-700";
+}
 
 function _rqBadge(rec) {
     const cls_ = _RQ_BADGE[rec] || "bg-slate-700 text-slate-300";
