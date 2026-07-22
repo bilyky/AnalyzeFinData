@@ -75,6 +75,30 @@
     4.  *Backtest via `backtest_ratings.py`:* Measure 10-day forward return spread for the new factor across the full 500-symbol universe. Only add to the S10 composite if the spread is statistically meaningful. If not, document why and park it.
     5.  *Integration gate:* If alpha is confirmed, wire into `scoring.short_score()` with a weight determined by the optimizer (Jul-18 calibration). Keep the factor independent (not bundled with Fibonacci) so each can be turned on/off separately.
 
+*   **Session: Saturday, August 22, 2026 (10:00 AM PST) — Price Pattern Research Lab (Numerology, Calendar & Behavioral):**
+    Research and backtest six candidate micro-factors across the full 500-symbol OHLCV universe using the same pipeline as the digit-sum study (`scripts/backtesting/digit_sum_study.py` as the template). For each factor: (1) run `/deep-research` on the academic/practitioner literature first, (2) implement the metric in `aether/primal_funcs.py`, (3) backtest 10-day forward return spread via `backtest_ratings.py`, (4) only wire into `aether/scoring.py` if the spread is statistically meaningful. Factors to investigate:
+
+    **Numerology / Number Theory:**
+    1.  *Units-Digit Pattern:* Last digit only of integer open price (0–9). Simpler than digit-sum; tests whether market-maker price clustering at whole-dollar boundaries creates directional bias. Architecture: same as `digit_sum_open_score` / `digit_sum_score` — separate standing (close units digit → next day) from real-time (open units digit → same day, applied in `_execute_buys`).
+    2.  *Round-Number Proximity:* Distance of current price from nearest $5, $10, $25, $50, $100 levels, expressed as a percentage of price. Institutional orders cluster at round numbers creating real support/resistance. Score: far below = approaching support (+), far above = approaching resistance (−). Likely stronger than pure digit-sum.
+    3.  *Cents Pattern (.99 / .50 / .00):* Does $X.99 (sub-round, market-maker accumulation zone) behave differently from $X.01 (just-broke-through) or $X.50 (mid-level)? Bucket by fractional cents, test open→same-day direction.
+
+    **Calendar / Time Patterns (per-symbol, not universal):**
+    4.  *Day-of-Week Effect (per symbol):* Some stocks have consistent Monday gaps (weekend news), Friday fade (option positioning), or Thursday beats (pre-earnings drift). Extend the existing `compute_seasonality()` to a weekday dimension per symbol. Result: a 5-bucket lookup table per symbol, same architecture as the digit-sum study JSON.
+    5.  *Week-of-Month Effect (per symbol):* Option expiration (3rd Friday) and index rebalancing create regular intramonth patterns. The global `week_of_month()` already exists in `aether/scoring.py`; test whether symbol-specific week-of-month buckets add marginal alpha on top.
+
+    **Price Action / Behavioral Patterns:**
+    6.  *Gap Persistence vs. Reversal:* When the open gaps above/below prior close by >0.5%, >1%, >2% — does the stock continue in the gap direction by close (momentum), or revert (fade)? Bucketed by gap size and direction. Per-symbol. **Most immediately actionable** — applied at the open as a real-time signal in `_execute_buys` alongside the open-digit signal.
+    7.  *Inside Bar Compression:* When yesterday's high-low range is fully inside the prior day's range (volatility squeeze), is the next session more likely to be directional? Classic setup for breakout entries — validate whether it shows up in our universe with meaningful edge.
+    8.  *Consecutive Streak Reversal:* After N consecutive up/down days (N=3,4,5), does the (N+1)th day tend to continue or reverse? `ohlcv_streak_count` already exists; backtest it as a direction predictor rather than just a descriptor.
+
+    **Shared implementation pattern for all eight factors:**
+    - Each factor produces a per-symbol lookup table (JSON) stored under `Data/` — same format as `digit_sum_study.json`
+    - Minimum N=50 per bucket, |z|≥2.0 for inclusion
+    - Symbol-modal digit-sum table is extended to show whichever factors have significant signals for that symbol
+    - Monthly refresh via `scripts/backtesting/` standalone scripts
+    - Only factors with a confirmed 10-day forward-return spread in `backtest_ratings.py` get added to `short_score()` / `long_score()`; others are logged and displayed but not scored
+
 ## Workflow Conventions
 
 When the user asks to "send", "push", "create", or "save" something (e.g., Gmail draft, commit, file), execute the full action — do not just preview or show content for review unless explicitly asked.

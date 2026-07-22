@@ -25,7 +25,10 @@ _OHLCV_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 # Only signals with |z| >= 2.0 (95%+ confidence) are used.
 _DIGIT_STUDY_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                   "Data", "digit_sum_study.json")
-_digit_index: dict | None = None  # {(symbol, type, digit): z_score}
+_DIGIT_FULL_STUDY_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                       "Data", "digit_sum_full_study.json")
+_digit_index: dict | None = None       # integer digit-sum: {(sym, type, digit): z}
+_digit_full_index: dict | None = None  # full-cents digit-sum: {(sym, type, digit): z}
 
 def _load_digit_index() -> dict:
     global _digit_index
@@ -37,54 +40,93 @@ def _load_digit_index() -> dict:
             rows = json.load(f)
         for r in rows:
             if abs(r.get("z", 0)) >= 2.0:
-                key = (r["symbol"], r["type"], r["digit"])
-                _digit_index[key] = r["z"]
+                _digit_index[(r["symbol"], r["type"], r["digit"])] = r["z"]
     except Exception:
         pass
     return _digit_index
 
+def _load_digit_full_index() -> dict:
+    global _digit_full_index
+    if _digit_full_index is not None:
+        return _digit_full_index
+    _digit_full_index = {}
+    try:
+        with open(_DIGIT_FULL_STUDY_PATH, "r") as f:
+            rows = json.load(f)
+        for r in rows:
+            if abs(r.get("z", 0)) >= 2.0:
+                _digit_full_index[(r["symbol"], r["type"], r["digit"])] = r["z"]
+    except Exception:
+        pass
+    return _digit_full_index
+
 def _price_digit_sum(price: float) -> int:
+    """Digit-sum of integer part only: $247.35 → 247 → 2+4+7=13 → 4."""
     s = str(int(abs(price)))
+    while len(s) > 1:
+        s = str(sum(int(c) for c in s))
+    return int(s)
+
+def _price_digit_sum_full(price: float) -> int:
+    """Digit-sum including cents: $247.35 → 2+4+7+3+5=21 → 3."""
+    s = f"{abs(price):.2f}".replace(".", "")
     while len(s) > 1:
         s = str(sum(int(c) for c in s))
     return int(s)
 
 def digit_sum_open_score(symbol: str, live_open_price: float) -> float:
     """
-    Real-time tiebreaker: digit-sum of TODAY's live open price → same-day direction.
-    Only valid during an active session when live_open_price is the actual open.
-    Called from _execute_buys() at buy-decision time, NOT from the nightly score.
-    Returns [-1.0, +1.0]; 0.0 if no signal exists for this symbol/digit.
+    Real-time tiebreaker at buy-decision time: combines both integer and full-cents
+    digit-sum signals for TODAY's live open price → same-day direction.
+    Only valid during an active session. Called from _execute_buys(), NOT nightly scoring.
+    Returns [-1.0, +1.0]; 0.0 if no signal exists for this symbol.
     """
-    idx = _load_digit_index()
-    if not idx or not live_open_price or live_open_price <= 0:
+    if not live_open_price or live_open_price <= 0:
         return 0.0
     sym = (symbol or "").upper().strip()
-    dg = _price_digit_sum(live_open_price)
-    z = idx.get((sym, "OPEN", dg), 0.0)
-    return round(max(-1.0, min(1.0, z / 3.0)), 2)
+    score = 0.0
+    idx = _load_digit_index()
+    idx_full = _load_digit_full_index()
+
+    dg_int  = _price_digit_sum(live_open_price)
+    dg_full = _price_digit_sum_full(live_open_price)
+
+    z_int  = idx.get((sym, "OPEN", dg_int), 0.0)
+    z_full = idx_full.get((sym, "OPEN", dg_full), 0.0)
+
+    # Average the two signals; each capped at ±1.0 before averaging
+    if z_int:  score += max(-1.0, min(1.0, z_int  / 3.0))
+    if z_full: score += max(-1.0, min(1.0, z_full / 3.0))
+    if z_int and z_full:
+        score /= 2  # average when both fire
+
+    return round(max(-1.0, min(1.0, score)), 2)
 
 
 def digit_sum_score(symbol: str, close_price: float | None = None) -> float:
     """
-    Standing factor: digit-sum of PRIOR CLOSE → next-day direction.
-    This is always available from the OHLCV cache and feeds into short_score().
-    The open-digit signal is NOT included here — it belongs in _execute_buys()
-    as a real-time tiebreaker using the live open price.
-    Returns [-1.0, +1.0]; 0.0 if no signal exists for this symbol/digit.
+    Standing factor: combines integer and full-cents digit-sum of PRIOR CLOSE
+    → next-day direction. Always available from OHLCV cache; feeds into short_score().
+    The open-digit signal belongs in _execute_buys() with the live open price.
+    Returns [-1.0, +1.0]; 0.0 if no signal exists for this symbol.
     """
-    idx = _load_digit_index()
-    if not idx:
+    if not close_price or close_price <= 0:
         return 0.0
-    score = 0.0
     sym = (symbol or "").upper().strip()
+    idx = _load_digit_index()
+    idx_full = _load_digit_full_index()
 
-    # Prior-close digit → today's direction
-    if close_price and close_price > 0:
-        dg2 = _price_digit_sum(close_price)
-        z2 = idx.get((sym, "CLOSE", dg2), 0.0)
-        if z2:
-            score += max(-1.0, min(1.0, z2 / 3.0))
+    dg_int  = _price_digit_sum(close_price)
+    dg_full = _price_digit_sum_full(close_price)
+
+    z_int  = idx.get((sym, "CLOSE", dg_int), 0.0)
+    z_full = idx_full.get((sym, "CLOSE", dg_full), 0.0)
+
+    score = 0.0
+    if z_int:  score += max(-1.0, min(1.0, z_int  / 3.0))
+    if z_full: score += max(-1.0, min(1.0, z_full / 3.0))
+    if z_int and z_full:
+        score /= 2
 
     return round(max(-1.0, min(1.0, score)), 2)
 
