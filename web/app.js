@@ -1521,11 +1521,21 @@ async function openSymbol(sym) {
                     : `<span class="mut">—</span>`;
                 const baseO = o ? `${(o.base*100).toFixed(1)}%` : '—';
                 const baseC = c ? `${(c.base*100).toFixed(1)}%` : '—';
-                const tq = (o && sig(o) ? o.temporal : null) || (c && sig(c) ? c.temporal : null);
-                const tqBadge = tq === 'consistent' ? '<span class="text-green-500">stable</span>'
-                    : tq === 'partial' ? '<span class="text-amber-500">mixed</span>'
-                    : tq === 'stale'   ? '<span class="text-red-400" title="Fired mainly in historical data">stale</span>'
-                    : '<span class="mut">—</span>';
+                const _sigRow = (o && sig(o)) ? o : (c && sig(c)) ? c : null;
+                let tqBadge;
+                if (!_sigRow) {
+                    tqBadge = '<span class="mut">—</span>';
+                } else if (_sigRow.has_flip) {
+                    tqBadge = '<span class="text-red-400" title="Direction flips between time periods — unreliable">flip</span>';
+                } else if (_sigRow.is_sparse) {
+                    tqBadge = '<span class="text-orange-400" title="Digit rarely appears at current price level">sparse</span>';
+                } else if (_sigRow.temporal === 'consistent') {
+                    tqBadge = '<span class="text-green-500" title="Fires in same direction across 4+ time periods">stable</span>';
+                } else if (_sigRow.temporal === 'partial') {
+                    tqBadge = '<span class="text-amber-500" title="Fires in same direction in 2-3 time periods">mixed</span>';
+                } else {
+                    tqBadge = '<span class="text-slate-500" title="Concentrated in historical data only">stale</span>';
+                }
                 html += `<tr class="border-t border-slate-800${isSig ? '' : ' opacity-50'}">
                     <td class="pr-3 py-0.5 text-slate-300">${dg}</td>
                     <td class="pr-3">${fmt(o)}</td>

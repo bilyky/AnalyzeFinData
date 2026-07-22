@@ -107,8 +107,8 @@ def analyze(path: Path) -> list[dict]:
     return rows
 
 
-def _temporal_quality(sym: str, dg: int, overall_z: float, ts: dict) -> str:
-    """Classify signal as consistent/partial/stale across 2-year rolling windows."""
+def _window_analysis(dg: int, overall_z: float, ts: dict, digit_fn) -> dict:
+    """Compute temporal quality, direction flip, and coverage for one signal."""
     dates = sorted(ts.keys())
     all_up = all_n = 0
     for date in dates:
@@ -118,7 +118,8 @@ def _temporal_quality(sym: str, dg: int, overall_z: float, ts: dict) -> str:
         all_n += 1; all_up += 1 if cl > op else 0
     base = all_up / all_n if all_n else 0.5
     sign = 1 if overall_z > 0 else -1
-    cons = 0
+
+    wzs = []
     for _, start, end in _WINDOWS:
         ups = n = 0
         for date in dates:
@@ -126,15 +127,22 @@ def _temporal_quality(sym: str, dg: int, overall_z: float, ts: dict) -> str:
             d = ts[date]
             try: op = float(d["1. open"]); cl = float(d["4. close"])
             except: continue
-            if _digit_sum(op) == dg:
+            if digit_fn(op) == dg:
                 n += 1; ups += 1 if cl > op else 0
-        if n >= MIN_WIN_N:
-            z = _z(ups, n, base)
-            if abs(z) >= 1.0 and (z > 0) == (sign > 0):
-                cons += 1
-    if cons >= 4: return "consistent"
-    if cons >= 2: return "partial"
-    return "stale"
+        wzs.append(_z(ups, n, base) if n >= MIN_WIN_N else None)
+
+    valid = [z for z in wzs if z is not None]
+    coverage = len(valid) / len(_WINDOWS)
+    cons = sum(1 for z in valid if abs(z) >= 1.0 and (z > 0) == (sign > 0))
+    sign_vals = [1 if z > 0 else -1 for z in valid if abs(z) >= 0.5]
+    has_flip = len(set(sign_vals)) > 1 if len(sign_vals) >= 2 else False
+
+    if cons >= 4: temporal = "consistent"
+    elif cons >= 2: temporal = "partial"
+    else: temporal = "stale"
+
+    return {"temporal": temporal, "coverage": round(coverage, 2),
+            "has_flip": has_flip, "is_sparse": coverage < 0.5}
 
 
 def run():
@@ -157,7 +165,11 @@ def run():
 
     for r in sig:
         ts = ts_map.get(r["symbol"], {})
-        r["temporal"] = _temporal_quality(r["symbol"], r["digit"], r["z"], ts) if ts else "no_data"
+        if ts:
+            info = _window_analysis(r["digit"], r["z"], ts, _digit_sum)
+            r.update(info)
+        else:
+            r["temporal"] = "no_data"
 
     with open(OUT_FILE, "w") as f:
         json.dump(all_rows, f)
