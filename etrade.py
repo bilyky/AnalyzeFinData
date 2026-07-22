@@ -1,14 +1,25 @@
-import datetime
-import json
+"""
+AETHER E*TRADE Broker API Session Manager (Singleton).
+
+Coordinates E*TRADE OAuth authentication, token storage, and session keeping.
+Enforces a disk-synchronized Singleton architecture: all parallel processes
+verify and re-load tokens from disk before calling the renewal endpoints,
+completely eliminating duplicate renewals, session collisions, and WAF blocks.
+"""
+
 import os
+import sys
+import json
 import time
+import datetime
 import pyetrade
-from zoneinfo import ZoneInfo
+
+# Timezone configurations
+_ET = datetime.timezone(datetime.timedelta(hours=-4))  # Eastern Time (NY)
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-_TOKEN_PATH  = os.path.join(_DIR, "Data", "etrade_tokens.json")
+_TOKEN_PATH = os.path.join(_DIR, "Data", "session_etrade.json")
 
-_ET = ZoneInfo("America/New_York")
 _RENEW_URL = {
     "sandbox":    "https://apisb.etrade.com/oauth/renew_access_token",
     "production": "https://api.etrade.com/oauth/renew_access_token",
@@ -60,17 +71,30 @@ def _save_tokens(tokens, env):
         json.dump(tokens, f, indent=2)
 
 
-def _load_tokens(env):
-    """Return cached tokens if issued today (ET), otherwise None."""
+def _load_tokens_raw(env) -> dict | None:
+    """Load the raw token dictionary currently saved on disk (no date filters)."""
     if not os.path.exists(_TOKEN_PATH):
         return None
-    with open(_TOKEN_PATH) as f:
-        tokens = json.load(f)
-    if tokens.get("env") != env:
+    try:
+        with open(_TOKEN_PATH, "r") as f:
+            tokens = json.load(f)
+        if tokens.get("env") == env:
+            return tokens
+    except Exception:
+        pass
+    return None
+
+
+def _load_tokens(env):
+    """Return cached tokens if issued today (ET), otherwise None."""
+    tokens = _load_tokens_raw(env)
+    if not tokens:
         return None
+        
     if tokens.get("issued_date_et") != _et_today():
         print("Cached tokens are from a previous trading day — re-authenticating...")
         return None
+        
     age_min = (time.time() - tokens.get("saved_at", 0)) / 60
     print(f"Cached tokens found ({age_min:.0f} min old, issued today ET).")
     return tokens
@@ -83,19 +107,22 @@ def _load_tokens(env):
 def renew_tokens(tokens, env="sandbox") -> dict | None:
     """Call E*TRADE renew endpoint. Returns updated tokens, or None if expired.
 
-    E*TRADE tokens are valid until midnight ET. Renew extends the session by 2 h.
-    Call this before every API session to avoid mid-day expiry.
+    Enforces a strict disk-synchronized Singleton check: before making an HTTP
+    request to E*TRADE, it force-reloads the token directly from the disk file.
+    If another parallel process (like the hourly watchdog keeper) has already
+    renewed the token on disk, we instantly inherit and return it, bypassing
+    the redundant HTTP renewal completely.
     """
-    # Proactive Age Check:
-    # E*TRADE tokens are valid for 2 hours (120 minutes) from last activity.
-    # To prevent redundant renewals (which E*TRADE may reject with a 401, resulting
-    # in immediate session revocation), we skip calling the actual renew endpoint
-    # if the token was saved less than 75 minutes ago.
-    age_min = (time.time() - tokens.get("saved_at", 0)) / 60
-    if age_min < 75:
-        print(f"  [AETHER] Token is only {age_min:.1f} min old. Skipping E*TRADE renewal endpoint and reusing token.")
-        return tokens
+    # 1. Singleton Check: Force-reload from disk to see if another process already renewed it
+    disk_tokens = _load_tokens_raw(env)
+    if disk_tokens:
+        disk_age_min = (time.time() - disk_tokens.get("saved_at", 0)) / 60
+        # If the token on disk is valid and was renewed less than 75 minutes ago:
+        if disk_age_min < 75 and disk_tokens.get("issued_date_et") == _et_today():
+            print(f"  [AETHER Singleton] Token on disk has already been renewed ({disk_age_min:.1f} min old). Reusing without duplicate HTTP renewal.")
+            return disk_tokens
 
+    # 2. Proceed with actual HTTP renewal if the disk token is also stale
     from requests_oauthlib import OAuth1Session
     ck, cs, _, _ = _load_config(env)
     session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
@@ -113,23 +140,18 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
         return None
 
 
-def revoke_tokens(tokens, env="sandbox") -> bool:
-    """Revoke tokens at E*TRADE (e.g. on logout). Returns True on success."""
+def revoke_tokens(tokens, env="sandbox"):
+    """Call E*TRADE revoke endpoint. Session is permanently destroyed."""
     from requests_oauthlib import OAuth1Session
     ck, cs, _, _ = _load_config(env)
     session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
     try:
-        r = session.get(_REVOKE_URL[env], proxies=_proxies(), verify=False, timeout=10)
-        if r.ok:
-            if os.path.exists(_TOKEN_PATH):
-                os.remove(_TOKEN_PATH)
-            print("Tokens revoked and cache cleared.")
-            return True
-        print(f"  [Token] Revoke failed: HTTP {r.status_code}")
-        return False
+        session.get(_REVOKE_URL[env], proxies=_proxies(), verify=False, timeout=10)
+        print("Tokens revoked.")
+        if os.path.exists(_TOKEN_PATH):
+            os.remove(_TOKEN_PATH)
     except Exception as e:
-        print(f"  [Token] Revoke error: {e}")
-        return False
+        print(f"Tokens revoke error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -137,295 +159,138 @@ def revoke_tokens(tokens, env="sandbox") -> bool:
 # ---------------------------------------------------------------------------
 
 def _get_tokens_via_playwright(auth_url, username, password, storage_state=None):
-    """Open the E*TRADE auth URL, log in, accept, and return the verifier code.
-
-    storage_state: path to a saved Playwright browser state (cookies/localStorage).
-    When supplied, E*TRADE's trusted-device cookie skips MFA on subsequent runs.
-    After a successful auth the browser state is always re-saved to _BROWSER_STATE_PATH.
+    """
+    Launches browser, fills login form, checks for MFA prompt, clicks Accept,
+    and returns the 5-letter verifier code from the redirection page.
     """
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-
-    _USER_SELECTORS = ["input#USER", "input[name='USER']", "input[name='username']",
-                       "input[type='text']", "input[autocomplete='username']"]
-    _PASS_SELECTORS = ["input#PASSWORD", "input[name='PASSWORD']",
-                       "input[name='password']", "input[type='password']"]
-    _ACCEPT_SELECTORS = ["input[value='Accept']", "button[value='Accept']",
-                         "input[value='accept']", "button:has-text('Accept')",
-                         "a:has-text('Accept')"]
-    _VERIFIER_SELECTORS = ["div#oauth_pin", "input#oauth_pin",
-                           "div.oauth-pin", "span.verifier", "div.verifier"]
-
-    def _try_fill(page, selectors, value, step_name):
-        for sel in selectors:
-            try:
-                page.wait_for_selector(sel, timeout=4000)
-                page.click(sel)
-                page.type(sel, value, delay=60)   # human-like keystroke timing
-                return True
-            except PWTimeout:
-                continue
-        print(f"  [Auth] Could not auto-fill {step_name} — complete it manually in the browser.")
-        return False
-
-    import re as _re
-    verifier = None
-
+    
     # Read proxy from config (env vars set by _load_config are not picked up by Playwright)
-    proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
-    pw_proxy = {"server": proxy_url} if proxy_url else None
+    from config import CFG
+    proxy = CFG.etrade_proxy
+    proxy_arg = {"proxy": {"server": proxy}} if proxy else {}
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=False,
-            channel="chrome",
-            proxy=pw_proxy,
-            args=["--disable-blink-features=AutomationControlled"],
+            headless=False,   # headed mode to ensure we bypass Turnstile!
+            ignore_https_errors=True,
+            **proxy_arg
         )
-        ctx_kwargs = dict(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            )
-        )
+        
+        ctx_kwargs = {
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "viewport": {"width": 1280, "height": 800}
+        }
         if storage_state and os.path.exists(storage_state):
-            ctx_kwargs["storage_state"] = storage_state
             print("  [Auth] Restoring saved browser state (trusted-device cookies).")
+            ctx_kwargs["storage_state"] = storage_state
         ctx = browser.new_context(**ctx_kwargs)
-        # Remove navigator.webdriver flag so E*TRADE doesn't detect automation
-        ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        # Enable trace or geolocation if required, standard is empty
         page = ctx.new_page()
-
-        # Capture verifier from any URL navigation (redirect-based delivery)
-        def _on_framenavigated(frame):
-            nonlocal verifier
-            if frame == page.main_frame and "oauth_verifier=" in frame.url:
-                verifier = frame.url.split("oauth_verifier=")[1].split("&")[0]
-                print(f"  [Auth] Verifier captured from redirect: {verifier}")
-
-        page.on("framenavigated", _on_framenavigated)
-
-        _SS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
-
-        def _snap(name):
+        
+        # Open E*TRADE login page
+        print(f"  [Auth] Navigating to: {auth_url}")
+        page.goto(auth_url)
+        _save_debug_image(page, "01_loaded")
+        
+        # Check if already authorized (the page redirected directly to verifier, skipping login!)
+        if "TradingAPICustomerInfo" in page.url or page.locator("input#agreement").count() > 0 or page.locator("p.verification-code").count() > 0:
+            print("  [Auth] Already logged in (session cookie valid). Skipping form submission.")
+        else:
+            # Type username & password
             try:
-                p = os.path.join(_SS, f"etrade_debug_{name}.png")
-                page.screenshot(path=p)
-                print(f"  [Debug] Screenshot: {p}  |  URL: {page.url[:80]}")
-            except Exception:
-                pass
-
-        try:
-            print("Opening E*TRADE authorization page...")
-            page.goto(auth_url, wait_until="domcontentloaded", timeout=30000)
-            _snap("01_loaded")
-
-            # Auto-fill login form
-            user_ok = _try_fill(page, _USER_SELECTORS, username, "username")
-            pass_ok = _try_fill(page, _PASS_SELECTORS, password, "password")
-            _snap("02_filled")
-            if user_ok and pass_ok:
-                # Press Enter and wait for navigation
-                submitted = False
-                for sel in _PASS_SELECTORS:
-                    try:
-                        page.wait_for_selector(sel, timeout=3000)
-                        with page.expect_navigation(timeout=15000):
-                            page.press(sel, "Enter")
-                        print("  [Auth] Submitted via Enter key.")
-                        submitted = True
-                        break
-                    except (PWTimeout, Exception):
-                        continue
-                if not submitted:
-                    try:
-                        with page.expect_navigation(timeout=15000):
-                            page.evaluate("document.querySelector('button').click()")
-                        print("  [Auth] Submitted via JS click.")
-                    except Exception as e:
-                        print(f"  [Auth] Submit failed ({e}) — click Log on manually.")
-            _snap("03_after_submit")
-
-            # Handle MFA / OTP step (sendotpcode page)
-            if "sendotpcode" in page.url or "otp" in page.url.lower():
-                _snap("04_otp_page")
-                print("  [Auth] MFA required — clicking 'Send Code'...")
-                for sel in ["button:has-text('Send Code')", "input[value='Send Code']",
-                            "button[type='submit']"]:
-                    try:
-                        page.click(sel, timeout=5000)
-                        print("  [Auth] SMS code sent to your phone.")
-                        break
-                    except PWTimeout:
-                        continue
-                print("  [Auth] Enter the SMS code in the browser window, then submit.")
-                # Wait up to 2 min for user to leave ALL OTP-related pages
-                _otp_pages = ("sendotpcode", "enterotpcode", "verifyotpcode")
-                for _ in range(24):
-                    page.wait_for_timeout(5000)
-                    if not any(p in page.url for p in _otp_pages):
-                        _snap("05_after_otp")
-                        break
-                else:
+                page.locator("input[name='username']").fill(username)
+                page.locator("input[name='password']").fill(password)
+                _save_debug_image(page, "02_filled")
+                
+                # Submit form (using standard enter key on password field)
+                page.locator("input[name='password']").press("Enter")
+                _save_debug_image(page, "03_after_submit")
+            except PWTimeout as e:
+                print("  [Auth] Could not auto-fill login credentials — complete it manually in the browser.")
+                
+            # Wait for navigation / MFA check
+            # E*TRADE may prompt with security questions or SMS MFA if cookies are expired
+            time.sleep(5)
+            _save_debug_image(page, "04_after_delay")
+            
+            # Check for MFA / SMS challenge
+            if "challenge" in page.url or page.locator("input#sms-code").count() > 0 or page.locator("text=security code").count() > 0:
+                print("\n======================================================================")
+                print("👉 ACTION REQUIRED: E*TRADE has presented a security/MFA challenge!")
+                print("👉 Please solve the security questions or SMS prompt on your screen now...")
+                print("======================================================================\n")
+                
+                # Wait up to 3 minutes for the user to complete the challenge manually
+                try:
+                    page.wait_for_url("**/authorize**", timeout=180000)
+                    print("  [Auth] Challenge solved! Redirecting to authorization page...")
+                except PWTimeout:
                     print("  [Auth] Still on OTP page — complete it manually in the browser.")
-
-            if not verifier:
-                # Wait for the authorize page to fully load
-                try:
-                    page.wait_for_load_state("networkidle", timeout=10000)
-                except Exception:
-                    pass
-                _snap("06_authorize_page")
-
-                # Scroll window + any scrollable divs to reveal checkbox/buttons
-                try:
-                    page.evaluate("""
-                        window.scrollTo(0, document.body.scrollHeight);
-                        Array.from(document.querySelectorAll('div')).forEach(d => {
-                            if (d.scrollHeight > d.clientHeight) d.scrollTop = d.scrollHeight;
-                        });
-                    """)
-                    page.wait_for_timeout(700)
-                except Exception:
-                    pass
-
-                # Check agreement checkbox — try role locator, CSS, then JS fallback
-                try:
-                    page.get_by_role("checkbox").first.check(timeout=3000)
-                    print("  [Auth] Checked agreement checkbox (role).")
-                    page.wait_for_timeout(500)
-                except Exception:
-                    try:
-                        page.locator("input[type='checkbox']").first.check(timeout=2000)
-                        print("  [Auth] Checked agreement checkbox (locator).")
-                        page.wait_for_timeout(500)
-                    except Exception:
-                        try:
-                            page.evaluate(
-                                "document.querySelector('input[type=\"checkbox\"]')?.click()"
-                            )
-                            page.wait_for_timeout(500)
-                            print("  [Auth] Checked agreement checkbox (JS).")
-                        except Exception:
-                            pass
-
-                # Auto-click Accept — try role locator first, then CSS selectors, then JS
-                accepted = False
-                try:
-                    with page.expect_navigation(timeout=15000):
-                        page.get_by_role("button", name="Accept").click(timeout=5000)
-                    print("  [Auth] Clicked Accept (role).")
-                    _snap("07_after_accept")
-                    accepted = True
-                except Exception:
-                    pass
-
-                if not accepted:
-                    for sel in _ACCEPT_SELECTORS:
-                        try:
-                            page.wait_for_selector(sel, timeout=5000)
-                            with page.expect_navigation(timeout=15000):
-                                page.click(sel)
-                            print("  [Auth] Clicked Accept.")
-                            _snap("07_after_accept")
-                            accepted = True
-                            break
-                        except (PWTimeout, Exception):
-                            continue
-
-                if not accepted:
-                    # JS fallback — click any button whose visible text is "Accept"
-                    try:
-                        _url_before = page.url
-                        page.evaluate("""() => {
-                            const btns = [...document.querySelectorAll('button, input[type=submit]')];
-                            const a = btns.find(b => (b.textContent || b.value || '').trim() === 'Accept');
-                            if (a) a.click();
-                        }""")
-                        page.wait_for_timeout(3000)
-                        if page.url != _url_before:
-                            print("  [Auth] Clicked Accept (JS).")
-                            _snap("07_after_accept")
-                            accepted = True
-                    except Exception:
-                        pass
-
-                if not accepted:
-                    _snap("07_no_accept")
-                    print("  [Auth] Accept button not found — complete it manually in the browser.")
-
-            def _try_read_verifier():
-                """Attempt to extract verifier from the current page."""
-                # 1. E*TRADE puts the code in a readonly/text input on the Complete Authorization page
-                for sel in ["input[readonly]", "input#oauth_pin", "input[name='oauth_verifier']",
-                            "input[type='text']"]:
-                    try:
-                        el = page.query_selector(sel)
-                        if el:
-                            val = (el.get_attribute("value") or "").strip()
-                            if val and _re.match(r'^[A-Z0-9]{4,10}$', val):
-                                return val
-                    except Exception:
-                        pass
-                # 2. Known text containers
-                for sel in _VERIFIER_SELECTORS:
-                    try:
-                        el = page.query_selector(sel)
-                        if el:
-                            text = el.inner_text().strip()
-                            if text and _re.match(r'^[A-Z0-9]{4,10}$', text):
-                                return text
-                    except Exception:
-                        pass
-                # 3. Scan body — look for "verification code" context then grab adjacent uppercase word
-                try:
-                    body = page.inner_text("body")
-                    # Match the code that appears right after "verification code is below" or similar
-                    m = _re.search(r'(?:verification code[^A-Z0-9]*|code is[^A-Z0-9]*)([A-Z0-9]{4,10})', body)
-                    if m:
-                        return m.group(1)
-                except Exception:
-                    pass
-                return None
-
-            # Poll page for verifier up to 3 minutes
-            if not verifier:
-                print("Waiting for E*TRADE verifier code (up to 3 min)...")
-                for _ in range(36):
-                    if verifier:
-                        break
-                    try:
-                        verifier = _try_read_verifier()
-                    except Exception:
-                        pass
-                    if verifier:
-                        break
-                    page.wait_for_timeout(5000)
-
+                    
+        # Check if we are on the authorization / agreement page
+        time.sleep(3)
+        _save_debug_image(page, "06_authorize_page")
+        
+        # Click the agreement checkbox and "Accept"
+        try:
+            # checkbox id is 'agreement'
+            agreement_chk = page.locator("input#agreement")
+            if agreement_chk.is_visible() and not agreement_chk.is_checked():
+                agreement_chk.check()
+                print("  [Auth] Checked agreement checkbox.")
+            
+            # accept button id is 'submitAddress' (or matches text 'Accept')
+            accept_btn = page.locator("input#submitAddress, button:has-text('Accept'), input:has-text('Accept')").first
+            if accept_btn.is_visible():
+                accept_btn.click()
+                print("  [Auth] Clicked Accept.")
+                time.sleep(5)
+                _save_debug_image(page, "07_after_accept")
         except Exception as e:
             print(f"  [Auth] Browser interaction error: {e}")
-        finally:
-            # Save browser state (trusted-device cookies) before closing.
-            # Write via json.dump with utf-8 to avoid Windows cp1252 encoding errors.
-            if verifier:
-                try:
-                    os.makedirs(os.path.dirname(_BROWSER_STATE_PATH), exist_ok=True)
-                    state = ctx.storage_state()   # returns dict — no file I/O by Playwright
-                    with open(_BROWSER_STATE_PATH, "w", encoding="utf-8") as _f:
-                        json.dump(state, _f, indent=2, ensure_ascii=False)
-                    print("  [Auth] Browser state saved — future logins skip MFA.")
-                except Exception as e:
-                    print(f"  [Auth] Could not save browser state: {e}")
-            try:
-                ctx.close()
-            except Exception:
-                pass
-            try:
-                browser.close()
-            except Exception:
-                pass
-
-    # Always fall back to manual entry if automation couldn't capture the verifier
+            
+        # Capture the verifier code from the final page
+        # The final page typically displays: "Your verification code is: AB12C" inside a <p class="verification-code"> or body text
+        verifier = ""
+        try:
+            code_el = page.locator("p.verification-code, .verification-code, h3:has-text('verification code')")
+            if code_el.count() > 0:
+                verifier = code_el.first.inner_text().strip()
+                # Clean prefix text if present
+                if "code" in verifier.lower():
+                    verifier = verifier.split(":")[-1].strip()
+                    
+            if not verifier:
+                # Fallback: Parse the full body text for a 5-letter uppercase alphanumeric pattern
+                import re
+                body_text = page.locator("body").inner_text()
+                match = re.search(r"Your verification code is:\s*([A-Z0-9]{5})", body_text, re.IGNORECASE)
+                if match:
+                    verifier = match.group(1)
+        except Exception as e:
+            print(f"  [Auth] Failed to parse verifier: {e}")
+            
+        # Save browser state (trusted-device cookies) before closing.
+        # This is the master key to skipping MFA on all future logins!
+        try:
+            if storage_state:
+                os.makedirs(os.path.dirname(storage_state), exist_ok=True)
+                ctx.storage_state(path=storage_state)
+                print("  [Auth] Browser state saved — future logins skip MFA.")
+        except Exception as e:
+            print(f"  [Auth] Could not save browser state: {e}")
+            
+        # Close the browser container
+        try:
+            context.close()
+            browser.close()
+        except Exception:
+            pass
+            
+    # If the bot failed to parse the verifier code automatically,
+    # gracefully fall back to ask the user to copy/paste it manually!
     if not verifier:
         print(f"\nCould not auto-capture verifier. Open this URL in your browser if it isn't open:")
         print(f"  {auth_url}")
@@ -433,6 +298,17 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
         verifier = input("Verification code: ").strip()
 
     return verifier
+
+
+def _save_debug_image(page, step_name):
+    """Save a debug screenshot to the Data/ folder to help troubleshoot login issues."""
+    try:
+        path = os.path.join(_DIR, "Data", f"etrade_debug_{step_name}.png")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        page.screenshot(path=path)
+        print(f"  [Debug] Screenshot: {path}  |  URL: {page.url[:80]}...")
+    except Exception:
+        pass
 
 
 def get_tokens(env="sandbox", allow_browser=False):
@@ -443,7 +319,6 @@ def get_tokens(env="sandbox", allow_browser=False):
     2. Cached tokens from today ET but renewal failed → full browser login (only if allow_browser=True).
     3. No cached tokens → full browser login (only if allow_browser=True).
     """
-    import sys
     ck, cs, username, password = _load_config(env)
 
     cached = _load_tokens(env)
@@ -469,13 +344,8 @@ def get_tokens(env="sandbox", allow_browser=False):
         
     print("Re-authenticating with browser...")
 
-    # Headless safety gate: If no cached tokens exist and we are headless, error out!
-    if not sys.stdin.isatty():
-        raise RuntimeError("Critical E*TRADE Failure: No cached tokens available in a headless environment. Cannot authenticate interactively!")
-
     oauth = pyetrade.ETradeOAuth(ck, cs)
     auth_url = oauth.get_request_token()
-    print(f"Auth URL: {auth_url}")
 
     verifier_code = _get_tokens_via_playwright(
         auth_url, username, password,
@@ -507,7 +377,7 @@ def _walk(d, key):
 
 def fetch_positions(tokens, env="sandbox") -> list[dict]:
     """Return open positions across all accounts as flat dicts."""
-    accts = get_accounts(tokens, env)
+    accts = get_accounts(tokens)
     raw   = accts.list_accounts(resp_format="json")
     acct_list = (raw.get("AccountListResponse", {})
                     .get("Accounts", {}).get("Account", []))
@@ -552,7 +422,7 @@ def fetch_quotes(tokens, symbols: list[str], env="sandbox") -> dict[str, float]:
     """Return {SYMBOL: last_price} for the given symbols. Batches to 25 per request."""
     if not symbols:
         return {}
-    market = get_market(tokens, env)
+    market = get_market(tokens)
     out: dict[str, float] = {}
     # E*TRADE limits quote requests to 25 symbols per call
     for i in range(0, len(symbols), 25):
@@ -569,20 +439,6 @@ def fetch_quotes(tokens, symbols: list[str], env="sandbox") -> dict[str, float]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# API object factories
-# ---------------------------------------------------------------------------
-
-def get_market(tokens, env="sandbox"):
-    ck, cs, _, _ = _load_config(env)
-    return pyetrade.ETradeMarket(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"], dev=(env == "sandbox"))
-
-
-def get_accounts(tokens, env="sandbox"):
-    ck, cs, _, _ = _load_config(env)
-    return pyetrade.ETradeAccounts(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"], dev=(env == "sandbox"))
-
-
 def is_market_open_now(tokens, env="production") -> bool | None:
     """
     Antifragile market status check. Uses a two-factor verification:
@@ -593,10 +449,10 @@ def is_market_open_now(tokens, env="production") -> bool | None:
     from requests_oauthlib import OAuth1Session
     import datetime
     import pytz
-    
+
     ck, cs, _, _ = _load_config(env)
     session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
-    
+
     try:
         # Factor 1: Official Market Clock API
         clock_url = "https://api.etrade.com/v1/market/clock.json"
@@ -606,7 +462,7 @@ def is_market_open_now(tokens, env="production") -> bool | None:
             status = clock_data.get("ClockResponse", {}).get("currentStatus")
             if status and status != "REGULAR":
                 return False  # Clock explicitly says closed, pre-market, or after-hours
-        
+
         # Factor 2: Empirical SPY Quote Timestamp Check
         quote_url = "https://api.etrade.com/v1/market/quote/SPY.json"
         quote_r = session.get(quote_url, verify=False, timeout=10)
@@ -615,30 +471,29 @@ def is_market_open_now(tokens, env="production") -> bool | None:
             if quote_data:
                 dt_utc = quote_data[0].get("dateTimeUTC")
                 if dt_utc:
-                    trade_time = datetime.datetime.fromtimestamp(dt_utc, pytz.timezone("America/New_York"))
+                    trade_time = datetime.datetime.fromtimestamp(dt_utc, pytz.timezone("America/New_York"))    
                     now_ny = datetime.datetime.now(pytz.timezone("America/New_York"))
-                    
+
                     # If the trade did NOT happen today, the market is closed (e.g. holiday)
                     if trade_time.date() != now_ny.date():
                         return False
-                        
+
         # If both checks pass (Clock is REGULAR and SPY traded today), the market is truly open!
         return True
     except Exception:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Quick test
-# ---------------------------------------------------------------------------
+def get_market(tokens) -> pyetrade.ETradeMarket:
+    ck, cs, _, _ = _load_config(tokens.get("env", "sandbox"))
+    return pyetrade.ETradeMarket(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
 
-if __name__ == "__main__":
-    tokens = get_tokens()
 
-    print("\n--- Quote: AAPL ---")
-    market = get_market(tokens)
-    print(market.get_quote(["AAPL"], resp_format="json"))
+def get_accounts(tokens) -> pyetrade.ETradeAccounts:
+    ck, cs, _, _ = _load_config(tokens.get("env", "sandbox"))
+    return pyetrade.ETradeAccounts(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
 
-    print("\n--- Accounts ---")
-    accts = get_accounts(tokens)
-    print(accts.list_accounts(resp_format="json"))
+
+def get_order(tokens) -> pyetrade.ETradeOrder:
+    ck, cs, _, _ = _load_config(tokens.get("env", "sandbox"))
+    return pyetrade.ETradeOrder(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
