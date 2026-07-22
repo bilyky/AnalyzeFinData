@@ -52,7 +52,7 @@ def _resolve_key(source: str) -> str:
 # ── Provider registry ──────────────────────────────────────────────────────────
 
 def _providers() -> dict:
-    from config import CFG
+    from aether.config import CFG
     return CFG.ai_providers or {}
 
 
@@ -72,7 +72,7 @@ def enabled_providers() -> list:
 def primary() -> str | None:
     """The provider that drives the surfaced verdict: the configured `primary` if
     it's usable, else the first enabled provider, else None."""
-    from config import CFG
+    from aether.config import CFG
     enabled = enabled_providers()
     if CFG.ai_primary and CFG.ai_primary in enabled:
         return CFG.ai_primary

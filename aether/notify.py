@@ -7,7 +7,7 @@ SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
 try:
-    from config import CFG
+    from aether.config import CFG
     SENDER_EMAIL = CFG.email_sender_address or os.environ.get("SENDER_EMAIL", "")
     RECIPIENT_EMAIL = CFG.email_recipient_address or os.environ.get("RECIPIENT_EMAIL", SENDER_EMAIL)
     SENDER_PASSWORD = CFG.smtp_password or os.environ.get("SMTP_PASSWORD", "")

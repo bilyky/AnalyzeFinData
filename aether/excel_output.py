@@ -724,7 +724,7 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
     ws = wb["Short_Long"]
 
     # Real account last-4 IDs from config (PII — never hardcode). [0]=T1, [1]=T2.
-    from config import CFG
+    from aether.config import CFG
     _real_ids = CFG.accounts_real or []
     ACCT_T1 = _real_ids[0] if len(_real_ids) > 0 else ""
     ACCT_T2 = _real_ids[1] if len(_real_ids) > 1 else ""

@@ -17,8 +17,9 @@ Usage:
 
 import json
 import os
+from pathlib import Path
 
-_DIR      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DIR      = str(Path(__file__).resolve().parent.parent)
 _CFG_PATH = os.path.join(_DIR, "config.json")
 
 

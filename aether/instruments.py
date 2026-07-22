@@ -15,7 +15,6 @@ algorithm is built for these instruments (see CLAUDE.md R&D roadmap).
 
 import json
 from pathlib import Path
-from aether import ai_client
 
 _SCARCITY_CACHE_FILE = Path(__file__).resolve().parent.parent / "Data" / "scarcity_cache.json"
 
@@ -100,6 +99,7 @@ def is_scarcity_asset(symbol: str, industry_str: str) -> bool:
         "Respond with exactly YES or NO."
     )
     try:
+        from aether import ai_client
         res = ai_client.evaluate(system, user, max_tokens=5, temperature=0.0)
         result = "YES" in (res or "").strip().upper()
     except Exception as e:

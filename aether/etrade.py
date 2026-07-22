@@ -29,7 +29,7 @@ def _et_today() -> str:
 # ---------------------------------------------------------------------------
 
 def _load_config(env="sandbox"):
-    from config import CFG
+    from aether.config import CFG
     if env == "sandbox":
         CFG.require("etrade_sandbox_key", "etrade_sandbox_secret")
         ck, cs = CFG.etrade_sandbox_key, CFG.etrade_sandbox_secret

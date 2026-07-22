@@ -22,16 +22,20 @@ _PERF     = _DATA_DIR / "performance_log.json"
 
 # ── Simple in-process TTL cache ───────────────────────────────────────────────
 
+import threading as _threading
 _cache: dict = {}
+_cache_lock = _threading.Lock()
 
 
 def _cached(key: str, ttl: float, fn):
-    entry = _cache.get(key)
     now = time.monotonic()
-    if entry and now - entry["ts"] < ttl:
-        return entry["val"]
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry and now - entry["ts"] < ttl:
+            return entry["val"]
     val = fn()
-    _cache[key] = {"ts": now, "val": val}
+    with _cache_lock:
+        _cache[key] = {"ts": now, "val": val}
     return val
 
 
