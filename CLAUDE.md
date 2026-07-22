@@ -1,5 +1,7 @@
 # AnalyzeFinData — Claude Instructions
 
+> 🛡️ **MANDATE:** You MUST read and strictly adhere to the unified workspace instructions in [AGENT.md](./AGENT.md) as your absolute first priority before executing any operations or reasoning in this workspace!
+
 ## General Principles
 
 *   **Rule of Zero Trust:** NEVER trust an initial data point or assumption. ALWAYS verify by checking file timestamps, reading raw JSON cache, or cross-referencing E*TRADE quotes before raising doubts or making moves.

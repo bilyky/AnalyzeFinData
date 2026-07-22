@@ -1,5 +1,7 @@
 # 🛡️ Project AETHER Instructions & Conventions
 
+> 🛡️ **MANDATE:** You MUST read and strictly adhere to the unified workspace instructions in [AGENT.md](./AGENT.md) as your absolute first priority before executing any operations or reasoning in this workspace!
+
 This file documents team-shared conventions, platform capabilities, and repo-wide workflows for Project AETHER.
 
 ---
@@ -39,6 +41,13 @@ To completely eliminate calendar, date-stamping, or virtual machine clock-lag di
 *   **The Mandate:** Whenever the user asks ANY question regarding account balances, portfolio equity, active holdings, performance progress, or daily trading status:
     *   **Action 1 (Mandatory First Step):** You **MUST** execute an empirical system clock check (e.g., running `Get-Date` via a shell tool) as the very first action in that turn.
     *   **No Exceptions:** Never guess, assume, or trust your memory or the loaded context for the current date, time, or weekday. Always verify the active system clock first before compiling any data, generating any reports, or answering any inquiries.
+
+### 🛡️ Zero-Trust Factual Auditing Standard (Cognitive Auditing Hook)
+To completely eliminate "AI hallucinations," speculative explanations, and logical rationalizations when discussing system performance, file-content timelines, or active state files:
+
+*   **The Mandate (Factual Verification Hook):** Whenever explaining WHY a transaction occurred, why a buy/sell was skipped, what is written in any JSON or log file on disk, or summarizing a chronological sequence of events:
+    *   **Action 1 (Mandatory Check):** You **MUST** execute a direct python or shell tool command in that exact turn to print and inspect the raw file content, terminal output, or database record *before* formulating your answer.
+    *   **No Speculating:** You are strictly forbidden from guessing, assuming, or constructing "reconciling narratives" or speculative chronologies to explain discrepancies. If you do not possess direct, unmocked, and newly printed log lines on screen in your current turn to prove a fact, you MUST explicitly state: *"I do not have the hard data for that. Let us run a check to find out,"* and then immediately execute the audit.
 
 ### 🌐 Price Fetching & Fallback Hierarchy (Zero-Trust Data Rule)
 To maximize data accuracy while eliminating API rate-limits, suspended sessions, and sequential network latency:
