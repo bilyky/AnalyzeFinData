@@ -222,27 +222,51 @@ const AETHER_WIKI = {
     "digit_sum_numerology": {
         title: "Digit-Sum Numerology Factor",
         origin: "Inspired by W.D. Gann's numerology research (1878–1955). Empirically backtested by AETHER across 522 symbols × 9+ years of daily OHLCV data (2014–2026).",
-        body: `<p>Tests whether the <b>digit-sum of a stock's price</b> predicts short-term direction. Digit-sum collapses any price to a single digit by repeatedly summing its digits: <code>$247.35 → 2+4+7+3+5 = 21 → 2+1 = 3</code>.</p>
+        body: `<p>Tests whether the <b>digit-sum of a stock's price</b> predicts short-term direction. Digit-sum collapses any price to a single digit: <code>$247.35 → 2+4+7+3+5=21 → 3</code>.</p>
 <p class="mt-2">AETHER runs <b>two variants</b> simultaneously:</p>
 <ul class="list-disc pl-4 mt-1 space-y-1 text-sm">
-  <li><b>Integer digit-sum</b> — uses the whole-dollar part only ($247 → digit 4). Simpler; 162/522 symbols show 95%+ confidence signals.</li>
-  <li><b>Full-cents digit-sum</b> — includes the cents ($247.35 → digit 3). Complementary: 106 additional symbols not captured by integer-only.</li>
+  <li><b>Integer digit-sum</b> — whole-dollar only ($247 → 4). 162/522 symbols with 95%+ signals.</li>
+  <li><b>Full-cents digit-sum</b> — includes cents ($247.35 → 3). Adds 106 unique symbols not captured by integer-only.</li>
 </ul>
-<p class="mt-2">Combined coverage: <b>228 unique symbols</b> with at least one statistically significant signal (|z| ≥ 2.0, N ≥ 50 days).</p>
 <p class="mt-2"><b>Two timing modes:</b></p>
 <ul class="list-disc pl-4 mt-1 space-y-1 text-sm">
-  <li><b>Prior-close → next-day</b> (standing factor): yesterday's close digit feeds into the overnight S10 score. Always available from the OHLCV cache.</li>
-  <li><b>Today's open → same-day</b> (real-time): applied in <code>_execute_buys()</code> at buy-decision time using the live open price. Logged as <code>🔢 [Digit-Sum]</code> in the pipeline run log.</li>
+  <li><b>Prior-close → next-day</b>: standing factor in S10/L60, computed nightly from OHLCV cache.</li>
+  <li><b>Today's open → same-day</b>: real-time tiebreaker in <code>_execute_buys()</code> using live open price. Logged as <code>🔢 [Digit-Sum]</code>.</li>
 </ul>
-<p class="mt-2">The Symbol detail modal shows a full digit table — bold rows are significant, grey rows are noise. Toggle "Show all digits" to see the full picture.</p>`,
+<p class="mt-2">Of 473 signals at 95%+ confidence, <b>only 224 pass all four quality gates</b> and are used in scoring. See the Signal Quality Validator wiki entry for the full filter pipeline.</p>
+<p class="mt-2">The Symbol detail modal shows a digit table with a <b>Stability</b> column: <span class="text-green-400">stable</span> / <span class="text-amber-400">mixed</span> / <span class="text-orange-400">sparse</span> / <span class="text-red-400">flip</span> / <span class="text-slate-500">stale</span>.</p>`,
         config: [
-            "Integer digit-sum (OPEN→same-day): real-time, applied in _execute_buys() at buy time only",
-            "Integer digit-sum (CLOSE→next-day): standing factor in S10 (±1.0) and L60 (±0.5)",
-            "Full-cents digit-sum (OPEN→same-day): same real-time gate, combined with integer",
-            "Full-cents digit-sum (CLOSE→next-day): averaged with integer when both fire",
-            "Minimum N=50 days per bucket; only |z|≥2.0 signals (95%+ confidence) are used",
-            "Score scale: z/3.0, capped at ±1.0 per variant; averaged when both variants fire",
-            "Refreshed monthly: python scripts/backtesting/digit_sum_study.py + digit_sum_full_study.py"
+            "Integer digit-sum OPEN→same-day: real-time only, applied in _execute_buys() at buy time",
+            "Integer digit-sum CLOSE→next-day: standing factor, S10 weight ±1.0, L60 weight ±0.5",
+            "Full-cents digit-sum: same two modes, combined with integer (averaged when both fire)",
+            "Activation gate: |z|≥2.0 (95%+ confidence), N≥50 per bucket",
+            "Score scale: z/3.0 capped at ±1.0 per variant; averaged when both fire",
+            "Quality filter: temporal + flip + sparse checks — 473 raw → 224 active signals",
+            "Monthly refresh: python scripts/backtesting/digit_sum_study.py + digit_sum_full_study.py"
+        ]
+    },
+    "signal_quality_validator": {
+        title: "Signal Quality Validator — 4-Layer Filter Pipeline",
+        origin: "AETHER Internal R&D — discovered during temporal distribution audit of digit-sum signals (July 2026).",
+        body: `<p>Before any statistical signal enters the scoring engine, AETHER runs it through a <b>4-layer quality filter</b> to reject noise masquerading as signal.</p>
+<p class="mt-2">The problem discovered: a signal can show z=+2.5 overall yet be completely unreliable — if it fired 700 times when a stock was at $15 and only 30 times at today's $200, or if it was bullish in 2016 and bearish in 2022.</p>
+<p class="mt-2"><b>The 4 filters applied in sequence:</b></p>
+<ol class="list-decimal pl-4 mt-1 space-y-2 text-sm">
+  <li><b>Statistical significance</b> — |z| ≥ 2.0 (95%+ confidence) with N ≥ 50 days per bucket. Eliminates weak correlations.</li>
+  <li><b>Temporal consistency</b> — Signal is tested across 6 rolling 2-year windows (2014–2026). Must fire in same direction in ≥ 2 windows to be kept; ≥ 4 windows = "stable". Rejects historically-concentrated signals.</li>
+  <li><b>Direction stability</b> (<code>has_flip</code>) — If the signal is bullish in some windows and bearish in others, it is rejected. A self-contradicting signal has no predictive value regardless of overall z-score.</li>
+  <li><b>Coverage adequacy</b> (<code>is_sparse</code>) — The digit must appear in ≥ 3 of 6 windows (coverage ≥ 50%). Low coverage means the digit barely exists at the stock's current price level — the signal has no recent history to validate.</li>
+</ol>
+<p class="mt-2"><b>Result for digit-sum:</b> 473 signals at 95%+ → <b>224 pass all four gates</b> (53% rejection rate). Each rejected signal is still displayed in the Symbol modal Stability column so you can see exactly why it was downgraded.</p>
+<p class="mt-2">This pipeline is reusable — future experimental factors (Gann levels, gap persistence, round-number proximity) will run through the same 4-layer validator before entering the score.</p>`,
+        config: [
+            "Layer 1 — Statistical: |z| ≥ 2.0, N ≥ 50 per bucket",
+            "Layer 2 — Temporal: fires in same direction in ≥ 2 of 6 rolling 2-year windows",
+            "Layer 3 — Direction: no flip (bullish in some windows, bearish in others) → rejected",
+            "Layer 4 — Coverage: digit appears in ≥ 3/6 windows (≥ 50% coverage) → sparse = rejected",
+            "Symbol modal Stability badge: stable (4+ windows) | mixed (2-3) | flip | sparse | stale",
+            "Scoring engine only loads signals passing layers 2+3+4 — stale/flip/sparse excluded",
+            "473 raw digit-sum signals → 224 active after all filters (53% rejection rate)"
         ]
     }
 };

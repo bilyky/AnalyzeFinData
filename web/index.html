@@ -578,13 +578,22 @@
                         🔬 5. Experimental Research Factors
                     </h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div data-wiki="digit_sum_numerology" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
+                        <div data-wiki="digit_sum_numerology" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
                             <h4 class="font-semibold text-slate-200 text-sm mb-1">🔢 Digit-Sum Numerology Factor</h4>
                             <p class="text-xs text-slate-400 leading-relaxed">
-                                Backtested across 522 symbols × 9+ years of OHLCV data. Tests whether the digit-sum of a stock's open or close price predicts same-day or next-day direction.
-                                Two variants (integer-only and full-cents) cover <b>228 unique symbols</b> with statistically significant signals (|z|≥2.0, N≥50).
-                                Prior-close signal feeds into the nightly S10/L60 score; today's open signal fires as a real-time tiebreaker at buy-decision time.
-                                Visible on every Symbol page — bold rows are actionable, grey rows are noise.
+                                Backtested across 522 symbols × 9+ years. Tests whether the digit-sum of a stock's open/close price predicts same-day or next-day direction.
+                                Two variants (integer and full-cents) cover 228 unique symbols with 95%+ confidence signals.
+                                Of 473 raw signals, <b>224 pass the full 4-layer quality validator</b> and are active in scoring.
+                                Symbol page shows a Stability column: <b class="text-green-400">stable</b> / <b class="text-amber-400">mixed</b> / <b class="text-orange-400">sparse</b> / <b class="text-red-400">flip</b>.
+                            </p>
+                        </div>
+                        <div data-wiki="signal_quality_validator" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">🛡️ Signal Quality Validator</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                4-layer filter pipeline that rejects statistical signals concentrated in the wrong time period, self-contradicting across eras, or from price regimes no longer relevant.
+                                Checks: (1) |z|≥2.0 significance, (2) temporal persistence across 6 rolling 2-year windows,
+                                (3) no direction flip between eras, (4) adequate coverage at current price level.
+                                Reusable framework for all future experimental factors.
                             </p>
                         </div>
                     </div>
