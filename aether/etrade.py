@@ -435,13 +435,13 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
     return verifier
 
 
-def get_tokens(env="sandbox"):
+def get_tokens(env="sandbox", allow_browser=False):
     """Return valid OAuth tokens, minimising browser interaction.
 
     Priority order:
     1. Cached tokens from today ET → try renewal (no browser at all).
-    2. Cached tokens from today ET but renewal failed → full browser login (only if interactive).
-    3. No cached tokens → full browser login (only if interactive).
+    2. Cached tokens from today ET but renewal failed → full browser login (only if allow_browser=True).
+    3. No cached tokens → full browser login (only if allow_browser=True).
     """
     import sys
     ck, cs, username, password = _load_config(env)
@@ -452,13 +452,22 @@ def get_tokens(env="sandbox"):
         if renewed:
             return renewed
         print("Token renewal failed.")
-        
-        # Headless safety gate: If running in background/scheduler and renewal fails,
-        # we MUST error out immediately instead of spawning Playwright/input() which hangs.
-        if not sys.stdin.isatty():
-            raise RuntimeError("Critical E*TRADE Failure: Silent token renewal failed in a headless environment. Cannot re-authenticate interactively!")
-            
-        print("Re-authenticating with browser...")
+
+    # Standard security barrier: If silent renewal failed and browser logins are disabled (default),
+    # we MUST abort immediately to prevent session clobbering, watchdog conflicts, and WAF blocks.
+    if not allow_browser:
+        raise RuntimeError(
+            "Critical E*TRADE Failure: Active session token on disk is expired and cannot be renewed. "
+            "To prevent background session clobbering, browser-based re-authentication is disabled for standard runs. "
+            "Please execute a manual E*TRADE login refresh by running 'python scripts/diagnostics/test_etrade.py'!"
+        )
+
+    # Headless safety gate: If running in background/scheduler and renewal fails,
+    # we MUST error out immediately instead of spawning Playwright/input() which hangs.
+    if not sys.stdin.isatty():
+        raise RuntimeError("Critical E*TRADE Failure: Silent token renewal failed in a headless environment. Cannot re-authenticate interactively!")
+
+    print("Re-authenticating with browser...")
 
     # Headless safety gate: If no cached tokens exist and we are headless, error out!
     if not sys.stdin.isatty():
