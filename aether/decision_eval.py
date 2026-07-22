@@ -16,7 +16,7 @@ real data.
 import json
 from pathlib import Path
 
-from aether import sell_rules
+from aether import ai_client, sell_eval, sell_rules
 
 _DIR = Path(__file__).resolve().parent.parent
 LOG = _DIR / "Data" / "decision_log.jsonl"
@@ -46,8 +46,6 @@ def build_entry(symbol, price, cost, stop_loss, s10, l60, sma50=None,
         "rules_action": action, "rules_reason": reason, "verdicts": {},
     }
     if run_shadow:
-        import ai_client
-        import sell_eval
         ctx = {"symbol": symbol, "action": action, "reason": reason, "cost": cost,
                "price": price, "pnl_pct": pnl_pct, "s10": s10, "l60": l60,
                "stop": stop_loss, "sma50": sma50, "pgr": pgr, "patterns": patterns}

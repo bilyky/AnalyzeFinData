@@ -1,5 +1,6 @@
-import os
+import datetime
 import json
+import os
 import pandas as pd
 from pathlib import Path
 
@@ -73,7 +74,6 @@ def _age_days(last_date, today=None):
     if not last_date:
         return None
     try:
-        import datetime
         d = datetime.date.fromisoformat(str(last_date)[:10])
         return ((today or datetime.date.today()) - d).days
     except Exception:

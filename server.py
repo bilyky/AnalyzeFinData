@@ -17,8 +17,11 @@ import argparse
 import base64
 import hashlib
 import hmac
+import html as _html_mod
 import json
 import os
+import re
+import requests
 import secrets
 import signal
 import subprocess
@@ -235,7 +238,7 @@ def create_app():
     ):
         """Phase 1: fetch live factors + run AI on factors only.
         Spawns a background thread for Phase 2 (news enrichment)."""
-        import ai_client, threading, time as _time
+        import ai_client
         symbol = (body.get("symbol") or "").upper().strip()
         cost   = body.get("cost")   # float or None
         if not symbol:
@@ -258,10 +261,9 @@ def create_app():
                     None,
                     lambda: ai_client.evaluate(system_prompt, user_prompt, max_tokens=_RQ_P1_TOKENS)
                 )
-                import json as _json, re as _re
-                m = _re.search(r'\{.*\}', raw, _re.DOTALL)
+                m = re.search(r'\{.*\}', raw, re.DOTALL)
                 if m:
-                    parsed = _json.loads(m.group())
+                    parsed = json.loads(m.group())
                     recommendation = parsed.get("recommendation", "")
                     rationale      = parsed.get("rationale", "")
                     risk           = parsed.get("risk", "")
@@ -273,7 +275,7 @@ def create_app():
         verdict = verdict_note = ""
         if factors.get("det_action") and cost:
             try:
-                import sell_eval
+                import sell_eval  # lazy: avoid circular at startup
                 ctx = {
                     "symbol": symbol,
                     "action": factors["det_action"],
@@ -295,33 +297,30 @@ def create_app():
                 pass
 
         # Register Phase 2 run
-        run_id = f"rq_{symbol}_{int(_time.time())}"
+        run_id = f"rq_{symbol}_{int(time.time())}"
         with _rq_lock:
-            _rq_store[run_id] = {"status": "pending", "ts": _time.time()}
+            _rq_store[run_id] = {"status": "pending", "ts": time.time()}
         _rq_evict()
 
         def _phase2():
-            import time as _t2
-            _deadline = _t2.time() + 90
+            _deadline = time.time() + 90
             try:
                 news = []
                 try:
-                    import requests as _req, html as _html
                     for query in [f'"{symbol}" stock news 2026', f'"{symbol}" earnings analyst 2026']:
-                        if _t2.time() > _deadline:
+                        if time.time() > _deadline:
                             break
-                        r = _req.get(
+                        r = requests.get(
                             "https://html.duckduckgo.com/html/",
                             params={"q": query},
                             headers={"User-Agent": "Mozilla/5.0"},
                             timeout=10,
                         )
                         if r.status_code == 200:
-                            import re as _re2
-                            body = r.text[:200_000]  # cap at 200 KB
-                            snippets = _re2.findall(r'class="result__snippet"[^>]*>(.*?)</a>', body, _re2.DOTALL)
+                            body = r.text[:200_000]
+                            snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', body, re.DOTALL)
                             for s in snippets[:3]:
-                                clean = _re2.sub(r'<[^>]+>', '', _html.unescape(s)).strip()
+                                clean = re.sub(r'<[^>]+>', '', _html_mod.unescape(s)).strip()
                                 if clean and len(clean) > 20:
                                     news.append(clean)
                         if len(news) >= 5:
@@ -329,7 +328,6 @@ def create_app():
                 except Exception:
                     pass
 
-                # Re-run AI with news appended
                 rec2 = rationale2 = risk2 = ""
                 if ai_client.primary() and news:
                     try:
@@ -337,10 +335,9 @@ def create_app():
                         sys2 = prompt_path2.read_text(encoding="utf-8") if prompt_path2.exists() else ""
                         usr2 = data_api.build_requalify_prompt(symbol, factors, cost, regime, news=news)
                         raw2 = ai_client.evaluate(sys2, usr2, max_tokens=_RQ_P2_TOKENS)
-                        import json as _j2, re as _re3
-                        m2 = _re3.search(r'\{.*\}', raw2, _re3.DOTALL)
+                        m2 = re.search(r'\{.*\}', raw2, re.DOTALL)
                         if m2:
-                            p2 = _j2.loads(m2.group())
+                            p2 = json.loads(m2.group())
                             rec2       = p2.get("recommendation", "")
                             rationale2 = p2.get("rationale", "")
                             risk2      = p2.get("risk", "")
@@ -350,7 +347,7 @@ def create_app():
                 with _rq_lock:
                     _rq_store[run_id] = {
                         "status":         "done",
-                        "ts":             _t2.time(),
+                        "ts":             time.time(),
                         "recommendation": rec2 or recommendation,
                         "rationale":      rationale2 or rationale,
                         "risk":           risk2 or risk,
@@ -359,7 +356,7 @@ def create_app():
             except Exception as _e2:
                 with _rq_lock:
                     _rq_store[run_id] = {
-                        "status": "done", "ts": _t2.time(),
+                        "status": "done", "ts": time.time(),
                         "recommendation": recommendation,
                         "rationale": rationale,
                         "risk": risk,
@@ -431,7 +428,7 @@ def create_app():
     async def aether_log_json(lines: int = Query(200, ge=1, le=2000),
                               level: str = Query("", description="Filter by level: DEBUG INFO WARNING ERROR")):
         """Last N JSONL entries from Data/logs/aether.jsonl, optionally filtered by level."""
-        import json as _json
+
         from pathlib import Path
         p = _DIR / "Data" / "logs" / "aether.jsonl"
         if not p.exists():
@@ -444,7 +441,7 @@ def create_app():
                 if not line:
                     continue
                 try:
-                    obj = _json.loads(line)
+                    obj = json.loads(line)
                     if level and obj.get("level", "").upper() != level.upper():
                         continue
                     entries.append(obj)

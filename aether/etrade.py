@@ -5,6 +5,7 @@ import sys
 import time
 import pyetrade
 from zoneinfo import ZoneInfo
+from aether.config import CFG
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _TOKEN_PATH  = os.path.join(_DIR, "Data", "etrade_tokens.json")
@@ -30,7 +31,6 @@ def _et_today() -> str:
 # ---------------------------------------------------------------------------
 
 def _load_config(env="sandbox"):
-    from aether.config import CFG
     if env == "sandbox":
         CFG.require("etrade_sandbox_key", "etrade_sandbox_secret")
         ck, cs = CFG.etrade_sandbox_key, CFG.etrade_sandbox_secret

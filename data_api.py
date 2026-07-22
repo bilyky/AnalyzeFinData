@@ -313,7 +313,7 @@ def _to_date_str(v):
 # (PII — never hardcode). Falls back to generic T1/T2 labels if unset.
 def _real_acct_ids():
     try:
-        from config import CFG
+        from aether.config import CFG
         return CFG.accounts_real or []
     except Exception:
         return []
