@@ -123,7 +123,7 @@ def run():
     for r in sig:
         ts = ts_map.get(r["symbol"], {})
         if ts:
-            r.update(window_analysis(r["digit"], r["z"], ts, _digit_sum_full))
+            r.update(window_analysis(r["digit"], r["z"], ts, _digit_sum_full, r["type"]))
         else:
             r["temporal"] = "no_data"
 

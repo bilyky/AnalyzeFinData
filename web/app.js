@@ -620,7 +620,7 @@ async function loadAccounts() {
                 `<td class="${cls(s10)}">${s10 == null ? "—" : s10.toFixed(1)}</td>
                  <td class="${cls(l60)}">${l60 == null ? "—" : l60.toFixed(1)}</td>
                  <td class="font-bold ${cls(total)}">${total == null ? "—" : total.toFixed(1)}</td>`;
-            const stopTitle = h.stop_source ? `stop source: ${h.stop_source}${h.buy_date ? " (as of " + h.buy_date + ")" : ""}` : "";
+            const stopTitle = h.stop_source ? `stop source: ${esc(h.stop_source)}${h.buy_date ? " (as of " + esc(h.buy_date) + ")" : ""}` : "";
             const tgtTitle = h.target_source ? `target source: ${h.target_source}` : "";
             const badgeCls = _statusBadgeClass(h.status);
             return `<tr data-acct="${a.id}" data-sym="${sym}" data-buy="${entry ?? ""}" data-qty="${h.qty ?? ""}">
@@ -1332,14 +1332,14 @@ function renderResearch() {
                 ${r.symbol}${heldSymbolsGlobal.has(r.symbol.toUpperCase()) ? ' <span class="text-[9px] px-1.5 py-0.5 rounded bg-green-900/80 text-green-300 font-bold ml-1" title="Currently held in your accounts">HELD</span>' : ''}${instrumentBadge(r.instrument)}
             </td>
             <td><div class="truncate text-xs ${industryColor(r.industry_strength)}" style="max-width:70px"
-                     title="${(r.industry || "")}${r.industry_strength ? " — " + r.industry_strength : ""}">${r.industry || "—"}</div></td>
+                     title="${esc(r.industry || "")}${r.industry_strength ? " — " + esc(r.industry_strength) : ""}">${esc(r.industry || "—")}</div></td>
             <td class="text-xs whitespace-nowrap">${pgrCell(r.prev_pgr, r.pgr)}</td>
             <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
             <td class="text-right ${weakStop(r, r.stop_source) ? "text-amber-400" : ""}" 
-                title="${r.stop_source === "swing" ? "Stop Source: Swing-Low (from spreadsheet). Note: Autopilot will override this with a safe ATR-based stop floor on purchase." : (r.stop_source === "atr" ? "Stop Source: ATR-based (Volatility-buffered stop)." : "Stop Source: " + (r.stop_source || "?"))}">
+                title="${r.stop_source === "swing" ? "Stop Source: Swing-Low (from spreadsheet). Note: Autopilot will override this with a safe ATR-based stop floor on purchase." : (r.stop_source === "atr" ? "Stop Source: ATR-based (Volatility-buffered stop)." : "Stop Source: " + esc(r.stop_source || "?"))}">
                 ${!r.stop ? "—" : fmt$(r.stop)}
             </td>
-            <td class="text-right ${weakStop(r, r.target_source) ? "text-amber-400" : ""}" title="target source: ${r.target_source || "?"}">${!r.target ? "—" : fmt$(r.target)}</td>
+            <td class="text-right ${weakStop(r, r.target_source) ? "text-amber-400" : ""}" title="target source: ${esc(r.target_source || "?")}">${!r.target ? "—" : fmt$(r.target)}</td>
             <td class="text-right ${r.risk_ratio == null ? "" : (r.risk_ratio < 2.0 ? "text-slate-500" : (r.risk_ratio > 10.0 ? "text-amber-500 font-bold" : "text-green-400 font-semibold"))}"
                 title="${r.risk_ratio == null ? "R:R not calculated" : (r.risk_ratio < 2.0 ? "Poor risk asymmetry. Autopilot will reject buying this candidate." : (r.risk_ratio > 10.0 ? "⚠️ Tight Stop Warning: This high ratio is a paper mirage. Price is extremely close to the swing-low. True ATR stop-loss is wider." : "Favorable R/R: Strong risk asymmetry."))}">
                 ${r.risk_ratio == null ? "—" : (r.risk_ratio > 10.0 ? "⚠️ " : "") + num(r.risk_ratio, 2)}

@@ -97,14 +97,13 @@ def digit_sum_open_score(symbol: str, live_open_price: float) -> float:
     dg_int  = _price_digit_sum(live_open_price)
     dg_full = _price_digit_sum_full(live_open_price)
 
-    z_int  = idx.get((sym, "OPEN", dg_int), 0.0)
-    z_full = idx_full.get((sym, "OPEN", dg_full), 0.0)
+    z_int  = idx.get((sym, "OPEN", dg_int))
+    z_full = idx_full.get((sym, "OPEN", dg_full))
 
-    # Average the two signals; each capped at ±1.0 before averaging
-    if z_int:  score += max(-1.0, min(1.0, z_int  / 3.0))
-    if z_full: score += max(-1.0, min(1.0, z_full / 3.0))
-    if z_int and z_full:
-        score /= 2  # average when both fire
+    if z_int is not None:  score += max(-1.0, min(1.0, z_int  / 3.0))
+    if z_full is not None: score += max(-1.0, min(1.0, z_full / 3.0))
+    if z_int is not None and z_full is not None:
+        score /= 2
 
     return round(max(-1.0, min(1.0, score)), 2)
 
@@ -125,13 +124,13 @@ def digit_sum_score(symbol: str, close_price: float | None = None) -> float:
     dg_int  = _price_digit_sum(close_price)
     dg_full = _price_digit_sum_full(close_price)
 
-    z_int  = idx.get((sym, "CLOSE", dg_int), 0.0)
-    z_full = idx_full.get((sym, "CLOSE", dg_full), 0.0)
+    z_int  = idx.get((sym, "CLOSE", dg_int))
+    z_full = idx_full.get((sym, "CLOSE", dg_full))
 
     score = 0.0
-    if z_int:  score += max(-1.0, min(1.0, z_int  / 3.0))
-    if z_full: score += max(-1.0, min(1.0, z_full / 3.0))
-    if z_int and z_full:
+    if z_int is not None:  score += max(-1.0, min(1.0, z_int  / 3.0))
+    if z_full is not None: score += max(-1.0, min(1.0, z_full / 3.0))
+    if z_int is not None and z_full is not None:
         score /= 2
 
     return round(max(-1.0, min(1.0, score)), 2)
