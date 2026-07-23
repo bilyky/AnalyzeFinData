@@ -1,5 +1,10 @@
 # AETHER Production Trailing Stop-Loss Adjuster (AETHER Profit-Lock)
 
+> **STATUS: NOT YET IMPLEMENTED**
+> This plan references `highest_close_since_acq`, the Gap-Down Guard, and position peak-tracking
+> fields that do not yet exist in the codebase. See the Jul-11 R&D roadmap session in CLAUDE.md
+> for the implementation timeline (Flower Protection trailing stop).
+
 ## 1. Objective
 To design and deploy a highly disciplined, automated **Dynamic Peak-Trailing Stop-Loss Adjuster (Profit-Lock)**. This system dynamically ratchets your stop-loss floor upwards as a stock rallies, permanently locking in open profits and ensuring that a profitable "winner" is never allowed to evaporate back into a losing position.
 

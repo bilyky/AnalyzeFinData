@@ -904,7 +904,7 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
     if ohlcv_ts and _date_str:
         all_d = sorted(ohlcv_ts.keys())
         idx_d = next((i for i, d in enumerate(all_d) if d >= _date_str), None)
-        if idx_d and idx_d > 0:
+        if idx_d:  # idx_d=0 means first date — no prior close available
             try:
                 _prev_close = float(ohlcv_ts[all_d[idx_d - 1]].get('4. close', 0) or 0)
             except (ValueError, TypeError):

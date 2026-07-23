@@ -5,6 +5,7 @@ All functions are safe to call from async FastAPI route handlers.
 """
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -13,6 +14,8 @@ import time
 from datetime import datetime, date
 from pathlib import Path
 from scripts.backtesting import backtest_levels
+
+_log = logging.getLogger("aether.data_api")
 
 _DIR      = Path(__file__).resolve().parent
 _DATA_DIR = _DIR / "Data"
@@ -26,18 +29,21 @@ _digit_study_index: dict | None = None  # {symbol: [row, ...]}
 _digit_study_lock = threading.Lock()
 
 def _get_digit_study(sym: str) -> list:
+    """Return all study rows for the given symbol (both integer and full-cents variants).
+    Loaded once from Data/digit_sum_study.json and Data/digit_sum_full_study.json."""
     global _digit_study_index
     with _digit_study_lock:
         if _digit_study_index is None:
-            _digit_study_index = {}
+            idx: dict = {}
             for path in [_DATA_DIR / "digit_sum_study.json",
                          _DATA_DIR / "digit_sum_full_study.json"]:
                 if path.exists():
                     try:
                         for r in json.load(open(path)):
-                            _digit_study_index.setdefault(r["symbol"], []).append(r)
+                            idx.setdefault(r["symbol"], []).append(r)
                     except Exception:
                         pass
+            _digit_study_index = idx  # atomic assignment after full load
     return _digit_study_index.get(sym, [])
 
 # ── Simple in-process TTL cache ───────────────────────────────────────────────
@@ -284,15 +290,15 @@ def read_research() -> dict:
         }
         # Alert on data gaps that weaken the stop.
         if stale_stops:
-            print(f"[data_api] OHLCV STALE: {stale_stops}/{len(rows)} symbols have caches "
-                  f"older than {risk_utils.STALE_STOP_DAYS}d (oldest {max_stale_age}d) — "
-                  f"their stops fell back to 8% off the live price. Refresh Data/Symbol_full.")
+            _log.warning(f"OHLCV STALE: {stale_stops}/{len(rows)} symbols have caches "
+                         f"older than {risk_utils.STALE_STOP_DAYS}d (oldest {max_stale_age}d) — "
+                         f"their stops fell back to 8% off the live price. Refresh Data/Symbol_full.")
         if support_misses:
-            print(f"[data_api] SUPPORT MISS: {support_misses}/{len(rows)} symbols have fresh "
-                  f"data but no confirmed swing-low support — stop used an ATR/8% fallback.")
+            _log.warning(f"SUPPORT MISS: {support_misses}/{len(rows)} symbols have fresh "
+                         f"data but no confirmed swing-low support — stop used an ATR/8% fallback.")
         if target_misses:
-            print(f"[data_api] TARGET MISS: {target_misses}/{len(rows)} symbols have fresh "
-                  f"data but no overhead resistance — target used an ATR/8% projection.")
+            _log.warning(f"TARGET MISS: {target_misses}/{len(rows)} symbols have fresh "
+                         f"data but no overhead resistance — target used an ATR/8% projection.")
         try:
             import autonomous_pipeline as _ap
             regime, color = _ap.get_market_regime()
@@ -430,7 +436,7 @@ def read_accounts() -> dict:
                         finally:
                             wb.close()
                     except Exception as ex:
-                        print(f"  [AETHER] Error loading Excel decorations: {ex}")
+                        _log.warning(f"Error loading Excel decorations: {ex}")
 
                 # Map E*TRADE accounts and positions
                 for acct in acct_list:
@@ -509,7 +515,7 @@ def read_accounts() -> dict:
                         "count": len(holdings)
                     })
             except Exception as e:
-                print(f"  [AETHER] Live broker feed failed: {e}. Falling back to Excel.")
+                _log.warning(f"Live broker feed failed: {e}. Falling back to Excel.")
             
         # ── FALLBACK: Parse merged Short_Long sheet if API fails ────────────────
         if not accounts:

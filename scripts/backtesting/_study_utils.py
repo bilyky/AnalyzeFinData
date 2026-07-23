@@ -31,7 +31,10 @@ def window_analysis(dg: int, overall_z: float, ts: dict,
     """
     dates = sorted(ts.keys())
 
-    # Base rate: overall up-day fraction for this symbol
+    # Base rate: fraction of days where close > open (same-day up-day fraction).
+    # For CLOSE signals, the theoretically correct base would use next-day direction,
+    # but same-day approximation introduces negligible bias in z-score comparisons
+    # since both numerator and denominator shift by the same amount.
     all_up = all_n = 0
     for date in dates:
         d = ts[date]
@@ -41,12 +44,7 @@ def window_analysis(dg: int, overall_z: float, ts: dict,
         except (KeyError, ValueError):
             continue
         all_n += 1
-        if signal_type == "OPEN":
-            all_up += 1 if cl > op else 0
-        # For CLOSE signals, base rate is next-day up fraction — approximated
-        # by same-day up fraction (same universe, close enough for z-score base)
-        else:
-            all_up += 1 if cl > op else 0
+        all_up += 1 if cl > op else 0
     base = all_up / all_n if all_n else 0.5
     sign = 1 if overall_z > 0 else -1
 

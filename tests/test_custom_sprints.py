@@ -418,9 +418,9 @@ class TestPersistentProfileModes(unittest.TestCase):
             }
         }
         
-        # Mock an active breaker state and 1.50 ATR for ZS
-        with mock.patch("circuit_breaker.check_systemic_risk", return_value=(True, "Single-Day Capitulation")):
-            with mock.patch("risk_utils.calculate_atr", return_value=1.50):
+        with mock.patch("circuit_breaker.check_systemic_risk", return_value=(True, "Single-Day Capitulation")), \
+             mock.patch("circuit_breaker.log_circuit_breaker_trigger_dna"), \
+             mock.patch("risk_utils.calculate_atr", return_value=1.50):
                 circuit_breaker.enforce_circuit_breaker(state, prices={"ZS": 149.0})
                 
                 # 1. Buying must be frozen (queued BUYs cleared, SELLs left alone)
@@ -594,7 +594,21 @@ class TestRequalifyPromptBuilder(unittest.TestCase):
 
 class TestDigitSumScoring(unittest.TestCase):
     """digit_sum_score and _price_digit_sum — pure math, no I/O mocks needed for math tests.
-    Index-loading tests use a patched study path to avoid depending on the real study JSON."""
+    Index-loading tests patch the module-level singletons directly."""
+
+    def setUp(self):
+        import aether.scoring as _sc
+        # Reset singletons so each test starts clean and cannot be affected
+        # by a prior test that loaded the real study JSON.
+        self._orig_idx      = _sc._digit_index
+        self._orig_full_idx = _sc._digit_full_index
+        _sc._digit_index      = None
+        _sc._digit_full_index = None
+
+    def tearDown(self):
+        import aether.scoring as _sc
+        _sc._digit_index      = self._orig_idx
+        _sc._digit_full_index = self._orig_full_idx
 
     def test_price_digit_sum_integer(self):
         from aether.scoring import _price_digit_sum
