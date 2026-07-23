@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from datetime import datetime, date
 from pathlib import Path
@@ -20,9 +21,27 @@ _GAME     = _DATA_DIR / "ai_portfolio_game.json"
 _LOG      = _DATA_DIR / "autonomous_run.log"
 _PERF     = _DATA_DIR / "performance_log.json"
 
+# ── Digit-sum study index (loaded once, keyed by symbol) ──────────────────────
+_digit_study_index: dict | None = None  # {symbol: [row, ...]}
+_digit_study_lock = threading.Lock()
+
+def _get_digit_study(sym: str) -> list:
+    global _digit_study_index
+    with _digit_study_lock:
+        if _digit_study_index is None:
+            _digit_study_index = {}
+            for path in [_DATA_DIR / "digit_sum_study.json",
+                         _DATA_DIR / "digit_sum_full_study.json"]:
+                if path.exists():
+                    try:
+                        for r in json.load(open(path)):
+                            _digit_study_index.setdefault(r["symbol"], []).append(r)
+                    except Exception:
+                        pass
+    return _digit_study_index.get(sym, [])
+
 # ── Simple in-process TTL cache ───────────────────────────────────────────────
 
-import threading
 _cache: dict = {}
 _cache_lock = threading.Lock()
 
@@ -984,16 +1003,7 @@ def read_symbol(symbol: str) -> dict:
                 break
         out["holding"] = holding
 
-        # ── Digit-sum study rows for this symbol ─────────────────────────────
-        _study = _DATA_DIR / "digit_sum_study.json"
-        digit_rows = []
-        if _study.exists():
-            try:
-                all_rows = json.load(open(_study))
-                digit_rows = [r for r in all_rows if r.get("symbol") == sym]
-            except Exception:
-                pass
-        out["digit_study"] = digit_rows
+        out["digit_study"] = _get_digit_study(sym)
 
         return out
     return _cached(f"symbol:{sym}", 60.0, _load)
@@ -1053,8 +1063,7 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
                 ohlcv_ts: dict = {}
                 if ohlcv_path.exists():
                     try:
-                        import json as _json
-                        ohlcv_ts = _json.load(open(ohlcv_path)).get("Time Series (Daily)", {})
+                        ohlcv_ts = json.load(open(ohlcv_path)).get("Time Series (Daily)", {})
                     except Exception:
                         pass
                 f = _pg._compute_pgr_fields(pg, ohlcv_ts=ohlcv_ts)

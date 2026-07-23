@@ -592,5 +592,72 @@ class TestRequalifyPromptBuilder(unittest.TestCase):
         self.assertNotIn("Invalid symbol", result.get("error") or "")
 
 
+class TestDigitSumScoring(unittest.TestCase):
+    """digit_sum_score and _price_digit_sum — pure math, no I/O mocks needed for math tests.
+    Index-loading tests use a patched study path to avoid depending on the real study JSON."""
+
+    def test_price_digit_sum_integer(self):
+        from aether.scoring import _price_digit_sum
+        self.assertEqual(_price_digit_sum(247.35), 4)   # 2+4+7=13->4
+        self.assertEqual(_price_digit_sum(9.0),    9)
+        self.assertEqual(_price_digit_sum(100.0),  1)
+        self.assertEqual(_price_digit_sum(99.99),  9)   # int(99.99)=99 -> 9+9=18->9
+
+    def test_price_digit_sum_full(self):
+        from aether.scoring import _price_digit_sum_full
+        self.assertEqual(_price_digit_sum_full(247.35), 3)   # 2+4+7+3+5=21->3
+        self.assertEqual(_price_digit_sum_full(100.00), 1)   # 1+0+0+0+0=1
+        self.assertEqual(_price_digit_sum_full(9.99),   9)   # 9+9+9=27->9
+
+    def test_digit_sum_score_no_signal_returns_zero(self):
+        from aether.scoring import digit_sum_score
+        import unittest.mock as _mock
+        # Empty index -> score must be 0.0
+        with _mock.patch("aether.scoring._digit_index", {}), \
+             _mock.patch("aether.scoring._digit_full_index", {}):
+            self.assertEqual(digit_sum_score("AAPL", close_price=247.35), 0.0)
+
+    def test_digit_sum_score_fires_when_signal_exists(self):
+        from aether.scoring import digit_sum_score, _price_digit_sum_full
+        import unittest.mock as _mock
+        # AAPL close at $247.35 -> full digit = 3
+        dg_full = _price_digit_sum_full(247.35)
+        fake_idx = {("AAPL", "CLOSE", dg_full): 3.0}  # z=3.0 -> score = +1.0
+        with _mock.patch("aether.scoring._digit_index", {}), \
+             _mock.patch("aether.scoring._digit_full_index", fake_idx):
+            score = digit_sum_score("AAPL", close_price=247.35)
+        self.assertGreater(score, 0.0)
+        self.assertLessEqual(score, 1.0)
+
+    def test_digit_sum_open_score_zero_without_signal(self):
+        from aether.scoring import digit_sum_open_score
+        import unittest.mock as _mock
+        with _mock.patch("aether.scoring._digit_index", {}), \
+             _mock.patch("aether.scoring._digit_full_index", {}):
+            self.assertEqual(digit_sum_open_score("SPY", 500.0), 0.0)
+
+    def test_build_digit_index_quality_filter(self):
+        from aether.scoring import _build_digit_index
+        import tempfile, json as _json
+        rows = [
+            {"symbol":"AAA","type":"OPEN","digit":5,"z":2.5,"up_pct":0.6,"base":0.5,"n":100,
+             "temporal":"consistent","has_flip":False,"is_sparse":False},  # PASS
+            {"symbol":"BBB","type":"OPEN","digit":3,"z":3.0,"up_pct":0.65,"base":0.5,"n":100,
+             "temporal":"stale","has_flip":False,"is_sparse":False},        # FAIL: stale
+            {"symbol":"CCC","type":"OPEN","digit":7,"z":2.2,"up_pct":0.58,"base":0.5,"n":80,
+             "temporal":"partial","has_flip":True,"is_sparse":False},       # FAIL: flip
+            {"symbol":"DDD","type":"OPEN","digit":1,"z":2.1,"up_pct":0.56,"base":0.5,"n":60,
+             "temporal":"partial","has_flip":False,"is_sparse":True},       # FAIL: sparse
+        ]
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            _json.dump(rows, f); fname = f.name
+        idx = _build_digit_index(fname)
+        self.assertIn(("AAA","OPEN",5), idx)    # only this one passes
+        self.assertNotIn(("BBB","OPEN",3), idx)
+        self.assertNotIn(("CCC","OPEN",7), idx)
+        self.assertNotIn(("DDD","OPEN",1), idx)
+        import os; os.unlink(fname)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1698,17 +1698,20 @@ document.addEventListener("click", (e) => {
 
 // ── Requalify ─────────────────────────────────────────────────────────────────
 
-const _statusToRec = (s) => {
+// Maps sheet status strings to {label, cls} for the accounts/symbol button.
+// One function; callers use .label or .cls as needed.
+function _statusInfo(s) {
     const u = (s || "").toUpperCase().trim();
-    if (u.startsWith("EXIT"))         return "SELL";
-    if (u.startsWith("REDUCE"))       return "REDUCE";
-    if (u.startsWith("STRONG HOLD"))  return "HOLD";
-    if (u.startsWith("HOLD"))         return "HOLD";
-    if (u.startsWith("WATCH"))        return "REVIEW";
-    if (u.startsWith("REVIEW"))       return "REVIEW";
-    if (u === "NEUTRAL")              return "HOLD";
-    return u || "⚡ AI";
-};
+    if (u.startsWith("EXIT"))        return { label: "SELL",   cls: "bg-red-950/70 text-red-300 border border-red-700/60 hover:bg-red-900" };
+    if (u.startsWith("REDUCE"))      return { label: "REDUCE", cls: "bg-orange-950/70 text-orange-300 border border-orange-700/60 hover:bg-orange-900" };
+    if (u.startsWith("STRONG HOLD")) return { label: "HOLD",   cls: "bg-green-950/70 text-green-300 border border-green-700/60 hover:bg-green-900" };
+    if (u.startsWith("HOLD"))        return { label: "HOLD",   cls: "bg-emerald-950/70 text-emerald-300 border border-emerald-700/60 hover:bg-emerald-900" };
+    if (u.startsWith("WATCH") || u.startsWith("REVIEW")) return { label: "REVIEW", cls: "bg-amber-950/70 text-amber-300 border border-amber-700/60 hover:bg-amber-900" };
+    if (u === "NEUTRAL")             return { label: "HOLD",   cls: "bg-emerald-950/70 text-emerald-300 border border-emerald-700/60 hover:bg-emerald-900" };
+    if (u === "BUY MORE" || u === "SELL") return { label: u,  cls: u === "SELL" ? "bg-red-950/70 text-red-300 border border-red-700/60 hover:bg-red-900" : "bg-blue-950/70 text-blue-300 border border-blue-700/60 hover:bg-blue-900" };
+    return { label: u || "⚡ AI",   cls: "bg-slate-800 text-slate-300 border border-slate-700/60 hover:bg-slate-700" };
+}
+const _statusToRec = (s) => _statusInfo(s).label;
 
 const _RQ_POLL_INTERVAL_MS = 2000;
 const _RQ_MAX_POLLS = 30;  // 30 × 2s = 60s max
@@ -1726,16 +1729,7 @@ const _VD_BADGE = {
     "NO-OPINION":      "text-slate-400",
 };
 
-function _statusBadgeClass(status) {
-    const s = (status || "").toUpperCase().trim();
-    if (s.startsWith("EXIT") || s === "SELL")  return "bg-red-950/70 text-red-300 border border-red-700/60 hover:bg-red-900";
-    if (s.startsWith("REDUCE"))                return "bg-orange-950/70 text-orange-300 border border-orange-700/60 hover:bg-orange-900";
-    if (s.startsWith("WATCH") || s.startsWith("REVIEW")) return "bg-amber-950/70 text-amber-300 border border-amber-700/60 hover:bg-amber-900";
-    if (s.startsWith("STRONG HOLD"))           return "bg-green-950/70 text-green-300 border border-green-700/60 hover:bg-green-900";
-    if (s.startsWith("HOLD"))                  return "bg-emerald-950/70 text-emerald-300 border border-emerald-700/60 hover:bg-emerald-900";
-    if (s === "BUY MORE")                      return "bg-blue-950/70 text-blue-300 border border-blue-700/60 hover:bg-blue-900";
-    return "bg-slate-800 text-slate-300 border border-slate-700/60 hover:bg-slate-700";
-}
+const _statusBadgeClass = (s) => _statusInfo(s).cls;
 
 function _rqBadge(rec) {
     const cls_ = _RQ_BADGE[rec] || "bg-slate-700 text-slate-300";

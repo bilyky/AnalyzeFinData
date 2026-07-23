@@ -87,14 +87,10 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
     E*TRADE tokens are valid until midnight ET. Renew extends the session by 2 h.
     Call this before every API session to avoid mid-day expiry.
     """
-    # Proactive Age Check:
-    # E*TRADE tokens are valid for 2 hours (120 minutes) from last activity.
-    # To prevent redundant renewals (which E*TRADE may reject with a 401, resulting
-    # in immediate session revocation), we skip calling the actual renew endpoint
-    # if the token was saved less than 75 minutes ago.
+    # E*TRADE rejects renewal if called too soon (< 75 min) and may revoke the session.
     age_min = (time.time() - tokens.get("saved_at", 0)) / 60
     if age_min < 75:
-        print(f"  [AETHER] Token is only {age_min:.1f} min old. Skipping E*TRADE renewal endpoint and reusing token.")
+        print(f"  [E*TRADE] Token {age_min:.0f}m old — reusing without renewal.")
         return tokens
 
     from requests_oauthlib import OAuth1Session

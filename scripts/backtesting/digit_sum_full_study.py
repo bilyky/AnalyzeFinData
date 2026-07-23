@@ -16,6 +16,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from scripts.backtesting._study_utils import window_analysis
 
 DATA     = Path(__file__).resolve().parent.parent.parent / "Data"
 OHLCV    = DATA / "Symbol_full"
@@ -23,11 +24,6 @@ OUT_FILE = DATA / "digit_sum_full_study.json"
 
 MIN_N     = 50
 MIN_ABS_Z = 2.0
-MIN_WIN_N = 30
-
-_WINDOWS = [("14-16","2014-01-01","2015-12-31"), ("16-18","2016-01-01","2017-12-31"),
-            ("18-20","2018-01-01","2019-12-31"), ("20-22","2020-01-01","2021-12-31"),
-            ("22-24","2022-01-01","2023-12-31"), ("24-26","2024-01-01","2026-12-31")]
 
 
 def _digit_sum_full(price: float) -> int:
@@ -104,41 +100,6 @@ def analyze(path: Path) -> list[dict]:
     return rows
 
 
-def _window_analysis(dg: int, overall_z: float, ts: dict) -> dict:
-    dates = sorted(ts.keys())
-    all_up = all_n = 0
-    for date in dates:
-        d = ts[date]
-        try: op = float(d["1. open"]); cl = float(d["4. close"])
-        except: continue
-        all_n += 1; all_up += 1 if cl > op else 0
-    base = all_up / all_n if all_n else 0.5
-    sign = 1 if overall_z > 0 else -1
-
-    wzs = []
-    for _, start, end in _WINDOWS:
-        ups = n = 0
-        for date in dates:
-            if date < start or date > end: continue
-            d = ts[date]
-            try: op = float(d["1. open"]); cl = float(d["4. close"])
-            except: continue
-            if _digit_sum_full(op) == dg:
-                n += 1; ups += 1 if cl > op else 0
-        wzs.append(_z(ups, n, base) if n >= MIN_WIN_N else None)
-
-    valid = [z for z in wzs if z is not None]
-    coverage = len(valid) / len(_WINDOWS)
-    cons = sum(1 for z in valid if abs(z) >= 1.0 and (z > 0) == (sign > 0))
-    sign_vals = [1 if z > 0 else -1 for z in valid if abs(z) >= 0.5]
-    has_flip = len(set(sign_vals)) > 1 if len(sign_vals) >= 2 else False
-
-    if cons >= 4: temporal = "consistent"
-    elif cons >= 2: temporal = "partial"
-    else: temporal = "stale"
-
-    return {"temporal": temporal, "coverage": round(coverage, 2),
-            "has_flip": has_flip, "is_sparse": coverage < 0.5}
 
 
 def run():
@@ -162,7 +123,7 @@ def run():
     for r in sig:
         ts = ts_map.get(r["symbol"], {})
         if ts:
-            r.update(_window_analysis(r["digit"], r["z"], ts))
+            r.update(window_analysis(r["digit"], r["z"], ts, _digit_sum_full))
         else:
             r["temporal"] = "no_data"
 

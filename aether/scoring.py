@@ -5,8 +5,12 @@ Called by _compute_pgr_fields() in powergauge.py.
 """
 
 import json
+import logging
 import os
+import threading
 from aether.utils import _to_float
+
+_log = logging.getLogger("aether.scoring")
 
 # ── Market regime config ─────────────────────────────────────────────────────
 # Ticker whose SMA(50) trend gates short/long scores.
@@ -29,44 +33,38 @@ _DIGIT_FULL_STUDY_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.ab
                                        "Data", "digit_sum_full_study.json")
 _digit_index: dict | None = None       # integer digit-sum: {(sym, type, digit): z}
 _digit_full_index: dict | None = None  # full-cents digit-sum: {(sym, type, digit): z}
+_digit_lock = threading.Lock()
 
 def _load_digit_index() -> dict:
     global _digit_index
-    if _digit_index is not None:
-        return _digit_index
-    _digit_index = {}
-    try:
-        with open(_DIGIT_STUDY_PATH, "r") as f:
-            rows = json.load(f)
-        for r in rows:
-            # Requirements: persist over time AND no direction flip AND adequate coverage.
-            # Stale = historically concentrated. Flip = unreliable direction. Sparse = price regime gap.
-            if (abs(r.get("z", 0)) >= 2.0
-                    and r.get("temporal") in ("consistent", "partial")
-                    and not r.get("has_flip", False)
-                    and not r.get("is_sparse", False)):
-                _digit_index[(r["symbol"], r["type"], r["digit"])] = r["z"]
-    except Exception:
-        pass
+    with _digit_lock:
+        if _digit_index is not None:
+            return _digit_index
+        _digit_index = _build_digit_index(_DIGIT_STUDY_PATH)
     return _digit_index
 
 def _load_digit_full_index() -> dict:
     global _digit_full_index
-    if _digit_full_index is not None:
-        return _digit_full_index
-    _digit_full_index = {}
+    with _digit_lock:
+        if _digit_full_index is not None:
+            return _digit_full_index
+        _digit_full_index = _build_digit_index(_DIGIT_FULL_STUDY_PATH)
+    return _digit_full_index
+
+def _build_digit_index(path: str) -> dict:
+    idx: dict = {}
     try:
-        with open(_DIGIT_FULL_STUDY_PATH, "r") as f:
+        with open(path, "r") as f:
             rows = json.load(f)
         for r in rows:
             if (abs(r.get("z", 0)) >= 2.0
                     and r.get("temporal") in ("consistent", "partial")
                     and not r.get("has_flip", False)
                     and not r.get("is_sparse", False)):
-                _digit_full_index[(r["symbol"], r["type"], r["digit"])] = r["z"]
+                idx[(r["symbol"], r["type"], r["digit"])] = r["z"]
     except Exception:
         pass
-    return _digit_full_index
+    return idx
 
 def _price_digit_sum(price: float) -> int:
     """Digit-sum of integer part only: $247.35 → 247 → 2+4+7=13 → 4."""
@@ -280,7 +278,7 @@ def market_regime(date_str: str, sma_period: int = 50) -> str:
         dates = sorted(ts.keys())
         past  = [d for d in dates if d <= date_str]
         if len(past) < sma_period:
-            print(f"  [Regime] {REGIME_SYMBOL}: only {len(past)} dates before {date_str}, need {sma_period} — using Neutral")
+            _log.debug(f"  [Regime] {REGIME_SYMBOL}: only {len(past)} dates before {date_str}, need {sma_period} — using Neutral")
             result = "Neutral"
         else:
             closes = [float(ts[d]["4. close"]) for d in past[-sma_period:]]
@@ -290,7 +288,7 @@ def market_regime(date_str: str, sma_period: int = 50) -> str:
             elif pct < -0.02: result = "Bear"
             else:             result = "Neutral"
     except (json.JSONDecodeError, KeyError, ValueError, ZeroDivisionError) as e:
-        print(f"  [Regime] {REGIME_SYMBOL} {date_str}: error computing regime — {e}")
+        _log.warning(f"  [Regime] {REGIME_SYMBOL} {date_str}: error computing regime — {e}")
         result = "Neutral"
     _regime_cache[_cache_key] = result
     return result
