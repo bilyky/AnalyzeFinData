@@ -564,12 +564,16 @@ def fetch_quotes(tokens, symbols: list[str], env="sandbox") -> dict[str, float]:
 # API object factories
 # ---------------------------------------------------------------------------
 
-def get_market(tokens, env="sandbox"):
+def get_market(tokens, env=None):
+    if env is None:
+        env = tokens.get("env", "sandbox")
     ck, cs, _, _ = _load_config(env)
     return pyetrade.ETradeMarket(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"], dev=(env == "sandbox"))
 
 
-def get_accounts(tokens, env="sandbox"):
+def get_accounts(tokens, env=None):
+    if env is None:
+        env = tokens.get("env", "sandbox")
     ck, cs, _, _ = _load_config(env)
     return pyetrade.ETradeAccounts(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"], dev=(env == "sandbox"))
 
