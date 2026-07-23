@@ -631,17 +631,27 @@ class TestDigitSumScoring(unittest.TestCase):
              _mock.patch("aether.scoring._digit_full_index", {}):
             self.assertEqual(digit_sum_score("AAPL", close_price=247.35), 0.0)
 
-    def test_digit_sum_score_fires_when_signal_exists(self):
+    def test_digit_sum_score_fires_from_full_cents_index(self):
         from aether.scoring import digit_sum_score, _price_digit_sum_full
         import unittest.mock as _mock
-        # AAPL close at $247.35 -> full digit = 3
         dg_full = _price_digit_sum_full(247.35)
-        fake_idx = {("AAPL", "CLOSE", dg_full): 3.0}  # z=3.0 -> score = +1.0
+        fake_full = {("AAPL", "CLOSE", dg_full): 3.0}
         with _mock.patch("aether.scoring._digit_index", {}), \
-             _mock.patch("aether.scoring._digit_full_index", fake_idx):
+             _mock.patch("aether.scoring._digit_full_index", fake_full):
             score = digit_sum_score("AAPL", close_price=247.35)
         self.assertGreater(score, 0.0)
         self.assertLessEqual(score, 1.0)
+
+    def test_digit_sum_score_fires_from_integer_index(self):
+        from aether.scoring import digit_sum_score, _price_digit_sum
+        import unittest.mock as _mock
+        dg_int = _price_digit_sum(247.35)   # int(247.35)=247 -> 2+4+7=13->4
+        fake_int = {("NVDA", "CLOSE", dg_int): -2.4}  # negative z -> down signal
+        with _mock.patch("aether.scoring._digit_index", fake_int), \
+             _mock.patch("aether.scoring._digit_full_index", {}):
+            score = digit_sum_score("NVDA", close_price=247.35)
+        self.assertLess(score, 0.0)   # negative signal fires
+        self.assertGreaterEqual(score, -1.0)
 
     def test_digit_sum_open_score_zero_without_signal(self):
         from aether.scoring import digit_sum_open_score

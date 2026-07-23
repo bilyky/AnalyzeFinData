@@ -96,9 +96,17 @@ def _make_pg_with_ohlcv(n_days: int = 35):
 class TestComputePgrFields(unittest.TestCase):
     def setUp(self):
         scoring.clear_regime_cache()
+        import aether.scoring as _sc
+        self._orig_idx      = _sc._digit_index
+        self._orig_full_idx = _sc._digit_full_index
+        _sc._digit_index      = {}  # empty — no real study JSON loaded during tests
+        _sc._digit_full_index = {}
 
     def tearDown(self):
         scoring.clear_regime_cache()
+        import aether.scoring as _sc
+        _sc._digit_index      = self._orig_idx
+        _sc._digit_full_index = self._orig_full_idx
 
     def test_all_expected_keys_present(self):
         pg, ohlcv = _make_pg_with_ohlcv()

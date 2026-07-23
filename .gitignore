@@ -1,5 +1,6 @@
 # Cache, API data, personal files — never commit
 Data/
+notes_fin_data.txt
 config.json
 etrade_config.json
 chaikin_config.json

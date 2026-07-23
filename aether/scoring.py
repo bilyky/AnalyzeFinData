@@ -33,7 +33,8 @@ _DIGIT_FULL_STUDY_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.ab
                                        "Data", "digit_sum_full_study.json")
 _digit_index: dict | None = None       # integer digit-sum: {(sym, type, digit): z}
 _digit_full_index: dict | None = None  # full-cents digit-sum: {(sym, type, digit): z}
-_digit_lock = threading.Lock()
+_digit_lock      = threading.Lock()    # guards _digit_index only
+_digit_full_lock = threading.Lock()    # guards _digit_full_index only
 
 def _load_digit_index() -> dict:
     global _digit_index
@@ -45,7 +46,7 @@ def _load_digit_index() -> dict:
 
 def _load_digit_full_index() -> dict:
     global _digit_full_index
-    with _digit_lock:
+    with _digit_full_lock:
         if _digit_full_index is not None:
             return _digit_full_index
         _digit_full_index = _build_digit_index(_DIGIT_FULL_STUDY_PATH)

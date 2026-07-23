@@ -2,3 +2,5 @@ TODO:
 read emails to find ideas
 read news to verify data
 add fibonochi algorithm to predictions
+
+GITHUB token: set via GITHUB_TOKEN env var (see config.json.example)

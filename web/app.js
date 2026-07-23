@@ -1905,7 +1905,7 @@ function initWiki() {
                 configs.forEach((cfg) => {
                     const li = document.createElement("li");
                     li.className = "flex items-start gap-2 text-slate-300";
-                    li.innerHTML = `<span class="text-purple-400 font-semibold">•</span> <span>${cfg}</span>`;
+                    li.innerHTML = `<span class="text-purple-400 font-semibold">•</span> <span>${esc(cfg)}</span>`;
                     configList.appendChild(li);
                 });
 
