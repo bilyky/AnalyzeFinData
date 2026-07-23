@@ -14,19 +14,19 @@
 ## Saturday R&D Roadmap (Next Sessions)
 
 *   **Session: Saturday, July 4, 2026 (10:00 AM PST) — Jeremy Grantham & E*TRADE Alerts API:**
-    1.  *The 2.5-Sigma Bubble Detector:* Build a technical filter that calculates how far SPY or sector ETFs are trading relative to their 500-day mean, blacklisting any asset class in the "Super-Bubble" zone (> 2.5 standard deviations above mean).
-    2.  *Structural Scarcity Core:* Create a dedicated, long-term 20% portfolio allocation cap reserved strictly for metals, agriculture, and grid utility assets (e.g., FCX, RS, EIX) to ride Grantham's secular "Hard Asset Supercycle."
-    3.  *E*TRADE Alerts API Integration:* Research and prototype a headless client for E*TRADE's native Alerts API (`GET /v1/user/alerts`) to dynamically capture "Power Inflow" and broker order-flow events (like today's INTC alert) directly from the broker in real-time.
+    1.  ✅ *The 2.5-Sigma Bubble Detector:* **SHIPPED** — `calculate_bubble_z_score()` in `ai_portfolio_game.py`; rejects any symbol > 2.5 SD above its 500-day mean.
+    2.  ✅ *Structural Scarcity Core:* **SHIPPED** — 20% allocation cap, LLM classifier, shrink-ray sizer in `instruments.py` + `ai_portfolio_game.py`.
+    3.  *E*TRADE Alerts API Integration:* Research and prototype a headless client for E*TRADE's native Alerts API (`GET /v1/user/alerts`) to dynamically capture "Power Inflow" and broker order-flow events directly from the broker in real-time.
     4.  *The Intraday Sentinel Trigger:* Code the real-time event-driven loop to parse these broker alerts every 15 minutes, run technical bottom checks, and instantly execute buy orders inside the active session.
-    5.  *The Real-Account Shadow Copilot:* Design an automated, isolated daily risk-auditor (`real_copilot.py`). It will headlessly scan the user's 44 actual E*TRADE holdings every evening, cross-reference our fresh technical sheets, and automatically email precise "Actionable Trade Tickets" (BUY/SELL recommendations with ATR stop levels) to their inbox, keeping real-money risk perfectly optimized without giving the AI raw trade execution access.
+    5.  ✅ *The Real-Account Shadow Copilot:* **SHIPPED** — `real_copilot.py` headlessly scans real E*TRADE holdings and emails HTML trade tickets.
 
 *   **Session: Saturday, July 11, 2026 (10:00 AM PST) — Peter Lynch & Portfolio Gardening:**
-    1.  *The "Flower Protection" Trailing Stop:* Research dynamic trailing stops to let our winning "flowers" run. Instead of selling immediately on a short-term score drop, allow high-conviction positions (with Bullish/Very Bullish PGR) to be held as long as they remain above their 50-day moving average.
-    2.  *The "Weed Cutter" (Breaking the Disposition Effect):* Code strict, non-negotiable risk rules that force the immediate liquidation of any losing "weed" position that breaches support, completely eliminating the human emotional trap of "waiting to get back to even."
-    3.  *The "Lynch Local Edge" Filter:* Integrate fundamental metrics that track consumer-footprint strength, transaction growth, and operational inventory cycles to identify undervalued consumer/retail companies before Wall Street notices them.
-    4.  *Trader Vic's Reversal Engines:* Code Victor Sperandeo's legendary "1-2-3 Reversal" (trendline break + higher low + peak breakout) and the "2B Reversal Pattern" (the classic bear-trap liquidity reclaim) as our advanced, real-time price action filters to capture the absolute physical bottoms of our target "flowers."
-    5.  *The "Non-Correlated Satellite" Engine:* Develop a dynamic allocation bypass (`satellite_slot.py`). If the market is Defensive, but AETHER detects an elite setup in a low-beta, non-correlated sector (specifically Biotechnology or Defense), the system automatically expands our position limits from 3 to 4 slots to actively capture non-correlated alpha.
-    6.  *The SPY-RSP Breadth Divergence Filter:* Build a macro-regime guard that calculates the delta between SPY (Cap-Weighted) and RSP (Equal-Weighted S&P 500). If `SPY_Score - RSP_Score > 4.0` (representing extreme, fragile cap-weight tech concentration), the system will automatically downgrade our strategy profile by one level (e.g. from Balanced to Defensive) to protect our capital from bad market breadth.
+    1.  *The "Flower Protection" Trailing Stop:* Flower Protection logic is active in `sell_rules.exit_decision()` — soft exits downgraded to REVIEW when position is in profit above 50-DMA. Full dynamic trailing stop (see `plans/trailing-stop-adjuster.md`) not yet implemented.
+    2.  *The "Weed Cutter" (Breaking the Disposition Effect):* ATR hard stop enforced in `sell_rules.exit_decision()` — positions at or below stop trigger immediate EXIT regardless of fundamentals.
+    3.  *The "Lynch Local Edge" Filter:* Not yet implemented — requires fundamental data integration.
+    4.  ✅ *Trader Vic's Reversal Engines:* **SHIPPED** — "1-2-3 Reversal" and "2B Pattern" in `patterns.py` with `+2.0` score boost to bottom-confirmed setups.
+    5.  *The "Non-Correlated Satellite" Engine:* Not yet implemented (`satellite_slot.py` not created).
+    6.  ✅ *The SPY-RSP Breadth Divergence Filter:* **SHIPPED** — `SPY_Score - RSP_Score > 4.0` auto-downgrades strategy profile; active in scoring pipeline.
 
 *   **Session: Saturday, July 18, 2026 (10:00 AM PST) — The Autonomic Self-Tuning Optimizer & Retrospective:**
     1.  *The Backtest Parser:* Code a headless parser inside `calibrate_model.py` that executes `backtest_ratings.py` programmatically, extracts the 10-day forward return spreads for all technical and pattern factors, and calculates the optimal weights using normalized spread ratio distributions.
