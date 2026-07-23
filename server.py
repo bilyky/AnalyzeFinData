@@ -645,6 +645,7 @@ def create_app():
 
     # In-memory run registry: run_id -> {log_path, pid, done}
     _runs: dict = {}
+    _runs_lock = threading.Lock()
 
     @app.post("/api/tasks/run")
     async def run_task(
@@ -681,7 +682,8 @@ def create_app():
                     stdout=lf, stderr=subprocess.STDOUT,
                     cwd=str(_DIR),
                 )
-            _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc}
+            with _runs_lock:
+                _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc}
             return {"status": "started", "pid": proc.pid, "run_id": run_id,
                     "task_id": task_id, "label": task["label"]}
         except Exception as e:
@@ -691,7 +693,8 @@ def create_app():
     async def task_output(run_id: str, offset: int = Query(0, ge=0)):
         """Stream lines from a task's log file starting at byte `offset`.
         Returns {lines, offset, done} so the client can poll incrementally."""
-        run = _runs.get(run_id)
+        with _runs_lock:
+            run = _runs.get(run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
         log_path = run["log"]

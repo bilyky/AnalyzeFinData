@@ -598,17 +598,15 @@ class TestDigitSumScoring(unittest.TestCase):
 
     def setUp(self):
         import aether.scoring as _sc
-        # Reset singletons so each test starts clean and cannot be affected
-        # by a prior test that loaded the real study JSON.
-        self._orig_idx      = _sc._digit_index
-        self._orig_full_idx = _sc._digit_full_index
+        # Force reset — do not save prior state; a prior test may have loaded
+        # the real JSON and restoring it would pollute subsequent tests.
         _sc._digit_index      = None
         _sc._digit_full_index = None
 
     def tearDown(self):
         import aether.scoring as _sc
-        _sc._digit_index      = self._orig_idx
-        _sc._digit_full_index = self._orig_full_idx
+        _sc._digit_index      = None
+        _sc._digit_full_index = None
 
     def test_price_digit_sum_integer(self):
         from aether.scoring import _price_digit_sum

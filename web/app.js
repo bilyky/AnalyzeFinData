@@ -1874,7 +1874,7 @@ function initWiki() {
             const entry = AETHER_WIKI[key];
             if (entry) {
                 $("wiki-title").textContent = entry.title;
-                $("wiki-origin").innerHTML = "<b>Origin:</b> " + entry.origin;
+                $("wiki-origin").innerHTML = "<b>Origin:</b> " + esc(entry.origin);
                 $("wiki-body").innerHTML = entry.body;
 
                 let configs = entry.config;

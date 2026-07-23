@@ -43,7 +43,7 @@ def _get_digit_study(sym: str) -> list:
                             idx.setdefault(r["symbol"], []).append(r)
                     except Exception:
                         pass
-            _digit_study_index = idx  # atomic assignment after full load
+            _digit_study_index = idx  # lock held for entire build; no duplicate work
     return _digit_study_index.get(sym, [])
 
 # ── Simple in-process TTL cache ───────────────────────────────────────────────
