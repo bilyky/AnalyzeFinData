@@ -79,9 +79,17 @@
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>#</th><th>Symbol</th><th>PGR</th><th>Price</th><th>Stop</th>
-                            <th>Target</th><th>S10</th><th>L60</th><th>Score</th>
-                            <th>Patterns</th><th>Sizing (ATR/Stop)</th>
+                            <th title="Rank. Ordered from highest Combined Score to lowest.">#</th>
+                            <th title="Ticker symbol. Click to open detailed statistics, price charts, and digit-sum analysis.">Symbol</th>
+                            <th title="Current PowerGauge rating — measures fundamental company strength.">PGR</th>
+                            <th title="Current price (or yesterday's close when after-hours/weekends).">Price</th>
+                            <th title="Dynamic Support Stop-Loss Floor. Calculated at entry and ratchets upward as price makes new highs to lock in gains.">Stop</th>
+                            <th title="Dynamic Overhead Resistance Target. Projected at entry based on key mathematical swing levels.">Target</th>
+                            <th title="Short-Term Momentum Score. Combines fast indicators (RSI, digit-sums, Bollinger recoveries, and 15-day streak percentage). Scale: [-5.0, +5.0].">S10</th>
+                            <th title="Long-Term Trend Score. Combines slow trend indicators (50/200 SMA crossings, relative volume buckets, and 30-day streak count). Scale: [-5.0, +5.0].">L60</th>
+                            <th title="Combined Momentum Score. Calculated as S10 + L60. Must be >= 9.5 to trigger automated buys.">Score</th>
+                            <th title="Bullish/Bearish chart patterns found (Double Bottom, Cup & Handle, Golden Cross, Bull Flag, etc.).">Patterns</th>
+                            <th title="Dynamic order sizing based on capital limits (80/20 Satellite cap) and stop-loss width.">Sizing (ATR/Stop)</th>
                         </tr>
                     </thead>
                     <tbody id="picks-body">
@@ -148,24 +156,24 @@
                 <table class="data-table text-sm" id="research-table">
                     <thead>
                         <tr>
-                            <th data-sort="symbol">Symbol</th>
-                            <th data-sort="industry" title="Sort by Industry Strength (green Strong / red Weak / amber NA)">Industry<button id="sort-industry-az" type="button" title="Sort alphabetically (A–Z)" class="ml-1 text-[10px] font-normal px-1 rounded bg-slate-700/70 hover:bg-slate-600">A–Z</button></th>
-                            <th data-sort="pgr" title="Prev &gt; Current PowerGauge rating — green improved, red deteriorated, white unchanged">PGR</th>
-                            <th data-sort="price" class="text-right">Price</th>
-                            <th data-sort="stop" class="text-right">Stop</th>
-                            <th data-sort="target" class="text-right">Target</th>
-                            <th data-sort="risk_ratio" class="text-right">R:R</th>
-                            <th data-sort="s10" class="text-right">S10</th>
-                            <th data-sort="l60" class="text-right">L60</th>
-                            <th data-sort="combined" class="text-right">Comb.</th>
-                            <th data-sort="status">Status</th>
-                            <th data-sort="setup">Setup</th>
-                            <th data-sort="win_pct" class="text-right">Win%</th>
-                            <th data-sort="buying_ratio" class="text-right">Buy Ratio</th>
-                            <th data-sort="money_flow" class="text-right">Money Flow</th>
-                            <th data-sort="obos" class="text-right">OB/OS</th>
-                            <th data-sort="lt_trend" class="text-right">LT Trend</th>
-                            <th data-sort="patterns">Patterns</th>
+                            <th data-sort="symbol" title="Ticker symbol. Click to open detailed statistics, price charts, and digit-sum analysis.">Symbol</th>
+                            <th data-sort="industry" title="Industry group. Sorts by Industry Strength: green Strong (heavy institutional support), red Weak, amber NA. Click A-Z to sort alphabetically.">Industry<button id="sort-industry-az" type="button" title="Sort alphabetically (A–Z)" class="ml-1 text-[10px] font-normal px-1 rounded bg-slate-700/70 hover:bg-slate-600">A–Z</button></th>
+                            <th data-sort="pgr" title="Prev > Current PowerGauge rating — green improved, red deteriorated, white unchanged. Measures fundamental company strength.">PGR</th>
+                            <th data-sort="price" class="text-right" title="Current price (or yesterday's close when after-hours/weekends).">Price</th>
+                            <th data-sort="stop" class="text-right" title="Dynamic Support Stop-Loss Floor. Calculated at entry and ratchets upward as price makes new highs to lock in gains.">Stop</th>
+                            <th data-sort="target" class="text-right" title="Dynamic Overhead Resistance Target. Projected at entry based on key mathematical swing levels.">Target</th>
+                            <th data-sort="risk_ratio" class="text-right" title="Reward-to-Risk Ratio. Calculated as (Target - Price) / (Price - Stop). Must be >= 2.0 to trigger automated buys.">R:R</th>
+                            <th data-sort="s10" class="text-right" title="Short-Term Momentum Score. Combines fast indicators (RSI, digit-sums, Bollinger recoveries, and 15-day streak percentage). Scale: [-5.0, +5.0].">S10</th>
+                            <th data-sort="l60" class="text-right" title="Long-Term Trend Score. Combines slow trend indicators (50/200 SMA crossings, relative volume buckets, and 30-day streak count). Scale: [-5.0, +5.0].">L60</th>
+                            <th data-sort="combined" class="text-right" title="Combined Momentum Score. Calculated as S10 + L60. Must be >= 9.5 to trigger automated buys.">Comb.</th>
+                            <th data-sort="status" title="Active spreadsheet portfolio status — STRONG HOLD, WATCH, REVIEW, or OUT of portfolio.">Status</th>
+                            <th data-sort="setup" title="Victor Sperandeo Trader Vic bottom setups found: 1-2-3 Reversal (Vic123↑) or 2B Pattern (Vic2B↑). Adds a +2.0 boost to S10.">Setup</th>
+                            <th data-sort="win_pct" class="text-right" title="Predicted historical win probability based on the stock's performance on similar scoring setups.">Win%</th>
+                            <th data-sort="buying_ratio" class="text-right" title="Buying Ratio. Measures the balance of buying power vs selling pressure. Scale: [0.0, 1.0].">Buy Ratio</th>
+                            <th data-sort="money_flow" class="text-right" title="Chaikin Money Flow. Measures institutional buying (accumulation) or selling (distribution) over a 20-day window.">Money Flow</th>
+                            <th data-sort="obos" class="text-right" title="Overbought or Oversold state. Calculated from short-term RSI levels. Avoids buying at bubble peaks.">OB/OS</th>
+                            <th data-sort="lt_trend" class="text-right" title="Long-Term Trend direction. Calculated as the stock's position relative to its 50-day and 200-day Simple Moving Averages.">LT Trend</th>
+                            <th data-sort="patterns" title="Bullish/Bearish chart patterns found (Double Bottom, Cup & Handle, Golden Cross, Bull Flag, etc.).">Patterns</th>
                         </tr>
                     </thead>
                     <tbody id="research-body">
