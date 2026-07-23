@@ -972,7 +972,6 @@ def read_symbol(symbol: str) -> dict:
     if not _SYMBOL_RE.match(sym):
         return {"symbol": sym, "error": f"Invalid symbol: {sym!r}"}
     def _load():
-        import json
         import risk_utils
         out: dict = {"symbol": sym}
 
