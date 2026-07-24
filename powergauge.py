@@ -4,6 +4,8 @@ import re
 import requests
 import json
 import os
+import threading
+import time
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -65,6 +67,92 @@ def _chaikin_uuid() -> str:
         return CFG.chaikin_email or ""
     except Exception:
         return ""
+
+# ── Session auto-renewal — true singleton across threads AND processes ────────
+#
+# Problem: watchdog, server, and CLI scripts all run in separate processes.
+# When the Chaikin session cookie expires, all of them race to re-authenticate.
+#
+# Solution — two-level mutex:
+#   1. threading.Lock  — within a single process, prevents N parallel fetch
+#      threads from all attempting re-auth simultaneously.
+#   2. File lock (O_EXCL atomic create) — across all processes on the machine,
+#      exactly one process wins the re-auth; others wait and re-read the result.
+#
+# The file lock IS the cross-process singleton. Whoever creates
+# Data/chaikin_reauth.lock exclusively owns the re-auth.
+
+_BASE_DIR_PG    = os.path.dirname(os.path.abspath(__file__))
+_REAUTH_LOCK_PATH = os.path.join(_BASE_DIR_PG, "Data", "chaikin_reauth.lock")
+_reauth_thread_lock  = threading.Lock()   # within-process guard
+_REAUTH_TIMEOUT = 60   # max seconds to wait for another process/thread to finish
+
+import logging as _logging
+_pg_log = _logging.getLogger("aether.powergauge")
+
+
+def _acquire_file_lock() -> int | None:
+    """Try to atomically create the lock file. Returns fd if won, None if another process holds it."""
+    try:
+        return os.open(_REAUTH_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return None
+
+
+def _release_file_lock(fd: int):
+    try:
+        os.close(fd)
+    except Exception:
+        pass
+    try:
+        os.unlink(_REAUTH_LOCK_PATH)
+    except Exception:
+        pass
+
+
+def ensure_valid_session() -> dict:
+    """Return a valid Chaikin session, refreshing headlessly if expired.
+
+    True singleton: at most one re-auth attempt runs at any moment
+    across all threads in this process AND all other processes on the machine.
+    Callers that lose the race wait up to 60 s then re-read the refreshed session.
+    """
+    # Fast path — current session is still valid
+    session = _load_session_from_file()
+    if session and _validate_session(session):
+        return session
+
+    # Slow path — session expired, need to re-auth
+    with _reauth_thread_lock:
+        # Re-check after acquiring thread lock (another thread may have just refreshed)
+        session = _load_session_from_file()
+        if session and _validate_session(session):
+            return session
+
+        # Try to win the cross-process file lock
+        fd = _acquire_file_lock()
+        if fd is not None:
+            # We won — perform the re-auth
+            try:
+                _pg_log.warning("Chaikin session expired — headless re-authentication...")
+                new_session = login(interactive=False)
+                if new_session and new_session.get("jsessionid"):
+                    _pg_log.info("Chaikin session refreshed successfully.")
+                    return new_session
+                _pg_log.error(
+                    "Headless re-auth failed. Run `python powergauge.py` to log in manually."
+                )
+                return session or {}
+            finally:
+                _release_file_lock(fd)
+        else:
+            # Another process is re-authing — wait for the lock file to disappear
+            _pg_log.info("Another process is refreshing Chaikin session — waiting...")
+            deadline = time.monotonic() + _REAUTH_TIMEOUT
+            while os.path.exists(_REAUTH_LOCK_PATH) and time.monotonic() < deadline:
+                time.sleep(1)
+            return _load_session_from_file() or session or {}
+
 
 # Pre-built index of symbol → sorted list of cached JSON paths.
 # None = not yet scanned; {} = scanned but empty directory.
@@ -551,7 +639,7 @@ def login(interactive=True) -> dict:
     )
 
 
-def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id) -> PowerGauge:
+def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id, _retry: bool = True) -> PowerGauge:
     if not _SYMBOL_RE.match(symbol):
         raise ValueError(f"Invalid symbol format: {symbol!r}")
     
@@ -605,6 +693,12 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id) -> PowerG
                 json.dump(data_jsn, fw)
 
         elif response.status_code in (401, 403):
+            if _retry:
+                # Singleton renewal — at most one attempt per 403, then hard fail
+                _pg_log.warning(f"HTTP {response.status_code} for {symbol} — triggering session renewal...")
+                fresh = ensure_valid_session()
+                if fresh and fresh.get("jsessionid"):
+                    return get_symbol_data(symbol, date, prefer_cache=False, session_id=fresh, _retry=False)
             print(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
             raise EnvironmentError(f"Session rejected (HTTP {response.status_code}). Update {SESSION_FILE}.")
         else:
