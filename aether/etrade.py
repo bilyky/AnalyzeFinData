@@ -11,13 +11,9 @@ from aether.config import CFG
 _log = logging.getLogger("aether.etrade")
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_TOKEN_PATH        = os.path.join(_DIR, "Data", "etrade_tokens.json")
-_RENEW_LOCK_PATH   = os.path.join(_DIR, "Data", "etrade_renew.lock")
-_RENEW_LOCK_TTL    = 30    # seconds — token renewal HTTP call, should be < 10s
-_RENEW_WAIT_TIMEOUT = 15   # seconds to wait if another process is renewing
+_TOKEN_PATH = os.path.join(_DIR, "Data", "etrade_tokens.json")
 
-import threading as _threading
-_renew_thread_lock = _threading.Lock()
+from aether.token_renewer import TokenRenewer as _TokenRenewer
 
 _ET = ZoneInfo("America/New_York")
 _RENEW_URL = {
@@ -102,59 +98,25 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
         _log.debug(f"Token {age_min:.0f}m old — reusing without renewal.")
         return tokens
 
-    # Cross-process singleton: only one process/thread renews at a time.
-    # Concurrent callers wait briefly then re-read the refreshed token file.
-    with _renew_thread_lock:
-        # Re-check age after acquiring thread lock (another thread may have just renewed)
-        tokens_fresh = _load_tokens(env)
-        if tokens_fresh:
-            age_min2 = (time.time() - tokens_fresh.get("saved_at", 0)) / 60
-            if age_min2 < 75:
-                return tokens_fresh
-
-        # Try to win the cross-process file lock
-        os.makedirs(os.path.dirname(_RENEW_LOCK_PATH), exist_ok=True)
-        try:
-            fd = os.open(_RENEW_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            # Another process is renewing — clean stale lock, then wait
-            try:
-                if time.time() - os.path.getmtime(_RENEW_LOCK_PATH) > _RENEW_LOCK_TTL:
-                    os.unlink(_RENEW_LOCK_PATH)
-                    fd = os.open(_RENEW_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                else:
-                    fd = None
-            except (OSError, FileExistsError):
-                fd = None
-
-    if fd is None:
-        # Another process has the lock — wait briefly, then re-read
-        deadline = time.time() + _RENEW_WAIT_TIMEOUT
-        while os.path.exists(_RENEW_LOCK_PATH) and time.time() < deadline:
-            time.sleep(0.5)
-        return _load_tokens(env) or tokens
-
-    try:
+    def _do_renew():
         from requests_oauthlib import OAuth1Session
         ck, cs, _, _ = _load_config(env)
         session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
-        r = session.get(_RENEW_URL[env], proxies=_proxies(), verify=False, timeout=10)
-        if r.ok:
-            tokens["saved_at"] = time.time()
-            _save_tokens(tokens, env)
-            _log.info("Tokens renewed.")
-            return tokens
-        _log.warning(f"Renew failed: HTTP {r.status_code} — {r.text[:120]}")
-        return None
-    except Exception as e:
-        _log.warning(f"Renew error: {e}")
-        return None
-    finally:
         try:
-            os.close(fd)
-            os.unlink(_RENEW_LOCK_PATH)
-        except OSError:
-            pass
+            r = session.get(_RENEW_URL[env], proxies=_proxies(), verify=False, timeout=10)
+            if r.ok:
+                tokens["saved_at"] = time.time()
+                _save_tokens(tokens, env)
+                return tokens
+            _log.warning(f"Renew failed: HTTP {r.status_code} — {r.text[:120]}")
+        except Exception as e:
+            _log.warning(f"Renew error: {e}")
+        return None
+
+    lock_path = os.path.join(_DIR, "Data", "etrade_renew.lock")
+    renewer = _TokenRenewer(lock_path, _do_renew, lambda: _load_tokens(env),
+                            lock_ttl=30, wait_timeout=15)
+    return renewer.ensure(current_token=tokens)
 
 
 def revoke_tokens(tokens, env="sandbox") -> bool:

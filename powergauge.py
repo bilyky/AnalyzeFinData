@@ -4,7 +4,6 @@ import re
 import requests
 import json
 import os
-import threading
 import time
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -71,113 +70,37 @@ def _chaikin_uuid() -> str:
     except Exception:
         return ""
 
-# ── Session auto-renewal — true singleton across threads AND processes ────────
-#
-# Problem: watchdog, server, and CLI scripts all run in separate processes.
-# When the Chaikin session cookie expires, all of them race to re-authenticate.
-#
-# Solution — two-level mutex:
-#   1. threading.Lock  — within a single process, prevents N parallel fetch
-#      threads from all attempting re-auth simultaneously.
-#   2. File lock (O_EXCL atomic create) — across all processes on the machine,
-#      exactly one process wins the re-auth; others wait and re-read the result.
-#
-# The file lock IS the cross-process singleton. Whoever creates
-# Data/chaikin_reauth.lock exclusively owns the re-auth.
+from aether.token_renewer import TokenRenewer as _TokenRenewer
 
-_REAUTH_LOCK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "chaikin_reauth.lock")
-_REAUTH_TIMEOUT   = 90    # max seconds to wait for another process to finish re-auth
-_REAUTH_LOCK_TTL  = 180   # stale lock age (seconds) — assume dead process if older
+_SESSION_VALID_TTL   = 300   # seconds to trust a validated session without re-checking
+_session_valid_until = 0.0   # monotonic timestamp; avoids HTTP validation on every call
 
-_reauth_thread_lock  = threading.Lock()  # within-process guard
-_session_valid_until = 0.0               # monotonic timestamp until which the session is known-good
+_chaikin_renewer = _TokenRenewer(
+    lock_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "chaikin_reauth.lock"),
+    renew_fn=lambda: login(interactive=False),
+    load_fn=lambda: _load_session_from_file(),
+    lock_ttl=180,
+    wait_timeout=90,
+)
 
-
-def _acquire_file_lock() -> int | None:
-    """Try to atomically create the lock file. Returns fd if won, None if another process holds it."""
-    os.makedirs(os.path.dirname(_REAUTH_LOCK_PATH), exist_ok=True)
-    try:
-        return os.open(_REAUTH_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        return None
-
-
-def _release_file_lock(fd: int):
-    try:
-        os.close(fd)
-    except Exception:
-        pass
-    try:
-        os.unlink(_REAUTH_LOCK_PATH)
-    except Exception:
-        pass
-
-
-def _clean_stale_lock():
-    """Remove the reauth lock file if it is older than _REAUTH_LOCK_TTL seconds (dead process)."""
-    try:
-        age = time.time() - os.path.getmtime(_REAUTH_LOCK_PATH)
-        if age > _REAUTH_LOCK_TTL:
-            os.unlink(_REAUTH_LOCK_PATH)
-            _pg_log.warning(f"Removed stale Chaikin reauth lock ({age:.0f}s old — assuming dead process).")
-    except (OSError, FileNotFoundError):
-        pass
-
-
-_SESSION_VALID_TTL = 300  # seconds to trust a validated session without re-checking
 
 def ensure_valid_session() -> dict:
     """Return a valid Chaikin session, refreshing headlessly if expired.
-
-    True singleton across threads AND processes: at most one re-auth attempt
-    runs at any moment on the machine. Losers wait up to _REAUTH_TIMEOUT seconds
-    then re-read the refreshed session from disk.
+    Uses TokenRenewer for cross-process safety — see aether/token_renewer.py.
     """
     global _session_valid_until
-    # Fast path — cached validation still fresh (avoids HTTP on every call)
     session = _load_session_from_file()
+    # Fast path: TTL cache avoids HTTP validation probe on every call
     if session and time.monotonic() < _session_valid_until:
         return session
-    # Full HTTP validation check
     if session and _validate_session(session):
         _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
         return session
-
-    # Within-process lock: prevents N parallel fetch threads all attempting re-auth
-    with _reauth_thread_lock:
-        # Re-check inside lock (another thread may have just refreshed)
-        session = _load_session_from_file()
-        if session and _validate_session(session):
-            return session
-
-        # Clean up stale lock from a crashed process before attempting
-        _clean_stale_lock()
-
-        # Try to win the cross-process file lock (atomic O_CREAT|O_EXCL)
-        fd = _acquire_file_lock()
-        if fd is None:
-            pass  # another process holds it — fall through to wait below
-    # Release thread lock BEFORE the slow browser/network re-auth so other
-    # threads are not stalled. File lock still prevents cross-process races.
-    if fd is not None:
-        try:
-            _pg_log.warning("Chaikin session expired — headless re-authentication...")
-            new_session = login(interactive=False)
-            if new_session and new_session.get("jsessionid"):
-                _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
-                _pg_log.info("Chaikin session refreshed.")
-                return new_session
-            _pg_log.error("Headless re-auth failed. Run 'python powergauge.py' to log in manually.")
-            return session or {}
-        finally:
-            _release_file_lock(fd)
-    # fd was None — another process holds the lock; wait outside thread lock
-    # so other threads in this process are not stalled waiting too
-    _pg_log.info("Another process is refreshing the Chaikin session — waiting...")
-    deadline = time.monotonic() + _REAUTH_TIMEOUT
-    while os.path.exists(_REAUTH_LOCK_PATH) and time.monotonic() < deadline:
-        time.sleep(1)
-    return _load_session_from_file() or session or {}
+    # Expired — delegate to the cross-process singleton
+    new_session = _chaikin_renewer.ensure(current_token=session)
+    if new_session and new_session.get("jsessionid"):
+        _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
+    return new_session or session or {}
 
 
 # Pre-built index of symbol → sorted list of cached JSON paths.
