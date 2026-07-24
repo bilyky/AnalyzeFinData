@@ -1576,13 +1576,21 @@ async function openSymbol(sym) {
             return html;
         };
 
+        // Hide the descriptive subtitle when there are no signals
+        const subtitle = $("sm-digit-subtitle");
+        if (subtitle) subtitle.classList.toggle("hidden", !hasSig);
+
         let _showAllDigits = false;
         const render = () => {
+            if (!hasSig) {
+                $("sm-digit-table").innerHTML = `<div class="mut text-xs py-1">No significant digit-sum signals for this symbol.</div>`;
+                return;
+            }
             const toggleLabel = _showAllDigits ? "Show significant only" : "Show all digits";
             $("sm-digit-table").innerHTML = buildTable(_showAllDigits) +
                 `<div class="mt-1 flex items-center gap-3 text-slate-600">
                     <span>Bold = 95%+ confidence &middot; N≥50 per cell &middot; refresh monthly</span>
-                    ${hasSig ? `<button id="sm-digit-toggle" class="text-blue-500 hover:text-blue-300 underline underline-offset-2">${toggleLabel}</button>` : ''}
+                    <button id="sm-digit-toggle" class="text-blue-500 hover:text-blue-300 underline underline-offset-2">${toggleLabel}</button>
                 </div>`;
             const btn = $("sm-digit-toggle");
             if (btn) btn.onclick = () => { _showAllDigits = !_showAllDigits; render(); };
