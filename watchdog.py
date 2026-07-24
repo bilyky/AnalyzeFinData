@@ -308,23 +308,16 @@ def run_watchdog():
         # Throw the exception to fail the task scheduler run (rc != 0), preventing silent logical failures!
         raise
 
-    # 0b. Chaikin Proactive Session Keeper & Auto-Login
+    # 0b. Chaikin Proactive Session Keeper — uses cross-process singleton
     try:
         import powergauge
-        session_id = powergauge._load_session_from_file()
-        if not session_id or not powergauge._validate_session(session_id):
-            print("  [Healer] Chaikin Analytics session is expired or missing. Attempting automated re-authentication...")
-            # Trigger the browser login on the user's active desktop!
-            # Since this runs inside the watchdog, we pass interactive=False to avoid blocking prompt hangs.
-            new_session = powergauge.login(interactive=False)
-            if new_session:
-                print("  [Healer] Chaikin Analytics session successfully renewed via automated login!")
-            else:
-                print("  [Healer] Chaikin Analytics automated login failed or was aborted.")
+        session = powergauge.ensure_valid_session()
+        if session and session.get("jsessionid"):
+            print("  [Healer] Chaikin Analytics session is valid.")
         else:
-            print("  [Healer] Chaikin Analytics session is fresh and valid.")
+            print("  [Healer] Chaikin Analytics session renewal failed — manual login required.")
     except Exception as e:
-        print(f"  [Healer] Chaikin session keep-alive bypassed or failed: {e}")
+        print(f"  [Healer] Chaikin session keep-alive failed: {e}")
 
     # 1. Gather Initial System Health Data
     initial_errors = check_logs()

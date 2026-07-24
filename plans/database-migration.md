@@ -164,4 +164,4 @@ To migrate this entire setup to AWS, GCP, or a new VPS:
 *   We will code **`scripts/utils/backup_db.py`** as part of the daily watchdog.
 *   Every morning at 6:00 AM, the watchdog executes a dry-run `pg_dump` of `market_DB`.
 *   The generated `.sql` file is safely saved under `Data/Backup/Database/`.
-*   For ultimate durability, the watchdog **automatically zips, encrypts, and emails the SQL backup directly to your Gmail inbox** (`bilyky@gmail.com`) using your newly configured secure SMTP sender! If the server's hard drive crashes, you still have your database fully saved in your inbox!
+*   For ultimate durability, the watchdog **automatically zips, encrypts, and emails the SQL backup directly to your Gmail inbox** (`your_backup_email@example.com`) using your newly configured secure SMTP sender! If the server's hard drive crashes, you still have your database fully saved in your inbox!
