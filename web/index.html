@@ -608,6 +608,16 @@
                                 Reusable framework for all future experimental factors.
                             </p>
                         </div>
+                        <div data-wiki="pattern_discovery" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">🔍 Pattern Discovery Agent — Missed Winners Retrospective</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Weekly self-improvement loop: replay a past date, find the top 10 actual winners, diagnose why each was missed, and extract candidate new scoring factors.
+                                Two-layer design — a Python computation engine reconstructs 475 symbol scores from the Chaikin cache in ~14s (parallelized),
+                                followed by an LLM agent that reasons about <em>why</em> patterns exist and names them.
+                                <b>First finding (Jul 2026):</b> <code>lt_trend=Strong</code> penalized -3.0 in L60 appeared in 95% of missed 60-day winners across 3 dates —
+                                weight corrected to 0. Run from the System page or via <code>/pattern-discover</code>.
+                            </p>
+                        </div>
                     </div>
                 </div>
 

@@ -666,11 +666,17 @@ def create_app():
         args = list(task.get("args", []))
         inp = task.get("input")
         if inp:
-            val = (input_value.strip().upper() if input_value.strip()
-                   else (inp.get("default") or "")).upper()
-            if not val:
+            raw_val = input_value.strip() if input_value.strip() else (inp.get("default") or "")
+            if not raw_val:
                 return {"status": "error", "message": "Input value required."}
-            args.insert(inp.get("arg_position", len(args)), val)
+            named_arg = inp.get("arg")          # e.g. "--date"
+            pos_arg   = inp.get("arg_position") # e.g. 0
+            if named_arg:
+                # Named: insert --date VALUE (do NOT uppercase dates/paths)
+                args += [named_arg, raw_val]
+            else:
+                val = raw_val.upper()
+                args.insert(pos_arg if pos_arg is not None else len(args), val)
         run_id = str(uuid.uuid4())[:8]
         log_dir = _DIR / "Data" / "task_runs"
         log_dir.mkdir(parents=True, exist_ok=True)

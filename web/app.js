@@ -23,28 +23,38 @@ const AETHER_WIKI = {
     },
     "s10_score": {
         title: "S10 Short-Term Entry Score",
-        origin: "Project AETHER Core Team (Calibration Backtest, 336k observations, 2023-2025).",
-        body: "Standardizes short-term entry quality over a 10-day trading horizon. Aggregates volume spikes, momentum exhaustion oscillators, and contrarian overlays.",
+        origin: "Project AETHER Core Team (Calibration Backtest, 336k observations, 2023-2025). Contrarian weights calibrated for mean-reversion over a 10-day horizon.",
+        body: "Standardizes short-term entry quality over a 10-day trading horizon. Aggregates volume spikes, momentum exhaustion oscillators, and contrarian overlays. Contrarian weights (negative for Strong signals) reflect the hypothesis that overbought conditions revert over 10 days.",
         config: [
-            "Relative Volume Weight: High (+2.5), Very High (+0.5), Low (-2.0)",
-            "OB/OS Zone Weight: Optimal (+3.0), Early (+1.0), Wait (-2.0)",
-            "Money Flow Weight: Strong (+3.0), Weak (-2.0)",
-            "Contrarian Industry Strength: Weak (+2.0), Strong (-2.0)",
-            "Contrarian LT Trend: Weak (+1.5), Strong (-1.5)",
-            "Overlays: Seasonality (+-1.0) | Regime (+-1.0) | Fibonacci (+-1.0)"
+            "Relative Volume: High (+2.5), Very High (+0.5), Normal (0), Low (-2.0)",
+            "OB/OS Zone: Optimal (+3.0), Early (+1.0), Neutral (0), Wait (-2.0)",
+            "Money Flow: Strong (+3.0), Neutral (0), Weak (-2.0)",
+            "Contrarian Industry Strength: Weak (+2.0), Neutral (0), Strong (-2.0)",
+            "Contrarian LT Trend: Weak (+1.5), Neutral (0), Strong (-1.5)",
+            "Seasonality: +-1.0 | Market Regime: Bull +1.0 / Bear -1.0 | Fibonacci: +-1.0",
+            "RSI Divergence: *0.5 | Candlestick: *-0.15 | Chart Pattern: *-0.15 | Momentum: *-0.15",
+            "Digit-Sum Numerology: +-1.0 (only for symbol/digit pairs with |z|≥2.0)"
         ]
     },
     "l60_score": {
         title: "L60 Long-Term Position Score",
-        origin: "Project AETHER Core Team (Calibration Backtest, 336k observations, 2023-2025).",
-        body: "Measures intermediate-to-long-term trend strength and durability over a rolling 60-day horizon, focusing on core moving average alignments and trend stability.",
+        origin: "Project AETHER Core Team (Calibration Backtest, 336k obs 2023-2025) + Pattern Discovery calibration (Jul 2026). LT Trend and Industry Strength contrarian weights removed after retrospective analysis showed they systematically excluded 95% and 81% of 60-day winners.",
+        body: `<p>Measures intermediate-to-long-term trend quality over a 60-day horizon. Note: the L60 contrarian logic for LT Trend and Industry Strength was <b>removed in July 2026</b> after Pattern Discovery analysis across 3 historical replay dates showed these penalized factors were present in the vast majority of 60-day winners — the opposite of the intended contrarian effect.</p>
+<p class="mt-2"><b>Key calibration change (Jul 2026):</b></p>
+<ul class="list-disc pl-4 mt-1 space-y-1 text-sm">
+  <li><b>LT Trend=Strong:</b> was -3.0 → now <b>0.0</b>. In 95% of L60 missed winners across 3 test dates (Oct 2025, Dec 2025, Mar 2026), the stock had Strong lt_trend. The contrarian assumption ("strong trend = overbought") does not hold for 60-day holds.</li>
+  <li><b>Industry Strength=Strong:</b> was -1.5 → now <b>0.0</b>. Present in 81% of L60 missed winners. Sector leadership is a feature for 60-day holds, not a mean-reversion warning.</li>
+</ul>
+<p class="mt-2">The contrarian logic was correct for S10 (10-day mean reversion) but incorrect for L60 (60-day trend following). These are now treated as neutral signals in L60.</p>`,
         config: [
-            "Contrarian LT Trend Weight: Weak (+4.0), Strong (-3.0)",
-            "Relative Volume Weight: High (+2.0), Low (-1.0)",
-            "Money Flow Weight: Strong (+2.5), Weak (-2.0)",
-            "Contrarian Industry Strength: Weak (+2.0), Strong (-1.5)",
-            "OB/OS Weight: Optimal (+1.5), Early (+0.5), Wait (-0.5)",
-            "Overlays: Seasonality (+-0.5) | Regime (+-1.5) | Fibonacci (+-0.5)"
+            "LT Trend: Weak (+4.0), Neutral (0), Strong (0)  ← was Strong (-3.0), changed Jul 2026",
+            "Relative Volume: High (+2.0), Normal (0), Low (-1.0)",
+            "Money Flow: Strong (+2.5), Neutral (0), Weak (-2.0)",
+            "Industry Strength: Weak (+2.0), Neutral (0), Strong (0)  ← was Strong (-1.5), changed Jul 2026",
+            "OB/OS: Optimal (+1.5), Early (+0.5), Neutral (0), Wait (-0.5)",
+            "Seasonality: +-0.5 | Market Regime: Bull +1.5 / Bear -1.5 | Fibonacci: +-0.5",
+            "RSI Divergence: *0.25 | Candlestick: *-0.075 | Chart Pattern: *-0.075 | Momentum: *-0.075",
+            "Digit-Sum Numerology: +-0.5 (only for symbol/digit pairs with |z|≥2.0)"
         ]
     },
     "seasonality_engine": {
@@ -243,6 +253,31 @@ const AETHER_WIKI = {
             "Score scale: z/3.0 capped at ±1.0 per variant; averaged when both fire",
             "Quality filter: temporal + flip + sparse checks — 473 raw → 224 active signals",
             "Monthly refresh: python scripts/backtesting/digit_sum_study.py + digit_sum_full_study.py"
+        ]
+    },
+    "pattern_discovery": {
+        title: "Pattern Discovery Agent — Missed Winners Retrospective",
+        origin: "AETHER Internal R&D (July 2026). Inspired by W.D. Gann's retrospective analysis approach and Amy Edmondson's Right Kind of Wrong — learning from intelligent failures.",
+        body: `<p>A self-improving learning loop that finds stocks the system missed, diagnoses <em>why</em> it missed them, and extracts candidate new scoring factors.</p>
+<p class="mt-2"><b>How it works (run weekly on Saturdays):</b></p>
+<ol class="list-decimal pl-4 mt-1 space-y-1 text-sm">
+  <li><b>Historical replay</b> — reconstructs every symbol's AETHER scores as they were on a past date (reads from the Chaikin per-symbol cache, no live API needed).</li>
+  <li><b>Forward returns</b> — computes actual 10-day (S10) and 60-day (L60) returns from OHLCV for all symbols.</li>
+  <li><b>Classify winners</b> — ranks actual winners; marks each as <em>bought</em> (system selected it), <em>missed</em> (system rejected it despite being in universe), or <em>not in universe</em>.</li>
+  <li><b>Diagnose misses</b> — for each missed winner records the exact filter that rejected it (score &lt; threshold, wrong PGR, setup=False) and which factor was most anomalous vs the universe.</li>
+  <li><b>Extract patterns</b> — two types: (a) <em>missed-winner patterns</em>: factor combos present in missed winners but penalized in the model; (b) <em>false-positive guards</em>: signals common in stocks the system bought that then lost.</li>
+  <li><b>Validate</b> — rolls candidate patterns across 16 historical dates. Only patterns with |z|≥2.0 and N≥30 are promoted to the scoring backlog.</li>
+</ol>
+<p class="mt-2"><b>First finding (Jul 2026):</b> <code>lt_trend=Strong</code> appeared in 95% of L60 missed winners across 3 dates. The -3.0 contrarian penalty was excluding exactly the stocks that performed best over 60 days. <b>Weight updated: Strong → 0 (was -3.0) in L60.</b></p>
+<p class="mt-2">Run from the System page, or invoke the <code>/pattern-discover</code> skill for full LLM reasoning over the results.</p>`,
+        config: [
+            "Replay date: target ~3-4 weeks back so both 10d and 60d windows have settled OHLCV data",
+            "Constraint: replay date ≤ 2026-04-04 for 10d window, ≤ 2026-02-24 for 60d window",
+            "Reconstruction: reads Data/Symbol/{sym}/{sym}_{date}.json Chaikin cache (no live session needed)",
+            "Thresholds: score ≥ 9.5 AND pgr ∈ {Bu, Bu+} AND setup=True to qualify as 'bought'",
+            "Validation: 16 sampled dates across 9-month range, |z|≥2.0 + N≥30 for promotion",
+            "Output: Data/pattern_discovery_{DATE}.json — machine-readable for the /pattern-discover skill",
+            "Weekly cadence: run same date each week; pattern recurring in 3+ weeks = strong validation signal"
         ]
     },
     "signal_quality_validator": {
@@ -996,7 +1031,7 @@ async function runManualTask(taskId, label, confirm_msg, adminOnly, inputEl) {
     const msg = $("run-msg");
     if (adminOnly && !isAdmin()) { $("login-btn").click(); return; }
     if (confirm_msg && !confirm(confirm_msg)) return;
-    const inputValue = inputEl ? inputEl.value.trim().toUpperCase() : "";
+    const inputValue = inputEl ? inputEl.value.trim() : "";
     msg.textContent = `Starting "${label}"${inputValue ? " (" + inputValue + ")" : ""}…`;
     msg.className = "text-xs mb-3 text-slate-400";
     try {

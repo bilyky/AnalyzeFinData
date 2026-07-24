@@ -513,11 +513,13 @@ def long_score(pg_fields: dict) -> float:
     """
     60-day position-quality score: -10 to +10.
 
-    Factor weights (backtest, 336k obs 2023-2025, NA-filtered):
-      LT Trend       4.5% spread: Weak +4, Strong -3  (contrarian)
+    Factor weights (backtest, 336k obs 2023-2025 + pattern-discovery Jul 2026):
+      LT Trend       Weak +4, Strong 0  (was -3; pattern-discovery: 95% of L60 missed
+                     winners had Strong lt_trend across 3 dates — contrarian L60 weight removed)
       Rel Volume     2.8%:        High +2, Low -1
       Money Flow     2.5%:        Strong +2.5, Weak -2
-      Industry Str   2.4%:        Weak +2, Strong -1.5  (contrarian)
+      Industry Str   Weak +2, Strong 0  (was -1.5; pattern-discovery: 81% of L60 missed
+                     winners had Strong industry_strength — contrarian L60 weight removed)
       OB/OS          2.3%:        Optimal +1.5, Early +0.5, Wait -0.5
       Seasonality    +-0.5
       Regime         +-1.5
@@ -529,11 +531,11 @@ def long_score(pg_fields: dict) -> float:
       Digit-sum      symbol-specific numerology (z>=2.0 signals only): +-0.5
     """
     score = 0.0
-    score += {'Weak': 4.0, 'Neutral': 0.0, 'Strong': -3.0}.get(pg_fields.get('lt_trend', ''), 0.0)
+    score += {'Weak': 4.0, 'Neutral': 0.0, 'Strong': 0.0}.get(pg_fields.get('lt_trend', ''), 0.0)
     rv = pg_fields.get('rel_vol')
     score += {'High': 2.0, 'Very High': 0.0, 'Normal': 0.0, 'Low': -1.0}.get(rv or '', 0.0)
     score += {'Strong': 2.5, 'Neutral': 0.0, 'Weak': -2.0}.get(pg_fields.get('money_flow', ''), 0.0)
-    score += {'Weak': 2.0, 'Strong': -1.5}.get(pg_fields.get('industry_strength', ''), 0.0)
+    score += {'Weak': 2.0, 'Strong': 0.0}.get(pg_fields.get('industry_strength', ''), 0.0)
     score += {'Optimal': 1.5, 'Early': 0.5, 'Neutral': 0.0, 'Wait': -0.5}.get(pg_fields.get('ob_os', ''), 0.0)
     score += pg_fields.get('seasonality', 0.0) * 0.5
     score += {'Bull': 1.5, 'Neutral': 0.0, 'Bear': -1.5}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)

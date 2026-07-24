@@ -960,6 +960,28 @@ MANUAL_TASKS = [
         "confirm": "Run the watchdog healer?",
         "category": "system",
     },
+    {
+        "id": "pattern_discovery",
+        "label": "Pattern Discovery",
+        "description": "Historical replay: reconstruct scores for a past date, find top winners, identify what the system missed and why. Extracts candidate new scoring factors.",
+        "script": "scripts/backtesting/pattern_discovery.py",
+        "args": ["--top", "10"],
+        "input": {"placeholder": "Replay date (e.g. 2026-03-01)", "default": "2026-03-01", "arg": "--date"},
+        "admin_only": False,
+        "confirm": None,
+        "category": "research",
+    },
+    {
+        "id": "pattern_discovery_validate",
+        "label": "Pattern Discovery + Validate",
+        "description": "Run pattern discovery AND validate found patterns across Jun 2025 → Feb 2026 to confirm statistical significance. Takes ~30 min.",
+        "script": "scripts/backtesting/pattern_discovery.py",
+        "args": ["--top", "10", "--validate", "--date-range", "2025-06-01:2026-02-28"],
+        "input": {"placeholder": "Replay date (e.g. 2026-03-01)", "default": "2026-03-01", "arg": "--date"},
+        "admin_only": False,
+        "confirm": "Run full pattern discovery with validation? This takes ~30 minutes.",
+        "category": "research",
+    },
 ]
 
 
