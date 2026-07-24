@@ -380,8 +380,18 @@ def read_accounts() -> dict:
                     for row in ws.iter_rows(min_row=2, values_only=True):
                         sym = row[3]
                         if sym:
+                            red_days   = _f(row[14]) if len(row) > 14 else None  # col N
+                            green_days = _f(row[15]) if len(row) > 15 else None  # col O
+                            # streak: positive = green days, negative = red days
+                            if green_days and green_days > 0:
+                                streak = int(green_days)
+                            elif red_days and red_days > 0:
+                                streak = -int(red_days)
+                            else:
+                                streak = None
                             scores[sym] = {
-                                "s10": row[24], "l60": row[25], "status": row[19]
+                                "s10": row[24], "l60": row[25], "status": row[19],
+                                "streak": streak,
                             }
 
                     ws_sl = wb["Short_Long"]
@@ -501,6 +511,7 @@ def read_accounts() -> dict:
                                 "l60": l60,
                                 "total": round((s10 or 0) + (l60 or 0), 1) if s10 is not None or l60 is not None else None,
                                 "status": status,
+                                "streak": sc.get("streak"),
                                 "buy_date": dec.get("buy_date", ""),
                                 "win_pct": dec.get("win_pct"),
                                 "in_profit": dec.get("in_profit", ""),
@@ -583,6 +594,7 @@ def read_accounts() -> dict:
                             "total":     round((s10 or 0) + (l60 or 0), 1),
                             "win_pct":   r[_SL["winpct"]],
                             "status":    _rsc.get("status") or str(r[_SL["status"]] or ""),
+                            "streak":    _rsc.get("streak"),
                             "in_profit": str(r[_SL["in_profit"]] or ""),
                             "pnl":       pnl,
                             "pnl_pct":   pnl_pct,
@@ -652,6 +664,7 @@ def read_accounts() -> dict:
                 "l60": l60,
                 "total": round((s10 or 0) + (l60 or 0), 1) if s10 is not None or l60 is not None else None,
                 "status": sc.get("status", ""),
+                "streak": sc.get("streak"),
                 "instrument": instruments.classify(sym)
             })
 

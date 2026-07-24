@@ -549,11 +549,12 @@ let gameCashBalance = 0;
 
 // Accounts tab sorting state
 let accountsSort = { key: "symbol", dir: 1 };
-const ACCTS_TEXT_COLS = ["symbol", "status", "buy_date"];
+const ACCTS_TEXT_COLS = ["symbol", "status", "buy_date", "streak"];
 function accountsSortValue(h, key) {
     if (key === "symbol")   return h.symbol || "";
     if (key === "status")   return h.status || "";
     if (key === "buy_date") return h.buy_date || "";
+    if (key === "streak")   return h.streak == null ? -9999 : Number(h.streak);
     if (key === "buy")      return h.buy == null ? -999999 : Number(h.buy);
     if (key === "current")  return h.current == null ? -999999 : Number(h.current);
     if (key === "stop")     return h.stop == null ? -999999 : Number(h.stop);
@@ -641,6 +642,11 @@ async function loadAccounts() {
             acctHoldings.push({ acctId: a.id, symbol: sym, buy: entry, qty: h.qty });
             const s10 = h.s10, l60 = h.l60, total = h.total;
             const buyDateShort = h.buy_date ? h.buy_date.slice(5) : "—";  // MM-DD
+            const streakVal = h.streak;
+            const streakCell = streakVal == null ? `<td class="text-xs mut text-center">—</td>`
+                : streakVal > 0
+                    ? `<td class="text-xs font-semibold text-green-400 text-center" title="${streakVal} consecutive green day${streakVal===1?'':'s'}">${streakVal}G</td>`
+                    : `<td class="text-xs font-semibold text-red-400 text-center" title="${Math.abs(streakVal)} consecutive red day${Math.abs(streakVal)===1?'':'s'}">${Math.abs(streakVal)}R</td>`;
             const scoreCells = isGame ? "" :
                 `<td class="${cls(s10)}">${s10 == null ? "—" : s10.toFixed(1)}</td>
                  <td class="${cls(l60)}">${l60 == null ? "—" : l60.toFixed(1)}</td>
@@ -659,17 +665,19 @@ async function loadAccounts() {
                 ${isGame
                     ? `<td>${h.days_held ?? "—"} d</td><td class="text-xs mut" title="${esc(h.buy_date || "")}">${buyDateShort}</td>`
                     : `<td class="${weakStop(h, h.target_source) ? "text-amber-400" : ""}" title="${esc(tgtTitle)}">${fmt$(h.target)}</td><td class="text-xs mut" title="${esc(h.buy_date || "")}">${buyDateShort}</td>`}
+                ${streakCell}
                 ${scoreCells}
                 <td><button class="rq-btn px-2 py-0.5 rounded text-xs font-semibold transition-colors max-w-[6rem] truncate ${badgeCls}" data-rq-sym="${sym}" data-rq-buy="${entry ?? ""}" title="Click to run live AI analysis">${esc(_statusToRec(h.status))}</button></td>
             </tr>
-            <tr class="rq-result-row hidden" data-rq-for="${sym}"><td colspan="15" class="p-0 whitespace-normal"></td></tr>`;
+            <tr class="rq-result-row hidden" data-rq-for="${sym}"><td colspan="16" class="p-0 whitespace-normal"></td></tr>`;
         }).join("");
 
         const scoreHdr = isGame
-            ? `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th><th data-sort="days_held" class="cursor-pointer hover:text-blue-400">Days</th><th data-sort="buy_date" class="cursor-pointer hover:text-blue-400">Bought</th><th data-sort="status" class="cursor-pointer hover:text-blue-400 text-right">Status</th>`
+            ? `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th><th data-sort="days_held" class="cursor-pointer hover:text-blue-400">Days</th><th data-sort="buy_date" class="cursor-pointer hover:text-blue-400">Bought</th><th data-sort="streak" class="cursor-pointer hover:text-blue-400 text-center" title="Consecutive green/red days">G/R</th><th data-sort="status" class="cursor-pointer hover:text-blue-400 text-right">Status</th>`
             : `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th>
                <th data-sort="target" class="cursor-pointer hover:text-blue-400">Target</th>
                <th data-sort="buy_date" class="cursor-pointer hover:text-blue-400">Bought</th>
+               <th data-sort="streak" class="cursor-pointer hover:text-blue-400 text-center" title="Consecutive green/red days">G/R</th>
                <th data-sort="s10" class="cursor-pointer hover:text-blue-400">S10</th>
                <th data-sort="l60" class="cursor-pointer hover:text-blue-400">L60</th>
                <th data-sort="total" class="cursor-pointer hover:text-blue-400">Score</th>
