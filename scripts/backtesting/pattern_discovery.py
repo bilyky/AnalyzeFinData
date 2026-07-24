@@ -30,14 +30,18 @@ import math
 import os
 import sys
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from aether_logger import get_logger as _get_logger
 import powergauge
 import instruments
 from aether.scoring import short_score as _short_score, long_score as _long_score
+
+_log = _get_logger("pattern_discovery")
 
 BASE_DIR  = Path(__file__).resolve().parent.parent.parent
 CACHE_DIR = BASE_DIR / "Data" / "Symbol"
@@ -121,64 +125,66 @@ def reconstruct_scores(replay_date: str, symbols: list[str] | None = None) -> li
 
     powergauge._build_cache_index()
 
-    results = []
-    for sym in symbols:
+    def _process_one(sym: str) -> dict | None:
         if instruments.is_excluded(sym):
-            continue
+            return None
         cached = _get_cached_dates(sym)
         if not cached:
-            continue
-        # Find closest cached date on or before replay_date
+            return None
         available = [d for d in cached if d <= replay_date]
         if not available:
-            continue
+            return None
         use_date = available[-1]
-        # Skip if cached snapshot is more than 5 trading days stale
-        replay_dt  = date.fromisoformat(replay_date)
-        use_dt     = date.fromisoformat(use_date)
+        replay_dt = date.fromisoformat(replay_date)
+        use_dt    = date.fromisoformat(use_date)
         if (replay_dt - use_dt).days > 7:
-            continue
-
+            return None
         try:
             pg = powergauge.get_symbol_data(sym, date.fromisoformat(use_date),
                                              prefer_cache=True, session_id={})
             if not pg or pg.price <= 0:
-                continue
-            ts, all_dates = _load_ohlcv(sym)
-            ohlcv_ts = ts
-            f = powergauge._compute_pgr_fields(pg, ohlcv_ts=ohlcv_ts)
+                return None
+            ts, _ = _load_ohlcv(sym)
+            f = powergauge._compute_pgr_fields(pg, ohlcv_ts=ts)
         except Exception:
-            continue
-
+            return None
         s10 = f.get("short_score", 0.0)
         l60 = f.get("long_score",  0.0)
-        results.append({
-            "symbol":           sym,
-            "cache_date":       use_date,
-            "price":            pg.price,
-            "pgr":              f.get("pgr", "N"),
-            "pgr_val":          pg.pgr_corrected_value,
-            "s10":              round(s10, 2),
-            "l60":              round(l60, 2),
-            "combined":         round(s10 + l60, 2),
-            "buying_ratio":     round(f.get("buying_ratio", 0.0), 2),
-            "money_flow":       pg.money_flow   or "Neutral",
-            "ob_os":            pg.over_bt_sl   or "Neutral",
-            "lt_trend":         pg.lt_trend     or "Neutral",
-            "industry":         pg.industry_name or "",
-            "industry_strength":pg.industry_strength or "Neutral",
-            "rel_vol":          f.get("rel_vol"),
-            "fibonacci":        round(f.get("fibonacci", 0.0), 3),
-            "rsi_divergence":   round(f.get("rsi_divergence", 0.0), 3),
-            "candlestick":      round(f.get("candlestick_score", 0.0), 2),
-            "chart_score":      round(f.get("chart_score", 0.0), 2),
-            "momentum_score":   round(f.get("momentum_score", 0.0), 2),
-            "pattern_text":     f.get("pattern_text", ""),
-            "digit_sum":        round(f.get("digit_sum", 0.0), 2),
-            "setup_ok":         f.get("setup_ok"),
-        })
+        return {
+            "symbol":            sym,
+            "cache_date":        use_date,
+            "price":             pg.price,
+            "pgr":               f.get("pgr", "N"),
+            "pgr_val":           pg.pgr_corrected_value,
+            "s10":               round(s10, 2),
+            "l60":               round(l60, 2),
+            "combined":          round(s10 + l60, 2),
+            "buying_ratio":      round(f.get("buying_ratio", 0.0), 2),
+            "money_flow":        pg.money_flow        or "Neutral",
+            "ob_os":             pg.over_bt_sl        or "Neutral",
+            "lt_trend":          pg.lt_trend          or "Neutral",
+            "industry":          pg.industry_name     or "",
+            "industry_strength": pg.industry_strength or "Neutral",
+            "rel_vol":           f.get("rel_vol"),
+            "fibonacci":         round(f.get("fibonacci", 0.0), 3),
+            "rsi_divergence":    round(f.get("rsi_divergence", 0.0), 3),
+            "candlestick":       round(f.get("candlestick_score", 0.0), 2),
+            "chart_score":       round(f.get("chart_score", 0.0), 2),
+            "momentum_score":    round(f.get("momentum_score", 0.0), 2),
+            "pattern_text":      f.get("pattern_text", ""),
+            "digit_sum":         round(f.get("digit_sum", 0.0), 2),
+            "setup_ok":          f.get("setup_ok"),
+        }
 
-    print(f"  Reconstructed {len(results)} symbols with Chaikin cache on {replay_date}")
+    results = []
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(_process_one, sym): sym for sym in symbols}
+        for fut in as_completed(futures):
+            row = fut.result()
+            if row:
+                results.append(row)
+
+    _log.info(f"Reconstructed {len(results)} symbols with Chaikin cache on {replay_date}")
     return results
 
 
@@ -195,7 +201,7 @@ def compute_forward_returns(replay_date: str, symbols: list[str]) -> dict[str, d
         r60 = _fwd_return(ts, dates, replay_date, HORIZONS["l60"])
         if r10 is not None or r60 is not None:
             returns[sym] = {"r10": r10, "r60": r60}
-    print(f"  Forward returns: {sum(1 for v in returns.values() if v['r10'] is not None)} symbols with 10d, "
+    _log.info(f"Forward returns: {sum(1 for v in returns.values() if v['r10'] is not None)} symbols with 10d, "
           f"{sum(1 for v in returns.values() if v['r60'] is not None)} with 60d")
     return returns
 
@@ -266,10 +272,10 @@ def find_missed_winners(scores: list[dict], returns: dict[str, dict],
     missed = [w for w in winners if w["status"] == "missed"]
     bought = [w for w in winners if w["status"] == "bought"]
 
-    print(f"  [{horizon.upper()}] top-{top_n} winners: {len(bought)} would-have-bought, "
+    _log.info(f"[{horizon.upper()}] top-{top_n} winners: {len(bought)} would-have-bought, "
           f"{len(missed)} missed, "
           f"{len(winners)-len(bought)-len(missed)} not in universe")
-    print(f"  Universe avg {r_key}: {universe_avg:+.2f}%")
+    _log.info(f"Universe avg {r_key}: {universe_avg:+.2f}%")
 
     # False positives: symbols the system would have bought that lost money
     false_positives = []
@@ -289,7 +295,7 @@ def find_missed_winners(scores: list[dict], returns: dict[str, dict],
     false_positives.sort(key=lambda x: x.get(f"fwd_{r_key}", 0))
 
     if false_positives:
-        print(f"  [{horizon.upper()}] false positives (bought but lost): {len(false_positives)} "
+        _log.info(f"[{horizon.upper()}] false positives (bought but lost): {len(false_positives)} "
               f"(worst: {false_positives[0]['symbol']} {false_positives[0].get(f'fwd_{r_key}', 0):+.1f}%)")
 
     return {
@@ -351,7 +357,7 @@ def extract_false_positive_patterns(false_positives: list[dict], all_scores: lis
 
 # ── Phase 4: candidate patterns ───────────────────────────────────────────────
 
-# Factors currently penalized as contrarian (value=high → system scores it lower)
+# Factors currently penalized as contrarian (value=high -> system scores it lower)
 CONTRARIAN_FACTORS = {
     "lt_trend":        {"Strong": -1.5, "Weak": +1.5},
     "industry_strength": {"Strong": -2.0, "Weak": +2.0},
@@ -505,10 +511,21 @@ def validate_patterns(candidates: list[dict], date_range: tuple[str, str],
         sample_dates.append(cur.isoformat())
         cur += timedelta(days=step)
 
+    # Deduplicate candidates by (type, factor/name, value) before expensive validation
+    seen_keys: set = set()
+    unique_candidates = []
+    for cand in candidates:
+        key = (cand.get("type"), cand.get("name") or cand.get("factor"), cand.get("value"))
+        if key not in seen_keys:
+            seen_keys.add(key)
+            unique_candidates.append(cand)
+    _log.info(f"Deduped {len(candidates)} candidates to {len(unique_candidates)} unique patterns")
+    candidates = unique_candidates
+
     validated = []
     for cand in candidates:
         name = cand.get("name", cand.get("factor", "unknown"))
-        print(f"  Validating '{name}' across {len(sample_dates)} dates...")
+        _log.info(f"Validating '{name}' across {len(sample_dates)} dates...")
         hits_ret = []
         baseline_ret = []
 
@@ -567,7 +584,7 @@ def validate_patterns(candidates: list[dict], date_range: tuple[str, str],
                 "confident":  abs(z) >= 1.96 and n >= 20,
             }
         })
-        print(f"    → n={n}, avg={avg_hit:+.2f}%, lift={lift:+.2f}%, z={z:+.2f}")
+        _log.info(f"  -> n={n}, avg={avg_hit:+.2f}%, lift={lift:+.2f}%, z={z:+.2f}")
 
     return sorted(validated, key=lambda x: abs(x.get("validation", {}).get("z", 0)), reverse=True)
 
@@ -594,38 +611,38 @@ def generate_report(replay_date: str, s10_result: dict, l60_result: dict,
     out_path = OUT_DIR / f"pattern_discovery_{replay_date}.json"
     with open(out_path, "w") as f:
         json.dump(report, f, indent=2)
-    print(f"\nReport saved to {out_path}")
+    _log.info(f"\nReport saved to {out_path}")
 
     # Human summary
-    print("\n" + "="*60)
-    print(f"PATTERN DISCOVERY REPORT — {replay_date}")
-    print("="*60)
+    _log.info("\n" + "="*60)
+    _log.info(f"PATTERN DISCOVERY REPORT — {replay_date}")
+    _log.info("="*60)
     for horizon, result in [("S10 (10-day)", s10_result), ("L60 (60-day)", l60_result)]:
         winners = result.get("winners", [])
         missed  = result.get("missed", [])
         bought  = result.get("bought", [])
         u_avg   = result.get("universe_avg", 0)
-        print(f"\n{horizon} — universe avg: {u_avg:+.2f}%")
-        print(f"  Top-{len(winners)} winners: {len(bought)} bought, {len(missed)} missed")
+        _log.info(f"\n{horizon} — universe avg: {u_avg:+.2f}%")
+        _log.info(f"Top-{len(winners)} winners: {len(bought)} bought, {len(missed)} missed")
         for w in winners[:5]:
             r_key = result.get("r_key", "r10")
-            print(f"  {w['symbol']:8s} {w.get(f'fwd_{r_key}', 0):+6.1f}%  [{w['status']:20s}]  {', '.join(w['reasons'][:2])}")
+            _log.info(f"{w['symbol']:8s} {w.get(f'fwd_{r_key}', 0):+6.1f}%  [{w['status']:20s}]  {', '.join(w['reasons'][:2])}")
 
     all_candidates = candidates_s10 + candidates_l60
     if all_candidates:
-        print(f"\nMissed winner patterns: {len(all_candidates)}")
+        _log.info(f"\nMissed winner patterns: {len(all_candidates)}")
         for c in all_candidates[:5]:
             name = c.get("name", c.get("factor", "?"))
-            print(f"  + {name}: {c.get('hypothesis','')[:80]}")
+            _log.info(f"+ {name}: {c.get('hypothesis','')[:80]}")
 
     all_guards = fp_guards_s10 + fp_guards_l60
     if all_guards:
-        print(f"\nFalse positive guard signals: {len(all_guards)}")
+        _log.info(f"\nFalse positive guard signals: {len(all_guards)}")
         for g in all_guards[:5]:
-            print(f"  - {g['factor']}={g['value']} (fp_rate={g['fp_rate']:.0%}): {g['hypothesis'][:70]}")
+            _log.info(f"- {g['factor']}={g['value']} (fp_rate={g['fp_rate']:.0%}): {g['hypothesis'][:70]}")
 
     if validated:
-        print(f"\nValidated patterns (|z|>=1.96): {sum(1 for v in validated if v.get('validation',{}).get('confident'))}")
+        _log.info(f"\nValidated patterns (|z|>=1.96): {sum(1 for v in validated if v.get('validation',{}).get('confident'))}")
 
     return report
 
@@ -646,14 +663,14 @@ def main():
     symbols = args.symbols.split(",") if args.symbols else None
     dr = tuple(args.date_range.split(":"))
 
-    print(f"\n{'='*60}")
-    print(f"AETHER Pattern Discovery — Replay Date: {replay_date}")
-    print(f"{'='*60}\n")
+    _log.info(f"\n{'='*60}")
+    _log.info(f"AETHER Pattern Discovery — Replay Date: {replay_date}")
+    _log.info(f"{'='*60}\n")
 
-    print("Phase 1: Reconstructing scores...")
+    _log.info("Phase 1: Reconstructing scores...")
     scores = reconstruct_scores(replay_date, symbols)
     if not scores:
-        print("ERROR: No scores reconstructed. Check Chaikin cache for this date.")
+        _log.error("ERROR: No scores reconstructed. Check Chaikin cache for this date.")
         sys.exit(1)
 
     # Build global medians for validation
@@ -668,32 +685,32 @@ def main():
                 fv[k].append(float(v))
     medians_global = {k: _median(v) for k, v in fv.items()}
 
-    print("\nPhase 2: Computing forward returns...")
+    _log.info("\nPhase 2: Computing forward returns...")
     all_syms = [r["symbol"] for r in scores]
     returns  = compute_forward_returns(replay_date, all_syms)
 
-    print("\nPhase 3a: Missed winners (S10 / 10-day)...")
+    _log.info("\nPhase 3a: Missed winners (S10 / 10-day)...")
     s10_result = find_missed_winners(scores, returns, top_n=args.top, horizon="s10")
 
-    print("\nPhase 3b: Missed winners (L60 / 60-day)...")
+    _log.info("\nPhase 3b: Missed winners (L60 / 60-day)...")
     l60_result = find_missed_winners(scores, returns, top_n=args.top, horizon="l60")
 
-    print("\nPhase 4a: Extracting missed-winner patterns...")
+    _log.info("\nPhase 4a: Extracting missed-winner patterns...")
     cands_s10 = extract_candidate_patterns(s10_result["missed"], scores, returns, "r10")
     cands_l60 = extract_candidate_patterns(l60_result["missed"], scores, returns, "r60")
-    print(f"  Found {len(cands_s10)} S10 missed-winner patterns, {len(cands_l60)} L60")
+    _log.info(f"Found {len(cands_s10)} S10 missed-winner patterns, {len(cands_l60)} L60")
 
-    print("\nPhase 4b: Extracting false-positive guard signals...")
+    _log.info("\nPhase 4b: Extracting false-positive guard signals...")
     fp_guards_s10 = extract_false_positive_patterns(s10_result["false_positives"], scores, returns, "r10")
     fp_guards_l60 = extract_false_positive_patterns(l60_result["false_positives"], scores, returns, "r60")
-    print(f"  Found {len(fp_guards_s10)} S10 guard signals, {len(fp_guards_l60)} L60")
+    _log.info(f"Found {len(fp_guards_s10)} S10 guard signals, {len(fp_guards_l60)} L60")
 
     validated = []
     if args.validate and (cands_s10 or cands_l60):
-        print(f"\nPhase 5: Validating patterns across {dr[0]} → {dr[1]}...")
+        _log.info(f"\nPhase 5: Validating patterns across {dr[0]} -> {dr[1]}...")
         validated = validate_patterns(cands_s10 + cands_l60, dr, all_syms, horizon="s10")
 
-    print("\nPhase 6: Generating report...")
+    _log.info("\nPhase 6: Generating report...")
     generate_report(replay_date, s10_result, l60_result, cands_s10, cands_l60,
                     fp_guards_s10, fp_guards_l60, validated, len(scores))
 
