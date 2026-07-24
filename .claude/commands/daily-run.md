@@ -1,30 +1,40 @@
 # Daily Run Pipeline — Automated Workflow
 
-Executes the full end-to-end trading pipeline.
+Runs the full AETHER trading pipeline: fetches live Chaikin PowerGauge data for
+all screener symbols, updates the Excel workbook, executes AI portfolio decisions,
+and sends an email summary.
 
-## Steps Performed
+## Run
 
-1.  **Workbook Refresh:** Runs `python main.py` to fetch latest Chaikin data.
-2.  **Data Freshness Check:** Verifies that `Data/state_of_the_day.xlsx` was updated today.
-3.  **Sheet Validation:** Ensures `Research`, `Picks`, and `Replacements` sheets rendered and contain data.
-4.  **Top-5 Scoring:** Computes the top 5 symbols where `Setup == 'OK'`, using decimal `Win%` and `S10+L60` total scores.
-5.  **Notification:** Sends a formatted HTML summary directly to Gmail.
-
-## Command
-
-Run immediately:
-```
+```bash
 python autonomous_pipeline.py
 ```
 
-## Scheduled Task (Automation)
+## Verify success
 
-To run this autonomously at 5:30 AM PST on Windows:
+Check the workbook was updated today:
+```bash
+python -c "
+import os, datetime
+from powergauge import XLSX_FILE
+mtime = os.path.getmtime(XLSX_FILE)
+ts = datetime.datetime.fromtimestamp(mtime)
+status = 'FRESH' if ts.date() == datetime.date.today() else f'STALE (last: {ts.strftime(\"%Y-%m-%d %H:%M\")})'
+print(f'{XLSX_FILE}: {status}')
+"
+```
 
-1.  Open **Task Scheduler**.
-2.  Create a new task named `AnalyzeFinData_Daily`.
-3.  **Trigger:** Daily at 5:30 AM.
-4.  **Action:** Start a Program.
-    - Program/script: `C:\Develop\StockTrading\AnalyzeFinData\venv_new\Scripts\python.exe` (use absolute path)
-    - Add arguments: `autonomous_pipeline.py`
-    - Start in: `C:\Develop\StockTrading\AnalyzeFinData` (use absolute path)
+If stale, check for errors:
+```bash
+python -c "import watchdog; errors = watchdog.check_logs(); [print(e) for e in errors] or print('No errors.')"
+```
+
+## Scheduling on Windows (optional)
+
+To run automatically at 5:30 AM daily via Task Scheduler:
+- Program: `venv\Scripts\python.exe` (relative to repo root)
+- Arguments: `autonomous_pipeline.py`
+- Start in: the repo root directory (where this file lives)
+- Trigger: Daily at 05:30
+
+The watchdog task (`watchdog.py`) runs hourly and self-heals crashes.

@@ -1,18 +1,19 @@
 # Extract Structural Intelligence from Email/Newsletter
 
-Reads a financial email or newsletter (pasted as argument or from a file) and extracts the hidden structural signal: dated catalysts, supply chain constraints, overlooked symbols, and R&D topics — not just the obvious ticker recommendations.
+Reads a financial email or newsletter and extracts hidden structural signal:
+dated catalysts, supply chain constraints, overlooked tickers, and R&D ideas —
+not just the obvious ticker recommendations.
 
-## When to Use
+## When to use
 
-Use this whenever you receive a financial newsletter, research pitch, or analyst email and want to know:
+When you receive a financial newsletter or analyst email and want to know:
 - What hard-deadline events are buried in the narrative?
 - What physical/regulatory constraints does it describe?
-- Which upstream/downstream symbols does it imply but not pitch?
-- What analytical ideas does it surface that we could build?
+- Which tickers does it imply but not pitch?
+- What analytical ideas does it surface?
 
 ## Usage
 
-Paste the email text directly after the command:
 ```
 /extract-intel
 <paste email text here>
@@ -23,47 +24,55 @@ Or reference a saved file:
 /extract-intel Data/emails/newsletter_2026-07-15.txt
 ```
 
-## Steps to Execute
+## Steps
 
-1. Take the text provided (either pasted inline or from the file path).
+### 1. Get the email text
+Take the text provided inline or read the file:
+```bash
+cat Data/emails/<filename>.txt
+```
 
-2. Run the extractor:
+### 2. Run the extractor
 ```python
-import extract_email_intel, json
+import extract_email_intel
 
-subject = "<first line or 'Email' if unknown>"
+subject = "<subject line or 'Email' if unknown>"
 body = """<full email body>"""
 
 intel = extract_email_intel.extract(subject, body)
 print(extract_email_intel.report(intel))
 ```
 
-3. For each item in `intel["missing_symbols"]`, check if it is already in our Research universe:
+### 3. Cross-reference against the screener universe
 ```python
 import data_api
+
 rows = data_api.read_research()["rows"]
-existing = {r["symbol"] for r in rows}
-missing = [m for m in intel.get("missing_symbols", []) if m["symbol"] not in existing]
-print("Not in our universe:", missing)
+universe = {r["symbol"] for r in rows}
+missing = [m for m in intel.get("missing_symbols", []) if m["symbol"] not in universe]
+print("Not in our 500-symbol universe:", [m["symbol"] for m in missing])
 ```
 
-4. For each item in `intel["rd_topics"]`, assess whether it should be added to the CLAUDE.md R&D roadmap.
+### 4. Assess R&D topics
+For each item in `intel["rd_topics"]`, consider whether it should be added to
+the R&D roadmap in `CLAUDE.md`.
 
-5. For each item in `intel["dated_catalysts"]`, check if AETHER already has any position or watchlist exposure that intersects with the event.
+### 5. Check position exposure
+For each item in `intel["dated_catalysts"]`, check if any current holding
+intersects with the event date.
 
-## Output Format
-
-Report in three sections:
+## Output format
 
 ### STRUCTURAL INTEL
-- Thesis (pitch_ratio: X/10, confidence: Y)
-- Dated catalysts: list with dates and impact
-- Supply chain facts: physical constraints named
+- Thesis (pitch_ratio: X/10, confidence: Y/10)
+- Dated catalysts with dates and expected impact
+- Supply chain / physical constraints named
 
 ### SYMBOLS TO INVESTIGATE
-Table of missing symbols (not in our 506-symbol universe) with why they matter.
+Table: symbol | why it matters | in universe? | action
 
-### R&D / ROADMAP
-Any analytical ideas implied by the email worth adding to CLAUDE.md.
+### R&D / ROADMAP IDEAS
+Analytical ideas worth adding to `CLAUDE.md`.
 
-Keep it tight. Flag the pitch_ratio prominently — a 7+/10 pitch means extract the facts but treat the BUY recommendations skeptically.
+Flag the pitch_ratio prominently — a 7+/10 pitch means extract the facts
+but treat the BUY recommendations skeptically.

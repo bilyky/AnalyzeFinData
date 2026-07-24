@@ -1,24 +1,32 @@
 # Intraday Stop Monitor — Real-time Risk Guard
 
-Monitors current E*TRADE positions against their Stop prices defined in the Research sheet.
+Checks all open positions against their stop-loss levels in real time and
+sends email alerts for any breaches. Reads positions from the workbook
+(`Data/state_of_the_day.xlsx`, Short_Long sheet), fetches live prices from
+E*TRADE (or Google Finance fallback), and alerts if `lastPrice <= stop`.
 
-## What it does
+## Run once
 
-1.  **Load Positions:** Reads `Data/state_of_the_day.xlsx` (Short_Long sheet) to identify current holdings and their `Stop` levels.
-2.  **Live Check:** Queries E*TRADE for the `lastPrice` of each position.
-3.  **Alerting:** If `lastPrice <= Stop`, it immediately sends an alert via `notify.py`.
-
-## Command
-
-Run once:
-```
-python intraday_monitor.py
+```bash
+python scripts/utils/intraday_monitor.py
 ```
 
-## Scheduled Task
+## Check for breach (programmatic)
 
-To monitor every 30 minutes during market hours:
+```python
+import data_api
 
-1.  **Task Scheduler:** Create `AnalyzeFinData_Monitor`.
-2.  **Trigger:** Daily, repeat every 30 minutes for 7 hours (starting at 6:30 AM PST).
-3.  **Action:** `python intraday_monitor.py`
+accounts = data_api.read_accounts()["accounts"]
+for acct in accounts:
+    for h in acct.get("holdings", []):
+        if h.get("stop") and h.get("current") and h["current"] <= h["stop"]:
+            print(f"STOP BREACH: {h['symbol']}  current={h['current']:.2f}  stop={h['stop']:.2f}")
+```
+
+## Scheduling (Windows Task Scheduler)
+
+To monitor every 30 minutes during market hours (6:30 AM – 1:30 PM PST):
+- Program: `venv\Scripts\python.exe`
+- Arguments: `scripts/utils/intraday_monitor.py`
+- Trigger: Daily, repeat every 30 min for 7 hours starting 06:30
+- Task name: `AnalyzeFinData_Monitor`
