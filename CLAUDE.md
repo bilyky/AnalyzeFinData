@@ -75,6 +75,19 @@
     4.  *Backtest via `backtest_ratings.py`:* Measure 10-day forward return spread for the new factor across the full 500-symbol universe. Only add to the S10 composite if the spread is statistically meaningful. If not, document why and park it.
     5.  *Integration gate:* If alpha is confirmed, wire into `scoring.short_score()` with a weight determined by the optimizer (Jul-18 calibration). Keep the factor independent (not bundled with Fibonacci) so each can be turned on/off separately.
 
+*   **Ongoing (every Saturday) — Pattern Discovery Agent: Missed Winners Retrospective:**
+    Run `/pattern-discover` weekly to find stocks the screener missed and analyze why. The agent computes a historical replay (reconstructing scores from the Chaikin cache), identifies the top 10 actual S10 (10-day) and L60 (60-day) winners, classifies each as bought/missed/not-in-universe, and extracts two types of candidate signals:
+    - **Missed-winner patterns**: factor combinations present in missed winners but absent/penalized in the scoring model (signals to ADD or upweight)
+    - **False-positive guard signals**: factor values common to stocks the system would have bought that lost money (signals to ADD as rejection filters or downweight)
+
+    Run with a date ~3-4 weeks back so both windows have settled OHLCV data:
+    ```
+    /pattern-discover 2026-07-01
+    ```
+    After 4+ weekly runs, any pattern appearing in 3+ runs with |z|>=2.0 and N>=30 becomes a validated signal for the Aug 22 Research Lab backlog.
+
+    Implementation: `scripts/backtesting/pattern_discovery.py` (computation) + `.claude/commands/pattern-discover.md` (agent skill).
+
 *   **Session: Saturday, August 22, 2026 (10:00 AM PST) — Price Pattern Research Lab (Numerology, Calendar & Behavioral):**
     Research and backtest six candidate micro-factors across the full 500-symbol OHLCV universe using the same pipeline as the digit-sum study (`scripts/backtesting/digit_sum_study.py` as the template). For each factor: (1) run `/deep-research` on the academic/practitioner literature first, (2) implement the metric in `aether/primal_funcs.py`, (3) backtest 10-day forward return spread via `backtest_ratings.py`, (4) only wire into `aether/scoring.py` if the spread is statistically meaningful. Factors to investigate:
 
