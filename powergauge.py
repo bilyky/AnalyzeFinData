@@ -95,6 +95,7 @@ _session_valid_until = 0.0               # monotonic timestamp until which the s
 
 def _acquire_file_lock() -> int | None:
     """Try to atomically create the lock file. Returns fd if won, None if another process holds it."""
+    os.makedirs(os.path.dirname(_REAUTH_LOCK_PATH), exist_ok=True)
     try:
         return os.open(_REAUTH_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
@@ -154,20 +155,24 @@ def ensure_valid_session() -> dict:
 
         # Try to win the cross-process file lock (atomic O_CREAT|O_EXCL)
         fd = _acquire_file_lock()
-        if fd is not None:
-            try:
-                _pg_log.warning("Chaikin session expired — headless re-authentication...")
-                new_session = login(interactive=False)
-                if new_session and new_session.get("jsessionid"):
-                    _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
-                    _pg_log.info("Chaikin session refreshed.")
-                    return new_session
-                _pg_log.error("Headless re-auth failed. Run 'python powergauge.py' to log in manually.")
-                return session or {}
-            finally:
-                _release_file_lock(fd)
-        # else: another process holds the lock — fall through to wait below
-    # Wait OUTSIDE thread lock so other threads in this process are not blocked
+        if fd is None:
+            pass  # another process holds it — fall through to wait below
+    # Release thread lock BEFORE the slow browser/network re-auth so other
+    # threads are not stalled. File lock still prevents cross-process races.
+    if fd is not None:
+        try:
+            _pg_log.warning("Chaikin session expired — headless re-authentication...")
+            new_session = login(interactive=False)
+            if new_session and new_session.get("jsessionid"):
+                _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
+                _pg_log.info("Chaikin session refreshed.")
+                return new_session
+            _pg_log.error("Headless re-auth failed. Run 'python powergauge.py' to log in manually.")
+            return session or {}
+        finally:
+            _release_file_lock(fd)
+    # fd was None — another process holds the lock; wait outside thread lock
+    # so other threads in this process are not stalled waiting too
     _pg_log.info("Another process is refreshing the Chaikin session — waiting...")
     deadline = time.monotonic() + _REAUTH_TIMEOUT
     while os.path.exists(_REAUTH_LOCK_PATH) and time.monotonic() < deadline:
@@ -737,7 +742,7 @@ def check_from_file(prefer_cache: bool, date=None):
         date = date.date()
     _build_cache_index()
     session_id = login()
-    print(f"SESSION ID: {session_id}")
+    _pg_log.debug("Session loaded", extra={"jsid_prefix": str(session_id)[:12] + "..."})
     syms_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "symbols_to_check.txt")
     csv_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", f"symbols_to_check_{date}.csv")
     ohlcv_cache: dict = {}
@@ -1044,7 +1049,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     _build_cache_index()
     _orig_backup = _backup_xlsx(XLSX_FILE)
     session_id = login()
-    print(f"SESSION ID: {session_id}")
+    _pg_log.debug("Session loaded", extra={"jsid_prefix": str(session_id)[:12] + "..."})
 
     # A full run (symbols=None) rebuilds from the ROOT source of truth. A targeted
     # run (symbols=[...]) merges onto the existing OUTPUT so the computed scores of

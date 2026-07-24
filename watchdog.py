@@ -317,7 +317,7 @@ def run_watchdog():
         else:
             print("  [Healer] Chaikin Analytics session renewal failed — manual login required.")
     except Exception as e:
-        print(f"  [Healer] Chaikin session keep-alive failed: {e}")
+        _log.error("Chaikin session keep-alive failed", extra={"error": str(e)}, exc_info=True)
 
     # 1. Gather Initial System Health Data
     initial_errors = check_logs()
