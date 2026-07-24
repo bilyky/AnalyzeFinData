@@ -140,13 +140,17 @@ def digit_sum_score(symbol: str, close_price: float | None = None) -> float:
 # ── OHLCV streak helpers ─────────────────────────────────────────────────────
 
 def ohlcv_streak_perc(ohlcv_ts: dict, all_dates: list, idx: int, cur_pct: float) -> float:
-    """Sum consecutive same-direction daily % changes ending at idx."""
+    """Sum consecutive same-direction close-to-close % changes ending at idx.
+
+    cur_pct is already dates[idx-1]→dates[idx]. Loop checks prior bars starting
+    at dates[idx-2]→dates[idx-1] to avoid double-counting the current bar.
+    """
     if idx < 1 or cur_pct == 0:
         return round(cur_pct, 4)
     going_up = cur_pct > 0
     total = cur_pct
-    for i in range(idx - 1, max(0, idx - _STREAK_LOOKBACK_SHORT) - 1, -1):
-        if i + 1 >= len(all_dates):
+    for i in range(idx - 2, max(0, idx - _STREAK_LOOKBACK_SHORT) - 1, -1):
+        if i < 0 or i + 1 >= len(all_dates):
             break
         prev_close = _to_float(ohlcv_ts[all_dates[i]].get('4. close'), 0)
         curr_close = _to_float(ohlcv_ts[all_dates[i + 1]].get('4. close'), 0)
@@ -161,13 +165,21 @@ def ohlcv_streak_perc(ohlcv_ts: dict, all_dates: list, idx: int, cur_pct: float)
 
 
 def ohlcv_streak_count(ohlcv_ts: dict, all_dates: list, idx: int, cur_pct: float) -> int:
-    """Count consecutive same-direction days ending at idx (positive=up, negative=down)."""
+    """Count consecutive same-direction close-to-close days ending at idx.
+
+    Returns positive int for green streak, negative for red streak.
+    E.g. 3 means 3 consecutive green closes; -1 means 1 red close today after
+    a green yesterday.
+
+    cur_pct covers dates[idx-1]→dates[idx] (already counted as 1 or -1).
+    Loop walks back from dates[idx-2]→dates[idx-1] to avoid double-counting.
+    """
     if idx < 1 or cur_pct == 0:
         return 0
     going_up = cur_pct > 0
     count = 1 if going_up else -1
-    for i in range(idx - 1, max(0, idx - _STREAK_LOOKBACK_LONG) - 1, -1):
-        if i + 1 >= len(all_dates):
+    for i in range(idx - 2, max(0, idx - _STREAK_LOOKBACK_LONG) - 1, -1):
+        if i < 0 or i + 1 >= len(all_dates):
             break
         prev_close = _to_float(ohlcv_ts[all_dates[i]].get('4. close'), 0)
         curr_close = _to_float(ohlcv_ts[all_dates[i + 1]].get('4. close'), 0)

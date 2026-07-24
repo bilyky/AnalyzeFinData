@@ -88,13 +88,14 @@ class TestOhlcvStreakPerc(unittest.TestCase):
         self.assertEqual(ohlcv_streak_perc(ohlcv, dates, 1, 0), 0)
 
     def test_direction_break_resets(self):
-        # up, up, DOWN, up — streak accumulates cur day twice then breaks on DOWN
+        # [100, 102, 104, 101, 103]: up, up, DOWN, up
+        # At idx=4, cur_pct covers 101→103 (up). Prior bar 104→101 was DOWN → streak stops.
+        # Result = cur_pct only (1 green day).
         ohlcv = make_ohlcv([100, 102, 104, 101, 103])
         dates = sorted(ohlcv.keys())
         cur_pct = (103 - 101) / 101 * 100
         result = ohlcv_streak_perc(ohlcv, dates, 4, cur_pct)
-        # loop adds cur_pct again at i=idx-1 before hitting the DOWN break
-        self.assertAlmostEqual(result, cur_pct * 2, places=2)
+        self.assertAlmostEqual(result, cur_pct, places=2)
 
     def test_idx_zero_returns_cur_pct(self):
         ohlcv = make_ohlcv([100, 105])
@@ -106,9 +107,12 @@ class TestOhlcvStreakPerc(unittest.TestCase):
 
 class TestOhlcvStreakCount(unittest.TestCase):
     def test_up_streak_positive(self):
+        # 5 bars: idx=4, cur_pct covers bar3→bar4 (1 green day).
+        # Loop checks bar2→bar3, bar1→bar2, bar0→bar1 — all green = 3 more.
+        # Total: 4 green days (not 5 — the old code double-counted bar3→bar4).
         ohlcv = make_ohlcv([100, 101, 102, 103, 104])
         dates = sorted(ohlcv.keys())
-        self.assertEqual(ohlcv_streak_count(ohlcv, dates, 4, 1.0), 5)
+        self.assertEqual(ohlcv_streak_count(ohlcv, dates, 4, 1.0), 4)
 
     def test_down_streak_negative(self):
         ohlcv = make_ohlcv([100, 99, 98, 97])
