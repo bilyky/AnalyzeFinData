@@ -429,6 +429,8 @@ def read_accounts() -> dict:
 
         if not in_unittest:
             try:
+                acct_list = []
+                raw_positions = []
                 tokens = etrade.get_tokens(env)
                 if tokens:
                     accts_api = etrade.get_accounts(tokens, env)
@@ -436,11 +438,8 @@ def read_accounts() -> dict:
                     acct_list = resp.get("AccountListResponse", {}).get("Accounts", {}).get("Account", [])
                     if isinstance(acct_list, dict):
                         acct_list = [acct_list]
-
-                    # Fetch all positions from E*TRADE
                     raw_positions = etrade.fetch_positions(tokens, env)
 
-                # Map E*TRADE accounts and positions
                 for acct in acct_list:
                     desc = acct.get("accountDesc", "Brokerage")
                     acct_id = acct.get("accountId", "")
