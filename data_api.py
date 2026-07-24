@@ -368,6 +368,65 @@ def read_accounts() -> dict:
         import sys
         in_unittest = "unittest" in sys.modules
         
+        # Load Research scores and Short_Long decorations unconditionally —
+        # needed whether E*TRADE is online or offline (fallback path uses them too).
+        if not in_unittest:
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(_XLSX, data_only=True, read_only=True)
+                try:
+                    ws = wb["Research"]
+                    for row in ws.iter_rows(min_row=2, values_only=True):
+                        sym = row[3]
+                        if sym:
+                            scores[sym] = {
+                                "s10": row[24], "l60": row[25], "status": row[19]
+                            }
+
+                    ws_sl = wb["Short_Long"]
+                    sl_rows = list(ws_sl.iter_rows(values_only=True))
+                    hdrs = [i for i, r in enumerate(sl_rows)
+                            if len(r) > 1 and str(r[1]).strip() == "Symb"]
+
+                    if hdrs:
+                        h = hdrs[0]
+                        started = False
+                        for r in sl_rows[h + 1:]:
+                            sym = r[_SL["sym"]] if len(r) > _SL["sym"] else None
+                            sym = str(sym).strip().upper() if sym else ""
+                            if not sym:
+                                if started:
+                                    break
+                                continue
+                            started = True
+                            buy = _f(r[_SL["buy"]])
+                            buy_date = _to_date_str(r[_SL["buy_date"]] if len(r) > _SL["buy_date"] else None)
+                            excl = instruments.is_excluded(sym)
+                            stop = _f(r[_SL["stop"]])
+                            target = _f(r[_SL["target"]])
+                            stop_src = target_src = "sheet"
+                            if buy:
+                                sd = risk_utils.resolve_stop_detailed(buy, symbol=sym, as_of=buy_date, exclude_swing=excl)
+                                if sd["stop"] is not None:
+                                    stop, stop_src = sd["stop"], sd["source"]
+                                td = risk_utils.resolve_target_detailed(buy, symbol=sym, as_of=buy_date, exclude_swing=excl)
+                                if td["target"] is not None:
+                                    target, target_src = td["target"], td["source"]
+                            sl_decorations[sym] = {
+                                "stop": stop, "stop_source": stop_src,
+                                "target": target, "target_source": target_src,
+                                "s10":     _f(r[_SL["s10"]]      if len(r) > _SL["s10"]      else None),
+                                "l60":     _f(r[_SL["l60"]]      if len(r) > _SL["l60"]      else None),
+                                "status":  str(r[_SL["status"]]  if len(r) > _SL["status"]   else "") or "",
+                                "win_pct": r[_SL["winpct"]]      if len(r) > _SL["winpct"]   else None,
+                                "buy_date": buy_date,
+                                "in_profit": str(r[_SL["in_profit"]] if len(r) > _SL["in_profit"] else "") or "",
+                            }
+                finally:
+                    wb.close()
+            except Exception as ex:
+                _log.warning(f"Error loading Excel decorations: {ex}")
+
         if not in_unittest:
             try:
                 tokens = etrade.get_tokens(env)
@@ -377,66 +436,9 @@ def read_accounts() -> dict:
                     acct_list = resp.get("AccountListResponse", {}).get("Accounts", {}).get("Account", [])
                     if isinstance(acct_list, dict):
                         acct_list = [acct_list]
-                        
+
                     # Fetch all positions from E*TRADE
                     raw_positions = etrade.fetch_positions(tokens, env)
-
-                    # Load Research scores and Short_Long decorations from the workbook
-                    try:
-                        import openpyxl
-                        wb = openpyxl.load_workbook(_XLSX, data_only=True, read_only=True)
-                        try:
-                            ws = wb["Research"]
-                            for row in ws.iter_rows(min_row=2, values_only=True):
-                                sym = row[3]
-                                if sym:
-                                    scores[sym] = {
-                                        "s10": row[24], "l60": row[25], "status": row[19]
-                                    }
-
-                            ws_sl = wb["Short_Long"]
-                            sl_rows = list(ws_sl.iter_rows(values_only=True))
-                            hdrs = [i for i, r in enumerate(sl_rows)
-                                    if len(r) > 1 and str(r[1]).strip() == "Symb"]
-
-                            if hdrs:
-                                h = hdrs[0]
-                                started = False
-                                for r in sl_rows[h + 1:]:
-                                    sym = r[_SL["sym"]] if len(r) > _SL["sym"] else None
-                                    sym = str(sym).strip().upper() if sym else ""
-                                    if not sym:
-                                        if started:
-                                            break
-                                        continue
-                                    started = True
-                                    buy = _f(r[_SL["buy"]])
-                                    buy_date = _to_date_str(r[_SL["buy_date"]] if len(r) > _SL["buy_date"] else None)
-                                    excl = instruments.is_excluded(sym)
-                                    stop = _f(r[_SL["stop"]])
-                                    target = _f(r[_SL["target"]])
-                                    stop_src = target_src = "sheet"
-                                    if buy:
-                                        sd = risk_utils.resolve_stop_detailed(buy, symbol=sym, as_of=buy_date, exclude_swing=excl)
-                                        if sd["stop"] is not None:
-                                            stop, stop_src = sd["stop"], sd["source"]
-                                        td = risk_utils.resolve_target_detailed(buy, symbol=sym, as_of=buy_date, exclude_swing=excl)
-                                        if td["target"] is not None:
-                                            target, target_src = td["target"], td["source"]
-                                    sl_decorations[sym] = {
-                                        "stop": stop, "stop_source": stop_src,
-                                        "target": target, "target_source": target_src,
-                                        "s10":     _f(r[_SL["s10"]]      if len(r) > _SL["s10"]      else None),
-                                        "l60":     _f(r[_SL["l60"]]      if len(r) > _SL["l60"]      else None),
-                                        "status":  str(r[_SL["status"]]  if len(r) > _SL["status"]   else "") or "",
-                                        "win_pct": r[_SL["winpct"]]      if len(r) > _SL["winpct"]   else None,
-                                        "buy_date": buy_date,
-                                        "in_profit": str(r[_SL["in_profit"]] if len(r) > _SL["in_profit"] else "") or "",
-                                    }
-                        finally:
-                            wb.close()
-                    except Exception as ex:
-                        _log.warning(f"Error loading Excel decorations: {ex}")
 
                 # Map E*TRADE accounts and positions
                 for acct in acct_list:
@@ -542,7 +544,10 @@ def read_accounts() -> dict:
                             continue            # skip leading blanks between header and data
                         started = True
                         buy = _f(r[_SL["buy"]]); top = _f(r[_SL["top"]]); qty = _f(r[_SL["qty"]])
-                        s10 = _f(r[_SL["s10"]]); l60 = _f(r[_SL["l60"]])
+                        # Prefer Research sheet scores (always fresher) over Short_Long columns
+                        _rsc = scores.get(sym.upper(), scores.get(sym, {}))
+                        s10 = _f(_rsc.get("s10")) if _rsc.get("s10") is not None else _f(r[_SL["s10"]])
+                        l60 = _f(_rsc.get("l60")) if _rsc.get("l60") is not None else _f(r[_SL["l60"]])
                         buy_date = _to_date_str(r[_SL["buy_date"]] if len(r) > _SL["buy_date"] else None)
                         pnl = pnl_pct = None
                         if buy and top and qty:
@@ -576,7 +581,7 @@ def read_accounts() -> dict:
                             "l60":       l60,
                             "total":     round((s10 or 0) + (l60 or 0), 1),
                             "win_pct":   r[_SL["winpct"]],
-                            "status":    str(r[_SL["status"]] or ""),
+                            "status":    _rsc.get("status") or str(r[_SL["status"]] or ""),
                             "in_profit": str(r[_SL["in_profit"]] or ""),
                             "pnl":       pnl,
                             "pnl_pct":   pnl_pct,
