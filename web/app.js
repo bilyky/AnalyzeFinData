@@ -561,10 +561,34 @@ function accountsSortValue(h, key) {
     return h[key] == null ? -999999 : Number(h[key]);
 }
 
+function _updateBrokerStatus(status) {
+    const wrap = $("broker-status-wrap");
+    const dot  = $("broker-dot");
+    const txt  = $("broker-text");
+    if (!wrap) return;
+    if (status === "live") {
+        wrap.classList.add("hidden");
+        return;
+    }
+    wrap.classList.remove("hidden");
+    if (status === "offline") {
+        dot.className  = "w-2 h-2 rounded-full bg-amber-500";
+        txt.className  = "text-xs text-amber-400";
+        txt.textContent = "E*TRADE offline — showing last cached data";
+    } else if (status === "reconnecting") {
+        dot.className  = "w-2 h-2 rounded-full bg-blue-400 animate-pulse";
+        txt.className  = "text-xs text-blue-300";
+        txt.textContent = "E*TRADE reconnecting…";
+    } else {
+        wrap.classList.add("hidden");
+    }
+}
+
 async function loadAccounts() {
     const data = await api("/api/accounts");
     const box = $("accounts-container");
     const accts = data.accounts || [];
+    _updateBrokerStatus(data.broker_status || "live");
     acctHoldings = [];
 
     // Dynamically populate our global held symbols set for the Research tab badges

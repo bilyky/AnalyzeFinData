@@ -142,6 +142,27 @@ def revoke_tokens(tokens, env="sandbox") -> bool:
 # OAuth — automated via Playwright
 # ---------------------------------------------------------------------------
 
+def _login_headless(ck: str, cs: str, username: str, password: str, env: str) -> dict | None:
+    """Fully automatic Playwright login using saved browser state (trusted-device cookies).
+    No human interaction required — MFA is skipped by the saved cookies.
+    Returns token dict on success, None on failure.
+    """
+    try:
+        oauth = pyetrade.ETradeOAuth(ck, cs)
+        auth_url = oauth.get_request_token()
+        verifier_code = _get_tokens_via_playwright(
+            auth_url, username, password,
+            storage_state=_BROWSER_STATE_PATH,
+        )
+        if verifier_code:
+            tokens = oauth.get_access_token(verifier_code)
+            _save_tokens(tokens, env)
+            return tokens
+    except Exception as e:
+        _log.debug(f"_login_headless: {e}")
+    return None
+
+
 def _get_tokens_via_playwright(auth_url, username, password, storage_state=None):
     """Open the E*TRADE auth URL, log in, accept, and return the verifier code.
 
@@ -457,14 +478,16 @@ def get_tokens(env="sandbox", allow_browser=False):
     """Return valid OAuth tokens, minimising browser interaction.
 
     Priority:
-    1. Today's cached tokens → silent renewal via E*TRADE OAuth endpoint.
-    2. Yesterday's cached tokens → attempt renewal (may still be valid within 2h).
-    3. Renewal failed + allow_browser=False → return None (callers use `if tokens:` guard).
-    4. Renewal failed + allow_browser=True + interactive TTY → full Playwright login.
+    1. Today's cached tokens → silent renewal via E*TRADE OAuth endpoint (no browser).
+    2. Yesterday's cached tokens → silent renewal attempt.
+    3. Silent renewal failed + saved browser state exists → headless Playwright re-auth
+       using trusted-device cookies (no MFA, no human needed on most days).
+    4. Browser state missing/stale → return None if allow_browser=False,
+       or interactive full login if allow_browser=True.
     """
     ck, cs, username, password = _load_config(env)
 
-    # Try today's tokens first (fast path)
+    # Try today's tokens (fast path — no browser)
     cached = _load_tokens(env)
     if cached:
         renewed = renew_tokens(cached, env)
@@ -472,7 +495,7 @@ def get_tokens(env="sandbox", allow_browser=False):
             return renewed
         _log.warning("E*TRADE: today's token renewal failed.")
 
-    # Try yesterday's tokens — E*TRADE sessions can span midnight if renewed within 2h
+    # Try yesterday's tokens — sessions renewed within 2h survive midnight
     if not cached:
         stale = _load_tokens_any_date(env)
         if stale:
@@ -482,9 +505,22 @@ def get_tokens(env="sandbox", allow_browser=False):
                 _log.info("Previous-day token renewed successfully.")
                 return renewed
 
+    # Silent renewal exhausted — try headless Playwright with saved browser state.
+    # The browser state contains trusted-device cookies that skip MFA on E*TRADE,
+    # so this runs fully automatically without human interaction on most days.
+    if os.path.exists(_BROWSER_STATE_PATH):
+        _log.info("Attempting automatic re-authentication via saved browser state...")
+        try:
+            tokens = _login_headless(ck, cs, username, password, env)
+            if tokens:
+                _log.info("E*TRADE: automatic re-authentication succeeded.")
+                return tokens
+            _log.warning("E*TRADE: automatic re-authentication failed (browser state may be stale).")
+        except Exception as e:
+            _log.warning(f"E*TRADE: headless Playwright re-auth error: {e}")
+
     if not allow_browser:
-        # Return None so callers can fall back gracefully (instead of raising)
-        _log.warning("E*TRADE token expired and silent renewal failed. Falling back to offline mode.")
+        _log.warning("E*TRADE: all automatic renewal methods failed. Run 'python scripts/diagnostics/test_etrade.py' once to re-authenticate manually.")
         return None
 
     if not sys.stdin.isatty():

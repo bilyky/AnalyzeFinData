@@ -363,6 +363,7 @@ def read_accounts() -> dict:
         scores = {}
         sl_decorations = {}
         env = "production"
+        broker_status = "live"   # "live" | "offline" | "reconnecting"
         
         # ── PRIMARY: Live E*TRADE Broker Feed ──────────────────────────────────
         import sys
@@ -517,7 +518,8 @@ def read_accounts() -> dict:
                     })
             except Exception as e:
                 _log.warning(f"Live broker feed failed: {e}. Falling back to Excel.")
-            
+                broker_status = "offline"
+
         # ── FALLBACK: Parse merged Short_Long sheet if API fails ────────────────
         if not accounts:
             real_ids = _real_acct_ids()
@@ -665,7 +667,7 @@ def read_accounts() -> dict:
             "count":    pf["open_positions"],
         })
 
-        return {"accounts": accounts}
+        return {"accounts": accounts, "broker_status": broker_status}
     return _cached("accounts", 30.0, _load)
 
 
