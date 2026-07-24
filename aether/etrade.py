@@ -11,7 +11,13 @@ from aether.config import CFG
 _log = logging.getLogger("aether.etrade")
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_TOKEN_PATH  = os.path.join(_DIR, "Data", "etrade_tokens.json")
+_TOKEN_PATH        = os.path.join(_DIR, "Data", "etrade_tokens.json")
+_RENEW_LOCK_PATH   = os.path.join(_DIR, "Data", "etrade_renew.lock")
+_RENEW_LOCK_TTL    = 30    # seconds — token renewal HTTP call, should be < 10s
+_RENEW_WAIT_TIMEOUT = 15   # seconds to wait if another process is renewing
+
+import threading as _threading
+_renew_thread_lock = _threading.Lock()
 
 _ET = ZoneInfo("America/New_York")
 _RENEW_URL = {
@@ -96,10 +102,42 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
         _log.debug(f"Token {age_min:.0f}m old — reusing without renewal.")
         return tokens
 
-    from requests_oauthlib import OAuth1Session
-    ck, cs, _, _ = _load_config(env)
-    session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
+    # Cross-process singleton: only one process/thread renews at a time.
+    # Concurrent callers wait briefly then re-read the refreshed token file.
+    with _renew_thread_lock:
+        # Re-check age after acquiring thread lock (another thread may have just renewed)
+        tokens_fresh = _load_tokens(env)
+        if tokens_fresh:
+            age_min2 = (time.time() - tokens_fresh.get("saved_at", 0)) / 60
+            if age_min2 < 75:
+                return tokens_fresh
+
+        # Try to win the cross-process file lock
+        os.makedirs(os.path.dirname(_RENEW_LOCK_PATH), exist_ok=True)
+        try:
+            fd = os.open(_RENEW_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            # Another process is renewing — clean stale lock, then wait
+            try:
+                if time.time() - os.path.getmtime(_RENEW_LOCK_PATH) > _RENEW_LOCK_TTL:
+                    os.unlink(_RENEW_LOCK_PATH)
+                    fd = os.open(_RENEW_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                else:
+                    fd = None
+            except (OSError, FileExistsError):
+                fd = None
+
+    if fd is None:
+        # Another process has the lock — wait briefly, then re-read
+        deadline = time.time() + _RENEW_WAIT_TIMEOUT
+        while os.path.exists(_RENEW_LOCK_PATH) and time.time() < deadline:
+            time.sleep(0.5)
+        return _load_tokens(env) or tokens
+
     try:
+        from requests_oauthlib import OAuth1Session
+        ck, cs, _, _ = _load_config(env)
+        session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
         r = session.get(_RENEW_URL[env], proxies=_proxies(), verify=False, timeout=10)
         if r.ok:
             tokens["saved_at"] = time.time()
@@ -111,6 +149,12 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
     except Exception as e:
         _log.warning(f"Renew error: {e}")
         return None
+    finally:
+        try:
+            os.close(fd)
+            os.unlink(_RENEW_LOCK_PATH)
+        except OSError:
+            pass
 
 
 def revoke_tokens(tokens, env="sandbox") -> bool:
@@ -435,28 +479,51 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
     return verifier
 
 
+def _load_tokens_any_date(env) -> dict | None:
+    """Load cached tokens regardless of issue date — for renewal attempts."""
+    if not os.path.exists(_TOKEN_PATH):
+        return None
+    try:
+        with open(_TOKEN_PATH) as f:
+            tokens = json.load(f)
+        return tokens if tokens.get("env") == env else None
+    except Exception:
+        return None
+
+
 def get_tokens(env="sandbox", allow_browser=False):
     """Return valid OAuth tokens, minimising browser interaction.
 
     Priority:
-    1. Cached today-ET tokens → silent renewal (no browser).
-    2. Renewal failed + allow_browser=True + interactive TTY → full browser login.
-    3. Renewal failed + allow_browser=False → raises RuntimeError (callers catch).
+    1. Today's cached tokens → silent renewal via E*TRADE OAuth endpoint.
+    2. Yesterday's cached tokens → attempt renewal (may still be valid within 2h).
+    3. Renewal failed + allow_browser=False → return None (callers use `if tokens:` guard).
+    4. Renewal failed + allow_browser=True + interactive TTY → full Playwright login.
     """
     ck, cs, username, password = _load_config(env)
 
+    # Try today's tokens first (fast path)
     cached = _load_tokens(env)
     if cached:
         renewed = renew_tokens(cached, env)
         if renewed:
             return renewed
-        print("E*TRADE: token renewal failed.")
+        _log.warning("E*TRADE: today's token renewal failed.")
+
+    # Try yesterday's tokens — E*TRADE sessions can span midnight if renewed within 2h
+    if not cached:
+        stale = _load_tokens_any_date(env)
+        if stale:
+            _log.info("Attempting renewal of previous-day E*TRADE tokens...")
+            renewed = renew_tokens(stale, env)
+            if renewed:
+                _log.info("Previous-day token renewed successfully.")
+                return renewed
 
     if not allow_browser:
-        raise RuntimeError(
-            "E*TRADE token expired and cannot be silently renewed. "
-            "Run 'python scripts/diagnostics/test_etrade.py' to re-authenticate."
-        )
+        # Return None so callers can fall back gracefully (instead of raising)
+        _log.warning("E*TRADE token expired and silent renewal failed. Falling back to offline mode.")
+        return None
 
     if not sys.stdin.isatty():
         raise RuntimeError("E*TRADE: cannot re-authenticate in a headless environment.")
