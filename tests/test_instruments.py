@@ -55,35 +55,26 @@ class TestExcludeSwingRouting(unittest.TestCase):
 
     def test_scarcity_asset_ai_classification(self):
         import unittest.mock as mock
-        # Reset in-process cache so _load_scarcity_cache is actually called
-        instruments._scarcity_mem = None
-        mock_cache = {}
-        with mock.patch("instruments._load_scarcity_cache", return_value=mock_cache), \
-             mock.patch("instruments._save_scarcity_cache"), \
-             mock.patch("ai_client.evaluate", return_value="YES") as mock_eval:
+        cases = [
+            ("GLD", "Gold Mining",  "YES", True),
+            ("AAPL", "Technology",  "NO",  False),
+        ]
+        for sym, industry, ai_resp, expected in cases:
+            with self.subTest(sym=sym):
+                instruments._scarcity_mem = None
+                with mock.patch("instruments._load_scarcity_cache", return_value={}), \
+                     mock.patch("instruments._save_scarcity_cache"), \
+                     mock.patch("ai_client.evaluate", return_value=ai_resp) as mock_eval:
+                    result = instruments.is_scarcity_asset(sym, industry)
+                self.assertEqual(result, expected)
+                self.assertEqual(instruments._scarcity_mem.get(sym), expected)
+                mock_eval.assert_called_once()
 
-            is_scarcity = instruments.is_scarcity_asset("GLD", "Gold Mining")
-            self.assertTrue(is_scarcity)
-            self.assertEqual(instruments._scarcity_mem.get("GLD"), True)  # result in real cache
-            mock_eval.assert_called_once()  # AI called once on cache miss
-
-            # Second call: in-process cache hit — AI not called again
-            mock_eval.reset_mock()
-            is_scarcity_cached = instruments.is_scarcity_asset("GLD", "Gold Mining")
-            self.assertTrue(is_scarcity_cached)
-            mock_eval.assert_not_called()
-
-    def test_scarcity_asset_ai_classification_negative(self):
-        import unittest.mock as mock
-        instruments._scarcity_mem = None
-        mock_cache = {}
-        with mock.patch("instruments._load_scarcity_cache", return_value=mock_cache), \
-             mock.patch("instruments._save_scarcity_cache"), \
-             mock.patch("ai_client.evaluate", return_value="NO"):
-
-            is_scarcity = instruments.is_scarcity_asset("AAPL", "Technology")
-            self.assertFalse(is_scarcity)
-            self.assertEqual(instruments._scarcity_mem.get("AAPL"), False)
+                # Cache hit — AI not called on repeat
+                mock_eval.reset_mock()
+                result2 = instruments.is_scarcity_asset(sym, industry)
+                self.assertEqual(result2, expected)
+                mock_eval.assert_not_called()
 
 
 if __name__ == "__main__":

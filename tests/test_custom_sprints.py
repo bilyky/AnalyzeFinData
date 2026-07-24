@@ -351,55 +351,50 @@ class TestPersistentProfileModes(unittest.TestCase):
         self.assertEqual(rec["holding_days"], 4)
         self.assertEqual(rec["buy_dna"]["industry"], "Software")
 
-    def test_risk_reward_gate_logic(self):
-        """The R/R gate rejects when ratio < 2.0 or target gain < 5%."""
-        # This tests the exact gate logic used inside run_daily_ai_management's
-        # workbook-scan loop (row[9]=stop, row[11]=target, price=row[10]).
+    def test_risk_reward_gate_math(self):
+        """The R/R gate formula used in run_daily_ai_management workbook-scan loop."""
         def _gate(price, stop, target):
-            upside = target - price
+            # Mirrors the exact logic at ai_portfolio_game.py lines ~1244-1255
+            upside   = target - price
             downside = price - stop
-            rr = round(upside / downside, 2) if downside > 0 else 0.0
-            gain = round((upside / price) * 100, 2) if price > 0 else 0.0
+            rr       = round(upside / downside, 2) if downside > 0 else 0.0
+            gain     = round((upside / price) * 100, 2) if price > 0 else 0.0
             return rr >= 2.0 and gain >= 5.0
 
-        self.assertFalse(_gate(100, 96,    102),  "R/R=0.5 → reject")
-        self.assertFalse(_gate(100, 99.5,  102),  "gain=2% → reject")
-        self.assertTrue(_gate(100,  98,    106),  "R/R=3.0, gain=6% → accept")
-        self.assertTrue(_gate(100,  95,    111),  "R/R=2.2, gain=11% → accept")
+        cases = [
+            (100, 96,   102, False, "R/R=0.5 → reject"),
+            (100, 99.5, 102, False, "gain=2% → reject"),
+            (100,  98,  106, True,  "R/R=3.0, gain=6% → accept"),
+            (100,  95,  111, True,  "R/R=2.2, gain=11% → accept"),
+        ]
+        for price, stop, target, expected, label in cases:
+            with self.subTest(label=label):
+                self.assertEqual(_gate(price, stop, target), expected, label)
 
-    def test_circuit_breaker_single_day_crash(self):
-        """Verify that a single-day SPY drop > 2.0% successfully triggers the Circuit Breaker."""
+    def test_circuit_breaker_triggers(self):
+        """check_systemic_risk fires on single-day crash, rolling drawdown, and VXX spike."""
         import circuit_breaker
-        from unittest import mock
-        
-        # Mock SPY history where yesterday was 100.0 and today is 97.0 (down 3.0%)
-        mock_series = [{"close": 100.0}] * 15
-        mock_series[-2] = {"close": 100.0}
-        mock_series[-1] = {"close": 97.0}
-        
-        with mock.patch("circuit_breaker.load_spy_history", return_value=mock_series):
-            is_active, reason = circuit_breaker.check_systemic_risk(prices={"SPY": 97.0})
-            self.assertTrue(is_active)
-            self.assertIn("Single-Day Capitulation", reason)
+        flat = [{"close": 100.0}] * 15
 
-    def test_circuit_breaker_rolling_drawdown(self):
-        """Verify that a 10-day rolling drawdown > 5.0% (slow bleed) successfully triggers the Breaker."""
-        import circuit_breaker
-        from unittest import mock
-        
-        # Mock a slow-bleed SPY history: peak was 100.0, we have fallen to 94.0 (down 6.0% drawdown)
-        mock_series = [{"close": 100.0}] * 15
-        # Set a peak at index -10 and bleed down to 94.0
+        drawdown = list(flat)
         for i in range(-10, 0):
-            mock_series[i] = {"close": 100.0 + (i * 0.6)} # index -1 is 99.4, index -10 is 94.0
-        mock_series[-10] = {"close": 100.0} # peak
-        mock_series[-1] = {"close": 94.0} # today's close
-        mock_series[-2] = {"close": 94.6} # yesterday's close
-        
-        with mock.patch("circuit_breaker.load_spy_history", return_value=mock_series):
-            is_active, reason = circuit_breaker.check_systemic_risk(prices={"SPY": 94.0})
-            self.assertTrue(is_active)
-            self.assertIn("Rolling 10-day Drawdown Breach", reason)
+            drawdown[i] = {"close": 100.0 + (i * 0.6)}
+        drawdown[-10] = {"close": 100.0}
+        drawdown[-1]  = {"close": 94.0}
+        drawdown[-2]  = {"close": 94.6}
+
+        cases = [
+            ("single-day crash",    flat,     {"SPY": 97.0},              "Single-Day Capitulation"),
+            ("rolling drawdown",    drawdown, {"SPY": 94.0},              "Rolling 10-day Drawdown Breach"),
+            ("VXX spike",           flat,     {"SPY": 100.0, "VXX": 116.0}, "Volatility Capitulation"),
+        ]
+        for label, series, prices, expected_reason in cases:
+            with self.subTest(label=label):
+                with mock.patch("circuit_breaker.load_spy_history", return_value=series), \
+                     mock.patch("circuit_breaker.load_vxx_prev_close", return_value=100.0):
+                    is_active, reason = circuit_breaker.check_systemic_risk(prices=prices)
+                self.assertTrue(is_active, label)
+                self.assertIn(expected_reason, reason, label)
 
     def test_circuit_breaker_stop_tightening(self):
         """Verify that the breaker successfully freezes buying and tightens stops on satellites."""

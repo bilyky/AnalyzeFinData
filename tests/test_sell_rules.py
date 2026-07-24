@@ -53,17 +53,16 @@ class TestSma(unittest.TestCase):
 
 
 class TestWinnerProtected(unittest.TestCase):
-    def test_winner_above_sma_protected(self):
-        self.assertTrue(sr.winner_protected(in_profit=True, price=110, sma50=100))
-
-    def test_winner_below_sma_not_protected(self):
-        self.assertFalse(sr.winner_protected(in_profit=True, price=95, sma50=100))
-
-    def test_loser_never_protected(self):
-        self.assertFalse(sr.winner_protected(in_profit=False, price=110, sma50=100))
-
-    def test_missing_sma_not_protected(self):
-        self.assertFalse(sr.winner_protected(in_profit=True, price=110, sma50=None))
+    def test_winner_protection_cases(self):
+        cases = [
+            (True,  110, 100, True,  "profit + above 50-DMA → protected"),
+            (True,   95, 100, False, "profit + below 50-DMA → not protected"),
+            (False, 110, 100, False, "loss → never protected"),
+            (True,  110, None, False, "no SMA data → not protected"),
+        ]
+        for in_profit, price, sma50, expected, label in cases:
+            with self.subTest(label=label):
+                self.assertEqual(sr.winner_protected(in_profit=in_profit, price=price, sma50=sma50), expected)
 
 
 class TestExitDecision(unittest.TestCase):

@@ -1,3 +1,4 @@
+import datetime
 import os
 import sys
 import unittest
@@ -13,15 +14,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import ai_portfolio_game
 
 def create_mock_ohlcv(path, base_price, trend_slope):
-    """Create a mock 250-day daily OHLCV dataset with a trend slope."""
+    """Create a mock 250-day daily OHLCV dataset with a valid calendar-based date series."""
     ts = {}
     price = base_price
+    start = datetime.date(2025, 1, 2)
     for i in range(250):
-        date_str = f"2026-01-{i+1:02d}" if i < 30 else f"2026-02-{(i-30)+1:02d}"
-        if i >= 100: date_str = f"2026-03-{(i-100)+1:02d}"
-        if i >= 150: date_str = f"2026-04-{(i-150)+1:02d}"
-        if i >= 200: date_str = f"2026-05-{(i-200)+1:02d}"
-        
+        date_str = (start + datetime.timedelta(days=i)).isoformat()
         price += trend_slope
         ts[date_str] = {
             "1. open": str(price),
