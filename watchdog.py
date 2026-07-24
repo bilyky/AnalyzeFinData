@@ -285,15 +285,28 @@ def run_watchdog():
     # 0. E*TRADE Proactive Session Keeper (Prevents Soft Expiry)
     try:
         import etrade
-        tokens = etrade._load_tokens("production")
+        # Attempt to get valid active tokens for today (silently renews if fresh, 
+        # or runs Playwright re-auth if yesterday's token has expired!)
+        tokens = etrade.get_tokens("production", allow_browser=True)
         if tokens:
-            renewed = etrade.renew_tokens(tokens, "production")
-            if renewed:
-                print("  [Healer] E*TRADE production tokens successfully renewed and session extended!")
-            else:
-                print("  [Healer] E*TRADE production tokens are expired or could not be renewed silently.")
+            print("  [Healer] E*TRADE production session is active, fresh, and fully validated!")
+        else:
+            raise RuntimeError("E*TRADE tokens are missing or could not be loaded.")
     except Exception as e:
-        print(f"  [Healer] E*TRADE session keep-alive bypassed or failed: {e}")
+        err_msg = f"E*TRADE Proactive Session Keeper Failed: {e}"
+        print(f"  🛑 [Healer] {err_msg}")
+        _log.error(err_msg, exc_info=True)
+        # Send a critical email alert so you know immediately that the session has failed!
+        try:
+            notify.send_email(
+                subject="🚨 CRITICAL: AETHER Watchdog Session Keeper Failure!",
+                body=f"The Project AETHER Watchdog Keeper failed to validate or renew your E*TRADE session today.\n\nError: {e}\n\nPlease run 'python scripts/diagnostics/test_etrade.py production' manually on your desktop to restore the session.",
+                is_html=False
+            )
+        except Exception as ne:
+            print(f"  ❌ Failed to send critical watchdog alert email: {ne}")
+        # Throw the exception to fail the task scheduler run (rc != 0), preventing silent logical failures!
+        raise
 
     # 0b. Chaikin Proactive Session Keeper & Auto-Login
     try:
