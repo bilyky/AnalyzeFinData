@@ -37,6 +37,21 @@ _DATE_FMT = "%Y-%m-%d %H:%M:%S"
 
 _initialised = False
 
+# ── Custom CONSOLE level ─────────────────────────────────────────────────────
+# Between DEBUG (10) and INFO (20). Writes to stdout only — not to log files.
+# Use for interactive progress messages that are useful on screen but should not
+# clutter aether.log / aether.jsonl (e.g. "Scanning mailbox X...", "3/500 done").
+CONSOLE = 15
+logging.addLevelName(CONSOLE, "CONSOLE")
+
+
+def _console(self, message, *args, **kwargs):
+    if self.isEnabledFor(CONSOLE):
+        self._log(CONSOLE, message, args, **kwargs)
+
+
+logging.Logger.console = _console
+
 
 class _JsonlFormatter(logging.Formatter):
     """One JSON object per line, safe to stream-parse."""
@@ -80,27 +95,30 @@ def _init():
     level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
     stdout_level = getattr(logging, level_name, logging.INFO)
 
-    # ── 1. Rotating plain text ──────────────────────────────────────────────
+    # ── 1. Rotating plain text — INFO+ only (no CONSOLE noise) ─────────────
     txt_handler = logging.handlers.RotatingFileHandler(
         _LOG_DIR / "aether.log",
         maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8",
     )
-    txt_handler.setLevel(logging.DEBUG)
+    txt_handler.setLevel(logging.INFO)   # CONSOLE(15) is below INFO(20) — excluded
     txt_handler.setFormatter(logging.Formatter(_TEXT_FMT, _DATE_FMT))
     root.addHandler(txt_handler)
 
-    # ── 2. Rotating JSON Lines ───────────────────────────────────────────────
+    # ── 2. Rotating JSON Lines — INFO+ only ─────────────────────────────────
     jsonl_handler = logging.handlers.RotatingFileHandler(
         _LOG_DIR / "aether.jsonl",
         maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8",
     )
-    jsonl_handler.setLevel(logging.DEBUG)
+    jsonl_handler.setLevel(logging.INFO)  # CONSOLE(15) excluded from structured log
     jsonl_handler.setFormatter(_JsonlFormatter())
     root.addHandler(jsonl_handler)
 
-    # ── 3. Stdout ────────────────────────────────────────────────────────────
+    # ── 3. Stdout — include CONSOLE(15) when env level is INFO or lower ──────
+    # If LOG_LEVEL=WARNING/ERROR, respect that — suppress CONSOLE noise.
+    # If LOG_LEVEL=INFO/DEBUG (default), also show CONSOLE progress messages.
+    stdout_level_eff = CONSOLE if stdout_level <= logging.INFO else stdout_level
     stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setLevel(stdout_level)
+    stream_handler.setLevel(stdout_level_eff)
     stream_handler.setFormatter(logging.Formatter(_TEXT_FMT, _DATE_FMT))
     root.addHandler(stream_handler)
 

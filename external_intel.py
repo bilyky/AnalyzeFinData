@@ -8,6 +8,9 @@ import extract_email_intel
 import openpyxl
 from pathlib import Path
 from config import CFG
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("external_intel")
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -44,7 +47,7 @@ def get_existing_symbols():
         ws = wb["Research"]
         return {str(row[3]).strip().upper() for row in ws.iter_rows(min_row=2, values_only=True) if row[3]}
     except Exception as e:
-        print(f"Failed to load symbols for verification: {e}")
+        _log.error(f"Failed to load symbols for verification: {e}")
         return set()
 
 # Common English words that are also valid stock tickers. 
@@ -106,7 +109,7 @@ def analyze_email_content(subject, body):
         content = content.replace("```json", "").replace("```", "").strip()
         return json.loads(content)
     except Exception as e:
-        print(f"Semantic email analysis failed: {e}")
+        _log.error(f"Semantic email analysis failed: {e}")
     return []
 
 def _max_intel_emails() -> int:
@@ -146,11 +149,11 @@ def fetch_idea_emails():
         email_pass = os.environ.get(pass_env) or CFG.smtp_password
 
         if not email_pass:
-            print(f"Warning: No password found for mailbox '{email_user}' "
-                  f"(checked env var '{pass_env}' and CFG.smtp_password). Skipping.")
+            _log.error(f"No password for mailbox '{email_user}' "
+                       f"(checked env var '{pass_env}' and CFG.smtp_password) — mailbox skipped.")
             continue
 
-        print(f"Scanning mailbox: {email_user} on {imap_server}...")
+        _log.console(f"Scanning mailbox: {email_user} on {imap_server}...")
         mail = None
         try:
             mail = imaplib.IMAP4_SSL(imap_server)
@@ -207,7 +210,7 @@ def fetch_idea_emails():
                             intel = extract_email_intel.extract(subject, body)
                             intel_count += 1
                         else:
-                            print(f"[intel] cap of {max_intel} emails reached; skipping deep extraction for: {subject[:60]}")
+                            _log.console(f"Intel cap ({max_intel}) reached; skipping: {subject[:60]}")
 
                         base = {"from": msg["from"], "subject": subject, "folder": folder, "intel": intel}
                         if parsed_ideas:
@@ -218,10 +221,10 @@ def fetch_idea_emails():
                             # Intel found but no explicit ticker recs — still worth surfacing
                             ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
                     except Exception as e:
-                        print(f"Failed to process message {num}: {e}")
+                        _log.error(f"Failed to process message {num}: {e}")
 
         except Exception as e:
-            print(f"Failed to fetch emails for {email_user}: {e}")
+            _log.error(f"Failed to fetch emails for {email_user}: {e}")
         finally:
             if mail:
                 try:
@@ -232,11 +235,11 @@ def fetch_idea_emails():
     return ideas
 
 def get_market_news(symbols):
-    print(f"Hiring AETHER news bots to scan for: {', '.join(symbols)}")
+    _log.console(f"get_market_news called for: {', '.join(symbols)}")
     return []
 
 if __name__ == "__main__":
-    print("Checking for new AETHER ideas...")
+    _log.console("Fetching external intel ideas...")
     new_ideas = fetch_idea_emails()
     for idea in new_ideas:
-        print(f"💡 Idea from {idea['from']}: {idea['subject']} (Symbol: {idea.get('symbol')}, Sentiment: {idea.get('sentiment')})")
+        _log.console(f"Idea from {idea['from']}: {idea['subject']} (Symbol: {idea.get('symbol')}, Sentiment: {idea.get('sentiment')})")

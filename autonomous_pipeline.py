@@ -464,9 +464,14 @@ def main():
     intel_ideas = []
     try:
         intel_ideas = external_intel.fetch_idea_emails()
-        log(f"Fetched {len(intel_ideas)} ideas from email.")
+        if intel_ideas:
+            log(f"Fetched {len(intel_ideas)} ideas from email.")
+        else:
+            _pipeline_log.warning("External intel fetch returned 0 ideas — mailbox auth may have failed. Check aether.jsonl for details.")
+            log("Warning: 0 ideas from email scan — see log for details.")
     except Exception as e:
-        log(f"Warning: Could not fetch external intel: {e}")
+        _pipeline_log.error(f"Could not fetch external intel: {e}")
+        log(f"ERROR: Could not fetch external intel: {e}")
 
     # 1. Sync history (Backfill cache for deltas)
     log("Backfilling 5-day history (run_history.py)...")
