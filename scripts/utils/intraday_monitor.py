@@ -9,6 +9,7 @@ import datetime
 from pathlib import Path
 
 from data_api import _SL  # canonical Short_Long column map (single source of truth)
+from ai_portfolio_game import get_live_prices
 
 XLSX_FILE = Path("Data/state_of_the_day.xlsx")
 
@@ -44,7 +45,6 @@ def monitor():
 
     print(f"Monitoring {len(monitored)} positions.")
 
-    from ai_portfolio_game import get_live_prices
     symbols = [p["symbol"] for p in monitored]
     quotes = get_live_prices(symbols)
 

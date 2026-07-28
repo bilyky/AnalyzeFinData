@@ -55,26 +55,24 @@ class TokenRenewer:
             # Re-read inside lock — another thread may have just renewed
             fresh = self._load_fn()
             if fresh:
-                # If current_token was provided, we only return fresh if it is actually
-                # different/newer than current_token, indicating another process/thread renewed it.
-                if current_token is not None:
-                    is_newer = False
-                    if isinstance(fresh, dict) and isinstance(current_token, dict):
-                        for key in ["oauth_token", "jsessionid", "saved_at"]:
-                            if key in fresh and key in current_token:
-                                if key == "saved_at":
-                                    if fresh[key] > current_token[key]:
-                                        is_newer = True
-                                        break
-                                elif fresh[key] != current_token[key]:
-                                    is_newer = True
-                                    break
-                    elif fresh != current_token:
-                        is_newer = True
-                    
-                    if is_newer:
-                        return fresh
+                if current_token is None:
+                    return fresh
+                # Only return the freshly-loaded token when it is actually newer/different
+                # than what the caller already holds — i.e. another thread or process renewed it.
+                is_newer = False
+                if isinstance(fresh, dict) and isinstance(current_token, dict):
+                    fresh_ts = fresh.get("saved_at", "")
+                    cur_ts = current_token.get("saved_at", "")
+                    if fresh_ts and cur_ts:
+                        is_newer = fresh_ts > cur_ts
+                    else:
+                        is_newer = (
+                            fresh.get("oauth_token") != current_token.get("oauth_token")
+                            or fresh != current_token
+                        )
                 else:
+                    is_newer = fresh != current_token
+                if is_newer:
                     return fresh
 
             # Try to win the cross-process file lock

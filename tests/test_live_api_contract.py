@@ -1,3 +1,4 @@
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -8,7 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import powergauge
 import etrade
 
+_LIVE = os.getenv("AETHER_LIVE_TESTS")
+
 class TestLiveApiContract(unittest.TestCase):
+    @unittest.skipUnless(_LIVE, "Set AETHER_LIVE_TESTS=1 to run live broker/API tests")
     def test_chaikin_live_connection(self):
         """Verify that the automated Chaikin login and API are 100% online and authenticated."""
         print("\n[LIVE TEST] Testing Chaikin Analytics API connection...")
@@ -29,6 +33,7 @@ class TestLiveApiContract(unittest.TestCase):
         except Exception as e:
             self.fail(f"Chaikin Live Connection Contract failed: {e}")
 
+    @unittest.skipUnless(_LIVE, "Set AETHER_LIVE_TESTS=1 to run live broker/API tests")
     def test_etrade_live_connection(self):
         """Verify that the production E*TRADE API is 100% online and authenticated."""
         print("\n[LIVE TEST] Testing E*TRADE Production API connection...")
@@ -44,8 +49,9 @@ class TestLiveApiContract(unittest.TestCase):
         except Exception as e:
             self.fail(f"E*TRADE Live Connection Contract failed: {e}")
 
+    @unittest.skipUnless(_LIVE, "Set AETHER_LIVE_TESTS=1 to run live broker/API tests")
     def test_accounts_api_contract(self):
-        """Verify that the accounts endpoint returns 100% complete, populated, and valid holdings data."""
+        """Verify that the accounts endpoint returns complete, populated, and valid holdings data."""
         print("\n[LIVE TEST] Testing /api/accounts Data Contract...")
         try:
             import data_api

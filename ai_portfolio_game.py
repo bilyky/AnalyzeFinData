@@ -135,20 +135,43 @@ def _load_closes(symbol):
         return []
 
 
+_HEAL_ATTEMPTED: set = set()  # per-process guard: each symbol healed at most once
+
+
 def _heal_symbol_cache(symbol) -> bool:
-    """Autonomic on-demand self-healing: pulls fresh OHLCV history via rapidapi when a stale cache is detected."""
+    """Autonomic on-demand self-healing: pulls fresh OHLCV history via rapidapi.
+    Each symbol is attempted at most once per process run."""
+    if symbol in _HEAL_ATTEMPTED:
+        return False
+    _HEAL_ATTEMPTED.add(symbol)
     try:
         today_str = str(datetime.date.today())
         res = rapidapi.repair_missing([symbol], today_str)
         if res.get("updated", 0) > 0:
-            _log.info(f"✅ [Self-Healer] Successfully healed and refreshed {symbol} OHLCV cache on disk.")
+            _log.info(f"[Self-Healer] Healed {symbol} OHLCV cache.")
             return True
         else:
-            _log.warning(f"⚠️ [Self-Healer] On-demand refresh for {symbol} yielded 0 updates.")
+            _log.warning(f"[Self-Healer] On-demand refresh for {symbol} yielded 0 updates.")
             return False
     except Exception as e:
-        _log.warning(f"❌ [Self-Healer] Failed to heal {symbol} cache: {e}")
+        _log.warning(f"[Self-Healer] Failed to heal {symbol} cache: {e}")
         return False
+
+
+def _cache_stale(symbol, max_stale_days=10) -> bool:
+    """Return True if the symbol's OHLCV cache is missing or older than max_stale_days."""
+    path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
+    if not path.exists():
+        return True
+    try:
+        with open(path) as f:
+            ts = json.load(f).get("Time Series (Daily)", {})
+        dates = sorted(ts.keys())
+        if not dates:
+            return True
+        return (datetime.date.today() - datetime.date.fromisoformat(dates[-1])).days > max_stale_days
+    except Exception:
+        return True
 
 
 def _sma50(symbol, max_stale_days=10):
@@ -161,7 +184,7 @@ def _sma50(symbol, max_stale_days=10):
         last_bar_date = "None"
         if not path.exists():
             needs_healing = True
-            _log.warning(f"⚠️ [BLINDED GUARD] {symbol} OHLCV cache file is MISSING on disk! Winner Protection is blinded.")
+            _log.warning(f"[sma50] {symbol} OHLCV cache missing — winner protection unavailable.")
         else:
             try:
                 with open(path) as f:
@@ -174,15 +197,14 @@ def _sma50(symbol, max_stale_days=10):
                     stale_days = (datetime.date.today() - datetime.date.fromisoformat(last_bar_date)).days
                     if stale_days > max_stale_days:
                         needs_healing = True
-                        _log.warning(f"⚠️ [BLINDED GUARD] {symbol} OHLCV cache is STALE by {stale_days} days (last bar: {last_bar_date})! Winner Protection is blinded.")
+                        _log.warning(f"[sma50] {symbol} OHLCV cache stale by {stale_days}d (last bar: {last_bar_date}).")
             except Exception:
                 needs_healing = True
 
-        # Attempt self-healing
         if needs_healing:
             healed = _heal_symbol_cache(symbol)
             if not healed:
-                _log.error(f"❌ [Self-Healer] Could not heal {symbol} cache on-demand. Proceeding with blinded winner-protection.")
+                _log.warning(f"[sma50] {symbol} cache heal failed; winner protection unavailable this run.")
                 return None
 
         # Re-read the newly healed/fresh cache file
@@ -746,22 +768,23 @@ def is_market_hours():
         return True
 
 def get_json_prices_fallback(symbols):
-    """Instantly retrieve the latest closing prices directly from the local per-symbol OHLCV JSON caches,
-    but ONLY if they contain today's actual settled close (or the most recent close on weekends)."""
+    """Retrieve the latest closing prices from the local per-symbol OHLCV JSON caches.
+    Accepts prices from the last 4 calendar days to handle weekends and market holidays."""
     quotes = {}
     try:
-        today_str = str(datetime.date.today())
-        is_weekend = (datetime.date.today().weekday() in (5, 6))
+        today = datetime.date.today()
+        today_str = str(today)
+        is_weekend = today.weekday() in (5, 6)
+        # Accept a close up to 4 days old — covers 3-day weekends and market holidays
+        cutoff = (today - datetime.timedelta(days=4)).isoformat()
         for sym in symbols:
             path = SYMBOL_FULL_DIR / f"{sym}_daily.json"
             if path.exists():
                 with open(path) as f:
                     ts = json.load(f).get("Time Series (Daily)", {})
                 if ts:
-                    dates = sorted(ts.keys())
-                    newest_date = dates[-1]
-                    # Only accept the cached price if it is actually today's settled close, or on weekends
-                    if newest_date == today_str or is_weekend:
+                    newest_date = sorted(ts.keys())[-1]
+                    if newest_date == today_str or is_weekend or newest_date >= cutoff:
                         quotes[sym] = float(ts[newest_date]["4. close"])
         return quotes
     except Exception as e:
@@ -1100,6 +1123,15 @@ def run_daily_ai_management(force=False, manual_profile=None):
         ws = wb["Research"]
         
         symbols_to_check = list(state["positions"].keys())
+
+        # Pre-flight: batch-heal stale OHLCV caches before the decision loop so
+        # _sma50 never blocks on a live network call mid-iteration.
+        stale_syms = [s for s in symbols_to_check if _cache_stale(s, max_stale_days=10)]
+        if stale_syms:
+            _log.info(f"[Pre-flight] Healing {len(stale_syms)} stale OHLCV cache(s) before evaluation: {stale_syms}")
+            for _s in stale_syms:
+                _heal_symbol_cache(_s)
+
         # Dynamically heal/classify legacy positions
         for row in ws.iter_rows(min_row=2, values_only=True):
             sym = row[3]

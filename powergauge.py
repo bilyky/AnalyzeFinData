@@ -65,11 +65,8 @@ from patterns import (
 
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
 
-# Chaikin Analytics app-level API key (shared across all members using this client).
-# Override via CHAIKIN_API_KEY env var if the key is rotated.
-_CHAIKIN_API_KEY = os.environ.get(
-    "CHAIKIN_API_KEY", "76J!7fb?jhEtz/hd7i6rHPKklawGZb5VLReDQXa0?4-jGCqQFi74xYCsb0H-hqUC"
-)
+# Chaikin Analytics app-level API key — set via CHAIKIN_API_KEY env var.
+_CHAIKIN_API_KEY = os.environ.get("CHAIKIN_API_KEY") or ""
 
 
 def _pgr_str(v: int) -> str:
@@ -173,8 +170,9 @@ XLSX_BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
 
 # ── Chaikin API ───────────────────────────────────────────────────────────────
-# Set CHAIKIN_API_KEY env var (see .env.example). No hardcoded fallback.
+# Set CHAIKIN_API_KEY and CHAIKIN_UID env vars (see .env.example).
 _CHAIKIN_API_KEY = os.environ.get("CHAIKIN_API_KEY") or ""
+_CHAIKIN_UID = os.environ.get("CHAIKIN_UID") or ""
 # Concurrent workers for parallel symbol fetch in check_from_xls.
 _FETCH_WORKERS = int(os.environ.get("CHAIKIN_WORKERS", "10"))
 
@@ -452,7 +450,7 @@ def _save_session_to_file(session_data: dict):
 def _validate_session(session_data: dict) -> bool:
     if not session_data or not session_data.get("jsessionid"):
         return False
-    test_url = "https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid=1101733&symbol=AAPL&components=pgr"
+    test_url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid={_CHAIKIN_UID}&symbol=AAPL&components=pgr"
     headers = {
         'jsessionid': session_data['jsessionid'],
         'x-session-id': session_data['jsessionid'],
@@ -608,11 +606,10 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
     if not _SYMBOL_RE.match(symbol):
         raise ValueError(f"Invalid symbol format: {symbol!r}")
 
-    # Always use the optimized ensure_valid_session() to bypass any stale loop parameters
     session_data = ensure_valid_session()
 
     industry_url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getChecklistStocks?symbol={symbol}"
-    url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid=1101733&symbol={symbol}&components=pgr,metaInfo,EPSData,fundamentalData,technical"
+    url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid={_CHAIKIN_UID}&symbol={symbol}&components=pgr,metaInfo,EPSData,fundamentalData,technical"
     
     headers = {
         'jsessionid': session_data.get('jsessionid', ''),
@@ -658,7 +655,6 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
                     if ohlcv_ts and cache_date_str in ohlcv_ts:
                         official_close = float(ohlcv_ts[cache_date_str]["4. close"])
                         if official_close > 0.0:
-                            # Safely handle Chaikin's list-structured metaInfo
                             meta_list = data_jsn.get("metaInfo")
                             if isinstance(meta_list, list) and len(meta_list) > 0:
                                 meta_list[0]["Last"] = official_close
@@ -667,7 +663,9 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
 
                             if "checklist_stocks" in data_jsn:
                                 data_jsn["checklist_stocks"]["lastPrice"] = official_close
-                            _pg_log.info(f"🔄 [Pricing Sync] Reconciled and updated Chaikin JSON price for {symbol} to official settled close: ${official_close}")
+                            _pg_log.info(f"[Pricing Sync] {symbol}: overrode Chaikin price with settled close ${official_close}")
+                    else:
+                        _pg_log.debug(f"[Pricing Sync] {symbol}: {cache_date_str} not in OHLCV cache; Chaikin price used as-is.")
             except Exception as e:
                 _pg_log.warning(f"Failed to reconcile price: {e}")
 
@@ -730,7 +728,7 @@ def check_from_file(prefer_cache: bool, date=None):
     pg_results: dict[str, PowerGauge] = {}
     with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
         future_to_sym = {
-            pool.submit(get_symbol_data, sym, date, prefer_cache, session_id): sym
+            pool.submit(get_symbol_data, sym, date, prefer_cache): sym
             for sym in unique_syms
         }
         done = 0
@@ -1096,7 +1094,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     pg_results: dict[str, PowerGauge] = {}
     with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
         future_to_sym = {
-            pool.submit(get_symbol_data, sym, date, prefer_cache, session_id): sym
+            pool.submit(get_symbol_data, sym, date, prefer_cache): sym
             for sym in unique_syms
         }
         done = 0

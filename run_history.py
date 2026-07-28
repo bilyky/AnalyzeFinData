@@ -20,9 +20,9 @@ Python deps: requests, openpyxl, playwright (for browser login fallback)
 """
 
 import datetime
-import glob
 import os
 import sys
+import pytz
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import powergauge
@@ -69,13 +69,30 @@ def load_symbols() -> list[str]:
 
 
 def days_missing(symbols: list[str], day: datetime.date) -> list[str]:
-    # Today's date must never be treated as cached during EOD sync to ensure we overwrite morning intraday prices!
-    if day == datetime.date.today():
-        return list(symbols)
     symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
-    return [s for s in symbols
-            if not (os.path.exists(os.path.join(symbol_dir, s, f"{s}_{day}.json")) or
-                    os.path.exists(os.path.join(symbol_dir, f"{s}_{day}.json")))]
+    if day < datetime.date.today():
+        return [s for s in symbols
+                if not (os.path.exists(os.path.join(symbol_dir, s, f"{s}_{day}.json")) or
+                        os.path.exists(os.path.join(symbol_dir, f"{s}_{day}.json")))]
+
+    # For today: re-fetch if the file is missing or was written before NYSE 4:05 PM ET
+    # (pre-market / intraday writes use the same filename and must be overwritten at EOD).
+    try:
+        eod_ts = datetime.datetime.combine(
+            day, datetime.time(16, 5),
+            tzinfo=pytz.timezone("America/New_York")
+        ).timestamp()
+    except Exception:
+        return list(symbols)  # safe fallback: fetch everything
+
+    missing = []
+    for s in symbols:
+        p1 = os.path.join(symbol_dir, s, f"{s}_{day}.json")
+        p2 = os.path.join(symbol_dir, f"{s}_{day}.json")
+        path = p1 if os.path.exists(p1) else (p2 if os.path.exists(p2) else None)
+        if path is None or os.path.getmtime(path) < eod_ts:
+            missing.append(s)
+    return missing
 
 
 def main():

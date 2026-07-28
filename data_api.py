@@ -9,13 +9,28 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import glob
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from scripts.backtesting import backtest_levels
 from aether import decision_eval as _decision_eval
+from aether.config import CFG as _cfg
+import instruments
+import risk_utils
+import sell_rules
+import openpyxl
+import etrade
+from autonomous_pipeline import (
+    get_top_5_picks as _ap_picks,
+    get_market_regime as _ap_regime,
+    get_replacement_pairs as _ap_replacements,
+    get_reserves_data as _ap_reserves,
+)
+from ai_portfolio_game import get_live_prices, get_google_prices_fallback
+import powergauge as _pg
 
 _log = logging.getLogger("aether.data_api")
 
@@ -84,29 +99,34 @@ def _load_latest_close_from_cache(sym: str) -> float | None:
         return None
 
 
-def verify_price_integrity(symbol: str, price: float, source: str) -> None:
-    """Strictly verify and reconcile price integrity for a symbol.
-    Raises a ValueError if any price discrepancy is detected to prevent silent data corruption."""
-    sym = (symbol or "").strip().upper()
-    if sym in ("931CVR013", "BBB"):  # Skip cash equivalents or mock symbols
-        return
-    if price is None or price < 0:
-        raise ValueError(f"🛑 [PRICING DISCREPANCY] {sym} has an invalid or missing price: {price} (Source: {source})")
+class PricingDiscrepancyError(ValueError):
+    """Raised when a live price deviates from the settled OHLCV cache beyond tolerance."""
 
-    # Reconcile against Symbol_full closing price cache on disk
+
+_PRICE_CHECK_EXEMPT = frozenset({"931CVR013", "BBB"})
+_PRICE_TOLERANCE_PCT = 15.0  # covers earnings gaps, splits, thin ETFs
+
+
+def verify_price_integrity(symbol: str, price: float, source: str) -> None:
+    """Check price against the settled OHLCV cache. Raises PricingDiscrepancyError on
+    deviation > _PRICE_TOLERANCE_PCT%. Skips CVR/BBB and leveraged/crypto instruments."""
+    sym = (symbol or "").strip().upper()
+    if sym in _PRICE_CHECK_EXEMPT or instruments.is_excluded(sym):
+        return
+    if price is None or price <= 0:
+        raise PricingDiscrepancyError(
+            f"[PRICING DISCREPANCY] {sym} has an invalid or missing price: {price} (Source: {source})"
+        )
+
     cache_close = _load_latest_close_from_cache(sym)
     if cache_close is not None and cache_close > 0:
         diff = abs(price - cache_close)
         if diff > 0.05:
-            # Apply a 3.0% percentage-based tolerance to accommodate delayed broker quotes or minor after-hours ticks
             pct_diff = (diff / cache_close) * 100
-            if pct_diff > 3.0:
-                raise ValueError(
-                    f"🛑 [PRICING DISCREPANCY] Price discrepancy detected for {sym}!\n"
-                    f"  Active Price (Source: {source}): ${price:.4f}\n"
-                    f"  Cache Price (Symbol_full):       ${cache_close:.4f}\n"
-                    f"  Difference:                      ${diff:.4f} ({pct_diff:.2f}% - Max tolerance: 3.0%)\n"
-                    f"  Action required: Re-sync Data/Symbol_full or Excel workbook immediately!"
+            if pct_diff > _PRICE_TOLERANCE_PCT:
+                raise PricingDiscrepancyError(
+                    f"[PRICING DISCREPANCY] {sym}: active ${price:.4f} vs cache ${cache_close:.4f}"
+                    f" ({pct_diff:.1f}% diff, tolerance {_PRICE_TOLERANCE_PCT}%) — Source: {source}"
                 )
 
 
@@ -185,9 +205,8 @@ def read_picks() -> dict:
     """Cached 60s — reads state_of_the_day.xlsx Research sheet."""
     def _load():
         try:
-            import autonomous_pipeline as _ap
-            picks = _ap.get_top_5_picks()
-            regime, color = _ap.get_market_regime()
+            picks = _ap_picks()
+            regime, color = _ap_regime()
             return {"market_regime": regime, "regime_color": color, "picks": picks}
         except Exception as e:
             return {"market_regime": "Unknown", "regime_color": "#7f8c8d",
@@ -199,8 +218,7 @@ def read_replacements() -> dict:
     """Cached 60s — reads Replacements sheet."""
     def _load():
         try:
-            import autonomous_pipeline as _ap
-            pairs = _ap.get_replacement_pairs()
+            pairs = _ap_replacements()
             return {"pairs": pairs}
         except Exception as e:
             return {"pairs": [], "error": str(e)}
@@ -211,8 +229,7 @@ def read_reserves() -> dict:
     """Cached 60s — reads A-Reserves from game state + Research sheet scores."""
     def _load():
         try:
-            import autonomous_pipeline as _ap
-            data = _ap.get_reserves_data()
+            data = _ap_reserves()
             return {"reserves": data}
         except Exception as e:
             return {"reserves": [], "error": str(e)}
@@ -234,10 +251,6 @@ def read_research() -> dict:
     (PGR, S10/L60, setup flag, buying ratio, money flow, OB/OS, win%, patterns …)
     plus a summary block. Cached 60s."""
     def _load():
-        import openpyxl
-        import sell_rules
-        import risk_utils
-        import instruments
         if not _XLSX.exists():
             return {"rows": [], "summary": {}, "error": "state_of_the_day.xlsx not found"}
         rows = []
@@ -355,8 +368,7 @@ def read_research() -> dict:
             _log.warning(f"TARGET MISS: {target_misses}/{len(rows)} symbols have fresh "
                          f"data but no overhead resistance — target used an ATR/8% projection.")
         try:
-            import autonomous_pipeline as _ap
-            regime, color = _ap.get_market_regime()
+            regime, color = _ap_regime()
             summary["market_regime"], summary["regime_color"] = regime, color
         except Exception:
             summary["market_regime"], summary["regime_color"] = "Unknown", "#7f8c8d"
@@ -384,7 +396,6 @@ def _to_date_str(v):
         return v.isoformat()
     if isinstance(v, (int, float)):
         try:
-            from datetime import timedelta
             return (date(1899, 12, 30) + timedelta(days=int(v))).isoformat()
         except Exception:
             return None
@@ -394,8 +405,7 @@ def _to_date_str(v):
 # (PII — never hardcode). Falls back to generic T1/T2 labels if unset.
 def _real_acct_ids():
     try:
-        from aether.config import CFG
-        return CFG.accounts_real or []
+        return _cfg.accounts_real or []
     except Exception:
         return []
 
@@ -464,25 +474,25 @@ def read_accounts() -> dict:
     """Return live E*TRADE account holdings and balances from the broker,
     with an automatic fallback to the local Excel sheet if offline."""
     def _load():
-        import etrade
-        import risk_utils
-        import instruments
-        
         accounts = []
         scores = {}
+        _streak_cache: dict = {}
+
+        def _streak(sym: str):
+            if sym not in _streak_cache:
+                _streak_cache[sym] = _get_streak_from_cache(sym)
+            return _streak_cache[sym]
         sl_decorations = {}
         env = "production"
         broker_status = "live"   # "live" | "offline" | "reconnecting"
-        
+
         # ── PRIMARY: Live E*TRADE Broker Feed ──────────────────────────────────
-        import sys
         in_unittest = "unittest" in sys.modules
         
         # Load Research scores and Short_Long decorations unconditionally —
         # needed whether E*TRADE is online or offline (fallback path uses them too).
         if not in_unittest:
             try:
-                import openpyxl
                 wb = openpyxl.load_workbook(_XLSX, data_only=True, read_only=True)
                 try:
                     ws = wb["Research"]
@@ -491,7 +501,7 @@ def read_accounts() -> dict:
                         if sym:
                             scores[sym] = {
                                 "s10": row[24], "l60": row[25], "status": row[19],
-                                "streak": _get_streak_from_cache(sym),
+                                "streak": _streak(sym),
                             }
 
                     ws_sl = wb["Short_Long"]
@@ -622,7 +632,7 @@ def read_accounts() -> dict:
                                 "l60": l60,
                                 "total": round((s10 or 0) + (l60 or 0), 1) if s10 is not None or l60 is not None else None,
                                 "status": status,
-                                "streak": _get_streak_from_cache(sym),
+                                "streak": _streak(sym),
                                 "buy_date": dec.get("buy_date", ""),
                                 "win_pct": dec.get("win_pct"),
                                 "in_profit": dec.get("in_profit", ""),
@@ -638,10 +648,9 @@ def read_accounts() -> dict:
                         "holdings": holdings,
                         "count": len(holdings)
                     })
+            except PricingDiscrepancyError:
+                raise
             except ValueError as ve:
-                # Never swallow pricing discrepancies! Raise them loudly all the way to the UI!
-                if "🛑 [PRICING DISCREPANCY]" in str(ve):
-                    raise ve
                 _log.warning(f"Live broker feed failed: {ve}. Falling back to Excel.")
                 broker_status = "offline"
             except Exception as e:
@@ -652,7 +661,6 @@ def read_accounts() -> dict:
         if not accounts:
             real_ids = _real_acct_ids()
             try:
-                import openpyxl
                 wb = openpyxl.load_workbook(_XLSX, data_only=True, read_only=True)
                 try:
                     rows = list(wb["Short_Long"].iter_rows(values_only=True))
@@ -721,7 +729,7 @@ def read_accounts() -> dict:
                             "total":     round((s10 or 0) + (l60 or 0), 1),
                             "win_pct":   r[_SL["winpct"]],
                             "status":    _rsc.get("status") or str(r[_SL["status"]] or ""),
-                            "streak":    _get_streak_from_cache(sym),
+                            "streak":    _streak(sym),
                             "in_profit": str(r[_SL["in_profit"]] or ""),
                             "pnl":       pnl,
                             "pnl_pct":   pnl_pct,
@@ -734,10 +742,8 @@ def read_accounts() -> dict:
                         "holdings": holdings,
                         "count":    len(holdings),
                     })
-            except ValueError as ve:
-                # Never swallow pricing discrepancies!
-                if "🛑 [PRICING DISCREPANCY]" in str(ve):
-                    raise ve
+            except PricingDiscrepancyError:
+                raise
             except FileNotFoundError:
                 pass
             except Exception as e:
@@ -752,7 +758,6 @@ def read_accounts() -> dict:
         game_symbols = [p["symbol"] for p in pf.get("positions", [])]
         game_prices = {}
         try:
-            from ai_portfolio_game import get_live_prices
             game_prices = get_live_prices(game_symbols)
         except Exception:
             pass
@@ -795,7 +800,7 @@ def read_accounts() -> dict:
                 "l60": l60,
                 "total": round((s10 or 0) + (l60 or 0), 1) if s10 is not None or l60 is not None else None,
                 "status": sc.get("status", ""),
-                "streak": sc.get("streak") if sc.get("streak") is not None else _get_streak_from_cache(sym),
+                "streak": sc.get("streak") if sc.get("streak") is not None else _streak(sym),
                 "instrument": instruments.classify(sym)
             })
 
@@ -974,7 +979,7 @@ MANUAL_TASKS = [
     {
         "id": "pipeline",
         "label": "Morning Pipeline",
-        "description": "WHAT: Executes the end-to-end screener pipeline (autonomous_pipeline.py). WHY: Fetches fresh Chaikin ratings and calculates S10/L60 technical scores to identify bullish breakouts. OUTCOME: Overwrites state_of_the_day.xlsx, generates logs, and emails the daily picks HTML report to your inbox.",
+        "description": "Full daily screener + workbook refresh + email report (autonomous_pipeline.py).",
         "script": "autonomous_pipeline.py",
         "args": [],
         "admin_only": True,
@@ -984,7 +989,7 @@ MANUAL_TASKS = [
     {
         "id": "ai_game_run",
         "label": "AI Game — Daily Moves",
-        "description": "WHAT: Evaluates screener entries and manages positions (ai_portfolio_game.py --run). WHY: Automatically buys high-scoring breakouts and sells decaying assets according to active profile limits. OUTCOME: Mutates Data/ai_portfolio_game.json, executes virtual order fills, and tightens trailing stop floors.",
+        "description": "Run the AI portfolio game's daily buy/sell logic (ai_portfolio_game.py --run).",
         "script": "ai_portfolio_game.py",
         "args": ["--run"],
         "admin_only": True,
@@ -994,7 +999,7 @@ MANUAL_TASKS = [
     {
         "id": "ai_game_summary",
         "label": "AI Game — Email Summary",
-        "description": "WHAT: Renders the EOD portfolio equity snapshot (ai_portfolio_game.py --summary). WHY: To audit total realized P&L, holdings performance, and monitor progress toward the $20,000 target. OUTCOME: Dispatches a structured closing performance statement HTML email.",
+        "description": "Send the daily performance summary email (ai_portfolio_game.py --summary).",
         "script": "ai_portfolio_game.py",
         "args": ["--summary"],
         "admin_only": True,
@@ -1004,7 +1009,7 @@ MANUAL_TASKS = [
     {
         "id": "ai_game_force",
         "label": "AI Game — Force Run (After-Hours)",
-        "description": "WHAT: Forces daily evaluation outside market hours (ai_portfolio_game.py --run --force). WHY: Simulates the morning buy/sell cycle for testing. OUTCOME: Mutates game state files and prints step-by-step decision trace blocks.",
+        "description": "Force the AI game to run outside market hours for testing (ai_portfolio_game.py --run --force).",
         "script": "ai_portfolio_game.py",
         "args": ["--run", "--force"],
         "admin_only": True,
@@ -1014,7 +1019,7 @@ MANUAL_TASKS = [
     {
         "id": "ohlcv_recovery",
         "label": "OHLCV Recovery",
-        "description": "WHAT: Scrapes and repairs price history databases (rapidapi.py). WHY: Fills missing or corrupted OHLCV cache arrays for accurate swing calculations. OUTCOME: Updates JSONs under Data/Symbol_full/ and writes network logs.",
+        "description": "Repair missing/stale OHLCV history for all symbols via RapidAPI (rapidapi.py).",
         "script": "rapidapi.py",
         "args": [],
         "admin_only": True,
@@ -1024,7 +1029,7 @@ MANUAL_TASKS = [
     {
         "id": "run_history",
         "label": "History Backfill (5d)",
-        "description": "WHAT: Backfills trailing 5 days of history (run_history.py 5). WHY: Refreshes cached price arrays after holiday breaks or weekends. OUTCOME: Syncs price history caches.",
+        "description": "Backfill the last 5 days of price history into the OHLCV cache (run_history.py 5).",
         "script": "run_history.py",
         "args": ["5"],
         "admin_only": True,
@@ -1034,7 +1039,7 @@ MANUAL_TASKS = [
     {
         "id": "backtest_levels",
         "label": "Backtest Levels",
-        "description": "WHAT: Walk-forward accuracy test of support/resistance levels. WHY: Validates stop-loss and target-profit hit rates. OUTCOME: Prints pivot levels accuracy scores.",
+        "description": "Walk-forward accuracy test of support/resistance levels for any symbol.",
         "script": "scripts/backtesting/backtest_levels.py",
         "args": [],
         "input": {"placeholder": "Symbol (e.g. INTC)", "default": "INTC", "arg_position": 0},
@@ -1045,7 +1050,7 @@ MANUAL_TASKS = [
     {
         "id": "backtest_levels_all",
         "label": "Backtest Levels — Universe",
-        "description": "WHAT: Walk-forward universe backtest. WHY: Evaluates support accuracy over 500+ symbols. OUTCOME: Outputs detailed CSV statistics.",
+        "description": "Walk-forward accuracy across all 500+ cached symbols (backtest_levels.py --all --step 20). Takes ~2 min.",
         "script": "scripts/backtesting/backtest_levels.py",
         "args": ["--all", "--step", "20"],
         "admin_only": False,
@@ -1055,7 +1060,7 @@ MANUAL_TASKS = [
     {
         "id": "decision_eval",
         "label": "Decision Scorecard",
-        "description": "WHAT: Backtracks and grades exit decisions (decision_eval.py). WHY: Measures the qualitative accuracy of exit reasons vs. subsequent forward prices. OUTCOME: Generates an exit selector scorecard.",
+        "description": "Backtrack exit decisions against forward prices and print the selector scorecard (decision_eval.py).",
         "script": "decision_eval.py",
         "args": [],
         "admin_only": False,
@@ -1065,7 +1070,7 @@ MANUAL_TASKS = [
     {
         "id": "intraday_monitor",
         "label": "Intraday Stop Monitor",
-        "description": "WHAT: Runs real-time stop-loss and profit-target checks (intraday_monitor.py). WHY: Secures capital against sharp intraday market panics. OUTCOME: Dispatches immediate urgent email/SMS breach alerts and triggers virtual stop-out exits.",
+        "description": "Run one pass of the intraday stop-loss monitor and email alerts for breaches (intraday_monitor.py).",
         "script": "intraday_monitor.py",
         "args": [],
         "admin_only": True,
@@ -1075,7 +1080,7 @@ MANUAL_TASKS = [
     {
         "id": "real_copilot",
         "label": "Real Account Shadow Copilot",
-        "description": "WHAT: Audits real-money E*TRADE brokerage accounts (real_copilot.py). WHY: Translates high-scoring screener breakouts and exit warnings into real-world actionable advice. OUTCOME: Emails custom trade tickets for real-money execution.",
+        "description": "Scan real E*TRADE holdings overnight and email trade tickets (real_copilot.py).",
         "script": "real_copilot.py",
         "args": [],
         "admin_only": True,
@@ -1085,7 +1090,7 @@ MANUAL_TASKS = [
     {
         "id": "watchdog",
         "label": "Watchdog / Self-Healer",
-        "description": "WHAT: Scans system logs, clears locks, and validates sessions (watchdog.py). WHY: To maintain 100% online system health and silent session token renewability. OUTCOME: Launches headless Playwright re-auth on desktop when needed, clears excel locks, and updates system logs.",
+        "description": "Run one watchdog cycle: check logs, heal tasks, refresh E*TRADE session (watchdog.py).",
         "script": "watchdog.py",
         "args": [],
         "admin_only": True,
@@ -1095,7 +1100,7 @@ MANUAL_TASKS = [
     {
         "id": "pattern_discovery",
         "label": "Pattern Discovery",
-        "description": "WHAT: Replays historical Chaikin caches and validates winners (pattern_discovery.py). WHY: Isolates missed winners and filters out false-positive bad habits. OUTCOME: Generates R&D JSON reports and automatically writes toxic failure rules into the exclusion guard database.",
+        "description": "Historical replay: reconstruct scores for a past date, find top winners, identify what the system missed and why. Extracts candidate new scoring factors.",
         "script": "scripts/backtesting/pattern_discovery.py",
         "args": ["--top", "10"],
         "input": {"placeholder": "Replay date (e.g. 2026-03-01)", "default": "2026-03-01", "arg": "--date"},
@@ -1172,7 +1177,6 @@ def read_symbol(symbol: str) -> dict:
     if not _SYMBOL_RE.match(sym):
         return {"symbol": sym, "error": f"Invalid symbol: {sym!r}"}
     def _load():
-        import risk_utils
         out: dict = {"symbol": sym}
 
         # ── Research row ──────────────────────────────────────────────────────
@@ -1240,7 +1244,6 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
     # ── 1. Live price ─────────────────────────────────────────────────────────
     price = None
     try:
-        import etrade
         tokens = etrade.get_tokens("production")
         if tokens:
             quotes = etrade.fetch_quotes(tokens, [sym], env="production")
@@ -1249,7 +1252,6 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
         pass
     if not price:
         try:
-            from ai_portfolio_game import get_google_prices_fallback
             goog = get_google_prices_fallback([sym])
             price = goog.get(sym)
         except Exception:
@@ -1258,7 +1260,6 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
     # ── 2. Live Chaikin factors ───────────────────────────────────────────────
     factors: dict = {}
     try:
-        import powergauge as _pg
         session = _pg._load_session_from_file()
         if session and session.get("jsessionid"):
             pg = _pg.get_symbol_data(sym, today, prefer_cache=False, session_id=session)
@@ -1325,7 +1326,6 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
     det_action = det_reason = ""
     if cost and factors.get("price") and factors.get("stop"):
         try:
-            import sell_rules
             s10 = factors.get("s10", 0.0) or 0.0
             l60 = factors.get("l60", 0.0) or 0.0
             det_action, det_reason = sell_rules.exit_decision(

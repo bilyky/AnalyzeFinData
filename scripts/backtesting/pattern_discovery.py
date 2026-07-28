@@ -29,6 +29,7 @@ import datetime
 import json
 import math
 import os
+import subprocess
 import sys
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -657,8 +658,6 @@ def generate_report(replay_date: str, s10_result: dict, l60_result: dict,
             except Exception:
                 pass
         
-        # Build candidate items list
-        import datetime
         new_items = []
         for c in (candidates_s10 + candidates_l60):
             new_items.append({
@@ -704,7 +703,6 @@ def generate_report(replay_date: str, s10_result: dict, l60_result: dict,
         retro_path = os.path.join(BASE_DIR, "retrospective_analyzer.py")
         if os.path.exists(retro_path):
             _log.info("\nPhase 7: Running Failure DNA Retrospective Analyzer...")
-            import subprocess
             subprocess.run([sys.executable, retro_path], check=True, capture_output=True, encoding="utf-8", errors="replace")
             _log.info("Failure DNA integration completed successfully -> Data/failure_dna_rules.json updated.")
             

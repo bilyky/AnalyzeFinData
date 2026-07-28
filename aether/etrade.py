@@ -515,13 +515,21 @@ def get_tokens(env="sandbox", allow_browser=False):
                 return renewed
 
     # Silent renewal exhausted — try headless Playwright with saved browser state.
-    # The browser state contains trusted-device cookies that skip MFA on E*TRADE,
-    # so this runs fully automatically without human interaction on most days.
+    # Uses the same cross-process file lock as renew_tokens() to guarantee only ONE
+    # process opens a browser even when multiple tasks fire simultaneously.
     if os.path.exists(_BROWSER_STATE_PATH):
         _log.info("Attempting automatic re-authentication via saved browser state...")
+        lock_path = os.path.join(_DIR, "Data", "etrade_reauth.lock")
+        reauth_renewer = _TokenRenewer(
+            lock_path,
+            renew_fn=lambda: _login_headless(ck, cs, username, password, env),
+            load_fn=lambda: _load_tokens(env),   # date-checked: only returns today's tokens
+            lock_ttl=120,   # browser login can take up to 2 min
+            wait_timeout=150,
+        )
         try:
-            tokens = _login_headless(ck, cs, username, password, env)
-            if tokens:
+            tokens = reauth_renewer.ensure()
+            if tokens and tokens.get("issued_date_et") == _et_today():
                 _log.info("E*TRADE: automatic re-authentication succeeded.")
                 return tokens
             _log.warning("E*TRADE: automatic re-authentication failed (browser state may be stale).")

@@ -5,7 +5,7 @@ from pathlib import Path
 
 class TestExecutables(unittest.TestCase):
     def test_compilation(self):
-        """Verify that all root-level executable scripts compile without syntax or reference errors."""
+        """Verify that all root-level executable scripts compile without syntax errors (import errors not checked)."""
         base_dir = Path(__file__).resolve().parent.parent
         executables = [
             "run_history.py",
