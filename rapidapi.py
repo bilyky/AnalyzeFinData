@@ -131,11 +131,18 @@ def _fetch_and_merge(symbol: str, path: str, outputsize: str = "compact") -> Non
 
     new_ts      = raw["Time Series (Daily)"]
     existing_ts = existing["Time Series (Daily)"]
-    added = {d: v for d, v in new_ts.items() if d not in existing_ts}
-    if not added:
-        return  # nothing new to merge
+    
+    # Always explicitly overwrite today's and the last 3 days of bars in the cache 
+    # with fresh API data. This guarantees that any low-volume, pre-market, or 
+    # intraday placeholder prints are always overridden with the official settled closes.
+    new_dates = sorted(new_ts.keys(), reverse=True)
+    for d in new_dates[:3]:
+        existing_ts[d] = new_ts[d]
 
+    # Plus, append any older historical dates that are missing
+    added = {d: v for d, v in new_ts.items() if d not in existing_ts}
     existing_ts.update(added)
+    
     latest = max(existing_ts.keys())
     existing.setdefault("Meta Data", {})["3. Last Refreshed"] = latest
     _write_atomic(path, existing)

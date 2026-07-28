@@ -1008,8 +1008,32 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         [(sym, rn, etrade_t2_by_sym) for sym, rn in sheet_t2_rows.items()]
     )
     for sym, rn, pos_lookup in all_rows:
-        if sym in quotes:
-            ws.cell(rn, 5).value = quotes[sym]
+        # Load RapidAPI settled close price and dates array for 3-Factor Cross-Validation
+        last_close = None
+        all_dates = []
+        idx = -1
+        ohlcv_full = (ohlcv_cache or {}).get(sym)
+        ohlcv_ts = ohlcv_full.get("Time Series (Daily)", {}) if ohlcv_full else {}
+        if ohlcv_ts:
+            all_dates = sorted(ohlcv_ts.keys())
+            date_str  = str(today)
+            idx = bisect.bisect_right(all_dates, date_str) - 1
+            if idx >= 0:
+                try:
+                    last_close = float(ohlcv_ts[all_dates[idx]].get('4. close') or 0.0)
+                except (ValueError, TypeError):
+                    pass
+
+        # 3-Factor Cross-Validation:
+        # Cross-validate E*TRADE live quote against RapidAPI settled close (last_close).
+        # If they diverge (or if E*TRADE is missing today's close), override with RapidAPI close.
+        top_val = quotes.get(sym)
+        if last_close and last_close > 0.0:
+            if not top_val or abs(top_val - last_close) > 0.01:
+                top_val = last_close
+
+        if top_val is not None:
+            ws.cell(rn, 5).value = top_val
 
         top  = ws.cell(rn, 5).value
         buy  = ws.cell(rn, 4).value
@@ -1035,16 +1059,13 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
 
         # N=R (red streak), O=G (green streak): consecutive closing-down/up days
         streak = None
-        ohlcv_ts = (ohlcv_cache or {}).get(sym)
-        if ohlcv_ts:
-            all_dates = sorted(ohlcv_ts.keys())
-            date_str  = str(today)
-            idx = bisect.bisect_right(all_dates, date_str) - 1
-            if idx >= 0:
-                last_close = float(ohlcv_ts[all_dates[idx]].get('4. close') or 0)
+        if ohlcv_ts and idx >= 0:
+            try:
                 prev_close = float(ohlcv_ts[all_dates[idx - 1]].get('4. close') or 0) if idx >= 1 else last_close
                 day_pct = ((last_close - prev_close) / prev_close * 100) if prev_close else 0
                 streak = _streak_count(ohlcv_ts, all_dates, idx, day_pct)
+            except Exception:
+                pass
 
         def _write_streak(col, value, worse_fill, better_fill):
             c = ws.cell(rn, col)

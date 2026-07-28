@@ -69,9 +69,13 @@ def load_symbols() -> list[str]:
 
 
 def days_missing(symbols: list[str], day: datetime.date) -> list[str]:
+    # Today's date must never be treated as cached during EOD sync to ensure we overwrite morning intraday prices!
+    if day == datetime.date.today():
+        return list(symbols)
     symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
     return [s for s in symbols
-            if not os.path.exists(os.path.join(symbol_dir, f"{s}_{day}.json"))]
+            if not (os.path.exists(os.path.join(symbol_dir, s, f"{s}_{day}.json")) or
+                    os.path.exists(os.path.join(symbol_dir, f"{s}_{day}.json")))]
 
 
 def main():
@@ -103,7 +107,7 @@ def main():
             print(f"  [{i}/{total}] {symbol:<8}", end='\r', flush=True)
             try:
                 pg = powergauge.get_symbol_data(
-                    symbol, day, prefer_cache=True, session_id=session_id
+                    symbol, day, prefer_cache=(day != datetime.date.today()), session_id=session_id
                 )
                 if pg.price == -1:
                     skip += 1
@@ -113,7 +117,7 @@ def main():
                 print(f"\n  Session expired — re-logging in...")
                 session_id = powergauge.login()
                 pg = powergauge.get_symbol_data(
-                    symbol, day, prefer_cache=True, session_id=session_id
+                    symbol, day, prefer_cache=(day != datetime.date.today()), session_id=session_id
                 )
                 ok += 1
             except Exception as e:

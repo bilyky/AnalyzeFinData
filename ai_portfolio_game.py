@@ -1,8 +1,10 @@
 import json
 import datetime
 import openpyxl
+import os
 import pytz
 import etrade
+import rapidapi
 import sys
 import circuit_breaker
 from pathlib import Path
@@ -133,12 +135,57 @@ def _load_closes(symbol):
         return []
 
 
+def _heal_symbol_cache(symbol) -> bool:
+    """Autonomic on-demand self-healing: pulls fresh OHLCV history via rapidapi when a stale cache is detected."""
+    try:
+        today_str = str(datetime.date.today())
+        res = rapidapi.repair_missing([symbol], today_str)
+        if res.get("updated", 0) > 0:
+            _log.info(f"✅ [Self-Healer] Successfully healed and refreshed {symbol} OHLCV cache on disk.")
+            return True
+        else:
+            _log.warning(f"⚠️ [Self-Healer] On-demand refresh for {symbol} yielded 0 updates.")
+            return False
+    except Exception as e:
+        _log.warning(f"❌ [Self-Healer] Failed to heal {symbol} cache: {e}")
+        return False
+
+
 def _sma50(symbol, max_stale_days=10):
-    """50-day SMA of closes from the local OHLCV cache, or None if unavailable
-    or stale. Returns None when the newest cached bar is older than
-    max_stale_days so winner-protection never trusts an out-of-date average."""
+    """50-day SMA of closes from the local OHLCV cache, with autonomic on-demand self-healing."""
     try:
         path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
+        
+        # Check if cache is missing or stale
+        needs_healing = False
+        last_bar_date = "None"
+        if not path.exists():
+            needs_healing = True
+            _log.warning(f"⚠️ [BLINDED GUARD] {symbol} OHLCV cache file is MISSING on disk! Winner Protection is blinded.")
+        else:
+            try:
+                with open(path) as f:
+                    ts = json.load(f).get("Time Series (Daily)", {})
+                dates = sorted(ts.keys())
+                if not dates:
+                    needs_healing = True
+                else:
+                    last_bar_date = dates[-1]
+                    stale_days = (datetime.date.today() - datetime.date.fromisoformat(last_bar_date)).days
+                    if stale_days > max_stale_days:
+                        needs_healing = True
+                        _log.warning(f"⚠️ [BLINDED GUARD] {symbol} OHLCV cache is STALE by {stale_days} days (last bar: {last_bar_date})! Winner Protection is blinded.")
+            except Exception:
+                needs_healing = True
+
+        # Attempt self-healing
+        if needs_healing:
+            healed = _heal_symbol_cache(symbol)
+            if not healed:
+                _log.error(f"❌ [Self-Healer] Could not heal {symbol} cache on-demand. Proceeding with blinded winner-protection.")
+                return None
+
+        # Re-read the newly healed/fresh cache file
         if not path.exists():
             return None
         with open(path) as f:
@@ -146,11 +193,10 @@ def _sma50(symbol, max_stale_days=10):
         dates = sorted(ts.keys())
         if not dates:
             return None
-        if (datetime.date.today() - datetime.date.fromisoformat(dates[-1])).days > max_stale_days:
-            return None  # cache too stale to trust
         closes = [float(ts[d]["4. close"]) for d in dates]
         return sell_rules.sma_from_closes(closes, 50)
-    except Exception:
+    except Exception as e:
+        _log.warning(f"Failed to calculate 50-day SMA for {symbol}: {e}")
         return None
 
 def _live_equity(cash, positions, price_of):
@@ -699,42 +745,68 @@ def is_market_hours():
         # Fallback to True if timezone check fails, to prevent blocking active hours
         return True
 
-def get_workbook_prices_fallback(symbols):
-    """Instantly map closing prices directly from the local workbook to bypass web scraping."""
+def get_json_prices_fallback(symbols):
+    """Instantly retrieve the latest closing prices directly from the local per-symbol OHLCV JSON caches,
+    but ONLY if they contain today's actual settled close (or the most recent close on weekends)."""
     quotes = {}
-    if not XLSX_FILE.exists():
-        return quotes
     try:
-        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
-        ws = wb["Research"]
-        # Map all prices in one fast pass
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            sym = row[3]
-            price = row[10]
-            if sym and price and isinstance(price, (int, float)):
-                quotes[sym] = float(price)
-        wb.close()
-        
-        # Filter down to the requested symbols
-        return {s: quotes[s] for s in symbols if s in quotes and quotes[s] > 0}
+        today_str = str(datetime.date.today())
+        is_weekend = (datetime.date.today().weekday() in (5, 6))
+        for sym in symbols:
+            path = SYMBOL_FULL_DIR / f"{sym}_daily.json"
+            if path.exists():
+                with open(path) as f:
+                    ts = json.load(f).get("Time Series (Daily)", {})
+                if ts:
+                    dates = sorted(ts.keys())
+                    newest_date = dates[-1]
+                    # Only accept the cached price if it is actually today's settled close, or on weekends
+                    if newest_date == today_str or is_weekend:
+                        quotes[sym] = float(ts[newest_date]["4. close"])
+        return quotes
     except Exception as e:
-        print(f"  [AETHER] Failed to load local workbook prices: {e}")
+        print(f"  [AETHER] Failed to load local JSON prices: {e}")
         return {}
 
 def get_live_prices(symbols):
     """Fetch real-time market prices via E*TRADE safely with automated recovery."""
     try:
-        # Trading Hours Gate: If after hours or weekends, bypass E*TRADE entirely to prevent login lockouts!
-        if not is_market_hours():
-            print("  [AETHER] After-hours detected — bypassing E*TRADE login to prevent lockout.")
-            print("  [AETHER] Attempting instant local price extraction from state_of_the_day.xlsx...")
-            quotes = get_workbook_prices_fallback(symbols)
+        # Weekend Gate: Bypass E*TRADE only on weekends to prevent offline lockout sweeps
+        if datetime.date.today().weekday() in (5, 6):
+            print("  [AETHER] Weekend detected — bypassing E*TRADE login.")
+            print("  [AETHER] Attempting instant local price extraction from per-symbol JSON cache...")
+            quotes = get_json_prices_fallback(symbols)
             # Find any missing gaps (symbols not in our local workbook)
             missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
             if missing:
-                print(f"  [AETHER] Local workbook missing prices for {missing}. Falling back to Google Finance.")
+                print(f"  [AETHER] Local cache missing prices for {missing}. Falling back to Google Finance.")
                 quotes.update(get_google_prices_fallback(missing))
             return quotes
+
+        # After-Hours Synced Gate: If after-hours on a weekday, and today's workbook is ALREADY
+        # fresh and synced, we can safely bypass E*TRADE entirely and load directly from the local cache!
+        if not is_market_hours():
+            is_fresh = False
+            try:
+                if os.path.exists(XLSX_FILE):
+                    mtime = os.path.getmtime(XLSX_FILE)
+                    mdate = datetime.date.fromtimestamp(mtime)
+                    is_fresh = (mdate == datetime.date.today())
+            except Exception:
+                pass
+
+            if is_fresh:
+                print("  [AETHER] After-hours detected & workbook is ALREADY synced today.")
+                print("  [AETHER] Bypassing E*TRADE login to load directly from per-symbol JSON cache...")
+                quotes = get_json_prices_fallback(symbols)
+                missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
+                if missing:
+                    print(f"  [AETHER] Local cache missing prices for {missing}. Falling back to Google Finance.")
+                    quotes.update(get_google_prices_fallback(missing))
+                return quotes
+            else:
+                print("  [AETHER] After-hours detected, but workbook is STALE/UN-SYNCED today.")
+                print("  [AETHER] Connecting to E*TRADE to fetch fresh settled closes...")
 
         # Call the hardened get_tokens() which is safe and has an active headless safety gate.
         # This ensures we always actively attempt to re-authenticate when tokens expire.
@@ -794,11 +866,22 @@ def send_daily_summary():
     if not live_prices or any(sym not in live_prices for sym in positions):
         try:
             wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
-            ws = wb["Research"]
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                sym = row[3]
-                if sym in positions and sym not in live_prices:
-                    live_prices[sym] = row[10] or positions[sym]["cost"]
+            # Use Short_Long sheet if available, as it contains all active portfolio holdings and current prices
+            if "Short_Long" in wb.sheetnames:
+                ws = wb["Short_Long"]
+                for row in ws.iter_rows(min_row=3, values_only=True):
+                    if len(row) > 4:
+                        sym = str(row[1] or "").strip().upper()
+                        if sym in positions and sym not in live_prices:
+                            live_prices[sym] = row[4] or positions[sym]["cost"]
+            # Fallback to Research sheet if Short_Long is unavailable
+            elif "Research" in wb.sheetnames:
+                ws = wb["Research"]
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if len(row) > 10:
+                        sym = str(row[3] or "").strip().upper()
+                        if sym in positions and sym not in live_prices:
+                            live_prices[sym] = row[10] or positions[sym]["cost"]
         except Exception as e:
             print(f"Workbook fallback failed inside summary: {e}")
 
@@ -1180,6 +1263,68 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 stop_loss=None if is_gap_frozen else pos.get("stop_loss"), 
                 s10=s10, l60=l60, sma50=sma50,
                 date=today, run_shadow=None)
+            
+            # AI Second-Opinion Exit Override Gate (R&D Item 14)
+            if entry["rules_action"] == "SELL":
+                ai_override = False
+                override_reason = ""
+                override_verdict = ""
+
+                # 1. Check real-time shadow verdicts generated in entry
+                realtime_verdicts = entry.get("verdicts", {})
+                for prov, v_info in realtime_verdicts.items():
+                    v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
+                    if v in ("FLAG-FOR-REVIEW", "HOLD"):
+                        ai_override = True
+                        override_verdict = v
+                        override_reason = f"Real-time AI Shadow Heuristic ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
+                        break
+
+                # 2. Check stored position shadow verdicts if any
+                if not ai_override:
+                    for key in ["shadow_verdict", "ai_verdict", "verdict"]:
+                        if key in pos:
+                            val = pos[key]
+                            if isinstance(val, dict):
+                                v = val.get("verdict", "").upper()
+                                note = val.get("note", "")
+                            else:
+                                v = str(val).upper()
+                                note = ""
+                            if v in ("FLAG-FOR-REVIEW", "HOLD"):
+                                ai_override = True
+                                override_verdict = v
+                                override_reason = f"Stored position {key} returned {v}" + (f": {note}" if note else "")
+                                break
+
+                # 3. Check verdicts dictionary inside the stored position
+                if not ai_override:
+                    pos_verdicts = pos.get("verdicts", {})
+                    if isinstance(pos_verdicts, dict):
+                        for prov, v_info in pos_verdicts.items():
+                            v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
+                            if v in ("FLAG-FOR-REVIEW", "HOLD"):
+                                ai_override = True
+                                override_verdict = v
+                                override_reason = f"Stored position verdicts ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
+                                break
+
+                if ai_override:
+                    old_action = entry["rules_action"]
+                    if override_verdict == "HOLD":
+                        new_action = "HOLD"
+                    else:
+                        new_action = "WATCH"
+                    
+                    entry["rules_action"] = new_action
+                    entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
+                    
+                    _log.info(
+                        f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
+                        f"Decision downgraded from {old_action} to {new_action}. Reason: {override_reason}"
+                    )
+                    print(f"🛡️ [AI Override] Overriding sell of {sym} -> Downgrading to {new_action} due to: {override_reason}")
+
             decision_entries.append(entry)
             if entry["rules_action"] == "SELL":
                 if not is_market_hours():

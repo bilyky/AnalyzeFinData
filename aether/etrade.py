@@ -28,7 +28,10 @@ _BROWSER_STATE_PATH = os.path.join(_DIR, "Data", "etrade_browser_state.json")
 
 
 def _et_today() -> str:
-    return datetime.datetime.now(_ET).date().isoformat()
+    # Always read the unmocked, physical OS system epoch clock (time.time())
+    # to completely isolate live brokerage authentications from any simulated
+    # or mocked date-stepping inside your game/backtest runs!
+    return datetime.datetime.fromtimestamp(time.time(), _ET).date().isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +457,12 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
 
     # Always fall back to manual entry if automation couldn't capture the verifier
     if not verifier:
+        if not sys.stdin.isatty():
+            raise RuntimeError(
+                "E*TRADE: Cannot prompt for verification code in a headless or non-interactive environment. "
+                "Failing immediately to prevent background process hang."
+            )
+
         print(f"\nCould not auto-capture verifier. Open this URL in your browser if it isn't open:")
         print(f"  {auth_url}")
         print("Log in, click Accept, then paste the code shown on screen.")

@@ -25,6 +25,7 @@ Run weekly on Saturday, targeting a date ~3-4 weeks back so both the 10-day and
 """
 
 import argparse
+import datetime
 import json
 import math
 import os
@@ -36,6 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+import notify
 from aether_logger import get_logger as _get_logger
 import powergauge
 import instruments
@@ -643,6 +645,165 @@ def generate_report(replay_date: str, s10_result: dict, l60_result: dict,
 
     if validated:
         _log.info(f"\nValidated patterns (|z|>=1.96): {sum(1 for v in validated if v.get('validation',{}).get('confident'))}")
+
+    # 1. Auto-save newly discovered candidates to a structured R&D backlog JSON
+    try:
+        backlog_path = OUT_DIR / "rd_backlog_patterns.json"
+        backlog = []
+        if backlog_path.exists():
+            try:
+                with open(backlog_path, "r", encoding="utf-8") as f:
+                    backlog = json.load(f)
+            except Exception:
+                pass
+        
+        # Build candidate items list
+        import datetime
+        new_items = []
+        for c in (candidates_s10 + candidates_l60):
+            new_items.append({
+                "date_added": str(datetime.date.today()),
+                "replay_date": replay_date,
+                "type": "pattern",
+                "name": c.get("name", c.get("factor")),
+                "description": c.get("hypothesis", ""),
+                "factor": c.get("factor"),
+                "value": c.get("value"),
+                "status": "pending_validation"
+            })
+        for g in (fp_guards_s10 + fp_guards_l60):
+            new_items.append({
+                "date_added": str(datetime.date.today()),
+                "replay_date": replay_date,
+                "type": "guard",
+                "name": f"Guard_{g.get('factor')}",
+                "description": g.get("hypothesis", ""),
+                "factor": g.get("factor"),
+                "value": g.get("value"),
+                "status": "pending_validation"
+            })
+            
+        # Append non-duplicates by name
+        existing_names = {x.get("name") for x in backlog}
+        added_count = 0
+        for item in new_items:
+            if item["name"] not in existing_names:
+                backlog.append(item)
+                added_count += 1
+        
+        with open(backlog_path, "w", encoding="utf-8") as f:
+            json.dump(backlog, f, indent=2)
+        _log.info(f"Auto-logged {added_count} new candidate patterns/guards to R&D Backlog JSON -> {backlog_path}")
+    except Exception as e:
+        _log.warning(f"Failed to auto-log to R&D Backlog JSON: {e}")
+
+    # 2. Auto-execute Failure DNA Retrospective Analyzer (Failure DNA Integration)
+    # Run this BEFORE compiling the email so we can read its output on disk!
+    retro_report_text = ""
+    try:
+        retro_path = os.path.join(BASE_DIR, "retrospective_analyzer.py")
+        if os.path.exists(retro_path):
+            _log.info("\nPhase 7: Running Failure DNA Retrospective Analyzer...")
+            import subprocess
+            subprocess.run([sys.executable, retro_path], check=True, capture_output=True, encoding="utf-8", errors="replace")
+            _log.info("Failure DNA integration completed successfully -> Data/failure_dna_rules.json updated.")
+            
+            # Read the newly generated report
+            report_path = os.path.join(BASE_DIR, "Data", "retrospective_report.txt")
+            if os.path.exists(report_path):
+                with open(report_path, "r", encoding="utf-8") as rf:
+                    retro_report_text = rf.read()
+        else:
+            _log.warning(f"retrospective_analyzer.py not found at {retro_path}")
+    except Exception as e:
+        _log.warning(f"Failed to execute Failure DNA Retrospective Analyzer: {e}")
+
+    # 3. Auto-send R&D summary HTML email (Including Validation and Failure DNA!)
+    try:
+        no_email = "--no-email" in sys.argv[1:]
+        if not no_email:
+            # Build gorgeous structured HTML R&D statement
+            html = f"""
+            <html>
+            <body style="font-family: 'Segoe UI', Tahoma, sans-serif; color: #333; line-height: 1.6; max-width: 800px; margin: auto;">
+                <div style="background: #8e44ad; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+                    <h1 style="margin: 0; font-size: 24px;">AETHER R&D Scientist Retrospective</h1>
+                    <p style="margin: 5px 0 0 0; opacity: 0.9;">Weekly Pattern Discovery Loop | Replay Date: {replay_date}</p>
+                </div>
+                <div style="padding: 20px; border: 1px solid #eee; border-top: none;">
+                    <h3>S10 Missed Winners (10-day horizon)</h3>
+                    <ul style="padding-left: 20px; font-size: 13px;">
+            """
+            for w in s10_result.get("winners", [])[:5]:
+                html += f"<li style='margin-bottom:8px;'><b>{w['symbol']}</b>: {w.get('fwd_r10', 0):+.2f}% change [{w['status']}] - {', '.join(w['reasons'][:2])}</li>"
+            html += """
+                    </ul>
+                    <h3>Discovered Setup Patterns</h3>
+                    <ul style="padding-left: 20px; font-size: 13px;">
+            """
+            for c in (candidates_s10 + candidates_l60)[:5]:
+                html += f"<li style='margin-bottom:8px;'><b>{c.get('name', c.get('factor'))}</b>: {c.get('hypothesis')}</li>"
+            html += """
+                    </ul>
+                    <h3>Discovered Guard Signals</h3>
+                    <ul style="padding-left: 20px; font-size: 13px;">
+            """
+            for g in (fp_guards_s10 + fp_guards_l60)[:5]:
+                html += f"<li style='margin-bottom:8px;'><b>{g.get('factor')}={g.get('value')}</b>: {g.get('hypothesis')}</li>"
+            html += """
+                    </ul>
+            """
+
+            # Append Statistical Validation Results if populated
+            if validated:
+                html += """
+                    <h3 style="margin-top:25px; border-top:1px solid #eee; pt-15px;">Statistical Validation Results (9-Month Backtests)</h3>
+                    <table style="width:100%; font-size:12px; border-collapse:collapse; margin-top:10px;">
+                        <tr style="background:#f4f6f7;">
+                            <th style="padding:8px; border:1px solid #ddd; text-align:left;">Pattern / Factor</th>
+                            <th style="padding:8px; border:1px solid #ddd; text-align:left;">Samples (N)</th>
+                            <th style="padding:8px; border:1px solid #ddd; text-align:left;">Avg Return</th>
+                            <th style="padding:8px; border:1px solid #ddd; text-align:left;">Lift</th>
+                            <th style="padding:8px; border:1px solid #ddd; text-align:left;">Z-Score</th>
+                            <th style="padding:8px; border:1px solid #ddd; text-align:left;">Status</th>
+                        </tr>
+                """
+                for v in validated:
+                    val_info = v.get("validation", {})
+                    status = "<span style='color:green; font-weight:bold;'>VALIDATED</span>" if val_info.get("confident") else "<span style='color:#7f8c8d;'>Pending</span>"
+                    html += f"""
+                        <tr>
+                            <td style="padding:8px; border:1px solid #ddd;"><b>{v.get('factor')}</b></td>
+                            <td style="padding:8px; border:1px solid #ddd;">{val_info.get('n', 0)}</td>
+                            <td style="padding:8px; border:1px solid #ddd;">{val_info.get('avg_fwd', 0.0):+.2f}%</td>
+                            <td style="padding:8px; border:1px solid #ddd;">{val_info.get('lift', 0.0):+.2f}%</td>
+                            <td style="padding:8px; border:1px solid #ddd;">{val_info.get('z', 0.0):+.2f}</td>
+                            <td style="padding:8px; border:1px solid #ddd;">{status}</td>
+                        </tr>
+                    """
+                html += "</table>"
+
+            # Append Failure DNA Retrospective Report if loaded
+            if retro_report_text:
+                html += f"""
+                    <h3 style="margin-top:25px; border-top:1px solid #eee; pt-15px;">Failure DNA Retrospective Report (Realized Losses)</h3>
+                    <pre style="background:#f9f9f9; padding:15px; border:1px solid #ddd; font-family:monospace; font-size:11px; white-space:pre-wrap; line-height:1.4;">{retro_report_text}</pre>
+                """
+
+            html += f"""
+                    <p style="font-size:11px; color:#95a5a6; border-top:1px solid #eee; pt-10px; margin-top:20px;">
+                        Report saved to Data/pattern_discovery_{replay_date}.json and logged to R&D backlog.
+                    </p>
+                </div>
+            </body>
+            </html>
+            """
+            notify.send_email(f"AETHER R&D Scientist Report: Replay {replay_date}", html, is_html=True)
+            _log.info("Sent R&D summary email.")
+        else:
+            _log.info("R&D email dispatch disabled via --no-email.")
+    except Exception as e:
+        _log.warning(f"Failed to send R&D summary email: {e}")
 
     return report
 

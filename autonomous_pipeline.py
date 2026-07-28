@@ -457,6 +457,8 @@ def main():
     cleanup_orphaned_processes()
     log("Starting Daily Trading Pipeline...")
     
+    no_email = "--no-email" in sys.argv[1:]
+    
     # 0. Gather External Intel (Emails & News)
     log("Gathering external intelligence...")
     intel_ideas = []
@@ -484,7 +486,8 @@ def main():
     except subprocess.CalledProcessError as e:
         error_msg = f"main.py failed: {e.stderr}"
         log(error_msg)
-        notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline failed during main.py execution.\n\n{error_msg}")
+        if not no_email:
+            notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline failed during main.py execution.\n\n{error_msg}")
         return
 
     # 2b. OHLCV recovery pass — repair missing/corrupted/stale Symbol_full files via RapidAPI.
@@ -507,14 +510,16 @@ def main():
     fresh, msg = verify_data_freshness()
     log(msg)
     if not fresh:
-        notify.send_email("ALERT: Daily Pipeline Stale Data", msg)
+        if not no_email:
+            notify.send_email("ALERT: Daily Pipeline Stale Data", msg)
         return
 
     # 4. Validate sheets
     valid, v_msg = validate_sheets()
     log(v_msg)
     if not valid:
-        notify.send_email("ALERT: Daily Pipeline Validation Failed", v_msg)
+        if not no_email:
+            notify.send_email("ALERT: Daily Pipeline Validation Failed", v_msg)
         return
 
     # 5. Compute top-5 picks & replacements
@@ -528,9 +533,12 @@ def main():
         performance_tracker.log_picks(picks)
 
     # 7. Send report
-    log("Drafting and sending HTML report...")
-    html = format_html_report(msg, picks, replacements, intel_ideas)
-    notify.send_email(f"Daily Trade Report: {datetime.date.today()}", html, is_html=True)
+    if not no_email:
+        log("Drafting and sending HTML report...")
+        html = format_html_report(msg, picks, replacements, intel_ideas)
+        notify.send_email(f"Daily Trade Report: {datetime.date.today()}", html, is_html=True)
+    else:
+        log("Drafting HTML report (email disabled via --no-email)...")
 
     log("Pipeline completed successfully.")
 

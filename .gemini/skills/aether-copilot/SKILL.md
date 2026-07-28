@@ -53,3 +53,17 @@ When analyzing setups, exits, or allocations, refer to these specialized guideli
 *   **Risk Profiles:** See [references/strategy_profiles.md](references/strategy_profiles.md) for strict position limits, cash buffers, and LLM exit-analyst rubrics.
 *   **Structural Scarcity:** See [references/scarcity_core.md](references/scarcity_core.md) for the 20% hard-asset cap rules, LLM-classifier heuristics, and "shrink-ray" order-sizing limits.
 *   **Bottom Snipers:** See [references/trader_vic.md](references/trader_vic.md) for Victor Sperandeo's "1-2-3 Reversal" and "2B Pattern" price action heuristics.
+
+
+## 🧠 Permanent Cognitive & Zero-Trust Mandates
+
+To completely eliminate cognitive drift, silent syntax failures, and "AI hallucinations" during multi-layered development sprints, you MUST strictly enforce these four cognitive guards:
+
+1.  **Layered Multi-Agent Delegation:**
+    You must operate as a strategic orchestrator. Whenever implementing complex features across multiple layers (Web UI, Python APIs, Schedulers, JSON databases), you **MUST delegate** single-language, single-layer tasks to dedicated sub-agents (using `invoke_agent`). This keeps your main context history lean, fast, and completely free of cross-language memory bleed!
+2.  **Strict Zero-Trust Factual Auditing:**
+    Before making any statements regarding active account balances, portfolio equity, workbook freshness, system times, or file-timelines, you **MUST execute direct unmocked system/python commands** to inspect the raw data and clocks on disk first. Speculation, guessing, and "AI-reconciling narratives" are strictly forbidden.
+3.  **Strict No-Inline-Imports Rule:**
+    Never write `import` statements inside functions, `try-except` blocks, or conditional scopes. All Python imports must be cleanly declared as standard, absolute imports at the very top of the file.
+4.  **No Silent Exception Swallowing:**
+    Never use silent `except: pass` blocks. All exceptions must be caught specifically, logged clearly with tracebacks, or raised. Any structural failure must fail loudly and instantly.

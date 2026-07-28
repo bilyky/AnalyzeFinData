@@ -84,5 +84,28 @@ class TestSummaryEquityPersistence(unittest.TestCase):
         self.assertEqual(saved.get("equity"), 1000.0 + 10 * 6.0)
 
 
+class TestLivePricingIntegration(unittest.TestCase):
+    """Rigorous unmocked integration test to verify real-world get_live_prices
+    and database path resolution, permanently preventing silent NameErrors/caching regressions."""
+
+    def test_unmocked_live_pricing_retrieval(self):
+        # 1. Load actual active symbols from game database
+        state = game.load_game()
+        positions = state.get("positions", {})
+        self.assertTrue(len(positions) > 0, "Active portfolio game positions database is empty!")
+
+        # 2. Call the real unmocked get_live_prices function
+        symbols = list(positions.keys())
+        prices = game.get_live_prices(symbols)
+
+        # 3. Assert perfect pricing math and path resolutions
+        self.assertTrue(len(prices) > 0, "No prices returned from unmocked price retrieval!")
+        for sym in symbols:
+            px = prices.get(sym)
+            self.assertIsNotNone(px, f"No closing price retrieved for active position {sym}!")
+            self.assertTrue(isinstance(px, (int, float)), f"Closing price for {sym} is not a valid numeric float: {px}")
+            self.assertTrue(px > 0, f"Closing price for {sym} is non-positive: {px}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -368,12 +368,65 @@
             <div class="overflow-x-auto mb-8">
                 <table class="data-table">
                     <thead>
-                        <tr><th>Symbol</th><th>Date</th><th>Reason</th><th>Forward Return</th></tr>
+                        <tr><th>Symbol</th><th>Date</th><th>Reason</th><th>Forward Return</th><th class="text-center">Status</th></tr>
                     </thead>
                     <tbody id="misses-body">
-                        <tr><td colspan="4" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                        <tr><td colspan="5" class="text-center text-slate-500 py-6">Loading…</td></tr>
                     </tbody>
                 </table>
+            </div>
+
+            <div class="flex items-center gap-3 mb-3 mt-8">
+                <h2 class="section-title mb-0">R&D Missed Winners (Buy-Side)</h2>
+                <span id="buy-side-date-badge" class="text-[10px] px-2 py-0.5 rounded bg-purple-900/60 text-purple-300 font-semibold border border-purple-500/20"></span>
+            </div>
+            <div class="overflow-x-auto mb-8">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>Symbol</th><th>PGR</th><th>Screener Score</th><th>10-Day Forward Return</th><th>Rejection Reason</th></tr>
+                    </thead>
+                    <tbody id="buy-side-misses-body">
+                        <tr><td colspan="5" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h2 class="section-title mt-8">🔬 Decision-Eval Retrospective & Hardening History</h2>
+            <div class="border border-slate-800 bg-slate-900/30 rounded p-5 space-y-4">
+                <div class="border-b border-slate-800 pb-3">
+                    <div class="flex flex-col md:flex-row md:items-center gap-3 mb-2 pb-2 border-b border-slate-800/50">
+                        <span class="px-2.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 w-fit">✅ ADDRESSED & VERIFIED</span>
+                        <b class="text-slate-200 text-xs">FANG Winner-Sell Miss (+6.6% Missed Upside on 2026-07-14)</b>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs mt-3 leading-relaxed">
+                        <div class="space-y-3">
+                            <div><span class="text-purple-400"><b>1. Root Cause History:</b></span> 
+                                FANG's combined momentum fell to -2.6 due to a short-term price pullback, triggering a deterministic <code>SELL</code> that missed a subsequent +6.6% rise. 
+                                Although FANG was trading above its 50-DMA (which should have triggered our <b>Winner Protection</b> safeguard), the protection failed because the local OHLCV cache was stale, causing <code>_sma50()</code> to return <code>None</code>.
+                            </div>
+                            <div><span class="text-purple-400"><b>2. Diagnostic Steps:</b></span>
+                                <ul class="list-disc pl-4 mt-1 space-y-1 text-slate-400">
+                                    <li>Audited <code>Data/decision_log.jsonl</code>—found FANG's <code>sma50</code> field was written as <code>null</code>.</li>
+                                    <li>Discovered a silent <code>NameError: name 'os' is not defined</code> inside <code>get_live_prices()</code>'s try-except block, which was silently swallowing errors and disabling daily cache-freshness checks.</li>
+                                    <li>Discovered a <b>Cache-Skipping Bug</b> in <code>run_history.py</code>: if a file for today exists, it skipped it, locking in the stale 7:00 AM morning/intraday price ($13.50 instead of settled $13.22!).</li>
+                                    <li>Discovered a <b>Cahce-Mismatched Bug</b> between Chaikin rating JSONs and Symbol_full closes.</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div class="space-y-3">
+                            <div><span class="text-purple-400"><b>3. What Was the Solution:</b></span>
+                                <ul class="list-disc pl-4 mt-1 space-y-1 text-slate-400">
+                                    <li><b>No Inline Imports:</b> Imported <code>os</code> and <code>pytz</code> cleanly at top-level inside <code>ai_portfolio_game.py</code> and <code>powergauge.py</code>.</li>
+                                    <li><b>Intraday Cache Safeguard:</b> Overhauled <code>powergauge.py</code> to skip saving today's cache file if NYSE is currently open, preventing morning intraday price pollution.</li>
+                                    <li><b>Cache-Freshness Enforced:</b> Overhauled <code>run_history.py</code> to never treat today's date as cached, forcing fresh EOD fetches.</li>
+                                    <li><b>Pre-Save Price Reconciliation:</b> Patched <code>powergauge.py</code>'s <code>get_symbol_data()</code> to overwrite Chaikin's daily JSON with the official settled close, making Chaikin, Symbol_full, and E*TRADE 100% identical!</li>
+                                    <li><b>JSON-Native Fallback:</b> Overhauled <code>ai_portfolio_game.py</code> to retrieve closes directly from <code>Symbol_full</code> JSON caches rather than Excel (openpyxl).</li>
+                                    <li><b>Unmocked Integration Test:</b> Deployed <code>TestLivePricingIntegration</code> inside <code>tests/test_game_pricing.py</code> to verify database pathing and prevent silent regressions.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -617,6 +670,42 @@
                                 <b>First finding (Jul 2026):</b> <code>lt_trend=Strong</code> penalized -3.0 in L60 appeared in 95% of missed 60-day winners across 3 dates —
                                 weight corrected to 0. Run from the System page or via <code>/pattern-discover</code>.
                             </p>
+                        </div>
+                        <div data-wiki="aether_rd_roadmap" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">🔬 Project AETHER R&D Roadmap & Lab Agenda</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed mb-4">
+                                The active experimental backlog, scoring studies, and structural risk-mitigation agenda for the AETHER quant desk:
+                            </p>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs leading-relaxed">
+                                <div class="space-y-3">
+                                    <div><b class="text-purple-400">1. Autonomic Self-Tuning Optimizer:</b> Backtests past watchlist signals to dynamically calibrate and optimize indicator weights.</div>
+                                    <div><b class="text-purple-400">2. Systemic Crash "Circuit Breaker":</b> Automated market panic detector (SPY down > 2% / VIX > 30) to freeze buying and tighten stops.</div>
+                                    <div><b class="text-purple-400">3. Global Sector Breadth "Heatmap":</b> Maps S&P 500 sectors above 50-SMA to block buys in decaying sector roll-overs.</div>
+                                    <div><b class="text-purple-400">4. Benner Cycle Macro-Temporal Filter:</b> Integrates Samuel Benner's 1875 long-term cycle time-anchors into autopilot risk engines.</div>
+                                    <div><b class="text-purple-400">5. Moonshot AI (Kimi) Failover:</b> Integrates OpenAI-compatible, high-capacity deep reasoning API failover alternatives.</div>
+                                    <div><b class="text-purple-400">6. Peter Lynch Categorization Engine:</b> Classifies watchlist stocks into Lynch's 6 categories to dynamically adjust exits, stops, and targets.</div>
+                                    <div><b class="text-purple-400">7. Fibonacci Wave-3 Forecaster:</b> Measures Wave 1 breakouts to project exact 161.8% and 261.8% extensions as target prices.</div>
+                                </div>
+                                <div class="space-y-3">
+                                    <div><b class="text-purple-400">8. Micro-Swing Day-Trading Sentinel:</b> 15-minute closing-candle soft stop checks with exchange-level disaster orders.</div>
+                                    <div><b class="text-purple-400">9. Production PostgreSQL Migration:</b> 5-table schema containerization with Docker and silent daily SQL email backups.</div>
+                                    <div><b class="text-purple-400">10. Dynamic Trailing Stop-Loss Adjuster:</b> Unidirectional trailing stop ratchet that updates stop floors based on highest closing prices.</div>
+                                    <div><b class="text-purple-400">11. Dividend Yield Capture Factors:</b> Integrates dividend capture and yield variables to add premium scoring weight.</div>
+                                    <div><b class="text-purple-400">12. Cash Dividend Reinvestment Engine:</b> Reinvests real-money cash distributions back into fractional shares.</div>
+                                    <div><b class="text-purple-400">14. AI Second-Opinion Exit Override:</b> Integrates an exit-routing gate to override momentum sells if the active AI Shadow Heuristic returns FLAG-FOR-REVIEW or HOLD.</div>
+                                    <div><b class="text-emerald-400">13. Saturday Pattern Retrospective (July 25):</b>
+                                        <div class="pl-3 mt-1.5 text-[11px] text-slate-400 space-y-1.5 leading-relaxed">
+                                            • <i>BottomSnipePGRWaiver:</i> Bypasses slow Chaikin PGR on confirmed Trader Vic 1-2-3 bottom setups.
+                                            <br>
+                                            • <i>HighScorePGRBypass:</i> Bypasses Neutral PGR on extremely high combined scores (>=15.0) backed by Money Flow.
+                                            <br>
+                                            • <i>SectorMomentumConfirmation:</i> Waives energy/oil industry penalties during active, volume-confirmed sector breakouts.
+                                            <br>
+                                            • <i>Overbought Breakout Guard:</i> Apply a soft -1.5 penalty on breakout chasing inside weak sectors.
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

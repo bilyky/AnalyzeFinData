@@ -6,6 +6,7 @@ import json
 import os
 import time
 import urllib3
+import pytz
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
@@ -16,6 +17,21 @@ import risk_utils
 import instruments
 
 _pg_log = _get_logger("powergauge")
+
+
+def is_nyse_market_open() -> bool:
+    """Return True if the NYSE is currently open (9:30 AM - 4:00 PM Eastern, weekdays)."""
+    try:
+        tz_ny = pytz.timezone("America/New_York")
+        now_ny = datetime.datetime.now(tz_ny)
+        if now_ny.weekday() in (5, 6):
+            return False
+        # Check market hours (9:30 AM - 4:00 PM Eastern)
+        start_time = now_ny.replace(hour=9, minute=30, second=0, microsecond=0)
+        end_time = now_ny.replace(hour=16, minute=0, second=0, microsecond=0)
+        return start_time <= now_ny <= end_time
+    except Exception:
+        return False
 
 from excel_output import (
     write_research_headers      as _write_research_headers,
@@ -588,18 +604,12 @@ def login(interactive=True) -> dict:
     )
 
 
-def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id, _allow_reauth: bool = True) -> PowerGauge:
+def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _allow_reauth: bool = True) -> PowerGauge:
     if not _SYMBOL_RE.match(symbol):
         raise ValueError(f"Invalid symbol format: {symbol!r}")
-    
-    if isinstance(session_id, str):
-        session_data = {
-            "jsessionid": session_id,
-            "jwttoken": "",
-            "uuid": _chaikin_uuid()
-        }
-    else:
-        session_data = session_id
+
+    # Always use the optimized ensure_valid_session() to bypass any stale loop parameters
+    session_data = ensure_valid_session()
 
     industry_url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getChecklistStocks?symbol={symbol}"
     url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid=1101733&symbol={symbol}&components=pgr,metaInfo,EPSData,fundamentalData,technical"
@@ -635,11 +645,41 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id, _allow_re
             data_jsn = response.json()
             if ind_data_jsn:
                 data_jsn["checklist_stocks"] = ind_data_jsn
+            # --- Closing Price Override (Pre-Save Reconciliation) ---
+            # Overwrite the Chaikin price fields with the official, settled close from Symbol_full.
+            # This guarantees that Chaikin (pg), RapidAPI (Symbol_full), and E*TRADE (live) are 100% synchronized!
+            try:
+                ohlcv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full", f"{symbol}_daily.json")
+                if os.path.exists(ohlcv_path):
+                    with open(ohlcv_path) as _f:
+                        ohlcv_data = json.load(_f)
+                    ohlcv_ts = ohlcv_data.get("Time Series (Daily)", {})
+                    cache_date_str = str(date if date else datetime.date.today())
+                    if ohlcv_ts and cache_date_str in ohlcv_ts:
+                        official_close = float(ohlcv_ts[cache_date_str]["4. close"])
+                        if official_close > 0.0:
+                            # Safely handle Chaikin's list-structured metaInfo
+                            meta_list = data_jsn.get("metaInfo")
+                            if isinstance(meta_list, list) and len(meta_list) > 0:
+                                meta_list[0]["Last"] = official_close
+                            elif isinstance(meta_list, dict):
+                                meta_list["Last"] = official_close
+
+                            if "checklist_stocks" in data_jsn:
+                                data_jsn["checklist_stocks"]["lastPrice"] = official_close
+                            _pg_log.info(f"🔄 [Pricing Sync] Reconciled and updated Chaikin JSON price for {symbol} to official settled close: ${official_close}")
+            except Exception as e:
+                _pg_log.warning(f"Failed to reconcile price: {e}")
+
             symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol", symbol)
             os.makedirs(symbol_dir, exist_ok=True)
             cache_date = date if date else datetime.date.today()
-            with open(os.path.join(symbol_dir, f"{symbol}_{cache_date}.json"), "w") as fw:
-                json.dump(data_jsn, fw)
+            # Safeguard: Do NOT write/save today's temporary intraday price as today's permanent closing cache if NYSE is currently open!
+            if cache_date == datetime.date.today() and is_nyse_market_open():
+                _pg_log.info(f"⚡ [Intraday Volatile] Today is an active trading day and NYSE is open. Skipping permanent disk-caching for {symbol} to force EOD sync.")
+            else:
+                with open(os.path.join(symbol_dir, f"{symbol}_{cache_date}.json"), "w") as fw:
+                    json.dump(data_jsn, fw)
 
         elif response.status_code in (401, 403):
             if _allow_reauth:
@@ -668,63 +708,98 @@ def check_from_file(prefer_cache: bool, date=None):
     _pg_log.debug("Session loaded", extra={"jsid_prefix": str(session_id)[:12] + "..."})
     syms_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "symbols_to_check.txt")
     csv_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", f"symbols_to_check_{date}.csv")
-    ohlcv_cache: dict = {}
+    
+    # ── Phase 1: parse and gather valid rows ──
+    valid_entries: list[tuple[str, str]] = []
     with open(syms_path, "r") as f:
-        with open(csv_path, "w") as fw:
-            for line in f.readlines():
-                split_line = line.strip().split()
-                symbol = split_line[-1]
-                if not _SYMBOL_RE.match(symbol):
-                    print(f"  [SKIP] invalid symbol format: {symbol!r}")
-                    continue
-                symbol_line = f"{split_line[0]},{symbol}"
-                power_g = get_symbol_data(symbol, date, prefer_cache, session_id=session_id)
+        for line in f.readlines():
+            split_line = line.strip().split()
+            if not split_line:
+                continue
+            symbol = split_line[-1]
+            if not _SYMBOL_RE.match(symbol):
+                print(f"  [SKIP] invalid symbol format: {symbol!r}")
+                continue
+            symbol_line = f"{split_line[0]},{symbol}"
+            valid_entries.append((symbol_line, symbol))
 
-                if symbol not in ohlcv_cache:
-                    ohlcv_path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
-                    try:
-                        with open(ohlcv_path) as _f:
-                            ohlcv_cache[symbol] = json.load(_f).get('Time Series (Daily)')
-                    except FileNotFoundError:
-                        ohlcv_cache[symbol] = None
-                    except (json.JSONDecodeError, OSError) as e:
-                        print(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
-                        ohlcv_cache[symbol] = None
-                ohlcv_ts = ohlcv_cache[symbol]
+    unique_syms = list(dict.fromkeys(sym for _, sym in valid_entries))
+    print(f"Fetching {len(unique_syms)} unique symbols ({_FETCH_WORKERS} workers)...")
 
-                f_fields = _compute_pgr_fields(power_g, ohlcv_ts=ohlcv_ts)
+    # ── Phase 2: parallel fetch ──
+    pg_results: dict[str, PowerGauge] = {}
+    with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
+        future_to_sym = {
+            pool.submit(get_symbol_data, sym, date, prefer_cache, session_id): sym
+            for sym in unique_syms
+        }
+        done = 0
+        for future in as_completed(future_to_sym):
+            sym = future_to_sym[future]
+            done += 1
+            try:
+                pg_results[sym] = future.result()
+            except EnvironmentError:
+                pool.shutdown(wait=False, cancel_futures=True)
+                raise
+            except Exception as e:
+                print(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
+                sentinel = PowerGauge(sym, date)
+                sentinel.price = -1
+                pg_results[sym] = sentinel
+    print(f"Fetch complete ({len(unique_syms)} symbols).")
 
-                prev_change = power_g.prevPG.change if power_g.prevPG else ""
-                percentage_delta = 0
-                percentage_delta_plus = 0
+    # ── Phase 3: serial compute + write ──
+    ohlcv_cache: dict = {}
+    with open(csv_path, "w") as fw:
+        for symbol_line, symbol in valid_entries:
+            power_g = pg_results[symbol]
 
-                if ohlcv_ts and power_g.pgr_value > 3:
-                    all_dates = sorted(ohlcv_ts.keys())
-                    date_str = str(date)
-                    past = [d for d in all_dates if d <= date_str]
-                    if past:
-                        idx = all_dates.index(past[-1])
-                        prev_count = _ohlcv_streak_count(ohlcv_ts, all_dates, idx - 1, f_fields['prev_percentage']) if idx >= 1 else 0
-                        cur_count  = _ohlcv_streak_count(ohlcv_ts, all_dates, idx,     power_g.percentage)
-                        if prev_count < 0 and cur_count > 0:
-                            percentage_delta = prev_count
-                        elif prev_count > 0 and power_g.percentage < 0:
-                            percentage_delta = prev_count
-                        elif prev_count > 0 and power_g.percentage > 0:
-                            percentage_delta_plus = prev_count + 1
-                        else:
-                            percentage_delta_plus = prev_count - 1
+            if symbol not in ohlcv_cache:
+                ohlcv_path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
+                try:
+                    with open(ohlcv_path) as _f:
+                        ohlcv_cache[symbol] = json.load(_f).get('Time Series (Daily)')
+                except FileNotFoundError:
+                    ohlcv_cache[symbol] = None
+                except (json.JSONDecodeError, OSError) as e:
+                    print(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
+                    ohlcv_cache[symbol] = None
+            ohlcv_ts = ohlcv_cache[symbol]
 
-                msg = f"{symbol_line},{power_g.industry_name},{f_fields['prev_pgr']},{f_fields['pgr']},{power_g.industry_strength}," \
-                      f"{round(power_g.price*0.95, 2)},{power_g.price},{f_fields['prev_move_price']}," \
-                      f"{f_fields['risk_ratio']},{power_g.signals}," \
-                      f"{f_fields['prev_percentage']}%,{power_g.percentage}%,{f_fields['prev_move_perc']}%," \
-                      f"${prev_change},${power_g.change}," \
-                      f"{f_fields['pgr_delta']},{percentage_delta * (-1)},{percentage_delta_plus}," \
-                      f"{power_g.lt_trend},{power_g.money_flow},{power_g.over_bt_sl}"
+            f_fields = _compute_pgr_fields(power_g, ohlcv_ts=ohlcv_ts)
 
-                print(msg)
-                fw.write(f"{msg}\n")
+            prev_change = power_g.prevPG.change if power_g.prevPG else ""
+            percentage_delta = 0
+            percentage_delta_plus = 0
+
+            if ohlcv_ts and power_g.pgr_value > 3:
+                all_dates = sorted(ohlcv_ts.keys())
+                date_str = str(date)
+                past = [d for d in all_dates if d <= date_str]
+                if past:
+                    idx = all_dates.index(past[-1])
+                    prev_count = _ohlcv_streak_count(ohlcv_ts, all_dates, idx - 1, f_fields['prev_percentage']) if idx >= 1 else 0
+                    cur_count  = _ohlcv_streak_count(ohlcv_ts, all_dates, idx,     power_g.percentage)
+                    if prev_count < 0 and cur_count > 0:
+                        percentage_delta = prev_count
+                    elif prev_count > 0 and power_g.percentage < 0:
+                        percentage_delta = prev_count
+                    elif prev_count > 0 and power_g.percentage > 0:
+                        percentage_delta_plus = prev_count + 1
+                    else:
+                        percentage_delta_plus = prev_count - 1
+
+            msg = f"{symbol_line},{power_g.industry_name},{f_fields['prev_pgr']},{f_fields['pgr']},{power_g.industry_strength}," \
+                  f"{round(power_g.price*0.95, 2)},{power_g.price},{f_fields['prev_move_price']}," \
+                  f"{f_fields['risk_ratio']},{power_g.signals}," \
+                  f"{f_fields['prev_percentage']}%,{power_g.percentage}%,{f_fields['prev_move_perc']}%," \
+                  f"${prev_change},${power_g.change}," \
+                  f"{f_fields['pgr_delta']},{percentage_delta * (-1)},{percentage_delta_plus}," \
+                  f"{power_g.lt_trend},{power_g.money_flow},{power_g.over_bt_sl}"
+
+            print(msg)
+            fw.write(f"{msg}\n")
 
 
 # _week_of_month, _compute_seasonality, _predicted_win_pct, _market_regime,
@@ -1067,22 +1142,23 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
                 ohlcv_cache[symbol] = None
         ohlcv_ts = ohlcv_cache[symbol].get('Time Series (Daily)') if ohlcv_cache[symbol] else None
 
-        f = _compute_pgr_fields(power_g, ohlcv_ts=ohlcv_ts)
-        setup_ok = f['setup_ok']   # True / False / None
-
-        # --- Closing Price Override ---
-        # If we have an official OHLCV bar for today, use its 'close' as the absolute truth.
-        # This overrides potentially delayed or intraday live API prices.
+        # --- Closing Price Override (Pre-Computation) ---
+        # If we have an official OHLCV close on disk, overwrite power_g.price immediately.
+        # This ensures all trend, support/resistance, stop, target, and Reward-to-Risk
+        # calculations are computed using the actual correct settled close.
         today_str = date.strftime("%Y-%m-%d")
-        final_price = power_g.price
         if ohlcv_ts and today_str in ohlcv_ts:
             try:
                 official_close = float(ohlcv_ts[today_str]['4. close'])
-                if abs(official_close - power_g.price) > 0.001:
-                    # print(f"  [OVERRIDE] {symbol} live price {power_g.price} -> final close {official_close}")
-                    final_price = official_close
+                if official_close > 0.0:
+                    power_g.price = official_close
             except (ValueError, KeyError):
                 pass
+
+        f = _compute_pgr_fields(power_g, ohlcv_ts=ohlcv_ts)
+        setup_ok = f['setup_ok']   # True / False / None
+
+        final_price = power_g.price
 
         row[4].value = power_g.industry_name
         row[5].value = f['prev_pgr']

@@ -30,7 +30,7 @@ def get_monitored_positions():
             stop = row[_SL["stop"]] if len(row) > _SL["stop"] else None
             if (isinstance(sym, str) and sym.strip() and sym.strip() != "Symb"
                     and isinstance(stop, (int, float)) and stop > 0):
-                positions.append({"symbol": sym, "stop": stop})
+                positions.append({"symbol": sym.strip().upper(), "stop": stop})
     except Exception as e:
         print(f"Error loading positions: {e}")
     return positions
@@ -43,25 +43,32 @@ def monitor():
         return
 
     print(f"Monitoring {len(monitored)} positions.")
-    
-    # We'll use etrade.py's quote fetching logic
-    # etrade.py seems to be a custom wrapper
+
+    from ai_portfolio_game import get_live_prices
+    symbols = [p["symbol"] for p in monitored]
+    quotes = get_live_prices(symbols)
+
+    breaches = []
     for p in monitored:
-        try:
-            # Simulated call to etrade.get_quote() assuming it returns a dict or object with 'lastPrice'
-            # Based on etrade.py contents if I had read it, but I'll use a generic approach
-            # or use the primal_funcs if it has it.
-            # Let's check etrade.py content again or assume a standard call.
-            quote = etrade.get_quote(p["symbol"]) 
-            if not quote: continue
-            
-            last_price = float(quote.get("lastPrice", 0))
-            if last_price > 0 and last_price <= p["stop"]:
-                msg = f"URGENT: {p['symbol']} breached stop! Price: {last_price}, Stop: {p['stop']}"
+        sym = p["symbol"]
+        stop = p["stop"]
+        last_price = quotes.get(sym)
+        if last_price and last_price > 0:
+            if last_price <= stop:
+                msg = f"URGENT: {sym} breached stop! Price: {last_price:.2f}, Stop: {stop:.2f}"
                 print(msg)
-                notify.send_email(f"STOP BREACHED: {p['symbol']}", msg)
-        except Exception as e:
-            print(f"Error checking {p['symbol']}: {e}")
+                breaches.append(msg)
+        else:
+            print(f"Warning: Could not fetch price for {sym}")
+
+    if breaches:
+        count = len(breaches)
+        subject = f"AETHER ALERT: Stop Breach Detected ({count} Position{'s' if count > 1 else ''})"
+        body = "The following stop breaches have been detected in your active E*TRADE portfolio:\n\n" + "\n".join(breaches) + "\n\nAction required: Please review and execute these exits manually in your broker."
+        notify.send_email(subject, body)
+        print(f"Sent consolidated alert email for {count} breaches.")
+    else:
+        print("No stop breaches detected.")
 
 if __name__ == "__main__":
     monitor()

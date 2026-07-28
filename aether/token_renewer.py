@@ -55,7 +55,27 @@ class TokenRenewer:
             # Re-read inside lock — another thread may have just renewed
             fresh = self._load_fn()
             if fresh:
-                return fresh
+                # If current_token was provided, we only return fresh if it is actually
+                # different/newer than current_token, indicating another process/thread renewed it.
+                if current_token is not None:
+                    is_newer = False
+                    if isinstance(fresh, dict) and isinstance(current_token, dict):
+                        for key in ["oauth_token", "jsessionid", "saved_at"]:
+                            if key in fresh and key in current_token:
+                                if key == "saved_at":
+                                    if fresh[key] > current_token[key]:
+                                        is_newer = True
+                                        break
+                                elif fresh[key] != current_token[key]:
+                                    is_newer = True
+                                    break
+                    elif fresh != current_token:
+                        is_newer = True
+                    
+                    if is_newer:
+                        return fresh
+                else:
+                    return fresh
 
             # Try to win the cross-process file lock
             fd = self._acquire()

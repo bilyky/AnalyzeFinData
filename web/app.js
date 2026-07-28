@@ -806,11 +806,11 @@ async function loadRotation() {
     const pairs = rep.pairs || [];
     rb.innerHTML = pairs.length ? pairs.map((p) => `
         <tr>
-            <td class="neg font-semibold">${p.Sell}</td>
+            <td class="neg font-semibold cursor-pointer hover:text-blue-400" data-open="${p.Sell}">${p.Sell}</td>
             <td class="${cls(p.Sell_Score)}">${p.Sell_Score?.toFixed?.(1) ?? p.Sell_Score}</td>
             <td class="text-xs">${p.Sell_Status || ""}</td>
             <td class="mut">→</td>
-            <td class="pos font-semibold">${p.Buy}</td>
+            <td class="pos font-semibold cursor-pointer hover:text-blue-400" data-open="${p.Buy}">${p.Buy}</td>
             <td class="${cls(p.Buy_Score)}">${p.Buy_Score?.toFixed?.(1) ?? p.Buy_Score}</td>
             <td>${p.Buy_PGR || "—"}</td>
         </tr>`).join("")
@@ -1057,6 +1057,50 @@ async function runManualTask(taskId, label, confirm_msg, adminOnly, inputEl) {
     }
 }
 
+// Global Hover Tooltip Modal for Scheduled Tasks
+let _tooltipEl = null;
+
+function showTooltip(event, text) {
+    if (!_tooltipEl) {
+        _tooltipEl = document.createElement("div");
+        _tooltipEl.className = "fixed z-50 w-80 p-3 bg-slate-950 border border-slate-800 text-xs text-slate-200 rounded-lg shadow-2xl leading-relaxed transition-opacity duration-150 pointer-events-none";
+        document.body.appendChild(_tooltipEl);
+    }
+    // Format WHAT:, WHY:, and OUTCOME: with spacing and color coding
+    const formatted = text
+        .replace(/WHAT:/g, "<b class='text-blue-400'>WHAT:</b>")
+        .replace(/WHY:/g, "<br><b class='text-purple-400 mt-1.5 inline-block'>WHY:</b>")
+        .replace(/OUTCOME:/g, "<br><b class='text-emerald-400 mt-1.5 inline-block'>OUTCOME:</b>");
+
+    _tooltipEl.innerHTML = formatted;
+    _tooltipEl.style.opacity = "0";
+    _tooltipEl.style.display = "block";
+
+    // Position tooltip relative to the hover target
+    const rect = event.target.getBoundingClientRect();
+    let left = rect.left;
+    let top = rect.bottom + 8;
+
+    // Shift left if extending off-screen right
+    if (left + 320 > window.innerWidth) {
+        left = window.innerWidth - 340;
+    }
+    // Shift above target if extending off-screen bottom
+    if (top + _tooltipEl.offsetHeight > window.innerHeight) {
+        top = rect.top - _tooltipEl.offsetHeight - 8;
+    }
+
+    _tooltipEl.style.left = left + "px";
+    _tooltipEl.style.top = top + "px";
+    _tooltipEl.style.opacity = "1";
+}
+
+function hideTooltip() {
+    if (_tooltipEl) {
+        _tooltipEl.style.display = "none";
+    }
+}
+
 async function loadSystem() {
     const [health, tasks, logs, manual] = await Promise.all([
         api("/api/health"), api("/api/tasks"), api("/api/pipeline/logs?lines=100"),
@@ -1073,11 +1117,20 @@ async function loadSystem() {
     // Scheduled tasks — with a "Run Now" button that triggers the matching manual task
     const manualById = Object.fromEntries((manual.tasks || []).map((t) => [t.id, t]));
     const SCHED_TO_MANUAL = {
-        "AnalyzeFinData_Morning":    "pipeline",
-        "AnalyzeFinData_AI_Game":    "ai_game_run",
-        "AnalyzeFinData_AI_Summary": "ai_game_summary",
-        "AnalyzeFinData_Evening":    null,
-        "Project_AETHER_Watchdog":   "watchdog",
+        "AETHER_Watchdog":           "watchdog",
+        "AETHER_StopMonitor":        "intraday_monitor",
+        "AETHER_DailyDriver":        "pipeline",
+        "AETHER_PostMarketReporter": "ai_game_summary",
+        "AETHER_PostMarketSync":     "pipeline",
+        "AETHER_RD_Scientist":       "pattern_discovery",
+    };
+    const SCHED_DESCRIPTIONS = {
+        "AETHER_Watchdog": "WHAT: Hourly pre-market/market diagnostics and 2-hourly off-market self-healing. WHY: Validates login cookie freshness, clears workbook locks, and renews E*TRADE sessions. OUTCOME: Generates watchdog_agent.log; auto-triggers headless Playwright browser re-auth.",
+        "AETHER_StopMonitor": "WHAT: Intraday risk guard checking open positions against stops and targets every 30 mins (6:45 AM - 1:45 PM). WHY: Secures profits and shields capital during sudden dumps. OUTCOME: Generates intraday_monitor_agent.log; sends urgent breach emails and auto-exits virtual games.",
+        "AETHER_DailyDriver": "WHAT: Core trading screener and portfolio rebalancer at 7:00 AM PST. WHY: Scrapes Chaikin, updates State, enforces Circuit Breakers, and executes virtual moves. OUTCOME: Generates daily_driver_agent.log and autonomous_pipeline logs; sends picks summary report.",
+        "AETHER_PostMarketReporter": "WHAT: Portfolio closing audit and scheduler diagnostic run at 2:00 PM PST. WHY: Captures settled returns, checks for scheduler missed runs, and scans logs. OUTCOME: Generates post_market_reporter_agent.log and logs closing status report.",
+        "AETHER_PostMarketSync": "WHAT: Nightly post-market data synchronization and workbook refresh at 1:30 PM PST. WHY: Finalizes daily PowerGauge scrapes, and refreshes price history caches via RapidAPI. OUTCOME: Generates post_market_sync_agent.log and autonomous_pipeline logs; updates State sheet.",
+        "AETHER_RD_Scientist": "WHAT: Missed winner retro and statistical validation on Saturdays at 10:00 AM PST. WHY: Replays historical caches to isolate missed momentum setups and feeds rules to the exclusion guard. OUTCOME: Generates pattern_discovery_agent.log; writes failure-DNA rules to database.",
     };
     const tb = $("tasks-body");
     const ts = tasks.tasks || [];
@@ -1091,8 +1144,15 @@ async function loadSystem() {
                  ▶ Run
                </button>`
             : "";
+        const descEscaped = (SCHED_DESCRIPTIONS[t.name] || "").replace(/'/g, "\\'");
         return `<tr>
-            <td class="font-semibold">${t.name}</td>
+            <td>
+                <span class="font-semibold text-sm cursor-help border-b border-dashed border-slate-500 hover:text-blue-400"
+                      onmouseover="showTooltip(event, '${descEscaped}')"
+                      onmouseout="hideTooltip()">
+                    ${t.name}
+                </span>
+            </td>
             <td>${t.status || "—"}</td>
             <td class="text-xs mut">${t.last_run || "—"}</td>
             <td class="text-xs mut">${t.next_run || "—"}</td>
@@ -1275,14 +1335,45 @@ async function loadScorecard() {
     }).join("") : `<tr><td colspan="6" class="text-center text-slate-500 py-6">No scored decisions yet.</td></tr>`;
 
     const misses = sc.winner_selling_misses || [];
-    $("misses-body").innerHTML = misses.length ? misses.map((m) => `
+    $("misses-body").innerHTML = misses.length ? misses.map((m) => {
+        const isAddressed = (m.symbol === "FANG" && m.date === "2026-07-14");
+        const statusCell = isAddressed
+            ? `<td class="text-center"><button class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20 transition-all cursor-pointer" data-to-retro="true" title="Click to view Hardening & Resolution details">✅ Addressed</button></td>`
+            : `<td class="text-center text-slate-500">—</td>`;
+        return `
         <tr>
             <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${m.symbol}">${m.symbol}</td>
             <td class="text-xs mut">${m.date || "—"}</td>
             <td class="text-xs mut">${m.reason || "—"}</td>
             <td class="neg">+${m.fwd_return_pct}%</td>
-        </tr>`).join("")
-        : `<tr><td colspan="4" class="text-center text-slate-500 py-6">None in the scored window.</td></tr>`;
+            ${statusCell}
+        </tr>`;
+    }).join("")
+    : `<tr><td colspan="5" class="text-center text-slate-500 py-6">None in the scored window.</td></tr>`;
+
+    // Render Buy-Side Missed Winners
+    const buySideMisses = sc.buy_side_missed_winners || [];
+    const buySideDate = sc.buy_side_replay_date || "";
+
+    const badge = $("buy-side-date-badge");
+    if (badge) {
+        badge.textContent = buySideDate ? `REPLAY DATE: ${buySideDate}` : "NO ACTIVE REPORT";
+        badge.classList.toggle("hidden", !buySideDate);
+    }
+
+    $("buy-side-misses-body").innerHTML = buySideMisses.length ? buySideMisses.map((bm) => {
+        const pgrCls = (bm.pgr || "").includes("Bu") ? "text-green-400 font-semibold" : (bm.pgr || "").includes("Be") ? "text-red-400" : "text-slate-300";
+        const reasonsList = (bm.reasons || []).map((r) => `<span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700/50 text-[10px] mr-1 inline-block">${esc(r)}</span>`).join("");
+        return `
+        <tr>
+            <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${bm.symbol}">${bm.symbol}</td>
+            <td class="${pgrCls}">${bm.pgr || "—"}</td>
+            <td class="${cls(bm.score)} font-semibold">${bm.score}</td>
+            <td class="pos font-bold">+${bm.fwd_return_pct}%</td>
+            <td>${reasonsList || "—"}</td>
+        </tr>`;
+    }).join("")
+    : `<tr><td colspan="5" class="text-center text-slate-500 py-6">No buy-side missed winners found.</td></tr>`;
 }
 
 // ── Research tab ─────────────────────────────────────────────────────────────
@@ -1418,7 +1509,7 @@ function renderResearch() {
             <td class="text-right ${cls(r.s10)}">${num(r.s10, 1)}</td>
             <td class="text-right ${cls(r.l60)}">${num(r.l60, 1)}</td>
             <td class="text-right font-semibold ${cls(r.combined)}">${num(r.combined, 1)}</td>
-            <td class="text-xs">${r.status || "—"}</td>
+            <td class="text-xs cursor-pointer hover:text-blue-400 font-semibold" data-to-scorecard="true" title="Click to open Scorecard & Retrospective History">${r.status || "—"}</td>
             <td>${r.setup ? '<span class="pos font-semibold">OK</span>' : '<span class="mut">—</span>'}</td>
             <td class="text-right">${r.win_pct == null ? "—" : r.win_pct + "%"}</td>
             <td class="text-right ${cls(r.buying_ratio)}">${num(r.buying_ratio, 1)}</td>
@@ -1771,8 +1862,27 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSymbo
 document.addEventListener("click", (e) => {
     const cell = e.target.closest("[data-open]");
     if (cell) { openSymbol(cell.dataset.open); return; }
+
+    // Status inline click: automatically open the Scorecard & Retrospective page
+    const statusLink = e.target.closest("[data-to-scorecard]");
+    if (statusLink) { switchTab("scorecard"); return; }
+
+    // Accounts page status inline click: open AETHER AI Requalification modal
     const rqBtn = e.target.closest(".rq-btn");
     if (rqBtn) { requalify(rqBtn.dataset.rqSym, parseFloat(rqBtn.dataset.rqBuy) || null, rqBtn); return; }
+
+    // Retro card click: smoothly scroll to and highlight our retrospective documentation card
+    const retroLink = e.target.closest("[data-to-retro]");
+    if (retroLink) {
+        const retroCard = document.querySelector(".border.border-slate-800.bg-slate-900\\/30.rounded.p-5");
+        if (retroCard) {
+            retroCard.scrollIntoView({ behavior: "smooth", block: "center" });
+            // Flashing highlight effect to draw focus!
+            retroCard.classList.add("ring-2", "ring-emerald-500", "transition-all", "duration-500");
+            setTimeout(() => retroCard.classList.remove("ring-2", "ring-emerald-500"), 2000);
+        }
+        return;
+    }
 });
 
 // ── Requalify ─────────────────────────────────────────────────────────────────
