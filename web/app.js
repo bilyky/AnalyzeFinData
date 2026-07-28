@@ -1598,22 +1598,87 @@ function _set(id, html, klass) {
     if (klass !== undefined) el.className = klass;
 }
 
-function renderCandlestick(allBars, days) {
+// ── Chart fullscreen overlay ──────────────────────────────────────────────────
+function openChartFullscreen(sym, bars, days) {
+    const overlay = $("chart-fs-overlay");
+    $("chart-fs-sym").textContent = sym;
+    overlay.classList.add("active");
+
+    const fsWrap    = $("chart-fs-svg");
+    const fsTooltip = $("chart-fs-tooltip");
+
+    const draw = (d) => renderCandlestick(bars, d, fsWrap, fsTooltip);
+    draw(days);
+
+    // Wire fullscreen range buttons
+    overlay.querySelectorAll(".fs-range-btn").forEach(btn => {
+        btn.onclick = () => draw(+btn.dataset.days);
+    });
+
+    // Redraw on window resize
+    const onResize = () => draw(+overlay.querySelector(".fs-range-btn.bg-blue-700")?.dataset.days || days);
+    window.addEventListener("resize", onResize);
+
+    // Close
+    const close = () => {
+        overlay.classList.remove("active");
+        fsWrap.innerHTML = "";
+        window.removeEventListener("resize", onResize);
+        $("chart-fs-close").onclick = null;
+    };
+    $("chart-fs-close").onclick = close;
+    overlay._closeFs = close;
+}
+
+// ── Modal chart resize handle ─────────────────────────────────────────────────
+function initChartResize() {
+    const svgWrap = $("sm-chart-svg");
+    if (!svgWrap || svgWrap._resizeInit) return;
+    svgWrap._resizeInit = true;
+
+    // Drag handle bar below the chart
+    const handle = document.createElement("div");
+    handle.style.cssText = "height:6px;cursor:ns-resize;background:transparent;border-top:2px solid #1e293b;margin-top:2px;border-radius:0 0 4px 4px;";
+    handle.title = "Drag to resize chart";
+    svgWrap.parentElement.insertBefore(handle, svgWrap.nextSibling);
+
+    let startY = 0, startH = 0;
+    handle.addEventListener("mousedown", e => {
+        startY = e.clientY;
+        startH = svgWrap.clientHeight;
+        const onMove = mv => {
+            const newH = Math.max(120, Math.min(600, startH + mv.clientY - startY));
+            svgWrap.style.height = newH + "px";
+            if (_smChartData.length) renderCandlestick(_smChartData, _smChartDays);
+        };
+        const onUp = () => {
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+        };
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+        e.preventDefault();
+    });
+}
+
+// wrapEl / tooltipEl default to the modal chart; pass the fullscreen elements for fs mode.
+function renderCandlestick(allBars, days, wrapEl, tooltipEl) {
     const bars = allBars.slice(-days);
     if (!bars.length) return;
 
-    const wrap = $("sm-chart-svg");
-    const tooltip = $("sm-chart-tooltip");
+    const wrap    = wrapEl    || $("sm-chart-svg");
+    const tooltip = tooltipEl || $("sm-chart-tooltip");
     if (!wrap) return;
 
-    // Highlight active range button
-    document.querySelectorAll(".sm-range-btn").forEach(b => {
+    // Highlight active range button — covers both modal (.sm-range-btn) and fullscreen (.fs-range-btn)
+    const btnClass = wrapEl ? "fs-range-btn" : "sm-range-btn";
+    document.querySelectorAll("." + btnClass).forEach(b => {
         const active = +b.dataset.days === days;
-        b.className = `sm-range-btn px-2 py-0.5 rounded text-xs ${active ? "bg-blue-700 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`;
+        b.className = `${btnClass} px-2 py-0.5 rounded text-xs ${active ? "bg-blue-700 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`;
     });
 
-    const W = wrap.clientWidth || 600;
-    const H = 220;
+    const W = wrap.clientWidth  || (wrapEl ? window.innerWidth  : 600);
+    const H = wrap.clientHeight || (wrapEl ? window.innerHeight - 48 : 220);
     const volH = 36;           // volume panel height
     const padL = 52, padR = 8, padT = 10, padB = 20;
     const plotW = W - padL - padR;
@@ -1956,16 +2021,43 @@ async function openSymbol(sym) {
         _smChartData = allBars;
         _smChartDays = 90;
         renderCandlestick(allBars, 90);
-        // Wire range buttons
+        initChartResize();
+
+        // Wire modal range buttons
         chartWrap.querySelectorAll(".sm-range-btn").forEach(btn => {
             btn.addEventListener("click", () => {
                 _smChartDays = +btn.dataset.days;
                 renderCandlestick(_smChartData, _smChartDays);
             });
         });
+
+        // Chart fullscreen button
+        const chartFsBtn = $("sm-chart-fs");
+        if (chartFsBtn) {
+            chartFsBtn.onclick = () => openChartFullscreen(sym, _smChartData, _smChartDays);
+        }
     } else {
         chartWrap.classList.add("hidden");
     }
+
+    // Modal fullscreen button (uses Browser Fullscreen API on the card element)
+    const modalFsBtn = $("sm-fs");
+    const modalCard  = $("sym-modal").querySelector(".card");
+    if (modalFsBtn && modalCard) {
+        modalFsBtn.onclick = () => {
+            if (!document.fullscreenElement) {
+                modalCard.requestFullscreen().catch(() => {});
+            } else {
+                document.exitFullscreen();
+            }
+        };
+    }
+    // Sync fullscreen button icon
+    const syncFsIcon = () => {
+        if (modalFsBtn) modalFsBtn.textContent = document.fullscreenElement ? "⊠" : "⛶";
+    };
+    document.removeEventListener("fullscreenchange", syncFsIcon);
+    document.addEventListener("fullscreenchange", syncFsIcon);
 
     // Backtest
     const btWrap = $("sm-bt-wrap");
@@ -1991,7 +2083,16 @@ function closeSymbolModal() {
 
 $("sm-close").addEventListener("click", closeSymbolModal);
 $("sym-modal").addEventListener("click", (e) => { if (e.target === $("sym-modal")) closeSymbolModal(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSymbolModal(); });
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+        const fsOverlay = $("chart-fs-overlay");
+        if (fsOverlay && fsOverlay.classList.contains("active")) {
+            if (fsOverlay._closeFs) fsOverlay._closeFs();
+        } else {
+            closeSymbolModal();
+        }
+    }
+});
 
 // Wire every rendered data-sym row to open the symbol modal when the symbol
 // name cell is clicked. Uses event delegation — works for any table re-rendered

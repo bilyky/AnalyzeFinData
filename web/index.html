@@ -764,7 +764,8 @@
                     <div id="sm-price" class="text-2xl font-bold text-slate-100"></div>
                     <div id="sm-holding-badge" class="hidden text-xs px-2 py-0.5 rounded bg-blue-900/60 text-blue-300 mt-1">HELD</div>
                 </div>
-                <button id="sm-close" class="text-slate-400 hover:text-white text-xl leading-none ml-2">✕</button>
+                <button id="sm-fs" title="Fullscreen" class="text-slate-400 hover:text-white text-base leading-none ml-1" style="font-size:15px">⛶</button>
+                <button id="sm-close" class="text-slate-400 hover:text-white text-xl leading-none ml-1">✕</button>
             </div>
 
             <!-- loading spinner -->
@@ -829,11 +830,14 @@
                 <div id="sm-chart-wrap" class="relative">
                     <div class="flex items-center justify-between mb-2">
                         <div class="card-label">Price</div>
-                        <div id="sm-chart-range" class="flex gap-1 text-xs">
-                            <button data-days="30"  class="sm-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">1M</button>
-                            <button data-days="90"  class="sm-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">3M</button>
-                            <button data-days="180" class="sm-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">6M</button>
-                            <button data-days="365" class="sm-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">1Y</button>
+                        <div class="flex items-center gap-2">
+                            <div id="sm-chart-range" class="flex gap-1 text-xs">
+                                <button data-days="30"  class="sm-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">1M</button>
+                                <button data-days="90"  class="sm-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">3M</button>
+                                <button data-days="180" class="sm-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">6M</button>
+                                <button data-days="365" class="sm-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">1Y</button>
+                            </div>
+                            <button id="sm-chart-fs" title="Chart fullscreen" class="text-slate-400 hover:text-white text-sm leading-none px-1">⛶</button>
                         </div>
                     </div>
                     <div id="sm-chart-svg" class="w-full" style="height:220px"></div>
@@ -918,6 +922,24 @@
                 <button onclick="closeWiki()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs font-semibold transition">Close Wiki</button>
             </div>
         </div>
+    </div>
+
+    <!-- Chart fullscreen overlay -->
+    <div id="chart-fs-overlay">
+        <div id="chart-fs-header">
+            <div class="flex items-center gap-3">
+                <span id="chart-fs-sym" class="text-base font-bold text-slate-100"></span>
+                <div id="chart-fs-range" class="flex gap-1 text-xs">
+                    <button data-days="30"  class="fs-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">1M</button>
+                    <button data-days="90"  class="fs-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">3M</button>
+                    <button data-days="180" class="fs-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">6M</button>
+                    <button data-days="365" class="fs-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">1Y</button>
+                </div>
+            </div>
+            <button id="chart-fs-close" class="text-slate-400 hover:text-white text-xl leading-none">✕</button>
+        </div>
+        <div id="chart-fs-svg"></div>
+        <div id="chart-fs-tooltip" class="hidden"></div>
     </div>
 
     <script src="/static/app.js"></script>

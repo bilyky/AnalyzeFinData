@@ -95,3 +95,58 @@
 .pos  { color: rgb(74 222 128); }         /* green-400 */
 .neg  { color: rgb(248 113 113); }        /* red-400  */
 .mut  { color: rgb(100 116 139); }        /* slate-500 */
+
+/* ── Symbol modal fullscreen ──────────────────────────────────────── */
+/* When the inner card is the fullscreen element, stretch it to fill   */
+#sym-modal .card:fullscreen,
+#sym-modal .card:-webkit-full-screen {
+    max-width: 100%;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    overflow-y: auto;
+    border: none;
+    padding: 1.5rem;
+}
+
+/* ── Chart-only fullscreen overlay ───────────────────────────────── */
+#chart-fs-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: #0a0f1e;
+    flex-direction: column;
+    padding: 0;
+}
+#chart-fs-overlay.active { display: flex; }
+
+#chart-fs-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: #0f172a;
+    border-bottom: 1px solid #1e293b;
+    flex-shrink: 0;
+}
+
+#chart-fs-svg {
+    flex: 1;
+    min-height: 0;        /* allow flex child to shrink */
+    width: 100%;
+}
+
+#chart-fs-tooltip {
+    position: fixed;
+    pointer-events: none;
+    z-index: 70;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: #e2e8f0;
+    min-width: 148px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
