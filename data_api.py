@@ -1215,15 +1215,18 @@ def read_symbol(symbol: str) -> dict:
         row = next((r for r in research.get("rows", []) if r["symbol"] == sym), None)
         out["research"] = row
 
-        # ── 90-day price series (closes + volume) for the mini-chart ──────────
+        # ── 365-day OHLCV series for the candlestick chart ──────────────────
         path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
         chart = []
         if path.exists():
             try:
                 ts = json.load(open(path)).get("Time Series (Daily)", {})
-                dates = sorted(ts.keys())[-90:]
+                dates = sorted(ts.keys())[-365:]
                 chart = [{"date": d,
-                          "close": round(float(ts[d]["4. close"]), 2),
+                          "open":   round(float(ts[d]["1. open"]),  2),
+                          "high":   round(float(ts[d]["2. high"]),  2),
+                          "low":    round(float(ts[d]["3. low"]),   2),
+                          "close":  round(float(ts[d]["4. close"]), 2),
                           "volume": int(float(ts[d].get("5. volume", 0)))} for d in dates]
             except Exception:
                 pass

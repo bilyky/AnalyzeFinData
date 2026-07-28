@@ -1588,12 +1588,163 @@ function startPolling() {
 }
 
 // ── Symbol detail modal ──────────────────────────────────────────────────────
-let _symChart = null;
+let _symChart = null;      // kept for closeSymbolModal cleanup (unused after candlestick)
+let _smChartData = [];
+let _smChartDays = 90;
 
 function _set(id, html, klass) {
     const el = $(id); if (!el) return;
     el.innerHTML = html;
     if (klass !== undefined) el.className = klass;
+}
+
+function renderCandlestick(allBars, days) {
+    const bars = allBars.slice(-days);
+    if (!bars.length) return;
+
+    const wrap = $("sm-chart-svg");
+    const tooltip = $("sm-chart-tooltip");
+    if (!wrap) return;
+
+    // Highlight active range button
+    document.querySelectorAll(".sm-range-btn").forEach(b => {
+        const active = +b.dataset.days === days;
+        b.className = `sm-range-btn px-2 py-0.5 rounded text-xs ${active ? "bg-blue-700 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`;
+    });
+
+    const W = wrap.clientWidth || 600;
+    const H = 220;
+    const volH = 36;           // volume panel height
+    const padL = 52, padR = 8, padT = 10, padB = 20;
+    const plotW = W - padL - padR;
+    const priceH = H - padT - padB - volH - 6;  // 6px gap between panels
+
+    const highs  = bars.map(b => b.high);
+    const lows   = bars.map(b => b.low);
+    const vols   = bars.map(b => b.volume);
+    const yMax   = Math.max(...highs);
+    const yMin   = Math.min(...lows);
+    const yRange = yMax - yMin || 1;
+    const vMax   = Math.max(...vols) || 1;
+
+    const n = bars.length;
+    const candleW = Math.max(1, Math.floor(plotW / n) - 1);
+    const halfC   = Math.max(0.5, candleW / 2);
+
+    function px(i) { return padL + (i + 0.5) * (plotW / n); }
+    function py(v) { return padT + priceH - ((v - yMin) / yRange) * priceH; }
+    function vy(v) { return H - padB - (v / vMax) * volH; }
+
+    // Y-axis ticks (5 levels)
+    const yTicks = 5;
+    const yStep  = yRange / (yTicks - 1);
+    let yAxis = "", yGrid = "";
+    for (let i = 0; i < yTicks; i++) {
+        const val = yMin + i * yStep;
+        const y   = py(val);
+        const lbl = val >= 1000 ? val.toFixed(0) : val >= 10 ? val.toFixed(1) : val.toFixed(2);
+        yAxis += `<text x="${padL - 4}" y="${y + 4}" text-anchor="end" fill="#64748b" font-size="10">${lbl}</text>`;
+        yGrid += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="rgba(51,65,85,0.4)" stroke-width="1"/>`;
+    }
+
+    // X-axis labels (up to 8, spaced evenly, show MM-DD)
+    const xLabelCount = Math.min(8, n);
+    const xStep = Math.floor(n / xLabelCount);
+    let xAxis = "";
+    for (let i = 0; i < n; i += xStep) {
+        const lbl = bars[i].date.slice(5);  // MM-DD
+        xAxis += `<text x="${px(i)}" y="${H - padB + 13}" text-anchor="middle" fill="#64748b" font-size="10">${lbl}</text>`;
+    }
+
+    // Candles + wicks
+    let candles = "";
+    bars.forEach((b, i) => {
+        const bull = b.close >= b.open;
+        const col  = bull ? "#4ade80" : "#f87171";
+        const x    = px(i);
+        const bodyTop    = py(Math.max(b.open, b.close));
+        const bodyBot    = py(Math.min(b.open, b.close));
+        const bodyHeight = Math.max(1, bodyBot - bodyTop);
+        const wickTop    = py(b.high);
+        const wickBot    = py(b.low);
+        candles +=
+            `<line x1="${x}" y1="${wickTop}" x2="${x}" y2="${wickBot}" stroke="${col}" stroke-width="1"/>` +
+            `<rect x="${x - halfC}" y="${bodyTop}" width="${candleW}" height="${bodyHeight}" fill="${col}" rx="1"/>`;
+    });
+
+    // Volume bars
+    let volBars = "";
+    bars.forEach((b, i) => {
+        const bull = b.close >= b.open;
+        const col  = bull ? "rgba(74,222,128,0.25)" : "rgba(248,113,113,0.25)";
+        const x    = px(i);
+        const top  = vy(b.volume);
+        const bot  = H - padB;
+        volBars += `<rect x="${x - halfC}" y="${top}" width="${candleW}" height="${bot - top}" fill="${col}" rx="1"/>`;
+    });
+
+    // Invisible hover hit targets
+    let hits = "";
+    bars.forEach((b, i) => {
+        hits += `<rect class="cs-hit" x="${px(i) - (plotW / n) / 2}" y="${padT}" width="${plotW / n}" height="${H - padT - padB}" fill="transparent" data-i="${i}"/>`;
+    });
+
+    // Crosshair lines (hidden by default)
+    const crosshair = `
+        <line id="cs-vline" x1="0" y1="${padT}" x2="0" y2="${H - padB}" stroke="#475569" stroke-width="1" stroke-dasharray="3,3" display="none" pointer-events="none"/>
+        <line id="cs-hline" x1="${padL}" y1="0" x2="${W - padR}" y2="0" stroke="#475569" stroke-width="1" stroke-dasharray="3,3" display="none" pointer-events="none"/>`;
+
+    wrap.innerHTML = `<svg width="${W}" height="${H}" style="display:block">
+        ${yGrid}
+        <line x1="${padL}" y1="${H - padB - volH - 3}" x2="${W - padR}" y2="${H - padB - volH - 3}" stroke="rgba(51,65,85,0.3)" stroke-width="1"/>
+        ${volBars}${candles}${crosshair}${hits}
+        ${yAxis}${xAxis}
+    </svg>`;
+
+    const svg = wrap.querySelector("svg");
+    const vline = wrap.querySelector("#cs-vline");
+    const hline = wrap.querySelector("#cs-hline");
+
+    wrap.querySelectorAll(".cs-hit").forEach(el => {
+        el.addEventListener("mousemove", e => {
+            const idx = +el.dataset.i;
+            const b   = bars[idx];
+            const x   = px(idx);
+            const y   = py(b.close);
+
+            vline.setAttribute("x1", x); vline.setAttribute("x2", x);
+            hline.setAttribute("y1", y); hline.setAttribute("y2", y);
+            vline.setAttribute("display", ""); hline.setAttribute("display", "");
+
+            const bull = b.close >= b.open;
+            const pctChg = ((b.close - b.open) / b.open * 100);
+            const volFmt = b.volume >= 1e6 ? (b.volume / 1e6).toFixed(1) + "M" : (b.volume / 1e3).toFixed(0) + "K";
+            tooltip.innerHTML = `
+                <div class="font-semibold ${bull ? "text-green-400" : "text-red-400"} mb-1">${b.date} &nbsp;${bull ? "▲" : "▼"} ${pctChg >= 0 ? "+" : ""}${pctChg.toFixed(2)}%</div>
+                <div class="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                    <span class="text-slate-400">Open</span><span>${fmt$(b.open)}</span>
+                    <span class="text-slate-400">High</span><span class="text-green-400">${fmt$(b.high)}</span>
+                    <span class="text-slate-400">Low</span><span class="text-red-400">${fmt$(b.low)}</span>
+                    <span class="text-slate-400">Close</span><span class="font-semibold">${fmt$(b.close)}</span>
+                    <span class="text-slate-400">Vol</span><span>${volFmt}</span>
+                </div>`;
+            // Position tooltip: right of cursor unless near right edge
+            const rect = wrap.getBoundingClientRect();
+            const cx = e.clientX - rect.left;
+            const cy = e.clientY - rect.top;
+            const tip = tooltip;
+            tip.classList.remove("hidden");
+            const tipW = 152;
+            const left = cx + 12 + tipW > W ? cx - tipW - 8 : cx + 12;
+            tip.style.left = left + "px";
+            tip.style.top  = Math.max(0, cy - 20) + "px";
+        });
+        el.addEventListener("mouseleave", () => {
+            vline.setAttribute("display", "none");
+            hline.setAttribute("display", "none");
+            tooltip.classList.add("hidden");
+        });
+    });
 }
 
 async function openSymbol(sym) {
@@ -1797,36 +1948,20 @@ async function openSymbol(sym) {
             <div id="sm-rq-result" class="hidden mt-2"></div>`;
     }
 
-    // Price chart
+    // Candlestick chart
     const chartWrap = $("sm-chart-wrap");
-    const chartData = d.chart || [];
-    if (chartData.length > 0) {
+    const allBars = d.chart || [];
+    if (allBars.length > 0) {
         chartWrap.classList.remove("hidden");
-        const labels = chartData.map(p => p.date.slice(5));   // MM-DD
-        const closes = chartData.map(p => p.close);
-        const first = closes[0], last = closes[closes.length - 1];
-        const up = last >= first;
-        const ctx = $("sm-chart").getContext("2d");
-        if (_symChart) { _symChart.destroy(); _symChart = null; }
-        _symChart = new Chart(ctx, {
-            type: "line",
-            data: {
-                labels,
-                datasets: [{
-                    data: closes,
-                    borderColor: up ? "#4ade80" : "#f87171",
-                    backgroundColor: up ? "rgba(74,222,128,0.07)" : "rgba(248,113,113,0.07)",
-                    fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
-                }],
-            },
-            options: {
-                plugins: { legend: { display: false }, tooltip: { mode: "index", intersect: false } },
-                scales: {
-                    x: { ticks: { color: "#64748b", maxTicksLimit: 8 }, grid: { display: false } },
-                    y: { ticks: { color: "#64748b" }, grid: { color: "rgba(51,65,85,0.3)" } },
-                },
-                animation: false,
-            },
+        _smChartData = allBars;
+        _smChartDays = 90;
+        renderCandlestick(allBars, 90);
+        // Wire range buttons
+        chartWrap.querySelectorAll(".sm-range-btn").forEach(btn => {
+            btn.addEventListener("click", () => {
+                _smChartDays = +btn.dataset.days;
+                renderCandlestick(_smChartData, _smChartDays);
+            });
         });
     } else {
         chartWrap.classList.add("hidden");
@@ -1848,6 +1983,9 @@ async function openSymbol(sym) {
 
 function closeSymbolModal() {
     $("sym-modal").classList.add("hidden");
+    _smChartData = [];
+    const svg = $("sm-chart-svg");
+    if (svg) svg.innerHTML = "";
     if (_symChart) { _symChart.destroy(); _symChart = null; }
 }
 

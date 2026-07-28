@@ -825,10 +825,19 @@
                 <!-- Requalify -->
                 <div id="sm-rq-wrap" class="mt-3"></div>
 
-                <!-- Price chart (90d) -->
-                <div id="sm-chart-wrap">
-                    <div class="card-label mb-2">Price — last 90 days</div>
-                    <canvas id="sm-chart" height="120"></canvas>
+                <!-- Price chart (candlestick + volume) -->
+                <div id="sm-chart-wrap" class="relative">
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="card-label">Price</div>
+                        <div id="sm-chart-range" class="flex gap-1 text-xs">
+                            <button data-days="30"  class="sm-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">1M</button>
+                            <button data-days="90"  class="sm-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">3M</button>
+                            <button data-days="180" class="sm-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">6M</button>
+                            <button data-days="365" class="sm-range-btn px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">1Y</button>
+                        </div>
+                    </div>
+                    <div id="sm-chart-svg" class="w-full" style="height:220px"></div>
+                    <div id="sm-chart-tooltip" class="hidden absolute pointer-events-none z-50 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-xs text-slate-200 shadow-lg" style="min-width:140px"></div>
                 </div>
 
                 <!-- Backtest -->
