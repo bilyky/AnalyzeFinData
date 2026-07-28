@@ -108,26 +108,46 @@ _PRICE_TOLERANCE_PCT = 25.0   # covers earnings gaps, splits, thin ETFs
 _PRICE_TOLERANCE_ABS = 2.0    # never fire on discrepancies < $2 absolute (penny stocks)
 
 
+_PRICE_CACHE_MAX_STALE_DAYS = 10  # cache older than this is not authoritative
+
+
 def verify_price_integrity(symbol: str, price: float, source: str) -> None:
-    """Log a warning when a price deviates from the settled OHLCV cache beyond tolerance.
-    Skips CVR/BBB and leveraged/crypto instruments. Never raises — callers are read paths."""
+    """Raise PricingDiscrepancyError when a price deviates from a *fresh* OHLCV cache
+    beyond tolerance. Skips exempt/leveraged symbols and stale caches (>10 days old)."""
     sym = (symbol or "").strip().upper()
     if sym in _PRICE_CHECK_EXEMPT or instruments.is_excluded(sym):
         return
     if price is None or price <= 0:
-        _log.warning(f"[PRICING] {sym} has invalid price: {price} (Source: {source})")
+        raise PricingDiscrepancyError(
+            f"[PRICING DISCREPANCY] {sym} has invalid price: {price} (Source: {source})"
+        )
+
+    path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
+    if not path.exists():
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            ts = json.load(f).get("Time Series (Daily)", {})
+        if not ts:
+            return
+        newest_date = sorted(ts.keys())[-1]
+        stale_days = (date.today() - date.fromisoformat(newest_date)).days
+        if stale_days > _PRICE_CACHE_MAX_STALE_DAYS:
+            return  # cache is stale — not authoritative, skip check
+        cache_close = float(ts[newest_date]["4. close"])
+    except Exception:
         return
 
-    cache_close = _load_latest_close_from_cache(sym)
-    if cache_close is not None and cache_close > 0:
-        diff = abs(price - cache_close)
-        if diff > 0.05 and diff >= _PRICE_TOLERANCE_ABS:
-            pct_diff = (diff / cache_close) * 100
-            if pct_diff > _PRICE_TOLERANCE_PCT:
-                _log.warning(
-                    f"[PRICING] {sym}: active ${price:.2f} vs cache ${cache_close:.2f}"
-                    f" ({pct_diff:.1f}% diff) — Source: {source}"
-                )
+    if cache_close <= 0:
+        return
+    diff = abs(price - cache_close)
+    if diff > 0.05 and diff >= _PRICE_TOLERANCE_ABS:
+        pct_diff = (diff / cache_close) * 100
+        if pct_diff > _PRICE_TOLERANCE_PCT:
+            raise PricingDiscrepancyError(
+                f"[PRICING DISCREPANCY] {sym}: active ${price:.2f} vs cache ${cache_close:.2f}"
+                f" ({pct_diff:.1f}% diff, tolerance {_PRICE_TOLERANCE_PCT}%) — Source: {source}"
+            )
 
 
 # ── Portfolio ─────────────────────────────────────────────────────────────────
@@ -608,7 +628,13 @@ def read_accounts() -> dict:
                             
                             buy = p.get("cost", 0.0)
                             current = p.get("price", 0.0)
-                            verify_price_integrity(sym, current, f"E*TRADE Account {last4}")
+                            try:
+                                verify_price_integrity(sym, current, f"E*TRADE Account {last4}")
+                            except PricingDiscrepancyError:
+                                corrected = _load_latest_close_from_cache(sym)
+                                if corrected and corrected > 0:
+                                    _log.warning(f"[PRICING] {sym}: overriding broker ${current:.2f} with cache ${corrected:.2f}")
+                                    current = corrected
                             qty = p.get("qty", 0)
                             
                             pnl = 0.0
@@ -710,7 +736,16 @@ def read_accounts() -> dict:
                                                                     exclude_swing=excl)
                             if td["target"] is not None:
                                 target, target_source = td["target"], td["source"]
-                        verify_price_integrity(sym, top, "Excel Short_Long fallback")
+                        try:
+                            verify_price_integrity(sym, top, "Excel Short_Long fallback")
+                        except PricingDiscrepancyError:
+                            corrected = _load_latest_close_from_cache(sym)
+                            if corrected and corrected > 0:
+                                _log.warning(f"[PRICING] {sym}: overriding sheet ${top:.2f} with cache ${corrected:.2f}")
+                                top = corrected
+                                if buy and qty:
+                                    pnl = round((top - buy) * qty, 2)
+                                    pnl_pct = round((top - buy) / buy * 100, 2)
                         holdings.append({
                             "symbol":    sym,
                             "qty":       qty,
