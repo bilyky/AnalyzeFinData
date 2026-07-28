@@ -4,7 +4,9 @@ Git pre-commit validator for Project AETHER.
 Enforces:
 1. No Inline Imports: All python imports must be top-level (uses ast, not regex).
 2. No Silent Exceptions: No 'except: pass' or 'except Exception: pass' without logging.
-3. R&D Roadmap Sync: Verifies MEMORY.md and web/index.html item counts are in sync.
+3. No bare print(): use _log.console() / _log.info() / _log.error() instead.
+   Exempt: lines ending with  # noqa: print  (for intentional interactive prompts).
+4. R&D Roadmap Sync: Verifies MEMORY.md and web/index.html item counts are in sync.
 """
 import ast
 import os
@@ -55,6 +57,40 @@ def check_no_silent_exceptions(file_path: str) -> bool:
     except Exception as e:
         print(f"Error checking {file_path}: {e}")
         return True
+
+def check_no_print_statements(file_path: str) -> bool:
+    """Detect bare print() calls using ast. Allows # noqa: print on the same line
+    for intentional interactive prompts (e.g. Playwright browser instructions)."""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            source = f.read()
+        lines = source.splitlines()
+        try:
+            tree = ast.parse(source, filename=file_path)
+        except SyntaxError:
+            return True  # py_compile handles syntax errors
+        rel = os.path.relpath(file_path, ROOT_DIR)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            # Match bare print(...) — not obj.print(...)
+            if not isinstance(func, ast.Name) or func.id != "print":
+                continue
+            lineno = node.lineno
+            # Allow explicit exemption via trailing comment
+            raw_line = lines[lineno - 1] if lineno <= len(lines) else ""
+            if "# noqa: print" in raw_line:
+                continue
+            print(f"[GIT PRE-COMMIT] bare print() in {rel} at line {lineno}: {raw_line.strip()[:80]}")
+            print("   Use _log.console() for progress, _log.info/warning/error() for events.")
+            print("   Add  # noqa: print  to exempt intentional interactive prompts.")
+            return False
+        return True
+    except Exception as e:
+        print(f"Error checking {file_path}: {e}")
+        return True
+
 
 def check_rd_roadmap_sync() -> bool:
     """Verify that R&D list item counts in private MEMORY.md and web/index.html match."""
@@ -137,17 +173,27 @@ def main():
     else:
         print(f"🔍 Scanning {len(python_files)} staged python file(s) for inline imports and silent exceptions...")
         for fpath in python_files:
-            # Skip files with intentional lazy inline imports (heavy modules deferred to
-            # avoid slow server startup; excel_output.py uses them inside openpyxl callbacks)
-            if any(x in fpath for x in ("pre_commit_validator.py", "reconcile_prices.py",
-                                        "rebuild_rs.py", "sync_excel_prices.py",
-                                        "reconcile_streaks.py", "excel_output.py")):
+            # Files fully exempt from all checks (intentional patterns or non-production)
+            _skip_all = ("pre_commit_validator.py", "reconcile_prices.py",
+                         "rebuild_rs.py", "sync_excel_prices.py", "reconcile_streaks.py")
+            if any(x in fpath for x in _skip_all):
                 continue
-                
-            if not check_no_inline_imports(fpath):
-                success = False
+
+            # Files exempt from inline-import check only (pre-existing lazy-load pattern)
+            _skip_imports = ("excel_output.py",)
+            if not any(x in fpath for x in _skip_imports):
+                if not check_no_inline_imports(fpath):
+                    success = False
+
             if not check_no_silent_exceptions(fpath):
                 success = False
+
+            # Files exempt from print() check (Playwright interactive browser prompts
+            # that intentionally write to the user's terminal, not to the log system)
+            _skip_print = ("etrade.py",)
+            if not any(x in fpath for x in _skip_print):
+                if not check_no_print_statements(fpath):
+                    success = False
                 
     if not success:
         print("❌ [GIT PRE-COMMIT] Commit aborted. Please resolve the discrepancies above.")
