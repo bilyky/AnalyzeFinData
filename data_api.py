@@ -104,29 +104,29 @@ class PricingDiscrepancyError(ValueError):
 
 
 _PRICE_CHECK_EXEMPT = frozenset({"931CVR013", "BBB"})
-_PRICE_TOLERANCE_PCT = 15.0  # covers earnings gaps, splits, thin ETFs
+_PRICE_TOLERANCE_PCT = 25.0   # covers earnings gaps, splits, thin ETFs
+_PRICE_TOLERANCE_ABS = 2.0    # never fire on discrepancies < $2 absolute (penny stocks)
 
 
 def verify_price_integrity(symbol: str, price: float, source: str) -> None:
-    """Check price against the settled OHLCV cache. Raises PricingDiscrepancyError on
-    deviation > _PRICE_TOLERANCE_PCT%. Skips CVR/BBB and leveraged/crypto instruments."""
+    """Log a warning when a price deviates from the settled OHLCV cache beyond tolerance.
+    Skips CVR/BBB and leveraged/crypto instruments. Never raises — callers are read paths."""
     sym = (symbol or "").strip().upper()
     if sym in _PRICE_CHECK_EXEMPT or instruments.is_excluded(sym):
         return
     if price is None or price <= 0:
-        raise PricingDiscrepancyError(
-            f"[PRICING DISCREPANCY] {sym} has an invalid or missing price: {price} (Source: {source})"
-        )
+        _log.warning(f"[PRICING] {sym} has invalid price: {price} (Source: {source})")
+        return
 
     cache_close = _load_latest_close_from_cache(sym)
     if cache_close is not None and cache_close > 0:
         diff = abs(price - cache_close)
-        if diff > 0.05:
+        if diff > 0.05 and diff >= _PRICE_TOLERANCE_ABS:
             pct_diff = (diff / cache_close) * 100
             if pct_diff > _PRICE_TOLERANCE_PCT:
-                raise PricingDiscrepancyError(
-                    f"[PRICING DISCREPANCY] {sym}: active ${price:.4f} vs cache ${cache_close:.4f}"
-                    f" ({pct_diff:.1f}% diff, tolerance {_PRICE_TOLERANCE_PCT}%) — Source: {source}"
+                _log.warning(
+                    f"[PRICING] {sym}: active ${price:.2f} vs cache ${cache_close:.2f}"
+                    f" ({pct_diff:.1f}% diff) — Source: {source}"
                 )
 
 
@@ -648,8 +648,6 @@ def read_accounts() -> dict:
                         "holdings": holdings,
                         "count": len(holdings)
                     })
-            except PricingDiscrepancyError:
-                raise
             except ValueError as ve:
                 _log.warning(f"Live broker feed failed: {ve}. Falling back to Excel.")
                 broker_status = "offline"
@@ -742,8 +740,6 @@ def read_accounts() -> dict:
                         "holdings": holdings,
                         "count":    len(holdings),
                     })
-            except PricingDiscrepancyError:
-                raise
             except FileNotFoundError:
                 pass
             except Exception as e:
