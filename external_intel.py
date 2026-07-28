@@ -139,10 +139,15 @@ def fetch_idea_emails():
         email_user = mb["email"]
         pass_env = mb["password_env"]
         imap_server = mb["imap_server"]
-        email_pass = os.environ.get(pass_env)
+        # Resolve password: env var takes priority; fall back to CFG.smtp_password
+        # (which is loaded from config.json email_sender.password).
+        # This handles the common case where the password is only in config.json
+        # and the SMTP_PASSWORD env var is not set in the scheduled-task environment.
+        email_pass = os.environ.get(pass_env) or CFG.smtp_password
 
         if not email_pass:
-            print(f"Warning: Environment variable '{pass_env}' for mailbox '{email_user}' is not set. Skipping.")
+            print(f"Warning: No password found for mailbox '{email_user}' "
+                  f"(checked env var '{pass_env}' and CFG.smtp_password). Skipping.")
             continue
 
         print(f"Scanning mailbox: {email_user} on {imap_server}...")
