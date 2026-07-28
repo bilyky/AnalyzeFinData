@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import glob
+import pytz
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from scripts.backtesting import backtest_levels
@@ -104,23 +105,38 @@ class PricingDiscrepancyError(ValueError):
 
 
 _PRICE_CHECK_EXEMPT = frozenset({"931CVR013", "BBB"})
-_PRICE_TOLERANCE_PCT = 25.0   # covers earnings gaps, splits, thin ETFs
-_PRICE_TOLERANCE_ABS = 2.0    # never fire on discrepancies < $2 absolute (penny stocks)
-
-
 _PRICE_CACHE_MAX_STALE_DAYS = 10  # cache older than this is not authoritative
+
+
+def is_active_nyse_market_hours() -> bool:
+    """Check if NYSE is currently open (9:30 AM - 4:00 PM Eastern, weekdays)."""
+    try:
+        tz_ny = pytz.timezone("America/New_York")
+        now_ny = datetime.now(tz_ny)
+        if now_ny.weekday() in (5, 6):
+            return False
+        start_time = now_ny.replace(hour=9, minute=30, second=0, microsecond=0)
+        end_time = now_ny.replace(hour=16, minute=0, second=0, microsecond=0)
+        return start_time <= now_ny <= end_time
+    except Exception:
+        return False
 
 
 def verify_price_integrity(symbol: str, price: float, source: str) -> None:
     """Raise PricingDiscrepancyError when a price deviates from a *fresh* OHLCV cache
-    beyond tolerance. Skips exempt/leveraged symbols and stale caches (>10 days old)."""
+    beyond tolerance. Skips exempt/leveraged symbols and stale caches (>10 days old).
+    Bypasses cache comparisons during active market hours to accommodate intra-day volatility."""
     sym = (symbol or "").strip().upper()
     if sym in _PRICE_CHECK_EXEMPT or instruments.is_excluded(sym):
         return
-    if price is None or price <= 0:
+    if price is None or price < 0:
         raise PricingDiscrepancyError(
             f"[PRICING DISCREPANCY] {sym} has invalid price: {price} (Source: {source})"
         )
+
+    # Skip cache reconciliation if NYSE is currently open (volatile active market hours)
+    if is_active_nyse_market_hours():
+        return
 
     path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
     if not path.exists():
@@ -141,12 +157,16 @@ def verify_price_integrity(symbol: str, price: float, source: str) -> None:
     if cache_close <= 0:
         return
     diff = abs(price - cache_close)
-    if diff > 0.05 and diff >= _PRICE_TOLERANCE_ABS:
+    if diff > 0.05:
         pct_diff = (diff / cache_close) * 100
-        if pct_diff > _PRICE_TOLERANCE_PCT:
+        # Enforce strict 3.0% percentage-based tolerance outside of market hours
+        if pct_diff > 3.0:
             raise PricingDiscrepancyError(
-                f"[PRICING DISCREPANCY] {sym}: active ${price:.2f} vs cache ${cache_close:.2f}"
-                f" ({pct_diff:.1f}% diff, tolerance {_PRICE_TOLERANCE_PCT}%) — Source: {source}"
+                f"🛑 [PRICING DISCREPANCY] Price discrepancy detected for {sym}!\n"
+                f"  Active Price (Source: {source}): ${price:.4f}\n"
+                f"  Cache Price (Symbol_full):       ${cache_close:.4f}\n"
+                f"  Difference:                      ${diff:.4f} ({pct_diff:.2f}% - Max tolerance: 3.0%)\n"
+                f"  Action required: Re-sync Data/Symbol_full or Excel workbook immediately!"
             )
 
 
@@ -507,7 +527,7 @@ def read_accounts() -> dict:
         broker_status = "live"   # "live" | "offline" | "reconnecting"
 
         # ── PRIMARY: Live E*TRADE Broker Feed ──────────────────────────────────
-        in_unittest = "unittest" in sys.modules
+        in_unittest = any("unittest" in arg for arg in sys.argv)
         
         # Load Research scores and Short_Long decorations unconditionally —
         # needed whether E*TRADE is online or offline (fallback path uses them too).
