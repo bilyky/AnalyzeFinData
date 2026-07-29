@@ -6,6 +6,9 @@ import openpyxl
 import notify
 import traceback
 import json
+import html
+import rapidapi
+from run_history import load_symbols
 from pathlib import Path
 from aether_logger import get_logger as _get_logger
 
@@ -247,10 +250,14 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
     # 0. Format External Ideas + Structural Intel
     # All email-sourced strings (from/subject) and AI-extracted text (event/impact/rd_topics)
     # are HTML-escaped before insertion to prevent injection into the email report.
-    import html as _html
-    def _e(v): return _html.escape(str(v or ""), quote=True)
+    def _e(v): return html.escape(str(v or ""), quote=True)
 
-    intel_section = ""
+    intel_section = """
+    <div style="background: #fafbfc; border: 1px solid #e1e4e6; border-radius: 6px; padding: 15px 20px; margin-bottom: 30px;">
+        <h3 style="color: #2c3e50; margin: 0 0 5px 0; font-size: 15px;">📰 External Intelligence Feed</h3>
+        <p style="font-size: 12px; color: #7f8c8d; margin: 0; font-style: italic;">No new newsletter intelligence or external catalysts parsed for today's session. System evaluated purely on indicators.</p>
+    </div>
+    """
     if intel_ideas:
         idea_list = ""
         for i in intel_ideas:
@@ -458,6 +465,7 @@ def main():
     log("Starting Daily Trading Pipeline...")
     
     no_email = "--no-email" in sys.argv[1:]
+    no_history = "--no-history" in sys.argv[1:]
     
     # 0. Gather External Intel (Emails & News)
     log("Gathering external intelligence...")
@@ -474,13 +482,16 @@ def main():
         log(f"ERROR: Could not fetch external intel: {e}")
 
     # 1. Sync history (Backfill cache for deltas)
-    log("Backfilling 5-day history (run_history.py)...")
-    try:
-        script_path = str(BASE_DIR / "run_history.py")
-        subprocess.run([sys.executable, script_path, "5"], check=True, capture_output=True, encoding="utf-8", errors="replace")
-        log("History backfilled.")
-    except subprocess.CalledProcessError as e:
-        log(f"Warning: run_history.py failed (will continue): {e.stderr}")
+    if no_history:
+        log("Skipping history backfill via --no-history...")
+    else:
+        log("Backfilling 5-day history (run_history.py)...")
+        try:
+            script_path = str(BASE_DIR / "run_history.py")
+            subprocess.run([sys.executable, script_path, "5"], check=True, capture_output=True, encoding="utf-8", errors="replace")
+            log("History backfilled.")
+        except subprocess.CalledProcessError as e:
+            log(f"Warning: run_history.py failed (will continue): {e.stderr}")
 
     # 2. Execute main.py (writes today's closes into OHLCV JSON via _append_ohlcv_entry)
     log("Refreshing workbook (main.py)...")
@@ -500,8 +511,6 @@ def main():
     #     with gaps > 30 days. Non-fatal: pipeline continues even if RapidAPI is unavailable.
     log("OHLCV recovery pass (rapidapi.py)...")
     try:
-        import rapidapi
-        from run_history import load_symbols
         _ohlcv_syms = load_symbols()
         _today_str = str(datetime.date.today())
         _ohlcv_result = rapidapi.repair_missing(_ohlcv_syms, _today_str)

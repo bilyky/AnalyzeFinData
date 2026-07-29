@@ -6,6 +6,7 @@ import imaplib
 import email
 import extract_email_intel
 import openpyxl
+import ai_client
 from pathlib import Path
 from config import CFG
 from aether_logger import get_logger as _get_logger
@@ -21,7 +22,6 @@ STOCK_KEYWORDS = ["BUY", "SELL", "STOCK", "TICKER", "NEWSLETTER", "PICK", "ALPHA
 def get_ai_reasoning(symbol, industry, pgr, s10, l60):
     """Advisory risk audit via the configured AI provider (see ai_client).
     Falls back to a deterministic alignment string when no provider is available."""
-    import ai_client
     system = ("You are Project AETHER, an elite, highly skeptical hedge fund risk "
               "manager. Your tone is professional, concise, and critical.")
     user = f"""
@@ -80,7 +80,6 @@ def extract_tickers(text):
 def analyze_email_content(subject, body):
     """Semantically analyze email content into structured trade ideas via the
     configured AI provider (see ai_client). Returns [] when unavailable."""
-    import ai_client
     universe = list(get_existing_symbols())[:150]  # sample to fit prompt limits
     system = ("You are a precise financial data extractor. You only output valid "
               "JSON. No markdown wrappers like ```json.")
@@ -114,7 +113,6 @@ def analyze_email_content(subject, body):
 
 def _max_intel_emails() -> int:
     try:
-        from config import CFG
         return CFG.ai_max_intel_emails
     except Exception:
         return 20
@@ -140,6 +138,9 @@ def fetch_idea_emails():
 
     for mb in CFG.mailboxes:
         email_user = mb["email"]
+        if "example.com" in email_user.lower():
+            _log.console(f"Skipping placeholder mailbox: {email_user}")
+            continue
         pass_env = mb["password_env"]
         imap_server = mb["imap_server"]
         # Resolve password: env var takes priority; fall back to CFG.smtp_password
