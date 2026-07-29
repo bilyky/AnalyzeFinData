@@ -32,7 +32,7 @@ def _make_wb(sym, price, s10=5.0, l60=5.0):
                "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other",
                "Win%", "Short10", "Long60"])
     ws.append([1, None, None, sym, "Retail", None, "Bu", None, None, None, price,
-               None, None, None, None, None, None, None, None, None, "0", None, None,
+               None, None, None, None, None, None, None, None, None, "OK", None, None,
                0.65, s10, l60])
     return wb
 
@@ -43,7 +43,7 @@ _COMMON_PATCHES = [
     mock.patch("ai_portfolio_game.load_game"),
     mock.patch("ai_portfolio_game.save_game"),
     mock.patch("ai_portfolio_game.openpyxl.load_workbook"),
-    mock.patch("ai_portfolio_game.circuit_breaker.enforce_circuit_breaker"),
+    mock.patch("circuit_breaker.enforce_circuit_breaker"),
 ]
 
 
@@ -145,6 +145,147 @@ class TestZeroCashDragAndFractionalSizing(unittest.TestCase):
         
         rules_def = game.get_strategy_rules("DEFENSIVE")
         self.assertEqual(rules_def["cash_buffer_pct"], 0.50)
+
+
+class TestAntiFragileFlexibility(unittest.TestCase):
+    @mock.patch("ai_portfolio_game.get_market_regime")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=True)
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
+    @mock.patch("circuit_breaker.enforce_circuit_breaker")
+    @mock.patch("ai_portfolio_game.backtrack_verify", return_value=(True, "OK"))
+    @mock.patch("ai_portfolio_game._cache_stale", return_value=False)
+    @mock.patch("ai_portfolio_game.calculate_bubble_z_score", return_value=1.0)
+    def test_adaptive_cap_relaxation(self, mock_z, mock_stale, mock_verify, mock_breaker, mock_load_wb, mock_hours, mock_get_prices, mock_save_game, mock_load_game, mock_regime):
+        # 1. Setup standard play candidate (AAPL) with score of 11.1 (ultra-conviction)
+        # Standard cap is 80% of $10,000 = $8,000 limit.
+        # We setup 4 existing standard positions costing $1,800 each (Total: $7,200).
+        # Remaining standard room is $8,000 - $7,200 = $800 limit.
+        # Available cash to deploy is $1,000. Max slots is 5 (Balanced).
+        # Active positions = 4, so available_slots = 1.
+        # Under standard rules, AAPL buy would be downsized to standard room $800 (5.556 shares).
+        # Under Adaptive Cap Relaxation (since score 11.1 >= 8.0), standard cap is bypassed, and AAPL buy goes through for full available cash $1,000 (6.944 shares)!
+        mock_regime.return_value = "NEUTRAL"
+        state = {
+            "balance": 3000.0,
+            "equity": 10000.0,
+            "positions": {
+                "P1": {"qty": 1, "cost": 1800.0, "is_scarcity": False},
+                "P2": {"qty": 1, "cost": 1800.0, "is_scarcity": False},
+                "P3": {"qty": 1, "cost": 1800.0, "is_scarcity": False},
+                "P4": {"qty": 1, "cost": 1800.0, "is_scarcity": False}
+            },
+            "queued_orders": [],
+            "history": []
+        }
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"AAPL": 144.0, "P1": 1800.0, "P2": 1800.0, "P3": 1800.0, "P4": 1800.0, "SPY": 500.0}
+
+        # Mock workbook sheet with ultra-conviction candidate AAPL
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Research"
+        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
+        ws.append([1, None, None, "AAPL", "Technology", None, "Bu", None, None, None, 144.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1]) # Score = 11.1
+        mock_load_wb.return_value = wb
+
+        # Mock ATR calculation
+        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00):
+            game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+
+        # AAPL was bought! Verify it bypassed standard cap ($800) and bought full $960 (6.667 shares!)
+        # If standard cap was enforced, standard room $800 / 144 = 5.556 shares.
+        # So qty must be greater than 6.5 shares!
+        pos = state["positions"]["AAPL"]
+        self.assertGreater(pos["qty"], 6.5)
+
+    @mock.patch("ai_portfolio_game.get_market_regime")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=True)
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
+    @mock.patch("circuit_breaker.enforce_circuit_breaker")
+    @mock.patch("ai_portfolio_game.backtrack_verify", return_value=(True, "OK"))
+    @mock.patch("ai_portfolio_game._cache_stale", return_value=False)
+    def test_dynamic_slot_expansion(self, mock_stale, mock_verify, mock_breaker, mock_load_wb, mock_hours, mock_get_prices, mock_save_game, mock_load_game, mock_regime):
+        # 1. Setup a portfolio with 5 of 5 maximum positions under BALANCED profile
+        # Cash is plentiful: Balance = 3000, Equity = 10000. Cash ratio = 30.0% (> 15%!).
+        # Under old rules, no buys are allowed because we are already at max 5 positions.
+        # Under Dynamic Position-Slot Expansion, slots count dynamically expands to 6, allowing a fresh buy!
+        mock_regime.return_value = "NEUTRAL"
+        state = {
+            "balance": 3000.0,
+            "equity": 10000.0,
+            "positions": {
+                "P1": {"qty": 1, "cost": 1000.0, "is_scarcity": False},
+                "P2": {"qty": 1, "cost": 1000.0, "is_scarcity": False},
+                "P3": {"qty": 1, "cost": 1000.0, "is_scarcity": False},
+                "P4": {"qty": 1, "cost": 1000.0, "is_scarcity": False},
+                "P5": {"qty": 1, "cost": 1000.0, "is_scarcity": False}
+            },
+            "queued_orders": [],
+            "history": []
+        }
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"P1": 1000.0, "P2": 1000.0, "P3": 1000.0, "P4": 1000.0, "P5": 1000.0, "CDW": 100.0, "SPY": 500.0}
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Research"
+        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
+        ws.append([1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 100.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1]) # Score = 11.1
+        mock_load_wb.return_value = wb
+
+        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00):
+            game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+
+        # CDW must be purchased successfully, showing that the 5-position limit was dynamically expanded!
+        self.assertIn("CDW", state["positions"])
+
+    @mock.patch("ai_portfolio_game.get_market_regime")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=True)
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
+    @mock.patch("circuit_breaker.enforce_circuit_breaker")
+    @mock.patch("ai_portfolio_game.backtrack_verify", return_value=(True, "OK"))
+    @mock.patch("ai_portfolio_game._cache_stale", return_value=False)
+    def test_dynamic_pyramiding_scale_in(self, mock_stale, mock_verify, mock_breaker, mock_load_wb, mock_hours, mock_get_prices, mock_save_game, mock_load_game, mock_regime):
+        # 1. Setup a portfolio with active green winning positions and plentiful cash (Balance = 10000, Equity = 10000)
+        # Active position ULTA cost = 400.0, current price = 410.0 (in profit!), highest_close_since_acq = 412.0 (near peak!)
+        # s10 momentum for ULTA is 5.0 (>= 3.0!)
+        # The system must dynamically scale-in by purchasing more shares of ULTA and recalculating its blended cost!
+        mock_regime.return_value = "NEUTRAL"
+        state = {
+            "balance": 10000.0,
+            "equity": 10000.0,
+            "positions": {
+                "ULTA": {"qty": 2, "cost": 400.0, "stop_loss": 380.0, "highest_close_since_acq": 412.0, "is_scarcity": False}
+            },
+            "queued_orders": [],
+            "history": []
+        }
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"ULTA": 410.0, "SPY": 500.0}
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Research"
+        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
+        ws.append([1, None, None, "ULTA", "Retail", None, "Bu", None, None, None, 410.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 5.0, 5.1]) # Short10 = 5.0
+        mock_load_wb.return_value = wb
+
+        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00):
+            game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+
+        # ULTA qty must be increased and blended cost recalculated!
+        pos = state["positions"]["ULTA"]
+        self.assertGreater(pos["qty"], 2)
+        self.assertGreater(pos["cost"], 400.0)
 
 
 if __name__ == "__main__":

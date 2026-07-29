@@ -311,8 +311,10 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                 print(f"🔢 [Digit-Sum] {buy['sym']} open digit signal: {_dir} bias (score={_open_digit_z:+.2f})")  # noqa: print
 
             # Core-Satellite Allocation Checking & Downsizing logic
+            # Adaptive Cap Relaxation: Automatically suspend core-satellite caps if the candidate is an ultra-high-conviction setup (score >= 8.0)
+            is_ultra_conviction = (buy.get("total", 0.0) >= 8.0)
             cost = qty * buy["price"]
-            if is_scarcity:
+            if is_scarcity and not is_ultra_conviction:
                 remaining_scarcity_room_usd = scarcity_limit_usd - current_scarcity_usd
                 if remaining_scarcity_room_usd <= 0:
                     print(f"🛑 AI BUY REJECTED (Scarcity Limit Full): {buy['sym']} is scarcity play, but 20% scarcity bucket is fully allocated.")  # noqa: print
@@ -325,7 +327,7 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                         print(f"🛑 AI BUY REJECTED (Scarcity Limit Full): Remaining room is less than 1 share of {buy['sym']}.")  # noqa: print
                         continue
                     cost = qty * buy["price"]
-            else:
+            elif not is_scarcity and not is_ultra_conviction:
                 remaining_standard_room_usd = standard_limit_usd - current_standard_usd
                 if remaining_standard_room_usd <= 0:
                     print(f"🛑 AI BUY REJECTED (Standard Cap Full): {buy['sym']} is standard play, but 80% standard bucket is fully allocated.")  # noqa: print
@@ -1428,6 +1430,14 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
         # BUY logic (filtered by profile momentum threshold)
         max_positions = rules["max_positions"]
+        
+        # Dynamic Position-Slot Expansion: If cash is plentiful (>15% of equity) and we are full, dynamically expand slots to deploy cash!
+        cash_ratio = state["balance"] / state["equity"] if state["equity"] > 1.0 else 0.0
+        if cash_ratio > 0.15 and len(state["positions"]) >= max_positions:
+            _log.info(f"🛡️ [Slot Expansion] Plentiful cash ({cash_ratio*100:.1f}%) detected. Dynamically expanding slots from {max_positions} to {max_positions+1} to prevent cash drag!")
+            print(f"🛡️ [Slot Expansion] Plentiful cash detected. Expanding max slots from {max_positions} to {max_positions+1}.")  # noqa: print
+            max_positions += 1
+            
         available_slots = max_positions - len(state["positions"])
         
         # Enforce defensive cash buffer
@@ -1506,6 +1516,57 @@ def run_daily_ai_management(force=False, manual_profile=None):
             else:
                 _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                               today, now_time, new_transactions, prices)
+
+                # ── Dynamic Pyramiding: Scale into winning trends with idle cash ──
+                cash_ratio = state["balance"] / state["equity"] if state["equity"] > 1.0 else 0.0
+                if cash_ratio > 0.10:  # If cash ratio exceeds 10.0% of total equity
+                    _log.info(f"🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash ({cash_ratio*100:.1f}%)...")
+                    for sym, pos in list(state["positions"].items()):
+                        current_px = prices.get(sym, pos["cost"])
+                        # A winner is in profit and trading at or near its peak close
+                        is_winner = (current_px > pos["cost"])
+                        has_peak = (pos.get("highest_close_since_acq", 0.0) >= current_px * 0.98) # within 2% of peak close
+
+                        # Retrieve its Short10 momentum score from row
+                        s10 = 0.0
+                        for row in ws.iter_rows(min_row=2, values_only=True):
+                            if row[3] == sym:
+                                s10 = row[24] or 0.0
+                                break
+
+                        if is_winner and has_peak and s10 >= 3.0:
+                            max_pos_allocation = state["equity"] * rules["max_allocation_pct"]
+                            current_allocation = pos["qty"] * current_px
+                            remaining_room = max_pos_allocation - current_allocation
+
+                            if remaining_room > 500.0:  # Minimum scale-in size is $500
+                                cash_to_deploy = min(state["balance"] - (state["equity"] * rules["cash_buffer_pct"]), remaining_room)
+                                add_qty = calculate_share_qty(sym, cash_to_deploy, current_px)
+
+                                if add_qty > 0:
+                                    cost = add_qty * current_px
+                                    state["balance"] -= cost
+
+                                    # Blended cost basis recalculation
+                                    old_qty = pos["qty"]
+                                    old_cost = pos["cost"]
+                                    new_qty = old_qty + add_qty
+                                    blended_cost = round(((old_qty * old_cost) + (cost)) / new_qty, 2)
+
+                                    pos["qty"] = new_qty
+                                    pos["cost"] = blended_cost
+
+                                    tx = {
+                                        "date": today, "time": now_time, "type": "BUY_SCALE_IN", 
+                                        "symbol": sym, "price": current_px, "qty": add_qty,
+                                        "details": f"Pyramiding Scale-In (Breakout Peak, s10={s10})"
+                                    }
+                                    state["history"].append(tx)
+                                    new_transactions.append(tx)
+
+                                    _log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f} (Blended Cost: ${blended_cost:.2f})")
+                                    print(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f}")  # noqa: print
+                # ───────────────────────────────────────────────────────────
 
     except RuntimeError:
         raise  # critical failures (no prices, etc.) must propagate — never swallow
