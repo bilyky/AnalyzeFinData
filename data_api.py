@@ -129,7 +129,7 @@ def verify_price_integrity(symbol: str, price: float, source: str) -> None:
     sym = (symbol or "").strip().upper()
     if sym in _PRICE_CHECK_EXEMPT or instruments.is_excluded(sym):
         return
-    if price is None or price < 0:
+    if price is None or price <= 0:
         raise PricingDiscrepancyError(
             f"[PRICING DISCREPANCY] {sym} has invalid price: {price} (Source: {source})"
         )
@@ -151,7 +151,8 @@ def verify_price_integrity(symbol: str, price: float, source: str) -> None:
         if stale_days > _PRICE_CACHE_MAX_STALE_DAYS:
             return  # cache is stale — not authoritative, skip check
         cache_close = float(ts[newest_date]["4. close"])
-    except Exception:
+    except Exception as e:
+        _log.warning(f"[PRICING] {sym}: could not read OHLCV cache for integrity check: {e}")
         return
 
     if cache_close <= 0:

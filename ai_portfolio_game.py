@@ -3,6 +3,8 @@ import datetime
 import openpyxl
 import os
 import pytz
+import re
+import requests
 import etrade
 import rapidapi
 import sys
@@ -141,7 +143,7 @@ _HEAL_ATTEMPTED: set = set()  # per-process guard: each symbol healed at most on
 
 
 def _heal_symbol_cache(symbol) -> bool:
-    """Autonomic on-demand self-healing: pulls fresh OHLCV history via rapidapi.
+    """Pull fresh OHLCV history via rapidapi when a stale cache is detected.
     Each symbol is attempted at most once per process run."""
     if symbol in _HEAL_ATTEMPTED:
         return False
@@ -690,7 +692,7 @@ def update_excel_log(state, new_transactions):
         print(f"Failed to update Excel log: {e}")  # noqa: print
 
 def get_live_google_price(symbol):
-    """Scrape the 100% live price from Google Finance as an agnostic online fallback."""
+    """Scrape the latest price from Google Finance as a fallback when E*TRADE is unavailable."""
     exchanges = ["NASDAQ", "NYSE", "NYSEARCA", "AMEX"]
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
@@ -760,8 +762,8 @@ def is_market_hours():
             
         return True
     except Exception:
-        # Fallback to True if timezone check fails, to prevent blocking active hours
-        return True
+        _log.warning("is_market_hours: timezone check failed — defaulting to False (skip run).")
+        return False  # safe default: skip trade rather than run at unknown hours
 
 def get_json_prices_fallback(symbols):
     """Retrieve the latest closing prices from the local per-symbol OHLCV JSON caches.
@@ -1288,7 +1290,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     old_stop = pos.get("stop_loss", 0.0)
                     if recalculated_stop > old_stop:
                         pos["stop_loss"] = recalculated_stop
-                        _log.info(f"🛡️ [Profit-Lock] {sym} stop ratcheted upwards: ${old_stop:.2f} ➡️ ${recalculated_stop:.2f} (Peak Close: ${highest_close:.2f})")
+                        _log.info(f"[Profit-Lock] {sym} stop ratcheted: ${old_stop:.2f} -> ${recalculated_stop:.2f} (peak close ${highest_close:.2f})")
                         print(f"🛡️ [Profit-Lock] {sym} stop ratcheted upwards: ${old_stop:.2f} ➡️ ${recalculated_stop:.2f}")  # noqa: print
                         
                 # 3. Breakeven Trigger: If price has rallied > 1.5x ATR, lock in exact purchase Cost Basis (Breakeven)
@@ -1297,7 +1299,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     cost_basis = pos.get("cost", 0.0)
                     if cost_basis > old_stop:
                         pos["stop_loss"] = cost_basis
-                        _log.info(f"🛡️ [Breakeven Lock] {sym} stop bumped to Cost Basis (Breakeven): ${old_stop:.2f} ➡️ ${cost_basis:.2f} (Risk-Free Trade!)")
+                        _log.info(f"[Breakeven Lock] {sym} stop raised to cost basis: ${old_stop:.2f} -> ${cost_basis:.2f}")
                         print(f"🛡️ [Breakeven Lock] {sym} stop bumped to Cost Basis: ${old_stop:.2f} ➡️ ${cost_basis:.2f}")  # noqa: print
             # ────────────────────────────────────────────────────────────────
 
@@ -1490,9 +1492,10 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                               today, now_time, new_transactions, prices)
 
+    except RuntimeError:
+        raise  # critical failures (no prices, etc.) must propagate — never swallow
     except Exception as e:
-        print(f"⚠️ SCRIPT ERROR: {e}")  # noqa: print
-        pass
+        _log.exception(f"run_daily_ai_management failed: {e}")
     finally:
         if state is not None:
             save_game(state)

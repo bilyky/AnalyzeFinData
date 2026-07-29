@@ -245,8 +245,8 @@ class TestPersistentProfileModes(unittest.TestCase):
             "profile_mode": "ADAPTIVE"
         }
         mock_load_game.return_value = state
-        mock_get_prices.return_value = {}
-        
+        mock_get_prices.return_value = {"SPY": 500.0}
+
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Research"
@@ -282,7 +282,7 @@ class TestPersistentProfileModes(unittest.TestCase):
         wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Research"
         ws.append(["Rank"] + [None] * 25)
         mock_load_wb.return_value = wb
-        mock_get_prices.return_value = {}
+        mock_get_prices.return_value = {"SPY": 500.0}
 
         cases = [
             (5000.0, "BALANCED", "above 40% threshold upgrades DEFENSIVE→BALANCED"),
