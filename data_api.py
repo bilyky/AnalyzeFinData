@@ -1183,6 +1183,12 @@ def read_manual_tasks() -> list[dict]:
     return MANUAL_TASKS
 
 
+_ADDRESSED_BUY_SIDE_MISSES = {
+    "ETHT": "Addressed",
+    "WDAY": "Addressed",
+}
+
+
 def read_scorecard(horizon_days: int = 10) -> dict:
     """Backtracked selector scorecard (rules vs each AI provider) + winner-selling
     misses, from Data/decision_log.jsonl. Cached; empty when no log yet."""
@@ -1208,12 +1214,15 @@ def read_scorecard(horizon_days: int = 10) -> dict:
                 buy_side_date = report.get("replay_date")
                 s10_missed = report.get("s10_analysis", {}).get("missed", [])
                 for m in s10_missed[:10]: # Top 10 missed buy-side winners
+                    sym_upper = str(m.get("symbol") or "").strip().upper()
+                    status_val = _ADDRESSED_BUY_SIDE_MISSES.get(sym_upper, "Reviewing")
                     buy_side_missed.append({
-                        "symbol": m.get("symbol"),
+                        "symbol": sym_upper,
                         "pgr": m.get("pgr") or "N/A",
                         "score": round(m.get("score", 0.0), 1),
                         "fwd_return_pct": round(m.get("fwd_r10", 0.0), 1),
-                        "reasons": m.get("reasons", [])
+                        "reasons": m.get("reasons", []),
+                        "status": status_val
                     })
         except Exception:
             pass

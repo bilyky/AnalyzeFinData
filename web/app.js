@@ -1364,6 +1364,10 @@ async function loadScorecard() {
     $("buy-side-misses-body").innerHTML = buySideMisses.length ? buySideMisses.map((bm) => {
         const pgrCls = (bm.pgr || "").includes("Bu") ? "text-green-400 font-semibold" : (bm.pgr || "").includes("Be") ? "text-red-400" : "text-slate-300";
         const reasonsList = (bm.reasons || []).map((r) => `<span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700/50 text-[10px] mr-1 inline-block">${esc(r)}</span>`).join("");
+        const isAddressed = bm.status === "Addressed";
+        const statusCell = isAddressed
+            ? `<td class="text-center"><span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title="This missed buy-side opportunity has been officially addressed & resolved by our automated updates.">✅ Addressed</span></td>`
+            : `<td class="text-center"><span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse" title="This missed buy-side opportunity is currently under investigation & review.">Reviewing</span></td>`;
         return `
         <tr>
             <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${bm.symbol}">${bm.symbol}</td>
@@ -1371,9 +1375,10 @@ async function loadScorecard() {
             <td class="${cls(bm.score)} font-semibold">${bm.score}</td>
             <td class="pos font-bold">+${bm.fwd_return_pct}%</td>
             <td>${reasonsList || "—"}</td>
+            ${statusCell}
         </tr>`;
     }).join("")
-    : `<tr><td colspan="5" class="text-center text-slate-500 py-6">No buy-side missed winners found.</td></tr>`;
+    : `<tr><td colspan="6" class="text-center text-slate-500 py-6">No buy-side missed winners found.</td></tr>`;
 }
 
 // ── Research tab ─────────────────────────────────────────────────────────────
