@@ -98,5 +98,54 @@ class TestTrailingStopRatcheting(unittest.TestCase):
         self.assertEqual(pos["highest_close_since_acq"], 107.0)
 
 
+class TestZeroCashDragAndFractionalSizing(unittest.TestCase):
+    def test_is_fractional_eligible(self):
+        # 1. Standard S&P 100 leaders and core ETFs must be eligible
+        self.assertTrue(game.instruments.is_fractional_eligible("AAPL"))
+        self.assertTrue(game.instruments.is_fractional_eligible("SPY"))
+        self.assertTrue(game.instruments.is_fractional_eligible("QQQ"))
+        self.assertTrue(game.instruments.is_fractional_eligible("NVDA"))
+        
+        # 2. Non-S&P 100 assets must NOT be eligible
+        self.assertFalse(game.instruments.is_fractional_eligible("TSCO"))
+        self.assertFalse(game.instruments.is_fractional_eligible("HE"))
+
+    def test_calculate_share_qty(self):
+        # 1. Standard assets must return integers (rounded down)
+        self.assertEqual(game.calculate_share_qty("TSCO", 1000.0, 30.0), 33)
+        self.assertEqual(type(game.calculate_share_qty("TSCO", 1000.0, 30.0)), int)
+        
+        # 2. Fractional assets must return precise floats rounded to 3 decimals
+        # 1000.0 / 30.0 = 33.333333... -> 33.333
+        self.assertEqual(game.calculate_share_qty("AAPL", 1000.0, 30.0), 33.333)
+        self.assertEqual(type(game.calculate_share_qty("AAPL", 1000.0, 30.0)), float)
+
+    @mock.patch("ai_portfolio_game.get_market_regime")
+    def test_zero_cash_floor_under_bullish(self, mock_regime):
+        # 1. When market is BULLISH, cash buffer must be 0% across all profiles
+        mock_regime.return_value = "BULLISH"
+        
+        rules_agg = game.get_strategy_rules("AGGRESSIVE")
+        self.assertEqual(rules_agg["cash_buffer_pct"], 0.0)
+        
+        rules_bal = game.get_strategy_rules("BALANCED")
+        self.assertEqual(rules_bal["cash_buffer_pct"], 0.0)
+        
+        rules_def = game.get_strategy_rules("DEFENSIVE")
+        self.assertEqual(rules_def["cash_buffer_pct"], 0.0)
+
+        # 2. When market is NEUTRAL, cash buffer must return to its standard values
+        mock_regime.return_value = "NEUTRAL"
+        
+        rules_agg = game.get_strategy_rules("AGGRESSIVE")
+        self.assertEqual(rules_agg["cash_buffer_pct"], 0.10)
+        
+        rules_bal = game.get_strategy_rules("BALANCED")
+        self.assertEqual(rules_bal["cash_buffer_pct"], 0.20)
+        
+        rules_def = game.get_strategy_rules("DEFENSIVE")
+        self.assertEqual(rules_def["cash_buffer_pct"], 0.50)
+
+
 if __name__ == "__main__":
     unittest.main()

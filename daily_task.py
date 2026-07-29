@@ -5,6 +5,8 @@ import subprocess
 import notify
 import openpyxl
 import traceback
+import json
+import powergauge
 from pathlib import Path
 
 # --- CONFIGURATION ---
@@ -15,7 +17,7 @@ def log(msg):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(LOG_FILE, "a") as f:
         f.write(f"[{timestamp}] {msg}\n")
-    print(msg)
+    print(msg)  # noqa: print
 
 def run_command(command_list):
     log(f"Running: {' '.join(command_list)}")
@@ -43,14 +45,12 @@ def get_symbols_from_xls():
                 symbols.append(str(val))
         return symbols
     except Exception as e:
-        print(f"Error reading symbols from XLS: {e}")
+        print(f"Error reading symbols from XLS: {e}")  # noqa: print
         return []
 
 def get_all_data(date):
     # Dynamic import to use existing logic
     sys.path.insert(0, str(BASE_DIR))
-    import powergauge
-    import json
 
     powergauge._build_cache_index()
 
@@ -129,10 +129,32 @@ def main():
         # We run ruff to catch errors like NameError before we even start
         log("Running self-validation (linting)...")
         # We use --select E to focus on basic syntax and logic errors
-        lint_result = subprocess.run([sys.executable, "-m", "ruff", "check", "--select", "F,E9,F63,F7,F82", "daily_task.py"], capture_output=True, text=True)
-        if lint_result.returncode != 0:
-            raise RuntimeError(f"Self-validation failed:\n{lint_result.stdout}\n{lint_result.stderr}")
-        log("Self-validation passed.")
+        ruff_cmd = [sys.executable, "-m", "ruff"]
+        venv_new_python = os.path.join("venv_new", "Scripts", "python.exe")
+        venv_python = os.path.join("venv", "Scripts", "python.exe")
+        
+        if not os.path.exists(venv_new_python) and os.path.exists(venv_python):
+            venv_new_python = venv_python
+
+        try:
+            # Check if the primary interpreter has ruff available
+            try:
+                test_res = subprocess.run(ruff_cmd + ["--version"], capture_output=True)
+                if test_res.returncode != 0:
+                    raise FileNotFoundError("Ruff not found in current python executable")
+            except Exception:
+                # If primary interpreter fails, fall back to virtual environment Python
+                if os.path.exists(venv_new_python):
+                    ruff_cmd = [venv_new_python, "-m", "ruff"]
+
+            lint_result = subprocess.run(ruff_cmd + ["check", "--select", "F,E9,F63,F7,F82", "daily_task.py"], capture_output=True, text=True)
+            if lint_result.returncode != 0:
+                raise RuntimeError(f"Self-validation failed:\n{lint_result.stdout}\n{lint_result.stderr}")
+            log("Self-validation passed.")
+        except RuntimeError as e:
+            raise
+        except Exception as e:
+            log(f"Warning: Self-validation skipped (ruff package not available): {e}")
 
         # 1. Sync last 5 days history
         run_command([sys.executable, "run_history.py", "5"])

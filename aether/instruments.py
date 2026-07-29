@@ -15,6 +15,7 @@ algorithm is built for these instruments (see CLAUDE.md R&D roadmap).
 
 import json
 from pathlib import Path
+from aether import ai_client
 
 _SCARCITY_CACHE_FILE = Path(__file__).resolve().parent.parent / "Data" / "scarcity_cache.json"
 
@@ -73,7 +74,7 @@ def _save_scarcity_cache(cache: dict):
         with open(_SCARCITY_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(cache, f, indent=4)
     except Exception as e:
-        print(f"Warning: Failed to save scarcity cache: {e}")
+        print(f"Warning: Failed to save scarcity cache: {e}")  # noqa: print
 
 
 def is_scarcity_asset(symbol: str, industry_str: str) -> bool:
@@ -99,13 +100,33 @@ def is_scarcity_asset(symbol: str, industry_str: str) -> bool:
         "Respond with exactly YES or NO."
     )
     try:
-        from aether import ai_client
         res = ai_client.evaluate(system, user, max_tokens=5, temperature=0.0)
         result = "YES" in (res or "").strip().upper()
     except Exception as e:
-        print(f"Warning: AI classification failed for {s}: {e}. Not caching — will retry next run.")
+        print(f"Warning: AI classification failed for {s}: {e}. Not caching — will retry next run.")  # noqa: print
         return False   # don't persist a transient failure as a permanent NO
 
     cache[s] = result
     _save_scarcity_cache(cache)
     return result
+
+
+_FRACTIONAL_ELIGIBLE = frozenset({
+    "DIA", "SPY", "QQQ", "IWM",  # Major ETFs
+    # S&P 100 Leaders
+    "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "GOOG", "META", "TSLA", "UNH", "JNJ", 
+    "XOM", "JPM", "V", "PG", "AVGO", "MA", "HD", "CVX", "MRK", "ABBV", 
+    "ADBE", "COST", "PEP", "KO", "ORCL", "AMD", "BAC", "WMT", "MCD", "CRM", 
+    "TMO", "NFLX", "CSCO", "ACN", "ABT", "PM", "DIS", "T", "TXN", "COP", 
+    "VZ", "BMY", "DHR", "AMGN", "C", "QCOM", "HON", "CAT", "NKE", "INTC", 
+    "UNP", "LOW", "GE", "SPGI", "AXP", "GS", "MS", "EL", "BLK", "PLD", 
+    "INTU", "DE", "AMAT", "ISRG", "MDLZ", "TJX", "LMT", "SBUX", "PFE", "SYK", 
+    "GILD", "ADP", "NOW", "CVS", "CI", "CB", "MMC", "VRTX", "ADI", "LRCX", 
+    "REGN", "HCA", "ZTS", "MO", "DUK", "SO", "USB", "PNC", "TFC", "FDX", 
+    "UPS", "CL", "WM", "EOG", "EW", "MCK"
+})
+
+
+def is_fractional_eligible(symbol: str) -> bool:
+    """Return True if the symbol is eligible for fractional share order entry."""
+    return (symbol or "").strip().upper() in _FRACTIONAL_ELIGIBLE

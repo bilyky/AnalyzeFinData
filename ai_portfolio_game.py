@@ -283,7 +283,7 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
         # Re-calculate cash buffer dynamically based on remaining available slots
         current_available = available_slots - buys_executed
         cash_per_buy = (state["balance"] - min_cash_required) / current_available
-        qty = int(cash_per_buy // buy["price"])
+        qty = calculate_share_qty(buy["sym"], cash_per_buy, buy["price"])
         if qty > 0:
             # 2.5-Sigma Bubble Guard: Reject if symbol trades > 2.5 standard deviations above 500 SMA
             z_score = calculate_bubble_z_score(buy["sym"])
@@ -319,7 +319,7 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                     continue
                 if cost > remaining_scarcity_room_usd:
                     old_qty = qty
-                    qty = int(remaining_scarcity_room_usd // buy["price"])
+                    qty = calculate_share_qty(buy["sym"], remaining_scarcity_room_usd, buy["price"])
                     print(f"⚠️ Downsizing scarcity buy {buy['sym']} from {old_qty} to {qty} shares to fit 20% scarcity cap.")  # noqa: print
                     if qty <= 0:
                         print(f"🛑 AI BUY REJECTED (Scarcity Limit Full): Remaining room is less than 1 share of {buy['sym']}.")  # noqa: print
@@ -332,7 +332,7 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                     continue
                 if cost > remaining_standard_room_usd:
                     old_qty = qty
-                    qty = int(remaining_standard_room_usd // buy["price"])
+                    qty = calculate_share_qty(buy["sym"], remaining_standard_room_usd, buy["price"])
                     print(f"⚠️ Downsizing standard buy {buy['sym']} from {old_qty} to {qty} shares to fit 80% standard cap.")  # noqa: print
                     if qty <= 0:
                         print(f"🛑 AI BUY REJECTED (Standard Cap Full): Remaining room is less than 1 share of {buy['sym']}.")  # noqa: print
@@ -504,6 +504,9 @@ def get_market_regime():
 def get_strategy_rules(profile):
     """Define risk and size rules based on the chosen strategy profile."""
     # Profile options: BALANCED, AGGRESSIVE, DEFENSIVE
+    regime = get_market_regime()
+    is_bullish = (regime == "BULLISH")
+
     if profile == "AGGRESSIVE":
         return {
             "max_positions": 6,
@@ -511,7 +514,7 @@ def get_strategy_rules(profile):
             "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite hard asset cap
             "atr_multiplier": 3.5,       # Loose stop to avoid shakeouts in high-beta stocks
             "min_score_threshold": 2.0,  
-            "cash_buffer_pct": 0.10      
+            "cash_buffer_pct": 0.0 if is_bullish else 0.10      
         }
     elif profile == "DEFENSIVE":
         return {
@@ -520,7 +523,7 @@ def get_strategy_rules(profile):
             "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite hard asset cap
             "atr_multiplier": 1.5,       # Tight stop-loss to preserve capital
             "min_score_threshold": 10.0, 
-            "cash_buffer_pct": 0.50      
+            "cash_buffer_pct": 0.0 if is_bullish else 0.50      
         }
     else: # BALANCED (Default)
         return {
@@ -529,8 +532,20 @@ def get_strategy_rules(profile):
             "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite hard asset cap
             "atr_multiplier": 2.5,
             "min_score_threshold": 5.0,
-            "cash_buffer_pct": 0.20
+            "cash_buffer_pct": 0.0 if is_bullish else 0.20
         }
+
+
+def calculate_share_qty(symbol: str, cash_to_use: float, price: float) -> float:
+    """Calculate the share quantity to purchase.
+    Returns a float rounded to 3 decimal places for fractional-eligible assets,
+    or a whole integer for standard assets."""
+    if price <= 0 or cash_to_use <= 0:
+        return 0
+    if instruments.is_fractional_eligible(symbol):
+        return round(cash_to_use / price, 3)
+    else:
+        return int(cash_to_use // price)
 
 def load_game():
     if not AI_GAME_FILE.exists() or AI_GAME_FILE.stat().st_size == 0:
@@ -1196,7 +1211,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         max_allocation = state["equity"] * rules["max_allocation_pct"]
                         cash_to_use = min(state["balance"] / available_slots, max_allocation)
                         
-                        qty = int(cash_to_use // price)
+                        qty = calculate_share_qty(sym, cash_to_use, price)
                         if qty > 0:
                             cost = qty * price
                             state["balance"] -= cost
