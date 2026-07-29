@@ -12,7 +12,8 @@
 
 setlocal
 
-set DEV_HOST=ybilyk@fm7duybilyk001
+set DEV_HOST=ybilyk@10.105.156.239
+ ::https://fm7duybilyk001.fm.intel.com/
 set DEV_PORT=8036
 set LOCAL_PORT=18036
 set SSH_KEY=%USERPROFILE%\.ssh\id_rsa
