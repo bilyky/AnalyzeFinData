@@ -7,29 +7,35 @@ import openpyxl
 import traceback
 import json
 import powergauge
+import logging
 from pathlib import Path
 
-# --- CONFIGURATION ---
+# --- LOGGING CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
-LOG_FILE = BASE_DIR / "daily_task.log"
+_log = logging.getLogger("aether.daily_task")
+_log.setLevel(logging.INFO)
 
-def log(msg):
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(LOG_FILE, "a") as f:
-        f.write(f"[{timestamp}] {msg}\n")
-    print(msg)  # noqa: T201
+# Avoid duplicate handlers if imported
+if not _log.handlers:
+    fh = logging.FileHandler(Path(__file__).resolve().parent / "daily_task.log", encoding="utf-8")
+    fh.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    _log.addHandler(fh)
+    
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setFormatter(logging.Formatter("%(message)s"))
+    _log.addHandler(ch)
 
 def run_command(command_list):
-    log(f"Running: {' '.join(command_list)}")
-    # Use BASE_DIR for the script if it's a local script
+    _log.info(f"Running: {' '.join(command_list)}")
+    # Use Path(__file__) for the script if it's a local script
     if len(command_list) > 1 and command_list[1].endswith(".py"):
-        command_list[1] = str(BASE_DIR / command_list[1])
+        command_list[1] = str(Path(__file__).resolve().parent / command_list[1])
     
     result = subprocess.run(command_list, capture_output=True, text=True)
     if result.returncode != 0:
-        log(f"Error (exit code {result.returncode}): {result.stderr}")
+        _log.info(f"Error (exit code {result.returncode}): {result.stderr}")
     else:
-        log("Command completed successfully.")
+        _log.info("Command completed successfully.")
     return result.stdout
 
 def get_symbols_from_xls():
@@ -45,7 +51,7 @@ def get_symbols_from_xls():
                 symbols.append(str(val))
         return symbols
     except Exception as e:
-        print(f"Error reading symbols from XLS: {e}")  # noqa: T201
+        _log.error(f"Error reading symbols from XLS: {e}")
         return []
 
 def get_all_data(date):
@@ -57,7 +63,7 @@ def get_all_data(date):
     # Get symbols from XLS to ensure we only analyze "Research" symbols
     research_symbols = get_symbols_from_xls()
     if not research_symbols:
-        log("Warning: No symbols found in Research sheet. Falling back to all cached symbols.")
+        _log.info("Warning: No symbols found in Research sheet. Falling back to all cached symbols.")
         symbol_dir = BASE_DIR / "Data" / "Symbol"
         cached_symbols = []
         if symbol_dir.exists():
@@ -122,12 +128,12 @@ def main():
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
     today = datetime.date.today()
-    log(f"Starting daily automation for {today}")
+    _log.info(f"Starting daily automation for {today}")
 
     try:
         # 0. Self-Validation (Linting)
         # We run ruff to catch errors like NameError before we even start
-        log("Running self-validation (linting)...")
+        _log.info("Running self-validation (linting)...")
         # We use --select E to focus on basic syntax and logic errors
         ruff_cmd = [sys.executable, "-m", "ruff"]
         venv_new_python = os.path.join("venv_new", "Scripts", "python.exe")
@@ -150,11 +156,11 @@ def main():
             lint_result = subprocess.run(ruff_cmd + ["check", "--select", "F,E9,F63,F7,F82", "daily_task.py"], capture_output=True, text=True)
             if lint_result.returncode != 0:
                 raise RuntimeError(f"Self-validation failed:\n{lint_result.stdout}\n{lint_result.stderr}")
-            log("Self-validation passed.")
+            _log.info("Self-validation passed.")
         except RuntimeError:
             raise
         except Exception as e:
-            log(f"Warning: Self-validation skipped (ruff package not available): {e}")
+            _log.info(f"Warning: Self-validation skipped (ruff package not available): {e}")
 
         # 1. Sync last 5 days history
         run_command([sys.executable, "run_history.py", "5"])
@@ -165,7 +171,7 @@ def main():
         # 3. Get all processed data
         all_symbols_data = get_all_data(today)
         if not all_symbols_data:
-            log("Error: No symbol data retrieved for report.")
+            _log.info("Error: No symbol data retrieved for report.")
             return
 
         # 4. Generate Tables (Same logic as Excel Picks sheet)
@@ -276,18 +282,18 @@ def main():
         </html>
         """
 
-        log("Generating rich HTML report...")
+        _log.info("Generating rich HTML report...")
         notify.send_email(f"Daily Trade Report: {today}", html, is_html=True)
-        log("Automation completed successfully.")
+        _log.info("Automation completed successfully.")
 
     except Exception as e:
         error_msg = f"Automation Failed for {today}\n\nError: {str(e)}\n\nFull Traceback:\n{traceback.format_exc()}"
-        log(f"FATAL ERROR: {error_msg}")
+        _log.info(f"FATAL ERROR: {error_msg}")
         try:
             notify.send_email(f"ALERT: Daily Trade Report Failed ({today})", error_msg)
-            log("Error alert email sent.")
+            _log.info("Error alert email sent.")
         except Exception as notify_err:
-            log(f"Could not send error alert email: {notify_err}")
+            _log.info(f"Could not send error alert email: {notify_err}")
 
 
 if __name__ == "__main__":
