@@ -158,20 +158,20 @@ def get_staged_python_files() -> list:
         return []
 
 def main():
-    print("⏳ Running Project AETHER Pre-Commit Quality Checks...")
-    
+    print("Running Project AETHER Pre-Commit Quality Checks...")
+
     success = True
-    
+
     # Check R&D Roadmap Synchronicity
     if not check_rd_roadmap_sync():
         success = False
-        
+
     # Scan only staged python files currently being committed!
     python_files = get_staged_python_files()
     if not python_files:
-        print("ℹ️ No staged python files detected for commit. Skipping file scans.")
+        print("No staged python files detected for commit. Skipping file scans.")
     else:
-        print(f"🔍 Scanning {len(python_files)} staged python file(s) for inline imports and silent exceptions...")
+        print(f"Scanning {len(python_files)} staged python file(s)...")
         for fpath in python_files:
             # Files fully exempt from all checks (intentional patterns or non-production)
             _skip_all = ("pre_commit_validator.py", "reconcile_prices.py",
@@ -179,8 +179,10 @@ def main():
             if any(x in fpath for x in _skip_all):
                 continue
 
-            # Files exempt from inline-import check only (pre-existing lazy-load pattern)
-            _skip_imports = ("excel_output.py",)
+            # Files exempt from inline-import check:
+            # - excel_output.py: pre-existing lazy-load inside openpyxl callbacks
+            # - test_*.py: inline imports inside test methods are legitimate (isolate failures)
+            _skip_imports = ("excel_output.py", "test_")
             if not any(x in fpath for x in _skip_imports):
                 if not check_no_inline_imports(fpath):
                     success = False
@@ -196,10 +198,10 @@ def main():
                     success = False
                 
     if not success:
-        print("❌ [GIT PRE-COMMIT] Commit aborted. Please resolve the discrepancies above.")
+        print("[GIT PRE-COMMIT] FAILED. Resolve the issues above before committing.")
         sys.exit(1)
-        
-    print("✅ [GIT PRE-COMMIT] All pre-commit quality checks passed successfully!")
+
+    print("[GIT PRE-COMMIT] All checks passed.")
     sys.exit(0)
 
 if __name__ == "__main__":
