@@ -7,6 +7,8 @@ import etrade
 import rapidapi
 import sys
 import circuit_breaker
+import aether.notify as notify
+import argparse
 from pathlib import Path
 
 # --- Windows UTF-8 Hardening ---
@@ -265,7 +267,6 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
     current_standard_usd = sum(pos["qty"] * prices.get(sym, pos["cost"]) 
                                for sym, pos in state["positions"].items() if not pos.get("is_scarcity", False))
                                
-    import logging as _log
     _log.debug("[Buckets] Scarcity $%.2f / $%.2f  Standard $%.2f / $%.2f",
                current_scarcity_usd, scarcity_limit_usd,
                current_standard_usd, standard_limit_usd)
@@ -285,13 +286,12 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
             # 2.5-Sigma Bubble Guard: Reject if symbol trades > 2.5 standard deviations above 500 SMA
             z_score = calculate_bubble_z_score(buy["sym"])
             if z_score is not None and z_score > 2.5:
-                print(f"🛑 AI BUY REJECTED (2.5-Sigma Bubble Guard): {buy['sym']} trades "
-                      f"at +{z_score:.2f} SD above its 500-day mean (Super-Bubble Zone!).")
+                print(f"🛑 AI BUY REJECTED (2.5-Sigma Bubble Guard): {buy['sym']} trades at +{z_score:.2f} SD above its 500-day mean (Super-Bubble Zone!).")  # noqa: print
                 continue
 
             is_verified, v_msg = backtrack_verify(buy["sym"])
             if not is_verified:
-                print(f"🛑 AI BUY REJECTED: {buy['sym']} - {v_msg}")
+                print(f"🛑 AI BUY REJECTED: {buy['sym']} - {v_msg}")  # noqa: print
                 continue
 
             # Dynamic Feedback Analyzer Guard Check (Anti-Failure DNA)
@@ -306,35 +306,34 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
             _open_digit_z = _digit_open_score(buy["sym"], buy["price"])
             if abs(_open_digit_z) >= 0.33:  # fires when |z|>=2.0 in study (z/3 threshold)
                 _dir = "UP" if _open_digit_z > 0 else "DOWN"
-                print(f"🔢 [Digit-Sum] {buy['sym']} open digit signal: {_dir} bias "
-                      f"(score={_open_digit_z:+.2f})")
+                print(f"🔢 [Digit-Sum] {buy['sym']} open digit signal: {_dir} bias (score={_open_digit_z:+.2f})")  # noqa: print
 
             # Core-Satellite Allocation Checking & Downsizing logic
             cost = qty * buy["price"]
             if is_scarcity:
                 remaining_scarcity_room_usd = scarcity_limit_usd - current_scarcity_usd
                 if remaining_scarcity_room_usd <= 0:
-                    print(f"🛑 AI BUY REJECTED (Scarcity Limit Full): {buy['sym']} is scarcity play, but 20% scarcity bucket is fully allocated.")
+                    print(f"🛑 AI BUY REJECTED (Scarcity Limit Full): {buy['sym']} is scarcity play, but 20% scarcity bucket is fully allocated.")  # noqa: print
                     continue
                 if cost > remaining_scarcity_room_usd:
                     old_qty = qty
                     qty = int(remaining_scarcity_room_usd // buy["price"])
-                    print(f"⚠️ Downsizing scarcity buy {buy['sym']} from {old_qty} to {qty} shares to fit 20% scarcity cap.")
+                    print(f"⚠️ Downsizing scarcity buy {buy['sym']} from {old_qty} to {qty} shares to fit 20% scarcity cap.")  # noqa: print
                     if qty <= 0:
-                        print(f"🛑 AI BUY REJECTED (Scarcity Limit Full): Remaining room is less than 1 share of {buy['sym']}.")
+                        print(f"🛑 AI BUY REJECTED (Scarcity Limit Full): Remaining room is less than 1 share of {buy['sym']}.")  # noqa: print
                         continue
                     cost = qty * buy["price"]
             else:
                 remaining_standard_room_usd = standard_limit_usd - current_standard_usd
                 if remaining_standard_room_usd <= 0:
-                    print(f"🛑 AI BUY REJECTED (Standard Cap Full): {buy['sym']} is standard play, but 80% standard bucket is fully allocated.")
+                    print(f"🛑 AI BUY REJECTED (Standard Cap Full): {buy['sym']} is standard play, but 80% standard bucket is fully allocated.")  # noqa: print
                     continue
                 if cost > remaining_standard_room_usd:
                     old_qty = qty
                     qty = int(remaining_standard_room_usd // buy["price"])
-                    print(f"⚠️ Downsizing standard buy {buy['sym']} from {old_qty} to {qty} shares to fit 80% standard cap.")
+                    print(f"⚠️ Downsizing standard buy {buy['sym']} from {old_qty} to {qty} shares to fit 80% standard cap.")  # noqa: print
                     if qty <= 0:
-                        print(f"🛑 AI BUY REJECTED (Standard Cap Full): Remaining room is less than 1 share of {buy['sym']}.")
+                        print(f"🛑 AI BUY REJECTED (Standard Cap Full): Remaining room is less than 1 share of {buy['sym']}.")  # noqa: print
                         continue
                     cost = qty * buy["price"]
 
@@ -372,7 +371,7 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
             state["history"].append(tx)
             new_transactions.append(tx)
             buys_executed += 1
-            print(f"🤖 AI LIVE BUY: {qty} shares of {buy['sym']} at ${buy['price']} ({stop_desc}, Scarcity={is_scarcity})")
+            print(f"🤖 AI LIVE BUY: {qty} shares of {buy['sym']} at ${buy['price']} ({stop_desc}, Scarcity={is_scarcity})")  # noqa: print
     return buys_executed
 
 
@@ -468,7 +467,7 @@ def get_market_regime():
                     base_profile = "BALANCED" # Consolidation
                 break
     except Exception as e:
-        print(f"Error loading SPY regime: {e}")
+        print(f"Error loading SPY regime: {e}")  # noqa: print
         base_profile = "BALANCED"
     finally:
         if wb:
@@ -483,21 +482,20 @@ def get_market_regime():
         # RSP data would otherwise read as a large SPY-RSP gap and force a spurious
         # defensive downgrade.
         if spy_score is None or rsp_score is None:
-            print(f"  [Breadth] Skipped — insufficient SMA history "
-                  f"(SPY={spy_score}, RSP={rsp_score}).")
+            print(f"  [Breadth] Skipped — insufficient SMA history (SPY={spy_score}, RSP={rsp_score}).")  # noqa: print
             return base_profile
         delta = spy_score - rsp_score
 
         if delta > 4.0:
-            print(f"⚠️ [BREADTH ALERT] SPY-RSP Divergence is high: {delta:.2f} (SPY: {spy_score:.1f}, RSP: {rsp_score:.1f})")
+            print(f"⚠️ [BREADTH ALERT] SPY-RSP Divergence is high: {delta:.2f} (SPY: {spy_score:.1f}, RSP: {rsp_score:.1f})")  # noqa: print
             if base_profile == "AGGRESSIVE":
-                print("  -> Downgrading profile from AGGRESSIVE to BALANCED due to narrow market breadth!")
+                print("  -> Downgrading profile from AGGRESSIVE to BALANCED due to narrow market breadth!")  # noqa: print
                 return "BALANCED"
             elif base_profile == "BALANCED":
-                print("  -> Downgrading profile from BALANCED to DEFENSIVE due to narrow market breadth!")
+                print("  -> Downgrading profile from BALANCED to DEFENSIVE due to narrow market breadth!")  # noqa: print
                 return "DEFENSIVE"
     except Exception as e:
-        print(f"Error applying breadth divergence filter: {e}")
+        print(f"Error applying breadth divergence filter: {e}")  # noqa: print
 
     return base_profile
 
@@ -544,7 +542,7 @@ def load_game():
                         state = json.load(bf)
                         # Succeeded! Copy it back to repair AI_GAME_FILE
                         shutil.copy2(b, AI_GAME_FILE)
-                        print(f"  [⚠️ AETHER SELF-HEALER] AI game file was missing or empty. Successfully restored from backup: {b.name}")
+                        print(f"  [⚠️ AETHER SELF-HEALER] AI game file was missing or empty. Successfully restored from backup: {b.name}")  # noqa: print
                         return state
                 except Exception:
                     continue
@@ -561,7 +559,7 @@ def load_game():
             return json.load(f)
         except Exception as e:
             # Corruption detected! Try to restore from backup
-            print(f"  [⚠️ AETHER SELF-HEALER] Error loading {AI_GAME_FILE.name}: {e}. Attempting automated recovery from backup...")
+            print(f"  [⚠️ AETHER SELF-HEALER] Error loading {AI_GAME_FILE.name}: {e}. Attempting automated recovery from backup...")  # noqa: print
             backup_dir = BASE_DIR / "Data" / "Backup" / "Game"
             if backup_dir.exists():
                 backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
@@ -570,7 +568,7 @@ def load_game():
                         with open(b, "r", encoding="utf-8") as bf:
                             state = json.load(bf)
                             shutil.copy2(b, AI_GAME_FILE)
-                            print(f"  [⚠️ AETHER SELF-HEALER] Successfully restored corrupted file from backup: {b.name}")
+                            print(f"  [⚠️ AETHER SELF-HEALER] Successfully restored corrupted file from backup: {b.name}")  # noqa: print
                             return state
                     except Exception:
                         continue
@@ -604,7 +602,7 @@ def save_game(state):
                 for old_b in backups[:-15]:
                     old_b.unlink()
         except Exception as e:
-            print(f"  [Warning] Game backup failed: {e}")
+            print(f"  [Warning] Game backup failed: {e}")  # noqa: print
 
     with open(AI_GAME_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=4)
@@ -689,12 +687,10 @@ def update_excel_log(state, new_transactions):
             ws2.append([tx["date"], tx["time"], tx["type"], tx["symbol"], tx["price"], tx.get("qty", ""), round(val, 2), tx.get("pnl", "")])
         wb.save(AI_PERF_XLSX)
     except Exception as e:
-        print(f"Failed to update Excel log: {e}")
+        print(f"Failed to update Excel log: {e}")  # noqa: print
 
 def get_live_google_price(symbol):
     """Scrape the 100% live price from Google Finance as an agnostic online fallback."""
-    import requests
-    import re
     exchanges = ["NASDAQ", "NYSE", "NYSEARCA", "AMEX"]
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
@@ -731,10 +727,10 @@ def is_market_hours():
                 is_open = etrade.is_market_open_now(tokens, "production")
                 if is_open is not None:
                     if not is_open:
-                        print("  [AETHER] Dynamic Market Checks confirm market is CLOSED (Holiday/Weekend).")
+                        print("  [AETHER] Dynamic Market Checks confirm market is CLOSED (Holiday/Weekend).")  # noqa: print
                     return is_open
         except Exception as e:
-            print(f"  [AETHER] Dynamic market clock failed: {e}. Falling back to static datetime checks.")
+            print(f"  [AETHER] Dynamic market clock failed: {e}. Falling back to static datetime checks.")  # noqa: print
             
         # 3. Fallback: Weekend check (Saturday=5, Sunday=6)
         if now_la.weekday() in (5, 6):
@@ -788,7 +784,7 @@ def get_json_prices_fallback(symbols):
                         quotes[sym] = float(ts[newest_date]["4. close"])
         return quotes
     except Exception as e:
-        print(f"  [AETHER] Failed to load local JSON prices: {e}")
+        print(f"  [AETHER] Failed to load local JSON prices: {e}")  # noqa: print
         return {}
 
 def get_live_prices(symbols):
@@ -796,13 +792,13 @@ def get_live_prices(symbols):
     try:
         # Weekend Gate: Bypass E*TRADE only on weekends to prevent offline lockout sweeps
         if datetime.date.today().weekday() in (5, 6):
-            print("  [AETHER] Weekend detected — bypassing E*TRADE login.")
-            print("  [AETHER] Attempting instant local price extraction from per-symbol JSON cache...")
+            print("  [AETHER] Weekend detected — bypassing E*TRADE login.")  # noqa: print
+            print("  [AETHER] Attempting instant local price extraction from per-symbol JSON cache...")  # noqa: print
             quotes = get_json_prices_fallback(symbols)
             # Find any missing gaps (symbols not in our local workbook)
             missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
             if missing:
-                print(f"  [AETHER] Local cache missing prices for {missing}. Falling back to Google Finance.")
+                print(f"  [AETHER] Local cache missing prices for {missing}. Falling back to Google Finance.")  # noqa: print
                 quotes.update(get_google_prices_fallback(missing))
             return quotes
 
@@ -819,23 +815,23 @@ def get_live_prices(symbols):
                 pass
 
             if is_fresh:
-                print("  [AETHER] After-hours detected & workbook is ALREADY synced today.")
-                print("  [AETHER] Bypassing E*TRADE login to load directly from per-symbol JSON cache...")
+                print("  [AETHER] After-hours detected & workbook is ALREADY synced today.")  # noqa: print
+                print("  [AETHER] Bypassing E*TRADE login to load directly from per-symbol JSON cache...")  # noqa: print
                 quotes = get_json_prices_fallback(symbols)
                 missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
                 if missing:
-                    print(f"  [AETHER] Local cache missing prices for {missing}. Falling back to Google Finance.")
+                    print(f"  [AETHER] Local cache missing prices for {missing}. Falling back to Google Finance.")  # noqa: print
                     quotes.update(get_google_prices_fallback(missing))
                 return quotes
             else:
-                print("  [AETHER] After-hours detected, but workbook is STALE/UN-SYNCED today.")
-                print("  [AETHER] Connecting to E*TRADE to fetch fresh settled closes...")
+                print("  [AETHER] After-hours detected, but workbook is STALE/UN-SYNCED today.")  # noqa: print
+                print("  [AETHER] Connecting to E*TRADE to fetch fresh settled closes...")  # noqa: print
 
         # Call the hardened get_tokens() which is safe and has an active headless safety gate.
         # This ensures we always actively attempt to re-authenticate when tokens expire.
         tokens = etrade.get_tokens("production")
         if not tokens:
-            print("  [AETHER] E*TRADE authentication failed. Attempting Google Finance live fallback.")
+            print("  [AETHER] E*TRADE authentication failed. Attempting Google Finance live fallback.")  # noqa: print
             return get_google_prices_fallback(symbols)
             
         quotes = etrade.fetch_quotes(tokens, symbols, env="production")
@@ -845,27 +841,26 @@ def get_live_prices(symbols):
         # every good quote and re-scraping the whole list.
         missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
         if missing:
-            print(f"  [AETHER] E*TRADE returned no quote for {missing} "
-                  f"(possibly dead/delisted/misaligned); filling gaps via Google Finance.")
+            print(f"  [AETHER] E*TRADE returned no quote for {missing} (possibly dead/delisted/misaligned); filling gaps via Google Finance.")  # noqa: print
             quotes.update(get_google_prices_fallback(missing))
             still_missing = [s for s in missing if s not in quotes or not quotes[s] or quotes[s] <= 0]
             if still_missing:
-                print(f"  [AETHER] SYMBOLOGY ERROR: No live quote from any source for: {still_missing}")
+                print(f"  [AETHER] SYMBOLOGY ERROR: No live quote from any source for: {still_missing}")  # noqa: print
 
         return quotes
     except Exception as e:
-        print(f"  [AETHER] E*TRADE connection failed: {e}. Attempting Google Finance live fallback.")
+        print(f"  [AETHER] E*TRADE connection failed: {e}. Attempting Google Finance live fallback.")  # noqa: print
         return get_google_prices_fallback(symbols)
 
 def get_google_prices_fallback(symbols):
     """Scrape Google Finance for multiple symbols in parallel/sequence as a robust fallback."""
     quotes = {}
-    print(f"  [Google] Scraping live quotes for: {symbols}")
+    print(f"  [Google] Scraping live quotes for: {symbols}")  # noqa: print
     for sym in symbols:
         price = get_live_google_price(sym)
         if price and price > 0:
             quotes[sym] = price
-            print(f"    - Google Verified {sym}: ${price:.2f}")
+            print(f"    - Google Verified {sym}: ${price:.2f}")  # noqa: print
     return quotes
 
 def send_daily_summary():
@@ -906,7 +901,7 @@ def send_daily_summary():
                         if sym in positions and sym not in live_prices:
                             live_prices[sym] = row[10] or positions[sym]["cost"]
         except Exception as e:
-            print(f"Workbook fallback failed inside summary: {e}")
+            print(f"Workbook fallback failed inside summary: {e}")  # noqa: print
 
     # Final safety fallback to cost basis if both API and workbook are empty
     for sym in positions:
@@ -963,7 +958,7 @@ def send_daily_summary():
         </div>
         """
     except Exception as e:
-        print(f"Failed to include retrospective reflection in email: {e}")
+        print(f"Failed to include retrospective reflection in email: {e}")  # noqa: print
         refl_html = ""
 
     html = f"""
@@ -1021,9 +1016,8 @@ def send_daily_summary():
     </body>
     </html>
     """
-    import notify
     notify.send_email(f"AI Portfolio Summary: {today}", html, is_html=True)
-    print(f"Summary email sent for {today}.")
+    print(f"Summary email sent for {today}.")  # noqa: print
 
 def _has_strong_setups_today(min_score=9.5) -> bool:
     """Return True if we have 2 or more strong, verified bottom setups in the workbook today."""
@@ -1062,7 +1056,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
     try:
         open_status, msg = is_market_open()
         if not open_status and not force:
-            print(f"Aborting AI Move: {msg}")
+            print(f"Aborting AI Move: {msg}")  # noqa: print
             return
 
         state = load_game()
@@ -1075,16 +1069,16 @@ def run_daily_ai_management(force=False, manual_profile=None):
             profile = get_market_regime()
             state["profile"] = profile
             state["profile_mode"] = "ADAPTIVE"
-            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive pilot restored)")
+            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive pilot restored)")  # noqa: print
         elif manual_profile:
             profile = manual_profile
             state["profile"] = profile
             state["profile_mode"] = "MANUAL"
-            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Manual Override - Locked)")
+            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Manual Override - Locked)")  # noqa: print
         elif state.get("profile_mode") == "MANUAL":
             # Auto-Reset Manual Override: A manual override is a one-time tactical choice.
             # On the next automated run (no CLI profile passed), we automatically reset back to ADAPTIVE autopilot.
-            print("  [AETHER] Manual override expired. Automatically resetting back to Adaptive autopilot...")
+            print("  [AETHER] Manual override expired. Automatically resetting back to Adaptive autopilot...")  # noqa: print
             state["profile_mode"] = "ADAPTIVE"
             profile = get_market_regime()
 
@@ -1092,12 +1086,12 @@ def run_daily_ai_management(force=False, manual_profile=None):
             equity = state.get("equity", 0)
             cash_ratio = state.get("balance", 0) / equity if equity > 1.0 else 0
             if profile == "DEFENSIVE" and cash_ratio > 0.40 and _has_strong_setups_today(min_score=9.5):
-                print(f"  [AETHER] Cash is plentiful ({cash_ratio*100:.1f}%) and strong bottom setups are detected.")
-                print("  -> Adaptively upgrading today's strategy profile from DEFENSIVE to BALANCED to deploy cash safely!")
+                print(f"  [AETHER] Cash is plentiful ({cash_ratio*100:.1f}%) and strong bottom setups are detected.")  # noqa: print
+                print("  -> Adaptively upgrading today's strategy profile from DEFENSIVE to BALANCED to deploy cash safely!")  # noqa: print
                 profile = "BALANCED"
 
             state["profile"] = profile
-            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive)")
+            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive)")  # noqa: print
         else:
             profile = get_market_regime()
             state["profile_mode"] = "ADAPTIVE"
@@ -1106,17 +1100,17 @@ def run_daily_ai_management(force=False, manual_profile=None):
             equity = state.get("equity", 0)
             cash_ratio = state.get("balance", 0) / equity if equity > 1.0 else 0
             if profile == "DEFENSIVE" and cash_ratio > 0.40 and _has_strong_setups_today(min_score=9.5):
-                print(f"  [AETHER] Cash is plentiful ({cash_ratio*100:.1f}%) and strong bottom setups are detected.")
-                print("  -> Adaptively upgrading today's strategy profile from DEFENSIVE to BALANCED to deploy cash safely!")
+                print(f"  [AETHER] Cash is plentiful ({cash_ratio*100:.1f}%) and strong bottom setups are detected.")  # noqa: print
+                print("  -> Adaptively upgrading today's strategy profile from DEFENSIVE to BALANCED to deploy cash safely!")  # noqa: print
                 profile = "BALANCED"
 
             state["profile"] = profile
-            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive)")
+            print(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive)")  # noqa: print
 
         rules = get_strategy_rules(profile)
 
         if not XLSX_FILE.exists():
-            print("Workbook not found. AI Management deferred.")
+            print("Workbook not found. AI Management deferred.")  # noqa: print
             return
 
         wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
@@ -1139,7 +1133,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 industry_str = row[4] or ""
                 is_scarcity = instruments.is_scarcity_asset(sym, industry_str)
                 state["positions"][sym]["is_scarcity"] = is_scarcity
-                print(f"  [AETHER State Healer] Classified existing position {sym} as scarcity={is_scarcity}")
+                print(f"  [AETHER State Healer] Classified existing position {sym} as scarcity={is_scarcity}")  # noqa: print
 
         research_symbols = _active_setup_symbols(ws)
 
@@ -1166,14 +1160,13 @@ def run_daily_ai_management(force=False, manual_profile=None):
         # cost-based price won't trip a stop) until a quote returns.
         missing_prices = [sym for sym in symbols_to_check if sym not in prices or not prices[sym] or prices[sym] <= 0]
         if missing_prices:
-            print(f"  [AETHER] PORTFOLIO ERROR: No live quote found for held positions {missing_prices}! "
-                  f"Using cost basis for their equity share and skipping their stop check this run.")
+            print(f"  [AETHER] PORTFOLIO ERROR: No live quote found for held positions {missing_prices}! Using cost basis for their equity share and skipping their stop check this run.")  # noqa: print
 
         state["equity"] = round(_live_equity(state["balance"], state["positions"], prices), 0)
 
         # 0. Execute QUEUED ORDERS (Strategic Overrides with Volatility Sizing)
         if queued:
-            print("🤖 AI EXECUTING QUEUED STRATEGIC ORDERS...")
+            print("🤖 AI EXECUTING QUEUED STRATEGIC ORDERS...")  # noqa: print
             for order in queued:
                 sym = order["symbol"]
                 price = prices.get(sym, 0)
@@ -1191,7 +1184,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     }
                     state["history"].append(tx)
                     new_transactions.append(tx)
-                    print(f"🤖 AI QUEUED SELL EXECUTED: {sym} at ${price} (PnL: ${tx['pnl']})")
+                    print(f"🤖 AI QUEUED SELL EXECUTED: {sym} at ${price} (PnL: ${tx['pnl']})")  # noqa: print
                     log_closed_trade_dna(sym, pos, price, today)
                     
                 elif order["type"] == "BUY" and sym not in state["positions"]:
@@ -1254,7 +1247,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                             }
                             state["history"].append(tx)
                             new_transactions.append(tx)
-                            print(f"🤖 AI QUEUED BUY EXECUTED: {qty} shares of {sym} at ${price} ({stop_desc})")
+                            print(f"🤖 AI QUEUED BUY EXECUTED: {qty} shares of {sym} at ${price} ({stop_desc})")  # noqa: print
             
             state["queued_orders"] = []
 
@@ -1276,13 +1269,44 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         prev_close = pos.get("cost", 0.0)
                     break
             price = prices.get(sym, pos.get("cost"))
-            
+
+            # ── AETHER Profit-Lock Trailing Stop-Loss Ratchet (Priority 1) ──
+            atr = risk_utils.calculate_atr(sym)
+            if atr and atr > 0:
+                # 1. Peak Price Tracking: track highest close since acquisition
+                highest_close = pos.get("highest_close_since_acq", 0.0)
+                highest_close = max(highest_close, pos.get("cost", 0.0), price)
+                pos["highest_close_since_acq"] = highest_close
+                
+                # Determine trailing multiplier (1.5x for Scarcity, profile rules-based for Standard)
+                is_scarcity = pos.get("is_scarcity", False)
+                multiplier = 1.5 if is_scarcity else rules.get("atr_multiplier", 2.5)
+                
+                # 2. Peter Lynch Flower Protection: Only ratchet stop upward once safely in profit by > 1.0x ATR
+                if (price - pos.get("cost", 0.0)) > (1.0 * atr):
+                    recalculated_stop = round(highest_close - (multiplier * atr), 2)
+                    old_stop = pos.get("stop_loss", 0.0)
+                    if recalculated_stop > old_stop:
+                        pos["stop_loss"] = recalculated_stop
+                        _log.info(f"🛡️ [Profit-Lock] {sym} stop ratcheted upwards: ${old_stop:.2f} ➡️ ${recalculated_stop:.2f} (Peak Close: ${highest_close:.2f})")
+                        print(f"🛡️ [Profit-Lock] {sym} stop ratcheted upwards: ${old_stop:.2f} ➡️ ${recalculated_stop:.2f}")  # noqa: print
+                        
+                # 3. Breakeven Trigger: If price has rallied > 1.5x ATR, lock in exact purchase Cost Basis (Breakeven)
+                if (price - pos.get("cost", 0.0)) > (1.5 * atr):
+                    old_stop = pos.get("stop_loss", 0.0)
+                    cost_basis = pos.get("cost", 0.0)
+                    if cost_basis > old_stop:
+                        pos["stop_loss"] = cost_basis
+                        _log.info(f"🛡️ [Breakeven Lock] {sym} stop bumped to Cost Basis (Breakeven): ${old_stop:.2f} ➡️ ${cost_basis:.2f} (Risk-Free Trade!)")
+                        print(f"🛡️ [Breakeven Lock] {sym} stop bumped to Cost Basis: ${old_stop:.2f} ➡️ ${cost_basis:.2f}")  # noqa: print
+            # ────────────────────────────────────────────────────────────────
+
             # Check Idiosyncratic Single-Stock Gap-Down Guard (Whipsaw protection)
             is_gap_frozen = False
             if circuit_breaker.is_single_stock_gap_frozen(sym, price, prev_close):
                 is_gap_frozen = True
                 gap_pct = round(((price - prev_close) / prev_close) * 100, 2) if prev_close > 0 else 0.0
-                print(f"❄️ [Gap Guard] {sym} gapped down {gap_pct}% overnight. Holding stop wide to prevent opening whipsaw.")
+                print(f"❄️ [Gap Guard] {sym} gapped down {gap_pct}% overnight. Holding stop wide to prevent opening whipsaw.")  # noqa: print
 
             # Only pay the OHLCV read when the soft signal actually fires (winner-
             # protection is the only consumer of sma50); HOLD positions skip the I/O.
@@ -1355,7 +1379,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
                         f"Decision downgraded from {old_action} to {new_action}. Reason: {override_reason}"
                     )
-                    print(f"🛡️ [AI Override] Overriding sell of {sym} -> Downgrading to {new_action} due to: {override_reason}")
+                    print(f"🛡️ [AI Override] Overriding sell of {sym} -> Downgrading to {new_action} due to: {override_reason}")  # noqa: print
 
             decision_entries.append(entry)
             if entry["rules_action"] == "SELL":
@@ -1365,12 +1389,12 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         state.setdefault("queued_orders", []).append({
                             "type": "SELL", "symbol": sym, "reason": f"Exit triggered: {entry['rules_reason'] or 'Technical exit'}"
                         })
-                        print(f"📝 [Queued] After-hours SELL queued for {sym}: {entry['rules_reason']}")
+                        print(f"📝 [Queued] After-hours SELL queued for {sym}: {entry['rules_reason']}")  # noqa: print
                 else:
                     symbols_to_sell.append(sym)
             elif entry["rules_action"] == "REVIEW":
                 # Winner above its 50-DMA on a soft signal — hold, don't dump.
-                print(f"🌸 AI HOLD (winner-protected): {sym} — {entry['rules_reason']}")
+                print(f"🌸 AI HOLD (winner-protected): {sym} — {entry['rules_reason']}")  # noqa: print
         if decision_entries:
             decision_eval.log_decisions(decision_entries)
 
@@ -1382,7 +1406,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
             tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2)}
             state["history"].append(tx)
             new_transactions.append(tx)
-            print(f"🤖 AI LIVE SELL: {sym} at ${price} (Time: {now_time})")
+            print(f"🤖 AI LIVE SELL: {sym} at ${price} (Time: {now_time})")  # noqa: print
             log_closed_trade_dna(sym, pos, price, today)
 
         # BUY logic (filtered by profile momentum threshold)
@@ -1417,7 +1441,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     if prev_close and prev_close > 0:
                         gap_pct = (price - prev_close) / prev_close
                         if gap_pct <= -0.08 and not bottom_ok:
-                            print(f"🛑 AI BUY REJECTED (CNXC Trap): {sym} - Gap-Down {round(gap_pct*100, 1)}% with no confirmed bottom.")
+                            print(f"🛑 AI BUY REJECTED (CNXC Trap): {sym} - Gap-Down {round(gap_pct*100, 1)}% with no confirmed bottom.")  # noqa: print
                             continue
 
                     # Reward-to-Risk & Target Upside Filter (Risk-Reward Gate):
@@ -1432,11 +1456,11 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
                         
                         if rr_ratio < 2.0:
-                            print(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required 2:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
+                            print(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required 2:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")  # noqa: print
                             continue
                             
                         if target_gain_pct < 5.0:
-                            print(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
+                            print(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")  # noqa: print
                             continue
 
                     if total_score >= rules["min_score_threshold"] or bottom_ok:
@@ -1461,21 +1485,21 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         state.setdefault("queued_orders", []).append({
                             "type": "BUY", "symbol": buy["sym"], "reason": "Top-ranked quantitative pick (After-Hours)"
                         })
-                        print(f"📝 [Queued] After-hours BUY queued for {buy['sym']}")
+                        print(f"📝 [Queued] After-hours BUY queued for {buy['sym']}")  # noqa: print
             else:
                 _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                               today, now_time, new_transactions, prices)
 
     except Exception as e:
-        print(f"⚠️ SCRIPT ERROR: {e}")
+        print(f"⚠️ SCRIPT ERROR: {e}")  # noqa: print
         pass
     finally:
         if state is not None:
             save_game(state)
             update_excel_log(state, new_transactions)
-            print(f"🤖 AI Portfolio Value: ${state['equity']} (Cash: ${round(state['balance'], 2)})")
+            print(f"🤖 AI Portfolio Value: ${state['equity']} (Cash: ${round(state['balance'], 2)})")  # noqa: print
         else:
-            print("🤖 AI Management aborted before state initialization. Game state preserved.")
+            print("🤖 AI Management aborted before state initialization. Game state preserved.")  # noqa: print
 
 def deduct_operational_costs(amount):
     if amount <= 0: return
@@ -1490,7 +1514,7 @@ def deduct_operational_costs(amount):
         "details": "Token & API fees"
     })
     save_game(state)
-    print(f"💸 AI Account debited ${round(amount, 4)} for operational costs.")
+    print(f"💸 AI Account debited ${round(amount, 4)} for operational costs.")  # noqa: print
 
 def show_report():
     state = load_game()
@@ -1518,25 +1542,24 @@ def show_report():
     for sym, pos in positions.items():
         live_equity += pos["qty"] * live_prices.get(sym, pos["cost"])
         
-    print("--- 🤖 AI PORTFOLIO MANAGER REPORT ---")
-    print(f"Active Strategy: {state.get('profile', 'BALANCED')}")
-    print(f"Current Equity:  ${round(live_equity, 2)}")
-    print(f"Cash Balance:    ${round(state['balance'], 2)}")
-    print(f"Total Ops Cost:  ${state.get('total_ops_cost', 0)}")
-    print(f"Open Positions:  {len(positions)}")
+    print("--- 🤖 AI PORTFOLIO MANAGER REPORT ---")  # noqa: print
+    print(f"Active Strategy: {state.get('profile', 'BALANCED')}")  # noqa: print
+    print(f"Current Equity:  ${round(live_equity, 2)}")  # noqa: print
+    print(f"Cash Balance:    ${round(state['balance'], 2)}")  # noqa: print
+    print(f"Total Ops Cost:  ${state.get('total_ops_cost', 0)}")  # noqa: print
+    print(f"Open Positions:  {len(positions)}")  # noqa: print
     for sym, pos in positions.items():
         cur_px = live_prices.get(sym, pos['cost'])
-        print(f"  - {sym}: {pos['qty']} @ ${pos['cost']} (Current: ${cur_px:.2f}, Stop: ${pos.get('stop_loss', 'N/A')})")
+        print(f"  - {sym}: {pos['qty']} @ ${pos['cost']} (Current: ${cur_px:.2f}, Stop: ${pos.get('stop_loss', 'N/A')})")  # noqa: print
     
     profit = live_equity - INITIAL_BALANCE
-    print(f"Net Profit:      ${round(profit, 2)} ({round((profit/INITIAL_BALANCE)*100, 2)}%)")
+    print(f"Net Profit:      ${round(profit, 2)} ({round((profit/INITIAL_BALANCE)*100, 2)}%)")  # noqa: print
     target = INITIAL_BALANCE * 2
     days_elapsed = (datetime.date.today() - datetime.datetime.strptime(state["start_date"], "%Y-%m-%d").date()).days
-    print(f"Goal Progress:   {round((profit/INITIAL_BALANCE)*100, 1)}% of 100% (Target: ${target})")
-    print(f"Days Active:     {days_elapsed} / 90")
+    print(f"Goal Progress:   {round((profit/INITIAL_BALANCE)*100, 1)}% of 100% (Target: ${target})")  # noqa: print
+    print(f"Days Active:     {days_elapsed} / 90")  # noqa: print
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", action="store_true", help="Execute AI daily moves")
     parser.add_argument("--profile", type=str, help="Manually override strategy profile (AGGRESSIVE, DEFENSIVE, BALANCED)")
