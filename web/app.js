@@ -519,7 +519,7 @@ async function loadDashboard() {
     } else {
         posb.innerHTML = dashPositions.map((p) => `
             <tr data-sym="${p.symbol}">
-                <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${p.symbol}">${p.symbol}</td>
+                <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${p.symbol}">${p.symbol}${p.fractional ? ' <span class="text-[9px] px-1 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/40 font-bold ml-1 uppercase" title="Fractional Share Order Entry Eligible (E*TRADE Production)">FRAC</span>' : ''}</td>
                 <td>${p.qty}</td>
                 <td>${fmt$(p.cost)}</td>
                 <td class="px-live">${fmt$(p.current_price)}</td>
@@ -690,7 +690,7 @@ async function loadAccounts() {
             const tgtTitle = h.target_source ? `target source: ${h.target_source}` : "";
             const badgeCls = _statusBadgeClass(h.status);
             return `<tr data-acct="${a.id}" data-sym="${sym}" data-buy="${entry ?? ""}" data-qty="${h.qty ?? ""}">
-                <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${sym}">${sym}${instrumentBadge(h.instrument)}</td>
+                <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${sym}">${sym}${h.fractional ? ' <span class="text-[9px] px-1 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/40 font-bold ml-1 uppercase" title="Fractional Share Order Entry Eligible (E*TRADE Production)">FRAC</span>' : ''}${instrumentBadge(h.instrument)}</td>
                 <td>${h.qty ?? "—"}</td>
                 <td>${fmt$(entry)}</td>
                 <td class="px-live">${fmt$(cur)}</td>
@@ -1491,7 +1491,7 @@ function renderResearch() {
     $("research-body").innerHTML = rows.length ? rows.map((r) => `
         <tr>
             <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${r.symbol}">
-                ${r.symbol}${heldSymbolsGlobal.has(r.symbol.toUpperCase()) ? ' <span class="text-[9px] px-1.5 py-0.5 rounded bg-green-900/80 text-green-300 font-bold ml-1" title="Currently held in your accounts">HELD</span>' : ''}${instrumentBadge(r.instrument)}
+                ${r.symbol}${r.fractional ? ' <span class="text-[9px] px-1 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/40 font-bold ml-1 uppercase" title="Fractional Share Order Entry Eligible (E*TRADE Production)">FRAC</span>' : ''}${heldSymbolsGlobal.has(r.symbol.toUpperCase()) ? ' <span class="text-[9px] px-1.5 py-0.5 rounded bg-green-900/80 text-green-300 font-bold ml-1" title="Currently held in your accounts">HELD</span>' : ''}${instrumentBadge(r.instrument)}
             </td>
             <td><div class="truncate text-xs ${industryColor(r.industry_strength)}" style="max-width:70px"
                      title="${esc(r.industry || "")}${r.industry_strength ? " — " + esc(r.industry_strength) : ""}">${esc(r.industry || "—")}</div></td>

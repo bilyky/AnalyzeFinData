@@ -358,6 +358,7 @@ def read_research() -> dict:
                     risk_ratio = _f(g("risk_ratio"))
                 rows.append({
                     "symbol": sym.strip(),
+                    "fractional": instruments.is_fractional_eligible(sym.strip()),
                     "industry": g("industry"),
                     "pgr": g("pgr"), "prev_pgr": g("prev_pgr"),
                     # These four are categorical text ratings (e.g. Weak/Neutral/Wait),
@@ -666,6 +667,7 @@ def read_accounts() -> dict:
                             
                             holdings.append({
                                 "symbol": sym,
+                                "fractional": instruments.is_fractional_eligible(sym),
                                 "qty": qty,
                                 "buy": buy,
                                 "current": current,
@@ -769,6 +771,7 @@ def read_accounts() -> dict:
                                     pnl_pct = round((top - buy) / buy * 100, 2)
                         holdings.append({
                             "symbol":    sym,
+                            "fractional": instruments.is_fractional_eligible(sym),
                             "qty":       qty,
                             "buy":       buy,
                             "buy_date":  buy_date,
@@ -838,6 +841,7 @@ def read_accounts() -> dict:
             
             game_holdings.append({
                 "symbol": sym,
+                "fractional": instruments.is_fractional_eligible(sym),
                 "qty": qty,
                 "buy": buy,
                 "current": current,

@@ -565,6 +565,18 @@
                                 Hard ATR stop-loss floor always overrides soft signals. Based on Peter Lynch's 'Flower Protection' trailing stops concept where soft exits on profitable, above-50-DMA positions are downgraded to REVIEW to let winners run.
                             </p>
                         </div>
+                        <div data-wiki="profit_lock" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">AETHER Profit-Lock (Trailing Stop Ratchet)</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Dynamically ratchets trailing stops upward as positions rally. If the price rises by <code>&gt; 1.5x ATR</code>, it instantly triggers a <b>Breakeven Lock</b> (bumping stop floor to cost basis) to guarantee a 100% risk-free trade early in the trend!
+                            </p>
+                        </div>
+                        <div data-wiki="zero_cash_drag" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Zero-Cash Drag Autopilot & Fractional Sizing</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Dynamically drops cash buffers to <code>0.0%</code> during <b>BULLISH</b> market regimes to maximize capital deployment. Supports 3-decimal fractional share sizing precision (up to <code>1.458</code> shares) for S&P 100 blue chips and core ETFs (DIA, SPY, QQQ, IWM) to eliminate cash leftovers!
+                            </p>
+                        </div>
                         <div data-wiki="gap_guard" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
                             <h4 class="font-semibold text-slate-200 text-sm mb-1">Catastrophic Gap Guard (CNXC Trap)</h4>
                             <p class="text-xs text-slate-400 leading-relaxed">
