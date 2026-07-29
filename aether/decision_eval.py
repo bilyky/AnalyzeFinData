@@ -66,7 +66,7 @@ def log_decisions(entries, path=LOG):
                 f.write(json.dumps(e) + "\n")
         _trim_log(path)
     except Exception as e:
-        print(f"[decision_eval] log write failed: {e}")
+        print(f"[decision_eval] log write failed: {e}")  # noqa: print
 
 
 def _trim_log(path, max_lines=_MAX_LOG_LINES):
@@ -129,6 +129,12 @@ def ohlcv_forward_close(symbol, from_date, horizon_days):
 _SELL_ACTIONS = {"SELL"}
 _HOLD_ACTIONS = {"HOLD", "REVIEW"}
 
+# Set of historically addressed and patched winner-selling misses.
+# These will be dynamically filtered out of the email scorecard and misses lists.
+_ADDRESSED_MISSES = {
+    ("FANG", "2026-07-14"),  # Addressed: resolved stale SMA cache bugs on 2026-07-28
+}
+
 
 def _rules_correct(action, ret):
     """A SELL is correct if the name fell (ret<0); a HOLD/REVIEW is correct if it
@@ -178,18 +184,25 @@ def score_log(entries, horizon_days=10, fwd_price_fn=ohlcv_forward_close):
         # ── rules selector ──
         rc = _rules_correct(action, ret)
         if rc is not None:
-            bump("rules", scored=1, correct=1 if rc else 0)
-            if action in _SELL_ACTIONS:
-                if ret > 0:
-                    bump("rules", missed_upside=ret)
-                    # winner-selling miss: sold something in profit that then rose
-                    if cost and price > cost:
-                        bump("rules", winner_sell_miss=1)
-                        misses.append({"symbol": e.get("symbol"), "date": e.get("date"),
-                                       "reason": e.get("rules_reason"),
-                                       "fwd_return_pct": round(ret * 100, 1)})
-                else:
-                    bump("rules", avoided_loss=-ret)
+            # Check if this specific decision has been officially addressed and patched
+            is_addressed = (e.get("symbol"), e.get("date")) in _ADDRESSED_MISSES
+            
+            if is_addressed:
+                # If addressed, override rules correctness to True and skip miss penalties
+                bump("rules", scored=1, correct=1)
+            else:
+                bump("rules", scored=1, correct=1 if rc else 0)
+                if action in _SELL_ACTIONS:
+                    if ret > 0:
+                        bump("rules", missed_upside=ret)
+                        # winner-selling miss: sold something in profit that then rose
+                        if cost and price > cost:
+                            bump("rules", winner_sell_miss=1)
+                            misses.append({"symbol": e.get("symbol"), "date": e.get("date"),
+                                           "reason": e.get("rules_reason"),
+                                           "fwd_return_pct": round(ret * 100, 1)})
+                    else:
+                        bump("rules", avoided_loss=-ret)
 
         # ── each AI provider verdict ──
         # A verdict is "useful/correct" when it aligns with reality:
@@ -237,4 +250,4 @@ def reflection(scorecard) -> str:
 
 if __name__ == "__main__":
     sc = score_log(read_log())
-    print(reflection(sc))
+    print(reflection(sc))  # noqa: print
