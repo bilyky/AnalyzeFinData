@@ -17,7 +17,7 @@ def log(msg):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(LOG_FILE, "a") as f:
         f.write(f"[{timestamp}] {msg}\n")
-    print(msg)  # noqa: print
+    print(msg)  # noqa: T201
 
 def run_command(command_list):
     log(f"Running: {' '.join(command_list)}")
@@ -45,7 +45,7 @@ def get_symbols_from_xls():
                 symbols.append(str(val))
         return symbols
     except Exception as e:
-        print(f"Error reading symbols from XLS: {e}")  # noqa: print
+        print(f"Error reading symbols from XLS: {e}")  # noqa: T201
         return []
 
 def get_all_data(date):
@@ -151,7 +151,7 @@ def main():
             if lint_result.returncode != 0:
                 raise RuntimeError(f"Self-validation failed:\n{lint_result.stdout}\n{lint_result.stderr}")
             log("Self-validation passed.")
-        except RuntimeError as e:
+        except RuntimeError:
             raise
         except Exception as e:
             log(f"Warning: Self-validation skipped (ruff package not available): {e}")
