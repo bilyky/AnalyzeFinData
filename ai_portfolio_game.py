@@ -1456,6 +1456,13 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 setup = str(row[20] or '')
                 price = prices.get(sym, 0)
                 total_score = (row[24] or 0) + (row[25] or 0)
+                short10 = row[24] or 0.0
+
+                # Strict Short10 Momentum Floor: Reject buy entries if short-term momentum is below 2.5
+                if short10 < 2.5:
+                    if (setup in ('1', 'OK', 1)) and sym not in state["positions"] and price > 0:
+                        print(f"🛑 AI BUY REJECTED (Momentum Floor): {sym} - Short10 score {short10} is below required 2.5 floor.")  # noqa: print
+                    continue
 
                 # Filter by strategy profile threshold OR mathematically confirmed bottom
                 if (setup in ('1', 'OK', 1)) and sym not in state["positions"] and price > 0:
