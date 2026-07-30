@@ -1,19 +1,47 @@
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-import openpyxl
-import etrade
-import notify
+"""
+Project AETHER Intraday Stop-Breach Monitor.
+Performs 30-minute interval audits of held E*TRADE positions against their ATR-based stop-loss levels.
+Includes state-persistence (cures 30-min duplicate email spam) and dynamic, AI-powered qualitative analyses.
+"""
+import sys
+import os
+import json
 import time
 import datetime
 from pathlib import Path
+import openpyxl
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+import notify
+import ai_client
+from aether_logger import get_logger
 from data_api import _SL  # canonical Short_Long column map (single source of truth)
 from ai_portfolio_game import get_live_prices
 
-XLSX_FILE = Path("Data/state_of_the_day.xlsx")
+_log = get_logger("monitor")
 
-def get_monitored_positions():
+XLSX_FILE = Path("Data/state_of_the_day.xlsx")
+STATE_FILE = Path("Data/intraday_monitor_state.json")
+
+def load_state() -> dict:
+    """Load the last active stop-breach state from disk."""
+    if STATE_FILE.exists():
+        try:
+            return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        except Exception as e:
+            _log.warning(f"Failed to load monitor state: {e}")
+    return {"last_breached": {}}
+
+def save_state(state: dict):
+    """Save the active stop-breach state to disk."""
+    try:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except Exception as e:
+        _log.warning(f"Failed to save monitor state: {e}")
+
+def get_monitored_positions() -> list:
     """Load positions and stops from Short_Long sheet."""
     positions = []
     try:
@@ -22,10 +50,6 @@ def get_monitored_positions():
             return []
         
         ws = wb["Short_Long"]
-        # Column indices come from the canonical map: sym=1, stop=6.
-        # (Previously read row[4] = the "Top" column — a bug; Stop is index 6.)
-        # Type-guard: the sheet has two tables separated by blank + repeated
-        # "Symb"/"Stop" header rows — skip anything non-numeric so BOTH accounts load.
         for row in ws.iter_rows(min_row=3, values_only=True):
             sym  = row[_SL["sym"]]  if len(row) > _SL["sym"]  else None
             stop = row[_SL["stop"]] if len(row) > _SL["stop"] else None
@@ -33,42 +57,135 @@ def get_monitored_positions():
                     and isinstance(stop, (int, float)) and stop > 0):
                 positions.append({"symbol": sym.strip().upper(), "stop": stop})
     except Exception as e:
-        print(f"Error loading positions: {e}")
+        _log.error(f"Error loading positions from workbook: {e}")
     return positions
 
+def generate_ai_analysis(sym: str, price: float, stop: float) -> str:
+    """Generate a highly specific, professional quantitative analysis for the stop breach."""
+    if not ai_client.primary():
+        return f"ATR Stop-Loss Floor Breached. Technical momentum is currently negative, representing an immediate capital preservation exit risk."
+        
+    system_prompt = (
+        "You are AETHER, an expert hedge-fund quantitative analyst.\n"
+        "Provide a highly concise, professional 2-sentence analysis and reasoning of why this stock has hit its stop-loss, "
+        "what the primary technical risk factor is, and what action the trader should take immediately. "
+        "Be concise, direct, and authoritative."
+    )
+    user_prompt = f"Asset {sym} has breached its ATR stop-loss floor. Current Price: ${price:.2f} | Stop-Loss level: ${stop:.2f}."
+    try:
+        raw_reply = ai_client.evaluate(system_prompt, user_prompt, max_tokens=150)
+        return raw_reply.strip()
+    except Exception as e:
+        _log.warning(f"Failed calling AI analyzer for {sym}: {e}")
+        return f"ATR Stop-Loss Floor Breached. Technical momentum is currently negative, representing an immediate capital preservation exit risk. Error: {e}"
+
 def monitor():
-    print(f"[{datetime.datetime.now()}] Starting Intraday Stop Monitor...")
+    _log.console(f"[{datetime.datetime.now()}] Starting Intraday Stop Monitor...")
     monitored = get_monitored_positions()
     if not monitored:
-        print("No positions with valid stops found to monitor.")
+        _log.info("No positions with valid stops found to monitor.")
         return
 
-    print(f"Monitoring {len(monitored)} positions.")
+    _log.console(f"Monitoring {len(monitored)} positions.")
 
     symbols = [p["symbol"] for p in monitored]
     quotes = get_live_prices(symbols)
 
-    breaches = []
+    current_breaches = {}
     for p in monitored:
         sym = p["symbol"]
         stop = p["stop"]
         last_price = quotes.get(sym)
         if last_price and last_price > 0:
             if last_price <= stop:
-                msg = f"URGENT: {sym} breached stop! Price: {last_price:.2f}, Stop: {stop:.2f}"
-                print(msg)
-                breaches.append(msg)
+                current_breaches[sym] = {"stop": stop, "price": last_price}
         else:
-            print(f"Warning: Could not fetch price for {sym}")
+            _log.warning(f"Could not fetch live price for {sym}")
 
-    if breaches:
-        count = len(breaches)
-        subject = f"AETHER ALERT: Stop Breach Detected ({count} Position{'s' if count > 1 else ''})"
-        body = "The following stop breaches have been detected in your active E*TRADE portfolio:\n\n" + "\n".join(breaches) + "\n\nAction required: Please review and execute these exits manually in your broker."
-        notify.send_email(subject, body)
-        print(f"Sent consolidated alert email for {count} breaches.")
+    # Load previous state
+    state = load_state()
+    last_breached = state.get("last_breached", {})
+
+    # Determine if something changed compared to the previous run
+    new_breaches = [s for s in current_breaches if s not in last_breached]
+    cleared_breaches = [s for s in last_breached if s not in current_breaches]
+    
+    # Check if existing breaches had price/stop modifications
+    modified_breaches = []
+    for s in current_breaches:
+        if s in last_breached:
+            if abs(current_breaches[s]["price"] - last_breached[s]["price"]) > 0.01:
+                modified_breaches.append(s)
+
+    has_changed = bool(new_breaches or cleared_breaches or modified_breaches)
+
+    if current_breaches:
+        if not has_changed:
+            _log.info(f"Stop breach state unchanged ({len(current_breaches)} active breaches). Bypassing duplicate email dispatch.")
+            return
+
+        # Prepare rich qualitative report with AI analysis for each item
+        diff_msgs = []
+        if new_breaches:
+            diff_msgs.append(f"🔴 NEW BREACHES DETECTED: {', '.join(new_breaches)}")
+        if cleared_breaches:
+            diff_msgs.append(f"🟢 BREACHES CLEARED/EXITED: {', '.join(cleared_breaches)}")
+        if modified_breaches:
+            diff_msgs.append(f"🔄 EXISTING BREACH PRICES UPDATED: {', '.join(modified_breaches)}")
+
+        _log.warning(f"Stop breach state changed! Dispatching rich, AI-analyzed alert email...")
+        
+        subject = f"AETHER ALERT: Stop Breach Detected ({len(current_breaches)} Position{'s' if len(current_breaches) > 1 else ''})"
+        
+        body_parts = [
+            "The following stop-loss breaches have been detected in your active E*TRADE portfolio.\n",
+            "📊 DIFFERENCE SUMMARY:",
+            "\n".join(f"  * {m}" for m in diff_msgs),
+            "\n" + "=" * 80,
+            "🔬 QUALITATIVE ANALYSIS & RISK REASONING FOR EACH BREACHED POSITION:",
+            "=" * 80 + "\n"
+        ]
+
+        for sym, data in current_breaches.items():
+            price = data["price"]
+            stop = data["stop"]
+            
+            _log.console(f"Running live AI risk analysis and reasoning for {sym}...")
+            ai_reasoning = generate_ai_analysis(sym, price, stop)
+            
+            body_parts.append(
+                f"📈 {sym} — BREACHED!"
+                f"\n  * Current Price:   ${price:.2f}"
+                f"\n  * Stop-Loss Level: ${stop:.2f}"
+                f"\n  * Technical Delta: {round(((price - stop)/stop)*100, 2):+.2f}%"
+                f"\n  * AI Risk Analysis & Reasoning:"
+                f"\n    {ai_reasoning}"
+                f"\n\n" + "-" * 80
+            )
+
+        body_parts.append(
+            "\nAction required: These positions are trading below their capital-preservation stop-loss levels. "
+            "Please review and execute these exits manually in your broker immediately to prevent further drawdown."
+        )
+
+        notify.send_email(subject, "\n".join(body_parts))
+        _log.info(f"Sent rich consolidated alert email for {len(current_breaches)} breaches.")
     else:
-        print("No stop breaches detected.")
+        if cleared_breaches:
+            # If breaches exist in memory but are now cleared (e.g. they were sold!)
+            _log.warning("All stop breaches cleared! Sending confirmation email...")
+            subject = "AETHER ALERT: All Stop Breaches Cleared/Exited"
+            body = (
+                "Great news! All previously detected stop-loss breaches have been successfully cleared or exited.\n\n"
+                f"Cleared Positions: {', '.join(cleared_breaches)}\n\n"
+                "Your portfolio risk profile is now fully stabilized and nominal."
+            )
+            notify.send_email(subject, body)
+        else:
+            _log.info("No stop breaches detected.")
+
+    # Save the current state for the next run
+    save_state({"last_breached": current_breaches})
 
 if __name__ == "__main__":
     monitor()
