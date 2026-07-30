@@ -1,3 +1,5 @@
+from aether_logger import get_logger
+_log = get_logger("backtest")
 """
 AETHER Backtracking Verification Engine.
 Parses the unified trade ledger (Data/trade_history_dna.json) on disk to run a historical post-mortem study.
@@ -14,7 +16,7 @@ DNA_LEDGER_PATH = os.path.join("Data", "trade_history_dna.json")
 
 def run_backtrack_study():
     if not os.path.exists(DNA_LEDGER_PATH):
-        print(f"❌ Error: Closed trade ledger '{DNA_LEDGER_PATH}' not found on disk.")  # noqa: print
+        _log.warning(f"❌ Error: Closed trade ledger '{DNA_LEDGER_PATH}' not found on disk.")
         return
 
     with open(DNA_LEDGER_PATH) as f:
@@ -24,13 +26,13 @@ def run_backtrack_study():
     trades = [t for t in ledger if "symbol" in t and "pnl_pct" in t]
     
     if not trades:
-        print("⚠️ No completed trades found in the ledger to backtrack.")  # noqa: print
+        _log.warning("⚠️ No completed trades found in the ledger to backtrack.")
         return
 
-    print(f"\n⚡ [AETHER Backtrack] Analyzing {len(trades)} historical completed trades from trade_history_dna.json...")  # noqa: print
-    print("-" * 80)  # noqa: print
-    print(f"{'Symbol':<10} {'Buy Date':<12} {'Sell Date':<12} {'s10':<6} {'Score':<6} {'Realized P&L%':<10} {'Industry'}")  # noqa: print
-    print("-" * 80)  # noqa: print
+    _log.console(f"\n⚡ [AETHER Backtrack] Analyzing {len(trades)} historical completed trades from trade_history_dna.json...")
+    _log.info("-" * 80)
+    _log.info(f"{'Symbol':<10} {'Buy Date':<12} {'Sell Date':<12} {'s10':<6} {'Score':<6} {'Realized P&L%':<10} {'Industry'}")
+    _log.info("-" * 80)
     
     total_original_pnl = 0.0
     original_wins = 0
@@ -47,7 +49,7 @@ def run_backtrack_study():
         score = dna.get("score", "N/A")
         industry = dna.get("industry", "N/A")
         
-        print(f"{sym:<10} {b_date:<12} {s_date:<12} {str(s10):<6} {str(score):<6} {pnl:>+9.2f}%   {industry}")  # noqa: print
+        _log.info(f"{sym:<10} {b_date:<12} {s_date:<12} {str(s10):<6} {str(score):<6} {pnl:>+9.2f}%   {industry}")
         
         total_original_pnl += pnl
         if pnl > 0:
@@ -57,13 +59,13 @@ def run_backtrack_study():
     orig_win_rate = (original_wins / orig_count) * 100 if orig_count > 0 else 0.0
     orig_avg_pnl = total_original_pnl / orig_count if orig_count > 0 else 0.0
 
-    print("-" * 80)  # noqa: print
-    print(f"📊 BASE PERFORMANCE (Old Rules):")  # noqa: print
-    print(f"  - Completed Trades: {orig_count}")  # noqa: print
-    print(f"  - Win Rate:         {orig_win_rate:.1f}%")  # noqa: print
-    print(f"  - Total Net Return: {total_original_pnl:>+6.2f}%")  # noqa: print
-    print(f"  - Avg Return/Trade: {orig_avg_pnl:>+6.2f}%")  # noqa: print
-    print("-" * 80)  # noqa: print
+    _log.info("-" * 80)
+    _log.console(f"📊 BASE PERFORMANCE (Old Rules):")
+    _log.info(f"  - Completed Trades: {orig_count}")
+    _log.info(f"  - Win Rate:         {orig_win_rate:.1f}%")
+    _log.info(f"  - Total Net Return: {total_original_pnl:>+6.2f}%")
+    _log.info(f"  - Avg Return/Trade: {orig_avg_pnl:>+6.2f}%")
+    _log.info("-" * 80)
 
     # --- Scenario 1: Strict Momentum Floor s10 >= 2.5 ---
     s10_25_trades = []
@@ -116,25 +118,25 @@ def run_backtrack_study():
     s30_avg_pnl = s10_30_pnl / s30_count if s30_count > 0 else 0.0
     s30_improvement = s10_30_pnl - total_original_pnl
 
-    print(f"\n🛡️ SCENARIO A: Strict Momentum Floor (Short10 >= 2.5)")  # noqa: print
-    print(f"  - Completed Trades: {s25_count} (Blocked {len(s10_25_rejections)} weak trades)")  # noqa: print
-    print(f"  - Win Rate:         {s25_win_rate:.1f}% (Change: {s25_win_rate - orig_win_rate:>+5.1f}%)")  # noqa: print
-    print(f"  - Total Net Return: {s10_25_pnl:>+6.2f}% (Improvement: {s25_improvement:>+6.2f}% net profit!)")  # noqa: print
-    print(f"  - Avg Return/Trade: {s25_avg_pnl:>+6.2f}%")  # noqa: print
-    print("  - Rejected Trades (Weak Momentum Blocked):")  # noqa: print
+    _log.info(f"\n🛡️ SCENARIO A: Strict Momentum Floor (Short10 >= 2.5)")
+    _log.info(f"  - Completed Trades: {s25_count} (Blocked {len(s10_25_rejections)} weak trades)")
+    _log.info(f"  - Win Rate:         {s25_win_rate:.1f}% (Change: {s25_win_rate - orig_win_rate:>+5.1f}%)")
+    _log.info(f"  - Total Net Return: {s10_25_pnl:>+6.2f}% (Improvement: {s25_improvement:>+6.2f}% net profit!)")
+    _log.info(f"  - Avg Return/Trade: {s25_avg_pnl:>+6.2f}%")
+    _log.console("  - Rejected Trades (Weak Momentum Blocked):")
     for r in s10_25_rejections:
-        print(f"    * Blocked {r[0]} (s10={r[1]}, avoided loss of {r[2]:>+.2f}%)")  # noqa: print
+        _log.info(f"    * Blocked {r[0]} (s10={r[1]}, avoided loss of {r[2]:>+.2f}%)")
 
-    print("-" * 80)  # noqa: print
-    print(f"\n🛡️ SCENARIO B: Strict Momentum Floor (Short10 >= 3.0)")  # noqa: print
-    print(f"  - Completed Trades: {s30_count} (Blocked {len(s10_30_rejections)} weak trades)")  # noqa: print
-    print(f"  - Win Rate:         {s30_win_rate:.1f}% (Change: {s30_win_rate - orig_win_rate:>+5.1f}%)")  # noqa: print
-    print(f"  - Total Net Return: {s10_30_pnl:>+6.2f}% (Improvement: {s30_improvement:>+6.2f}% net profit!)")  # noqa: print
-    print(f"  - Avg Return/Trade: {s30_avg_pnl:>+6.2f}%")  # noqa: print
-    print("  - Rejected Trades (Weak Momentum Blocked):")  # noqa: print
+    _log.info("-" * 80)
+    _log.info(f"\n🛡️ SCENARIO B: Strict Momentum Floor (Short10 >= 3.0)")
+    _log.info(f"  - Completed Trades: {s30_count} (Blocked {len(s10_30_rejections)} weak trades)")
+    _log.info(f"  - Win Rate:         {s30_win_rate:.1f}% (Change: {s30_win_rate - orig_win_rate:>+5.1f}%)")
+    _log.info(f"  - Total Net Return: {s10_30_pnl:>+6.2f}% (Improvement: {s30_improvement:>+6.2f}% net profit!)")
+    _log.info(f"  - Avg Return/Trade: {s30_avg_pnl:>+6.2f}%")
+    _log.console("  - Rejected Trades (Weak Momentum Blocked):")
     for r in s10_30_rejections:
-        print(f"    * Blocked {r[0]} (s10={r[1]}, avoided loss of {r[2]:>+.2f}%)")  # noqa: print
-    print("-" * 80)  # noqa: print
+        _log.info(f"    * Blocked {r[0]} (s10={r[1]}, avoided loss of {r[2]:>+.2f}%)")
+    _log.info("-" * 80)
 
 if __name__ == "__main__":
     run_backtrack_study()

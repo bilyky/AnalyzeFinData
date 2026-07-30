@@ -776,7 +776,7 @@ def _is_running(pid: int) -> bool:
 def cmd_start():
     pid = _read_pid()
     if pid and _is_running(pid):
-        print(f"Already running (pid {pid}).")  # noqa: print
+        _log.info(f"Already running (pid {pid}).")
         return
     cfg = _cfg()
     port = cfg.web_port
@@ -791,19 +791,19 @@ def cmd_start():
     _PID.write_text(str(proc.pid))
     time.sleep(1.5)
     if _is_running(proc.pid):
-        print(f"Started AETHER Dashboard (pid {proc.pid}) -> http://{host}:{port}")  # noqa: print
+        _log.info(f"Started AETHER Dashboard (pid {proc.pid}) -> http://{host}:{port}")
     else:
-        print("Failed to start. Check Data/webserver.log.")  # noqa: print
+        _log.info("Failed to start. Check Data/webserver.log.")
 
 
 def cmd_stop():
     pid = _read_pid()
     if not pid:
-        print("Not running (no PID file).")  # noqa: print
+        _log.info("Not running (no PID file).")
         return
     if not _is_running(pid):
         _PID.unlink(missing_ok=True)
-        print("Not running (stale PID removed).")  # noqa: print
+        _log.info("Not running (stale PID removed).")
         return
     try:
         os.kill(pid, signal.SIGTERM)
@@ -812,18 +812,18 @@ def cmd_stop():
             if not _is_running(pid):
                 break
         _PID.unlink(missing_ok=True)
-        print(f"Stopped (pid {pid}).")  # noqa: print
+        _log.info(f"Stopped (pid {pid}).")
     except Exception as e:
-        print(f"Error stopping: {e}")  # noqa: print
+        _log.warning(f"Error stopping: {e}")
 
 
 def cmd_status():
     pid = _read_pid()
     cfg = _cfg()
     if pid and _is_running(pid):
-        print(f"Running  pid={pid}  http://{cfg.web_host}:{cfg.web_port}")  # noqa: print
+        _log.info(f"Running  pid={pid}  http://{cfg.web_host}:{cfg.web_port}")
     else:
-        print(f"Stopped  (port {cfg.web_port})")  # noqa: print
+        _log.info(f"Stopped  (port {cfg.web_port})")
 
 
 def cmd_restart():
@@ -833,7 +833,7 @@ def cmd_restart():
 
 
 def cmd_upgrade():
-    print("Pulling latest code...")  # noqa: print
+    _log.info("Pulling latest code...")
     subprocess.run(["git", "pull"], cwd=str(_DIR), check=True)
     cmd_restart()
 
@@ -860,7 +860,7 @@ def cmd_regen_secret():
     Invalidates all existing admin sessions (everyone must log in again)."""
     cfg_path = _DIR / "config.json"
     if not cfg_path.exists():
-        print("config.json not found — create it from config.json.example first.")  # noqa: print
+        _log.info("config.json not found — create it from config.json.example first.")
         return
 
     # Backup before writing (Data/Backup is gitignored)
@@ -878,14 +878,14 @@ def cmd_regen_secret():
         json.dump(cfg, f, indent=2)
     os.replace(tmp, cfg_path)
 
-    print(f"New web.secret written (64 chars). Backup: {bak}")  # noqa: print
-    print("All existing admin sessions are now invalid.")  # noqa: print
+    _log.info(f"New web.secret written (64 chars). Backup: {bak}")
+    _log.info("All existing admin sessions are now invalid.")
     pid = _read_pid()
     if pid and _is_running(pid):
-        print("Server is running -> restarting to apply...")  # noqa: print
+        _log.info("Server is running -> restarting to apply...")
         cmd_restart()
     else:
-        print("Start the server for it to take effect: python server.py start")  # noqa: print
+        _log.info("Start the server for it to take effect: python server.py start")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

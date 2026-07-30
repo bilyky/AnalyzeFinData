@@ -78,10 +78,7 @@ def check_no_print_statements(file_path: str) -> bool:
             if not isinstance(func, ast.Name) or func.id != "print":
                 continue
             lineno = node.lineno
-            # Allow explicit exemption via trailing comment
-            raw_line = lines[lineno - 1] if lineno <= len(lines) else ""
-            if "# noqa: print" in raw_line:
-                continue
+            # NO SHORTS ALLOWED: print statements are strictly banned!
             print(f"[GIT PRE-COMMIT] bare print() in {rel} at line {lineno}: {raw_line.strip()[:80]}")
             print("   Use _log.console() for progress, _log.info/warning/error() for events.")
             print("   Add  # noqa: print  to exempt intentional interactive prompts.")
