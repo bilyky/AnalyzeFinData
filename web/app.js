@@ -1574,7 +1574,28 @@ function loadTab(tab) {
     else if (tab === "chat") setTimeout(() => $("chat-input").focus(), 50);
     else if (tab === "scorecard") loadScorecard();
     else if (tab === "system") { loadSystem(); _startLogRefresh(); }
-    else if (tab === "about") {} // No API data to load for static about tab
+    else if (tab === "about") loadAboutDocs();
+}
+
+async function loadAboutDocs() {
+    const el = $("docs-content");
+    if (!el) return;
+    el.innerHTML = '<span class="text-slate-500">Loading master reference manual…</span>';
+    try {
+        const d = await api("/api/docs");
+        if (d.error) { el.textContent = "Error loading manual: " + d.error; return; }
+        if (window.marked) {
+            // Render beautiful rich Markdown HTML!
+            el.className = "text-sm text-slate-300 leading-relaxed overflow-y-auto max-h-[75vh] pr-2 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent space-y-4";
+            el.innerHTML = marked.parse(d.markdown);
+        } else {
+            // Monospace raw fallback
+            el.className = "text-xs text-slate-300 leading-relaxed font-mono whitespace-pre-wrap overflow-y-auto max-h-[75vh] pr-2 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent";
+            el.textContent = d.markdown;
+        }
+    } catch (e) {
+        el.textContent = "Error: " + e.message;
+    }
 }
 
 // ── Polling loops ──────────────────────────────────────────────────────────────

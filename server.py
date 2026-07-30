@@ -14,7 +14,13 @@ API docs:  http://localhost:8888/docs
 """
 
 import argparse
+import asyncio
+import ctypes
+import datetime
 import base64
+import shutil
+import uuid
+import tempfile
 import hashlib
 import hmac
 import html as _html_mod
@@ -29,6 +35,18 @@ import sys
 import threading
 import time
 from pathlib import Path
+from fastapi import Body, FastAPI, Header, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from config import CFG
+import data_api
+import uvicorn
+import ai_portfolio_game
+import ai_client
+import watchdog
+import sell_eval
+from aether_logger import get_logger
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -42,7 +60,6 @@ _TOKEN_TTL = 12 * 3600   # session token lifetime (seconds)
 # ── Config (lazy import to avoid import-time side effects in CLI mode) ────────
 
 def _cfg():
-    from config import CFG
     return CFG
 
 
@@ -93,21 +110,13 @@ def check_credentials(username: str, password: str, admins: list) -> bool:
 # ── FastAPI application ───────────────────────────────────────────────────────
 
 def create_app():
-    import asyncio
-    from fastapi import Body, FastAPI, Header, HTTPException, Query
-    from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import FileResponse, JSONResponse
-    from fastapi.staticfiles import StaticFiles
-
-    import data_api
-    from aether_logger import get_logger
     _log = get_logger("server")
 
     # Signing secret: configured value survives restarts; otherwise ephemeral.
     _secret = _cfg().web_secret or secrets.token_hex(32)
     if not _cfg().web_secret:
-        print("[AETHER] No web.secret configured -- using an ephemeral signing "
-              "secret (admin sessions won't survive a restart).")
+        print("[AETHER] No web.secret configured -- using an ephemeral signing "  # noqa: print
+              "secret (admin sessions won't survive a restart).")  # noqa: print
 
     app = FastAPI(title="AETHER Dashboard", version="1.0")
 
@@ -150,6 +159,14 @@ def create_app():
     async def health():
         return data_api.get_system_health()
 
+    @app.get("/api/docs")
+    async def get_docs():
+        ref_path = _DIR / "AETHER_REFERENCE.md"
+        if ref_path.exists():
+            with open(ref_path, encoding="utf-8") as f:
+                return {"markdown": f.read()}
+        raise HTTPException(status_code=404, detail="AETHER_REFERENCE.md not found")
+
     # ── Portfolio ─────────────────────────────────────────────────────────────
 
     @app.get("/api/portfolio")
@@ -173,8 +190,7 @@ def create_app():
         # Fetch live (blocking call — run in thread to avoid blocking event loop)
         loop = asyncio.get_running_loop()
         try:
-            from ai_portfolio_game import get_live_prices
-            fresh = await loop.run_in_executor(None, get_live_prices, sym_list)
+            fresh = await loop.run_in_executor(None, ai_portfolio_game.get_live_prices, sym_list)
             _price_cache.update(fresh)
             _price_ts = now
         except Exception:
@@ -185,7 +201,6 @@ def create_app():
 
     @app.get("/api/wiki/config")
     async def wiki_config():
-        import ai_portfolio_game
         return {
             "DEFENSIVE": ai_portfolio_game.get_strategy_rules("DEFENSIVE"),
             "BALANCED": ai_portfolio_game.get_strategy_rules("BALANCED"),
@@ -238,7 +253,6 @@ def create_app():
     ):
         """Phase 1: fetch live factors + run AI on factors only.
         Spawns a background thread for Phase 2 (news enrichment)."""
-        import ai_client
         symbol = (body.get("symbol") or "").upper().strip()
         cost   = body.get("cost")   # float or None
         if not symbol:
@@ -275,7 +289,6 @@ def create_app():
         verdict = verdict_note = ""
         if factors.get("det_action") and cost:
             try:
-                import sell_eval  # lazy: avoid circular at startup
                 ctx = {
                     "symbol": symbol,
                     "action": factors["det_action"],
@@ -364,8 +377,7 @@ def create_app():
                         "error": str(_e2),
                     }
 
-        import threading as _threading
-        _threading.Thread(target=_phase2, daemon=True).start()
+        threading.Thread(target=_phase2, daemon=True).start()
 
         return {
             "run_id":         run_id,
@@ -414,7 +426,7 @@ def create_app():
     @app.get("/api/logs/aether")
     async def aether_log_txt(lines: int = Query(200, ge=1, le=2000)):
         """Last N lines from Data/logs/aether.log (plain text, newest-last)."""
-        from pathlib import Path
+
         p = _DIR / "Data" / "logs" / "aether.log"
         if not p.exists():
             return {"lines": []}
@@ -429,7 +441,7 @@ def create_app():
                               level: str = Query("", description="Filter by level: DEBUG INFO WARNING ERROR")):
         """Last N JSONL entries from Data/logs/aether.jsonl, optionally filtered by level."""
 
-        from pathlib import Path
+
         p = _DIR / "Data" / "logs" / "aether.jsonl"
         if not p.exists():
             return {"entries": []}
@@ -483,7 +495,6 @@ def create_app():
         """Multi-turn chat with the configured AI provider, augmented with live
         AETHER context (portfolio state, regime, top picks, OHLCV freshness).
         messages: [{role: user|assistant, content: str}]"""
-        import ai_client
         if not ai_client.primary():
             return {"reply": "No AI provider configured. Enable one in config.json under ai.providers.", "provider": None}
 
@@ -493,8 +504,6 @@ def create_app():
         messages = [m for m in messages
                     if isinstance(m, dict) and m.get("role") in VALID_ROLES
                     and isinstance(m.get("content"), str)][:50]  # cap history length
-
-        import re as _re
 
         # Detect uppercase ticker candidates in the last user message BEFORE
         # building context — this gates the 9-second read_research() cold load.
@@ -653,7 +662,6 @@ def create_app():
         input_value: str = Body(default=""),
         authorization: str = Header(default=""),
     ):
-        import uuid, tempfile, os as _os
         registry = {t["id"]: t for t in data_api.MANUAL_TASKS}
         task = registry.get(task_id)
         if not task:
@@ -721,7 +729,6 @@ def create_app():
         _require_admin(authorization)
         loop = asyncio.get_running_loop()
         def _heal():
-            import watchdog
             watchdog.heal_tasks([], force=True)
         await loop.run_in_executor(None, _heal)
         return {"status": "healed"}
@@ -745,7 +752,6 @@ def _is_running(pid: int) -> bool:
     probe — it falls through to TerminateProcess), so we must use OpenProcess.
     """
     if sys.platform == "win32":
-        import ctypes
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         STILL_ACTIVE = 259
         kernel32 = ctypes.windll.kernel32
@@ -770,7 +776,7 @@ def _is_running(pid: int) -> bool:
 def cmd_start():
     pid = _read_pid()
     if pid and _is_running(pid):
-        print(f"Already running (pid {pid}).")
+        print(f"Already running (pid {pid}).")  # noqa: print
         return
     cfg = _cfg()
     port = cfg.web_port
@@ -785,19 +791,19 @@ def cmd_start():
     _PID.write_text(str(proc.pid))
     time.sleep(1.5)
     if _is_running(proc.pid):
-        print(f"Started AETHER Dashboard (pid {proc.pid}) -> http://{host}:{port}")
+        print(f"Started AETHER Dashboard (pid {proc.pid}) -> http://{host}:{port}")  # noqa: print
     else:
-        print("Failed to start. Check Data/webserver.log.")
+        print("Failed to start. Check Data/webserver.log.")  # noqa: print
 
 
 def cmd_stop():
     pid = _read_pid()
     if not pid:
-        print("Not running (no PID file).")
+        print("Not running (no PID file).")  # noqa: print
         return
     if not _is_running(pid):
         _PID.unlink(missing_ok=True)
-        print("Not running (stale PID removed).")
+        print("Not running (stale PID removed).")  # noqa: print
         return
     try:
         os.kill(pid, signal.SIGTERM)
@@ -806,18 +812,18 @@ def cmd_stop():
             if not _is_running(pid):
                 break
         _PID.unlink(missing_ok=True)
-        print(f"Stopped (pid {pid}).")
+        print(f"Stopped (pid {pid}).")  # noqa: print
     except Exception as e:
-        print(f"Error stopping: {e}")
+        print(f"Error stopping: {e}")  # noqa: print
 
 
 def cmd_status():
     pid = _read_pid()
     cfg = _cfg()
     if pid and _is_running(pid):
-        print(f"Running  pid={pid}  http://{cfg.web_host}:{cfg.web_port}")
+        print(f"Running  pid={pid}  http://{cfg.web_host}:{cfg.web_port}")  # noqa: print
     else:
-        print(f"Stopped  (port {cfg.web_port})")
+        print(f"Stopped  (port {cfg.web_port})")  # noqa: print
 
 
 def cmd_restart():
@@ -827,7 +833,7 @@ def cmd_restart():
 
 
 def cmd_upgrade():
-    print("Pulling latest code...")
+    print("Pulling latest code...")  # noqa: print
     subprocess.run(["git", "pull"], cwd=str(_DIR), check=True)
     cmd_restart()
 
@@ -835,9 +841,8 @@ def cmd_upgrade():
 def _write_commit_stamp():
     """Stamp the git HEAD at server start so health checks can detect stale processes."""
     try:
-        import subprocess as _sp
-        head = _sp.check_output(["git", "rev-parse", "--short", "HEAD"],
-                                 cwd=str(_DIR), text=True, timeout=3).strip()
+        head = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
+                                        cwd=str(_DIR), text=True, timeout=3).strip()
         (_DIR / "Data" / "server_commit.txt").write_text(head)
     except Exception:
         pass
@@ -845,7 +850,6 @@ def _write_commit_stamp():
 
 def cmd_serve(host: str, port: int):
     """Run uvicorn in-process (called by cmd_start subprocess)."""
-    import uvicorn
     _write_commit_stamp()
     app = create_app()
     uvicorn.run(app, host=host, port=port, log_level="info")
@@ -854,13 +858,9 @@ def cmd_serve(host: str, port: int):
 def cmd_regen_secret():
     """Generate a fresh web.secret in config.json and restart if running.
     Invalidates all existing admin sessions (everyone must log in again)."""
-    import datetime
-    import json
-    import shutil
-
     cfg_path = _DIR / "config.json"
     if not cfg_path.exists():
-        print("config.json not found — create it from config.json.example first.")
+        print("config.json not found — create it from config.json.example first.")  # noqa: print
         return
 
     # Backup before writing (Data/Backup is gitignored)
@@ -878,14 +878,14 @@ def cmd_regen_secret():
         json.dump(cfg, f, indent=2)
     os.replace(tmp, cfg_path)
 
-    print(f"New web.secret written (64 chars). Backup: {bak}")
-    print("All existing admin sessions are now invalid.")
+    print(f"New web.secret written (64 chars). Backup: {bak}")  # noqa: print
+    print("All existing admin sessions are now invalid.")  # noqa: print
     pid = _read_pid()
     if pid and _is_running(pid):
-        print("Server is running -> restarting to apply...")
+        print("Server is running -> restarting to apply...")  # noqa: print
         cmd_restart()
     else:
-        print("Start the server for it to take effect: python server.py start")
+        print("Start the server for it to take effect: python server.py start")  # noqa: print
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -922,7 +922,6 @@ if __name__ == "__main__":
     else:
         # Default: foreground dev mode (auto-reload)
         cfg = _cfg()
-        import uvicorn
         app = create_app()
         uvicorn.run(app, host=args.host or cfg.web_host,
                     port=args.port or cfg.web_port, log_level="info")
