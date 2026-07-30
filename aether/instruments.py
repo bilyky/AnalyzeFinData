@@ -74,7 +74,7 @@ def _save_scarcity_cache(cache: dict):
         with open(_SCARCITY_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(cache, f, indent=4)
     except Exception as e:
-        print(f"Warning: Failed to save scarcity cache: {e}")  # noqa: print
+        _log.warning(f"Warning: Failed to save scarcity cache: {e}")
 
 
 def is_scarcity_asset(symbol: str, industry_str: str) -> bool:
@@ -103,7 +103,7 @@ def is_scarcity_asset(symbol: str, industry_str: str) -> bool:
         res = ai_client.evaluate(system, user, max_tokens=5, temperature=0.0)
         result = "YES" in (res or "").strip().upper()
     except Exception as e:
-        print(f"Warning: AI classification failed for {s}: {e}. Not caching — will retry next run.")  # noqa: print
+        _log.warning(f"Warning: AI classification failed for {s}: {e}. Not caching — will retry next run.")
         return False   # don't persist a transient failure as a permanent NO
 
     cache[s] = result

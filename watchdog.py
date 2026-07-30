@@ -4,6 +4,8 @@ import datetime
 import subprocess
 import json
 import notify
+import etrade
+import powergauge
 from pathlib import Path
 from aether_logger import get_logger as _get_logger
 
@@ -154,20 +156,20 @@ def extract_latest_traceback():
             last_failure = parts[-1]
             return "AI Game failed (Exit " + last_failure[:1500] # Limit size safely
     except Exception as e:
-        print(f"Failed to extract traceback: {e}")
+        _log.error(f"Failed to extract traceback: {e}")
     return ""
 
 def trigger_ai_self_healing(traceback):
     """Headlessly trigger the configured AI CLI Agent synchronously to self-heal the python codebase on the fly."""
     if SELF_HEAL_LOCK.exists():
-        print("  [Healer] Circuit breaker active (self_healing.lock found). Skipping AI trigger.")
+        _log.console("  [Healer] Circuit breaker active (self_healing.lock found). Skipping AI trigger.")
         return False, "Circuit breaker active. Code needs manual review.", ""
     
     # Create the lock to prevent recursive self-healing loops
     with open(SELF_HEAL_LOCK, "w", encoding="utf-8") as f:
         f.write(f"Active since: {datetime.datetime.now()}\nTraceback: {traceback[:200]}\n")
         
-    print("🧠 [AETHER BRAIN] CRITICAL ERROR DETECTED. ACTIVATING SYNCHRONOUS SELF-HEALER...")
+    _log.error("🧠 [AETHER BRAIN] CRITICAL ERROR DETECTED. ACTIVATING SYNCHRONOUS SELF-HEALER...")
     
     _prompt_template = BASE_DIR / "prompts" / "self_healing.md"
     if _prompt_template.exists():
@@ -184,7 +186,7 @@ def trigger_ai_self_healing(traceback):
             prompt=prompt.replace('"', '\\"').replace('\n', ' '),
             prompt_file=str(SELF_HEAL_PROMPT_FILE)
         )
-        print(f"🚀 [AETHER BRAIN] Dispatching self-healing command (prompt written to file)")
+        _log.console(f"🚀 [AETHER BRAIN] Dispatching self-healing command (prompt written to file)")
         result = subprocess.run(
             cmd,
             shell=True,
@@ -199,17 +201,17 @@ def trigger_ai_self_healing(traceback):
         console_log = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
         
         if result.returncode == 0:
-            print("✅ [AETHER BRAIN] Self-healing process completed successfully.")
+            _log.console("✅ [AETHER BRAIN] Self-healing process completed successfully.")
             return True, "Self-healer executed successfully.", console_log
         else:
-            print(f"❌ [AETHER BRAIN] Self-healer exited with code {result.returncode}.")
+            _log.error(f"❌ [AETHER BRAIN] Self-healer exited with code {result.returncode}.")
             return False, f"Self-healer failed with exit code {result.returncode}.", console_log
             
     except subprocess.TimeoutExpired:
-        print("❌ [AETHER BRAIN] Self-healing process timed out (5 minute limit reached).")
+        _log.error("❌ [AETHER BRAIN] Self-healing process timed out (5 minute limit reached).")
         return False, "Self-healing process timed out (5 min limit reached).", "TIMEOUT"
     except Exception as e:
-        print(f"❌ Failed to run Self-Healer: {e}")
+        _log.error(f"❌ Failed to run Self-Healer: {e}")
         # Clean up files if we fail to spawn
         if SELF_HEAL_LOCK.exists(): SELF_HEAL_LOCK.unlink()
         if SELF_HEAL_PROMPT_FILE.exists(): SELF_HEAL_PROMPT_FILE.unlink()
@@ -254,9 +256,9 @@ def heal_tasks(missing_tasks, force=False):
     }
 
     for task in (TASKS if force else missing_tasks):
-        print(f"🔧 Healing/Upgrading scheduled task: {task}")
+        _log.console(f"🔧 Healing/Upgrading scheduled task: {task}")
         if task not in _TASK_DEFS:
-            print(f"⚠️  No registration template for task: {task}")
+            _log.warning(f"⚠️  No registration template for task: {task}")
             continue
         tr, sc, st = _TASK_DEFS[task]
         args = ["schtasks", "/create", "/tn", task, "/tr", tr, "/sc", sc, "/f", "/it", "/ru", run_as]
@@ -265,36 +267,35 @@ def heal_tasks(missing_tasks, force=False):
         try:
             result = subprocess.run(args, capture_output=True)
             if result.returncode == 0:
-                print(f"✅ Task {task} successfully registered with native UTF-8 environment.")
+                _log.info(f"✅ Task {task} successfully registered with native UTF-8 environment.")
             else:
-                print(f"❌ schtasks failed for {task} (rc={result.returncode}): {result.stderr.decode(errors='replace').strip()}")
+                _log.error(f"❌ schtasks failed for {task} (rc={result.returncode}): {result.stderr.decode(errors='replace').strip()}")
         except Exception as e:
-            print(f"❌ Failed to heal {task}: {e}")
+            _log.error(f"❌ Failed to heal {task}: {e}")
 
 def kill_ghost_processes():
     """Kill any hung python or excel processes that might be locking resources."""
-    print("🧹 Cleaning up hung ghost processes...")
+    _log.console("🧹 Cleaning up hung ghost processes...")
     try:
         subprocess.run(["powershell", "Get-Process | Where-Object { $_.Name -match 'excel|python' -and $_.CommandLine -match 'AnalyzeFinData' } | Stop-Process -Force"], capture_output=True)
     except:
         pass
 
 def run_watchdog():
-    print(f"[{datetime.datetime.now()}] Project AETHER Healer starting...")
+    _log.console(f"[{datetime.datetime.now()}] Project AETHER Healer starting...")
     
     # 0. E*TRADE Proactive Session Keeper (Prevents Soft Expiry)
     try:
-        import etrade
         # Attempt to get valid active tokens for today (silently renews if fresh, 
         # or runs Playwright re-auth if yesterday's token has expired!)
         tokens = etrade.get_tokens("production", allow_browser=True)
         if tokens:
-            print("  [Healer] E*TRADE production session is active, fresh, and fully validated!")
+            _log.info("  [Healer] E*TRADE production session is active, fresh, and fully validated!")
         else:
             raise RuntimeError("E*TRADE tokens are missing or could not be loaded.")
     except Exception as e:
         err_msg = f"E*TRADE Proactive Session Keeper Failed: {e}"
-        print(f"  🛑 [Healer] {err_msg}")
+        _log.error(f"  🛑 [Healer] {err_msg}")
         _log.error(err_msg, exc_info=True)
         # Send a critical email alert so you know immediately that the session has failed!
         try:
@@ -304,18 +305,17 @@ def run_watchdog():
                 is_html=False
             )
         except Exception as ne:
-            print(f"  ❌ Failed to send critical watchdog alert email: {ne}")
+            _log.error(f"  ❌ Failed to send critical watchdog alert email: {ne}")
         # Throw the exception to fail the task scheduler run (rc != 0), preventing silent logical failures!
         raise
 
     # 0b. Chaikin Proactive Session Keeper — uses cross-process singleton
     try:
-        import powergauge
         session = powergauge.ensure_valid_session()
         if session and session.get("jsessionid"):
-            print("  [Healer] Chaikin Analytics session is valid.")
+            _log.info("  [Healer] Chaikin Analytics session is valid.")
         else:
-            print("  [Healer] Chaikin Analytics session renewal failed — manual login required.")
+            _log.error("  [Healer] Chaikin Analytics session renewal failed — manual login required.")
     except Exception as e:
         _log.error("Chaikin session keep-alive failed", extra={"error": str(e)}, exc_info=True)
 
@@ -379,7 +379,7 @@ def run_watchdog():
     # We only send an email if a healing action occurred, an AI healer triggered, or there are active code errors in the logs.
     # Stale data alone is a status warning and should not spam your inbox hourly.
     if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered):
-        print("Healer cycle complete. Constructing consolidated recovery report...")
+        _log.console("Healer cycle complete. Constructing consolidated recovery report...")
         
         # Color badges
         status_color = "#27ae60" if compilation_passed else "#c0392b"
@@ -445,9 +445,9 @@ def run_watchdog():
         """
         
         notify.send_email("🛡️ Project AETHER: Autonomous Health & AI Recovery Report", html_report, is_html=True)
-        print("Consolidated Recovery Report emailed successfully!")
+        _log.info("Consolidated Recovery Report emailed successfully!")
     else:
-        print("✅ System Health Check: All systems nominal.")
+        _log.info("✅ System Health Check: All systems nominal.")
 
 if __name__ == "__main__":
     run_watchdog()

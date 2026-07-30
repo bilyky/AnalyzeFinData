@@ -66,7 +66,7 @@ def log_decisions(entries, path=LOG):
                 f.write(json.dumps(e) + "\n")
         _trim_log(path)
     except Exception as e:
-        print(f"[decision_eval] log write failed: {e}")  # noqa: print
+        _log.warning(f"[decision_eval] log write failed: {e}")
 
 
 def _trim_log(path, max_lines=_MAX_LOG_LINES):
@@ -250,4 +250,4 @@ def reflection(scorecard) -> str:
 
 if __name__ == "__main__":
     sc = score_log(read_log())
-    print(reflection(sc))  # noqa: print
+    _log.info(reflection(sc))

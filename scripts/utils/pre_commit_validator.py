@@ -5,7 +5,7 @@ Enforces:
 1. No Inline Imports: All python imports must be top-level (uses ast, not regex).
 2. No Silent Exceptions: No 'except: pass' or 'except Exception: pass' without logging.
 3. No bare print(): use _log.console() / _log.info() / _log.error() instead.
-   Exempt: lines ending with  # noqa: print  (for intentional interactive prompts).
+   Print statements are strictly banned with ZERO shortcuts or exemptions.
 4. R&D Roadmap Sync: Verifies MEMORY.md and web/index.html item counts are in sync.
 """
 import ast
@@ -59,8 +59,7 @@ def check_no_silent_exceptions(file_path: str) -> bool:
         return True
 
 def check_no_print_statements(file_path: str) -> bool:
-    """Detect bare print() calls using ast. Allows # noqa: print on the same line
-    for intentional interactive prompts (e.g. Playwright browser instructions)."""
+    """Detect bare print() calls using ast. No print statements are allowed."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             source = f.read()
