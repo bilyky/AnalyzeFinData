@@ -51,5 +51,27 @@ class TestExecutables(unittest.TestCase):
         res = subprocess.run(ruff_cmd + ["check", "--select", "F,E9,F63,F7,F82", str(daily_task_py)], capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, f"daily_task.py failed Ruff self-validation linter checks:\n{res.stdout}\n{res.stderr}")
 
+    def test_server_cli_smoke(self):
+        """Verify that server.py CLI commands (status, stop) execute without crashing on NameErrors or runtime scope errors."""
+        import subprocess
+        base_dir = Path(__file__).resolve().parent.parent
+        server_py = base_dir / "server.py"
+        
+        # Test 1: server.py status
+        res = subprocess.run([sys.executable, str(server_py), "status"], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"server.py status failed with exit code {res.returncode}:\n{res.stdout}\n{res.stderr}")
+        self.assertNotIn("Traceback", res.stdout)
+        self.assertNotIn("NameError", res.stdout)
+        self.assertNotIn("Traceback", res.stderr)
+        self.assertNotIn("NameError", res.stderr)
+
+        # Test 2: server.py stop
+        res_stop = subprocess.run([sys.executable, str(server_py), "stop"], capture_output=True, text=True)
+        self.assertEqual(res_stop.returncode, 0, f"server.py stop failed with exit code {res_stop.returncode}:\n{res_stop.stdout}\n{res_stop.stderr}")
+        self.assertNotIn("Traceback", res_stop.stdout)
+        self.assertNotIn("NameError", res_stop.stdout)
+        self.assertNotIn("Traceback", res_stop.stderr)
+        self.assertNotIn("NameError", res_stop.stderr)
+
 if __name__ == "__main__":
     unittest.main()
