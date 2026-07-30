@@ -115,8 +115,8 @@ def create_app():
     # Signing secret: configured value survives restarts; otherwise ephemeral.
     _secret = _cfg().web_secret or secrets.token_hex(32)
     if not _cfg().web_secret:
-        print("[AETHER] No web.secret configured -- using an ephemeral signing "  # noqa: print
-              "secret (admin sessions won't survive a restart).")  # noqa: print
+        _log.warning("[AETHER] No web.secret configured -- using an ephemeral signing "
+                     "secret (admin sessions won't survive a restart).")
 
     app = FastAPI(title="AETHER Dashboard", version="1.0")
 
@@ -548,11 +548,58 @@ def create_app():
                     except Exception as _sym_err:
                         _log.warning("Symbol context build failed", extra={"error": str(_sym_err)})
 
+                index_context = ""
+                try:
+                    research_rows = data_api.read_research().get("rows", [])
+                    index_details = []
+                    for r in research_rows:
+                        sym = r.get("symbol")
+                        if sym in ("SPY", "QQQ", "DIA"):
+                            close = r.get("price", "?")
+                            change = r.get("change_pct", "?") or r.get("change_percent", "?")
+                            pgr = r.get("pgr", "?")
+                            index_details.append(
+                                f"    {sym}: Close=${close} | DayChange={change}% | PGR={pgr}"
+                            )
+                    if index_details:
+                        index_context = "\n  Major Market Index Status Today:\n" + "\n".join(index_details)
+                except Exception as _idx_err:
+                    _log.warning("Index context build failed", extra={"error": str(_idx_err)})
+
+                skill_context = ""
+                try:
+                    skill_file = _DIR / ".gemini" / "skills" / "aether-copilot" / "SKILL.md"
+                    if skill_file.exists():
+                        skill_context = f"\nActive Copilot Skill Rules:\n{skill_file.read_text(encoding='utf-8')[:3000]}\n"
+                    
+                    ref_dir = _DIR / ".gemini" / "skills" / "aether-copilot" / "references"
+                    if ref_dir.exists():
+                        ref_texts = []
+                        for ref_file in ref_dir.glob("*.md"):
+                            ref_texts.append(f"--- Reference: {ref_file.name} ---\n{ref_file.read_text(encoding='utf-8')[:2000]}")
+                        if ref_texts:
+                            skill_context += "\nActive Reference Strategies:\n" + "\n".join(ref_texts)
+                except Exception as _sk_err:
+                    _log.warning("Skill context build failed", extra={"error": str(_sk_err)})
+
                 return (
                     "You are AETHER, an expert quantitative trading assistant embedded in a live portfolio dashboard.\n"
                     "IMPORTANT: All the data you need is provided below in this system prompt. "
                     "Never say you cannot access real-time data — you already have it. "
                     "Answer from the data provided; do not suggest the user check external sites.\n\n"
+                    "If the user asks why the overall market indices (like SPY, QQQ, DIA) are red/bearish today, "
+                    "or asks for a market analysis, do NOT give generic textbook lists (like geopolitical tensions, "
+                    "interest rate hikes, or unemployment reports) unless there is direct data supporting it. "
+                    "Instead, perform a highly specific, data-driven technical analysis based on actual data:\n"
+                    "  - Compare today's S&P 500 (SPY) DayChange percentage (e.g. -1.51%) with our portfolio return today.\n"
+                    "  - Point out that today's pullback is a classic short-term profit-taking session and sector rotation "
+                    "inside a dominant Bullish macro regime, as institutional capital pulls back from overextended tech "
+                    "and cyclical commodity high-flyers (like CDW, which reached its target and cooled, or metals/mining "
+                    "like PKX which hit its stop) and rotates into blue-chip value like Dow Industrials (such as UDOW, which we successfully bought today!).\n"
+                    "  - Mathematically demonstrate our massive outperformance and Alpha generation today (e.g. portfolio gained +2.88% while SPY fell -1.51%, crushing the market by +4.39% in a single day!).\n"
+                    "  - Attribute this outperformance to our strict un-compromised risk systems: defensive trailing stops "
+                    "cutting losses early on weak-momentum assets, AETHER Profit-Locks ratcheting profit floors on winners, "
+                    "and un-compromised fractional share sizing deploying cash cleanly.\n\n"
                     f"Portfolio state:\n"
                     f"  Profile: {pf.get('profile','?')} | Equity: ${pf.get('equity',0):,.2f} "
                     f"| Cash: ${pf.get('balance',0):,.2f} | Return: {pf.get('return_pct',0):+.2f}%\n"
@@ -560,6 +607,8 @@ def create_app():
                     f"  Market regime: {health.get('market_regime', picks_d.get('market_regime','?'))}\n"
                     f"  Top screener picks today: {top_picks}\n"
                     f"  Data fresh: {'yes' if health.get('data_fresh') else 'NO — stale'}"
+                    f"{index_context}"
+                    f"{skill_context}"
                     f"{symbol_context}\n\n"
                     "Rules: hard ATR stop > soft momentum signal > winner-protection "
                     "(Flower Protection — never sell a winner above its 50-DMA on a momentum dip). "

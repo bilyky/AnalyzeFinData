@@ -159,6 +159,11 @@ AETHER's factor weights are fully customizable and backtest-driven:
     *   **Dividend Yield Factor (`scoring.py`):** Maps the current stock's forward dividend yield (sourced from live E*TRADE API quotes) into our quantitative scoring model, providing a fundamental valuation floor for defensive scarcity assets during market downtrends.
     *   **Cash Dividend Reinvestment (`ai_portfolio_game.py`):** Automatically detects dividend payout dates from held positions, collects the cash dividends, and reinvests them directly back into our cash balance to maximize capital compounding efficiency, accelerating our target trajectory toward the $20,000 portfolio goal.
 
+8.  **🗓️ Scheduled Milestone: Saturday, August 1, 2026 — Momentum Balancing & Market Summarization Skills (R&D Lab Module):**
+    We will develop two critical quantitative and AI research studies to optimize capital efficiency and data-grounded chat analysis:
+    *   **Short10 Momentum Floor Qualification Tuning (Finding Balance) (`ai_portfolio_game.py`):** Research and develop an additional qualification parameter (such as Long60 trend strength $\ge 5.0$, a high Money Flow rating, or stable PGR 'Bu/Bu+') to dynamically bypass the strict `s10 >= 2.5` floor, allowing the portfolio to purchase steady, slow-moving long-term winners (like FANG with `s10 = 0.7`) while still blocking rapid-loss traps (like PKX/ETHT).
+    *   **Market Summarization Skill Development (`watchdog.py` & `server.py`):** Develop a custom, un-compromised Gemini CLI Agent Skill (and matching dashboard API) that headlessly ingests live intraday index ticks, parses daily newsletter text blocks, and generates a cohesive, data-grounded macro market summary (explaining exact indices catalysts and relative strength sector shifts) to completely eliminate generic RAG lists.
+
 ---
 
 ## 🏁 7. Developer Modification Checklist
