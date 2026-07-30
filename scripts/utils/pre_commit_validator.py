@@ -78,10 +78,10 @@ def check_no_print_statements(file_path: str) -> bool:
             if not isinstance(func, ast.Name) or func.id != "print":
                 continue
             lineno = node.lineno
-            # NO SHORTS ALLOWED: print statements are strictly banned!
+            raw_line = lines[lineno - 1] if lineno <= len(lines) else ""
             print(f"[GIT PRE-COMMIT] bare print() in {rel} at line {lineno}: {raw_line.strip()[:80]}")
             print("   Use _log.console() for progress, _log.info/warning/error() for events.")
-            print("   Add  # noqa: print  to exempt intentional interactive prompts.")
+            print("   Print statements are strictly banned with ZERO shortcuts or exemptions.")
             return False
         return True
     except Exception as e:
