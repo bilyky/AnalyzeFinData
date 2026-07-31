@@ -168,6 +168,22 @@ def create_app():
                 return {"markdown": f.read()}
         raise HTTPException(status_code=404, detail="AETHER_REFERENCE.md not found")
 
+    @app.get("/api/roadmap")
+    async def get_roadmap():
+        roadmap_path = _DIR / "plans" / "roadmap.md"
+        if roadmap_path.exists():
+            with open(roadmap_path, encoding="utf-8") as f:
+                return {"markdown": f.read()}
+        raise HTTPException(status_code=404, detail="plans/roadmap.md not found")
+
+    @app.get("/api/wiki")
+    async def get_wiki():
+        wiki_path = _DIR / "Data" / "wiki.json"
+        if wiki_path.exists():
+            with open(wiki_path, encoding="utf-8") as f:
+                return json.load(f)
+        raise HTTPException(status_code=404, detail="Data/wiki.json not found")
+
     # ── Portfolio ─────────────────────────────────────────────────────────────
 
     @app.get("/api/portfolio")

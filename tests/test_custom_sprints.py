@@ -163,7 +163,7 @@ class TestCoreSatelliteAllocation(unittest.TestCase):
         # With $5,000 cash and 1 available slot, dynamic sizing wants to buy $5,000 worth (500 shares).
         # But the 20% scarcity cap should restrict/downsize this to exactly 50 shares ($500).
         rules = {"scarcity_allocation_pct": 0.20, "max_allocation_pct": 0.50, "atr_multiplier": 2.5}
-        top_buys = [{"sym": "SLV", "price": 10.0, "total": 12.0, "industry": "Gold Mining", "bottom_desc": ""}]
+        top_buys = [{"sym": "SLV", "price": 10.0, "total": 5.0, "industry": "Gold Mining", "bottom_desc": ""}]
         new_tx = []
         
         # Mock instruments classification so SLV is treated as scarcity

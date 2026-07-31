@@ -23,6 +23,7 @@ import datetime
 import os
 import sys
 import pytz
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import powergauge
@@ -116,30 +117,36 @@ def main():
             continue
 
         total = len(missing)
-        print(f"{day}: fetching {total}/{len(symbols)} symbols...")
+        print(f"{day}: fetching {total}/{len(symbols)} symbols in parallel...")
         ok = 0
         skip = 0
         errors = 0
-        for i, symbol in enumerate(missing, 1):
-            print(f"  [{i}/{total}] {symbol:<8}", end='\r', flush=True)
-            try:
-                pg = powergauge.get_symbol_data(
-                    symbol, day, prefer_cache=(day != datetime.date.today()), session_id=session_id
-                )
-                if pg.price == -1:
-                    skip += 1
-                else:
-                    ok += 1
-            except EnvironmentError:
-                print(f"\n  Session expired — re-logging in...")
-                session_id = powergauge.login()
-                pg = powergauge.get_symbol_data(
-                    symbol, day, prefer_cache=(day != datetime.date.today()), session_id=session_id
-                )
-                ok += 1
-            except Exception as e:
-                print(f"\n  {symbol}: ERROR {e}")
-                errors += 1
+        
+        workers = int(os.environ.get("CHAIKIN_WORKERS", "10"))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            future_to_sym = {
+                pool.submit(
+                    powergauge.get_symbol_data,
+                    symbol,
+                    day,
+                    day != datetime.date.today()
+                ): symbol
+                for symbol in missing
+            }
+            done = 0
+            for future in as_completed(future_to_sym):
+                symbol = future_to_sym[future]
+                done += 1
+                print(f"  [{done}/{total}] {symbol:<8}", end='\r', flush=True)
+                try:
+                    pg = future.result()
+                    if pg.price == -1:
+                        skip += 1
+                    else:
+                        ok += 1
+                except Exception as e:
+                    print(f"\n  {symbol}: ERROR {e}")
+                    errors += 1
 
         print(f"  done: {ok} fetched, {skip} no-data, {errors} errors          \n")
 

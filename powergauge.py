@@ -15,6 +15,11 @@ from utils import _to_float
 from aether_logger import get_logger as _get_logger
 import risk_utils
 import instruments
+from config import CFG
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    sync_playwright = None
 
 _pg_log = _get_logger("powergauge")
 
@@ -121,25 +126,58 @@ def ensure_valid_session() -> dict:
 _cache_file_index: dict | None = None
 
 
+class LazyCacheFileIndex(dict):
+    def __init__(self):
+        super().__init__()
+        self._scanned_symbols = set()
+        self._symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
+        try:
+            if os.path.isdir(self._symbol_dir):
+                for d in os.listdir(self._symbol_dir):
+                    if os.path.isdir(os.path.join(self._symbol_dir, d)):
+                        self[d] = []
+        except OSError:
+            pass
+
+    def _ensure_symbol(self, sym: str):
+        if sym in self._scanned_symbols:
+            return
+        self._scanned_symbols.add(sym)
+        sym_dir = os.path.join(self._symbol_dir, sym)
+        paths = []
+        if os.path.isdir(sym_dir):
+            try:
+                for name in os.listdir(sym_dir):
+                    if name.endswith('.json'):
+                        if name.rsplit('_', 1)[0] == sym:
+                            paths.append(os.path.join(sym_dir, name))
+            except OSError:
+                pass
+        self[sym] = sorted(paths)
+
+    def __getitem__(self, item):
+        if isinstance(item, str):
+            self._ensure_symbol(item)
+        return super().__getitem__(item)
+
+    def get(self, key, default=None):
+        if isinstance(key, str):
+            self._ensure_symbol(key)
+        return super().get(key, default)
+
+    def __contains__(self, key):
+        if isinstance(key, str):
+            self._ensure_symbol(key)
+        return super().__contains__(key)
+
+
 def _build_cache_index():
     """Scan Data/Symbol recursively and build a symbol→[paths] index for find_prev_pf."""
     global _cache_file_index
     if _cache_file_index is not None:
         return
-    symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
-    from collections import defaultdict
-    idx: dict = defaultdict(list)
-    try:
-        for root, _dirs, files in os.walk(symbol_dir):
-            for name in files:
-                if not name.endswith('.json'):
-                    continue
-                sym = name.rsplit('_', 1)[0]
-                idx[sym].append(os.path.join(root, name))
-    except OSError:
-        pass
-    _cache_file_index = {sym: sorted(paths) for sym, paths in idx.items()}
-    print(f"Cache index built: {len(_cache_file_index)} symbols")
+    _cache_file_index = LazyCacheFileIndex()
+    _pg_log.info(f"Cache index built: {len(_cache_file_index)} symbols")
 
 
 SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
@@ -486,7 +524,6 @@ def _jwt_to_session_id(jwt_token: str) -> str:
 
 def _load_credentials() -> tuple[str, str]:
     """Load Chaikin credentials from unified config (env vars override config.json)."""
-    from config import CFG
     email, password = CFG.chaikin_email, CFG.chaikin_password
     if not email or not password:
         raise EnvironmentError(
@@ -498,9 +535,10 @@ def _load_credentials() -> tuple[str, str]:
 
 
 def _login_via_browser() -> dict:
-    from playwright.sync_api import sync_playwright
+    if not sync_playwright:
+        raise ImportError("Playwright is not installed in the environment.")
 
-    print("Opening browser for login (a window will appear)...")
+    _pg_log.info("Opening browser for login (a window will appear)...")
     session_data = [None]
 
     def on_request(request):

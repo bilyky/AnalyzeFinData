@@ -8,6 +8,7 @@ import traceback
 import json
 import powergauge
 import logging
+from config import CFG
 from pathlib import Path
 
 # --- LOGGING CONFIGURATION ---
@@ -25,18 +26,22 @@ if not _log.handlers:
     ch.setFormatter(logging.Formatter("%(message)s"))
     _log.addHandler(ch)
 
-def run_command(command_list):
+def run_command(command_list, timeout=180):
     _log.info(f"Running: {' '.join(command_list)}")
     # Use Path(__file__) for the script if it's a local script
     if len(command_list) > 1 and command_list[1].endswith(".py"):
         command_list[1] = str(Path(__file__).resolve().parent / command_list[1])
     
-    result = subprocess.run(command_list, capture_output=True, text=True)
-    if result.returncode != 0:
-        _log.info(f"Error (exit code {result.returncode}): {result.stderr}")
-    else:
-        _log.info("Command completed successfully.")
-    return result.stdout
+    try:
+        result = subprocess.run(command_list, capture_output=True, text=True, timeout=timeout)
+        if result.returncode != 0:
+            _log.info(f"Error (exit code {result.returncode}): {result.stderr}")
+        else:
+            _log.info("Command completed successfully.")
+        return result.stdout
+    except subprocess.TimeoutExpired:
+        _log.warning(f"🚨 Command timed out after {timeout}s: {' '.join(command_list)}")
+        return ""
 
 def get_symbols_from_xls():
     try:
@@ -129,6 +134,16 @@ def main():
 
     today = datetime.date.today()
     _log.info(f"Starting daily automation for {today}")
+
+    # ── Configuration Placeholder Audit ──
+    if getattr(CFG, "has_placeholders", False):
+        _log.warning("🚨 [Config Alert] Active placeholders detected! Dispatching configuration health warning email...")
+        details_str = "\n".join(f"- {ph}" for ph in CFG.placeholder_details)
+        msg = f"AETHER Configuration Health Alert!\n\nActive placeholders were detected in your configuration:\n\n{details_str}\n\nPlease update your config.json or environment variables immediately to resolve this."
+        try:
+            notify.send_email("ALERT: AETHER Configuration Placeholders Detected", msg)
+        except Exception as e:
+            _log.error(f"Failed to send configuration health alert email: {e}")
 
     try:
         # 0. Self-Validation (Linting)

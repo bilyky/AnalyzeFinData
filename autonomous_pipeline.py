@@ -8,6 +8,7 @@ import traceback
 import json
 import html
 import rapidapi
+from config import CFG
 from run_history import load_symbols
 from pathlib import Path
 from aether_logger import get_logger as _get_logger
@@ -464,6 +465,16 @@ def main():
     cleanup_orphaned_processes()
     log("Starting Daily Trading Pipeline...")
     
+    # ── Configuration Placeholder Audit ──
+    if getattr(CFG, "has_placeholders", False):
+        log("Warning: Active placeholders detected in configuration! Dispatching health alert email...")
+        details_str = "\n".join(f"- {ph}" for ph in CFG.placeholder_details)
+        msg = f"AETHER Configuration Health Alert!\n\nActive placeholders were detected in your configuration:\n\n{details_str}\n\nPlease update your config.json or environment variables immediately to resolve this."
+        try:
+            notify.send_email("ALERT: AETHER Configuration Placeholders Detected", msg)
+        except Exception as e:
+            log(f"ERROR: Failed to send configuration health alert email: {e}")
+
     no_email = "--no-email" in sys.argv[1:]
     no_history = "--no-history" in sys.argv[1:]
     
@@ -488,8 +499,15 @@ def main():
         log("Backfilling 5-day history (run_history.py)...")
         try:
             script_path = str(BASE_DIR / "run_history.py")
-            subprocess.run([sys.executable, script_path, "5"], check=True, capture_output=True, encoding="utf-8", errors="replace")
+            subprocess.run(
+                [sys.executable, script_path, "5"], 
+                check=True, capture_output=True, 
+                encoding="utf-8", errors="replace",
+                timeout=120  # Fail fast after 2 minutes!
+            )
             log("History backfilled.")
+        except subprocess.TimeoutExpired as e:
+            log(f"Warning: run_history.py timed out after 120s (Playwright hang likely). Bypassing backfill...")
         except subprocess.CalledProcessError as e:
             log(f"Warning: run_history.py failed (will continue): {e.stderr}")
 
@@ -497,8 +515,19 @@ def main():
     log("Refreshing workbook (main.py)...")
     try:
         script_path = str(BASE_DIR / "main.py")
-        subprocess.run([sys.executable, script_path], check=True, capture_output=True, encoding="utf-8", errors="replace")
+        subprocess.run(
+            [sys.executable, script_path], 
+            check=True, capture_output=True, 
+            encoding="utf-8", errors="replace",
+            timeout=180  # Fail fast after 3 minutes!
+        )
         log("Workbook regenerated.")
+    except subprocess.TimeoutExpired as e:
+        error_msg = "main.py execution timed out after 180s (Playwright hang likely)."
+        log(error_msg)
+        if not no_email:
+            notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline failed: {error_msg}")
+        return
     except subprocess.CalledProcessError as e:
         error_msg = f"main.py failed: {e.stderr}"
         log(error_msg)

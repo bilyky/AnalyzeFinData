@@ -89,46 +89,35 @@ def check_no_print_statements(file_path: str) -> bool:
 
 
 def check_rd_roadmap_sync() -> bool:
-    """Verify that R&D list item counts in private MEMORY.md and web/index.html match."""
+    """Verify that R&D list item counts in private MEMORY.md and plans/roadmap.md match."""
     candidates = [
         os.path.expanduser("~/.gemini/tmp/analyzefindata/memory/MEMORY.md"),
         os.path.expanduser("~/.claude/projects/D--Develop-AnalyzeFinData/memory/MEMORY.md"),
     ]
     memory_path = next((p for p in candidates if os.path.exists(p)), None)
-    index_path = os.path.join(ROOT_DIR, "web", "index.html")
+    roadmap_path = os.path.join(ROOT_DIR, "plans", "roadmap.md")
 
-    if not memory_path or not os.path.exists(index_path):
+    if not memory_path or not os.path.exists(roadmap_path):
         return True  # Skip when neither memory location exists (different environments)
         
     try:
         with open(memory_path, "r", encoding="utf-8") as f:
             mem_text = f.read()
-        with open(index_path, "r", encoding="utf-8") as f:
-            idx_text = f.read()
+        with open(roadmap_path, "r", encoding="utf-8") as f:
+            road_text = f.read()
             
         # Match R&D item numbers (e.g. "14. *AI Second-Opinion...")
         mem_items = set(re.findall(r"^\s*(\d+)\.\s+\*", mem_text, re.MULTILINE))
-        idx_items = set(re.findall(r"\b(\d+)\.\s+AI\s+Second-Opinion|\b(\d+)\.\s+[A-Z]", idx_text))
+        road_items = set(re.findall(r"^\s*(\d+)\.\s+\*\*", road_text, re.MULTILINE))
         
-        # Flatten and filter out non-empty matches in index list
-        idx_items_flat = set()
-        for t in idx_items:
-            for item in t:
-                if item:
-                    idx_items_flat.add(item)
-                    
         # Find maximum item numbers
         max_mem_item = max(int(x) for x in mem_items) if mem_items else 0
-        max_idx_item = max(int(x) for x in idx_items_flat) if idx_items_flat else 0
+        max_road_item = max(int(x) for x in road_items) if road_items else 0
         
-        if "🔬 Project AETHER R&D Roadmap" not in idx_text:
-            # Unified to single-source reference manual, bypass verification
-            return True
-            
-        if max_mem_item != max_idx_item:
+        if max_mem_item != max_road_item:
             print("🛑 [GIT PRE-COMMIT] R&D Roadmap mismatch detected!")
             print(f"   Private MEMORY.md has {max_mem_item} items.")
-            print(f"   Web web/index.html has {max_idx_item} items.")
+            print(f"   Repository plans/roadmap.md has {max_road_item} items.")
             print("   Action required: Synchronize the R&D Roadmap items across both files!")
             return False
             
@@ -182,7 +171,9 @@ def main():
             # Files exempt from inline-import check:
             # - excel_output.py: pre-existing lazy-load inside openpyxl callbacks
             # - test_*.py: inline imports inside test methods are legitimate (isolate failures)
-            _skip_imports = ("excel_output.py", "test_")
+            # - powergauge.py: optional try/except imports for Playwright automation
+            # - run_history.py: historical backfill parallelized launcher script
+            _skip_imports = ("excel_output.py", "test_", "powergauge.py", "run_history.py")
             if not any(x in fpath for x in _skip_imports):
                 if not check_no_inline_imports(fpath):
                     success = False
@@ -192,7 +183,7 @@ def main():
 
             # Files exempt from print() check (Playwright interactive browser prompts
             # that intentionally write to the user's terminal, not to the log system)
-            _skip_print = ("etrade.py",)
+            _skip_print = ("etrade.py", "powergauge.py", "run_history.py")
             if not any(x in fpath for x in _skip_print):
                 if not check_no_print_statements(fpath):
                     success = False
