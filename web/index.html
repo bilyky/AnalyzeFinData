@@ -526,6 +526,12 @@
                                 Programmatically negates the combined pattern score (<code>-1.0 * score</code>) because backtests prove overbought patterns act as contrarian, prioritizing oversold bottoming plays.
                             </p>
                         </div>
+                        <div data-wiki="rbr" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
+                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Rubber-Band Reversal (RBR) — Overreaction Snap-Back (`patterns.py`)</h4>
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                A positively-signed <b>bullish</b> factor: a big, fast overreaction drawdown (Leg 1) followed by a <b>confirmed higher-low green reversal bar</b> in the upper half of its range (Leg 2). Pure price/volume, no look-ahead — the trough must already be in before the recovery bar scores. The tradeable event is the confirmed recovery bar, not the gap. Backtested on 25+ yr of OHLCV; only the reliable no-gap pocket scores, while the higher-variance earnings-<b>gap</b> cohort is <b>watch-only</b> (<code>RBR↑(gap,watch)</code>). Anchored on INTC's Jul-2026 snap-back.
+                            </p>
+                        </div>
                     </div>
                 </div>
 
