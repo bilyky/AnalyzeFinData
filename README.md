@@ -1,7 +1,7 @@
 # AnalyzeFinData — PowerGauge Stock Screener
 
 Stock screener for ~485 symbols. Pulls live data from the Chaikin Analytics API, computes
-entry-quality scores from local OHLCV history, and writes results into `Data/investment.xlsx`.
+entry-quality scores from local OHLCV history, and writes results into `Data/state_of_the_day.xlsx`.
 
 ---
 
@@ -25,7 +25,7 @@ entry-quality scores from local OHLCV history, and writes results into `Data/inv
 ## How It Works
 
 ```
-investment.xlsx (Research sheet)
+state_of_the_day.xlsx (Research sheet)
        ↑ written by check_from_xls()
        │
 powergauge.py  ←── Chaikin API (live PGR, signals, price)
@@ -102,7 +102,7 @@ If the token expires the screener re-authenticates automatically.
 
 ## Running the Screener
 
-### Full run — all symbols in investment.xlsx
+### Full run — all symbols in state_of_the_day.xlsx
 
 ```python
 import datetime
@@ -139,11 +139,6 @@ print(pg.price, pg.pgr_corrected_value)
 ```python
 powergauge.check_from_file(prefer_cache=False, date=date)
 ```
-
-### If Excel is open when the run finishes
-
-The screener detects the file-lock and saves to `Data/investment_pending_<timestamp>.xlsx`.
-Close Excel, then rename/copy that file over `investment.xlsx`.
 
 ### `state_of_the_day.xlsx` (source) → `Data/state_of_the_day.xlsx` (generated)
 
@@ -199,7 +194,7 @@ AnalyzeFinData/
 │   ├── sync/              # sync_data.py, sync_short_long.py
 │   └── utils/             # alpha_challenge.py, archive_manager.py, intraday_monitor.py, …
 │
-├── tests/                 # python -m unittest discover tests
+├── tests/                 # 23 files, 296 tests — python -m unittest discover tests (subset shown)
 │   ├── conftest.py            # make_ohlcv() fixture helper
 │   ├── test_scoring.py        # scoring pure functions
 │   ├── test_compute.py        # PowerGauge compute helpers
@@ -212,7 +207,7 @@ AnalyzeFinData/
 │   └── test_short_long_sync.py
 │
 └── Data/                  # gitignored — local data only
-    ├── investment.xlsx          # Main workbook (Research + Picks sheets)
+    ├── state_of_the_day.xlsx    # Generated workbook (Research + Picks sheets); XLSX_FILE
     ├── session.txt              # Cached Chaikin session token
     ├── symbols_to_check.txt     # One symbol per line, used by check_from_file()
     ├── Symbol/                  # Per-symbol, per-date Chaikin API cache
@@ -310,7 +305,7 @@ To move the project or its data, change only these constants near the top of eac
 
 ```python
 SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.txt")
-XLSX_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "investment.xlsx")
+XLSX_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "state_of_the_day.xlsx")
 XLSX_BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Backup")
 OHLCV_DIR    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
 ```
@@ -352,7 +347,11 @@ Tests are plain `unittest.TestCase` — no pytest required.
 python -m unittest discover -s tests -v
 ```
 
-Expected output: **270 tests, 0 failures.**
+The suite collects **297 tests** (4 live broker/API tests skip unless `AETHER_LIVE_TESTS=1`).
+
+One test is environment-dependent: `test_executables.test_daily_task_linter_self_validation`
+requires a working `ruff` on PATH and fails if the `ruff` subprocess can't initialize
+(e.g. a broken interpreter env). All other tests pass.
 
 ### Run a single file
 

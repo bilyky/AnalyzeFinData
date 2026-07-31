@@ -6,12 +6,12 @@ Includes state-persistence (cures 30-min duplicate email spam) and dynamic, AI-p
 import sys
 import os
 import json
-import time
 import datetime
 from pathlib import Path
 import openpyxl
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_BASE_DIR = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_BASE_DIR))
 
 import notify
 import ai_client
@@ -21,8 +21,17 @@ from ai_portfolio_game import get_live_prices
 
 _log = get_logger("monitor")
 
-XLSX_FILE = Path("Data/state_of_the_day.xlsx")
-STATE_FILE = Path("Data/intraday_monitor_state.json")
+# Anchor state/workbook paths to the project root, not the process CWD — the
+# scheduled task may launch from anywhere, and CWD-relative paths would silently
+# yield "no positions found" and skip every cycle.
+XLSX_FILE = _BASE_DIR / "Data" / "state_of_the_day.xlsx"
+STATE_FILE = _BASE_DIR / "Data" / "intraday_monitor_state.json"
+
+# Re-alert an existing breach only when it materially deteriorates: the price
+# drops at least this fraction below the last-alerted price, or the stop moves.
+# Without this, ordinary sub-percent ticks flip "changed" on every 30-min run and
+# re-send the alert — the duplicate-email spam this monitor is meant to cure.
+_MATERIAL_DROP_PCT = 0.01
 
 def load_state() -> dict:
     """Load the last active stop-breach state from disk."""
@@ -34,10 +43,13 @@ def load_state() -> dict:
     return {"last_breached": {}}
 
 def save_state(state: dict):
-    """Save the active stop-breach state to disk."""
+    """Save the active stop-breach state to disk atomically (temp file + replace),
+    so a crash or overlapping run can't leave a truncated JSON that resets state."""
     try:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        os.replace(tmp, STATE_FILE)
     except Exception as e:
         _log.warning(f"Failed to save monitor state: {e}")
 
@@ -77,7 +89,7 @@ def generate_ai_analysis(sym: str, price: float, stop: float) -> str:
         return raw_reply.strip()
     except Exception as e:
         _log.warning(f"Failed calling AI analyzer for {sym}: {e}")
-        return f"ATR Stop-Loss Floor Breached. Technical momentum is currently negative, representing an immediate capital preservation exit risk. Error: {e}"
+        return "ATR Stop-Loss Floor Breached. Technical momentum is currently negative, representing an immediate capital preservation exit risk."
 
 def monitor():
     _log.console(f"[{datetime.datetime.now()}] Starting Intraday Stop Monitor...")
@@ -110,11 +122,18 @@ def monitor():
     new_breaches = [s for s in current_breaches if s not in last_breached]
     cleared_breaches = [s for s in last_breached if s not in current_breaches]
     
-    # Check if existing breaches had price/stop modifications
+    # Re-alert an existing breach only when it materially worsens: the stop level
+    # moved (e.g. a trailing/ratchet adjustment) or the price made a new low at
+    # least _MATERIAL_DROP_PCT below what we last alerted on. A small tick or an
+    # upward bounce toward the stop must NOT re-trigger the email.
     modified_breaches = []
     for s in current_breaches:
         if s in last_breached:
-            if abs(current_breaches[s]["price"] - last_breached[s]["price"]) > 0.01:
+            prev = last_breached[s]
+            cur = current_breaches[s]
+            stop_moved = abs(cur["stop"] - prev.get("stop", cur["stop"])) > 1e-9
+            dropped_further = cur["price"] < prev["price"] * (1 - _MATERIAL_DROP_PCT)
+            if stop_moved or dropped_further:
                 modified_breaches.append(s)
 
     has_changed = bool(new_breaches or cleared_breaches or modified_breaches)

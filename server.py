@@ -198,16 +198,6 @@ def create_app():
             fresh = {}
         return {s: _price_cache.get(s, 0) for s in sym_list}
 
-    # ── Wiki Config Hook ──────────────────────────────────────────────────────
-
-    @app.get("/api/wiki/config")
-    async def wiki_config():
-        return {
-            "DEFENSIVE": ai_portfolio_game.get_strategy_rules("DEFENSIVE"),
-            "BALANCED": ai_portfolio_game.get_strategy_rules("BALANCED"),
-            "AGGRESSIVE": ai_portfolio_game.get_strategy_rules("AGGRESSIVE")
-        }
-
     # ── Picks ─────────────────────────────────────────────────────────────────
 
     @app.get("/api/picks")
@@ -511,7 +501,7 @@ def create_app():
         last_user = next(
             (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
         )
-        raw_candidates = _re.findall(r'\b[A-Z]{2,5}\b', last_user)
+        raw_candidates = re.findall(r'\b[A-Z]{2,5}\b', last_user)
 
         def _build_context():
             """Build the system prompt. Runs in a thread via run_in_executor so
@@ -589,22 +579,18 @@ def create_app():
                     "Never say you cannot access real-time data — you already have it. "
                     "Answer from the data provided; do not suggest the user check external sites.\n\n"
                     "CRITICAL: Whenever the user asks ANY question about today's market performance (e.g. 'What happened today with market?'), "
-                    "you MUST first inspect 'Major Market Index Status Today'. If major indices are red/bearish today (e.g. SPY is down -1.51%), "
-                    "you MUST lead your answer by stating these actual daily closes and percentage changes, rather than generalizing "
-                    "based on the intermediate-term 'BULLISH' macro regime label! "
+                    "you MUST first inspect 'Major Market Index Status Today' below and answer ONLY from those actual figures. "
+                    "Lead with the real daily closes and percentage changes given there, rather than generalizing from the "
+                    "intermediate-term macro regime label. Never invent index levels, percentages, or symbol events that are "
+                    "not present in the data below.\n"
                     "Do NOT give generic textbook lists (like geopolitical tensions, interest rate hikes, or unemployment data). "
-                    "Instead, perform a highly specific, data-driven technical analysis based on actual data:\n"
-                    "  - State today's actual index closing performance (e.g. SPY fell -1.51%).\n"
-                    "  - Point out that today's pullback is a classic short-term profit-taking session and sector rotation "
-                    "inside a dominant Bullish macro regime, as institutional capital pulls back from overextended tech "
-                    "and cyclical commodity high-flyers (like CDW, which reached its target and cooled, or metals/mining "
-                    "like PKX which hit its stop) and rotates into blue-chip value like Dow Industrials (such as UDOW, which we successfully bought today!).\n"
-                    "  - Mathematically demonstrate our massive outperformance and Alpha generation today (e.g. our portfolio gained +2.88% while SPY fell -1.51%, crushing the market by +4.39% in a single day!).\n"
-                    "  - Attribute this outperformance to our strict un-compromised risk systems: defensive trailing stops "
-                    "cutting losses early on weak-momentum assets, AETHER Profit-Locks ratcheting profit floors on winners, "
-                    "and un-compromised fractional share sizing deploying cash cleanly.\n\n"
+                    "Instead, perform a specific, data-driven technical read of the figures provided:\n"
+                    "  - State today's actual index closing performance from the data below.\n"
+                    "  - Relate it to the current macro regime label and the portfolio's positions/actions shown below "
+                    "(only reference trades or stop/target events that actually appear in the portfolio state).\n"
+                    "  - If the requested figures are not present in the data below, say so plainly instead of estimating.\n\n"
                     f"Major Market Index Status Today:\n"
-                    f"{index_context or '    SPY: Close=$740.84 | DayChange=-1.51% | PGR=Bu (Bullish)'}\n\n"
+                    f"{index_context or '    (index data unavailable — do not state specific index levels or percentages)'}\n\n"
                     f"Portfolio state:\n"
                     f"  Profile: {pf.get('profile','?')} | Equity: ${pf.get('equity',0):,.2f} "
                     f"| Cash: ${pf.get('balance',0):,.2f} | Return: {pf.get('return_pct',0):+.2f}%\n"

@@ -122,27 +122,30 @@ class TestZeroCashDragAndFractionalSizing(unittest.TestCase):
 
     @mock.patch("ai_portfolio_game.get_market_regime")
     def test_zero_cash_floor_under_bullish(self, mock_regime):
-        # 1. When market is BULLISH, cash buffer must be 0% across all profiles
-        mock_regime.return_value = "BULLISH"
-        
+        # 1. In a bull market, cash buffer must be 0% across all profiles.
+        #    get_market_regime() labels a strong bull market "AGGRESSIVE" — that is
+        #    the bull signal the Zero-Cash-Drag Autopilot keys off (not "BULLISH",
+        #    which the regime function never returns).
+        mock_regime.return_value = "AGGRESSIVE"
+
         rules_agg = game.get_strategy_rules("AGGRESSIVE")
         self.assertEqual(rules_agg["cash_buffer_pct"], 0.0)
-        
+
         rules_bal = game.get_strategy_rules("BALANCED")
         self.assertEqual(rules_bal["cash_buffer_pct"], 0.0)
-        
+
         rules_def = game.get_strategy_rules("DEFENSIVE")
         self.assertEqual(rules_def["cash_buffer_pct"], 0.0)
 
-        # 2. When market is NEUTRAL, cash buffer must return to its standard values
-        mock_regime.return_value = "NEUTRAL"
-        
+        # 2. Outside a bull regime, cash buffer must return to its standard values.
+        mock_regime.return_value = "BALANCED"
+
         rules_agg = game.get_strategy_rules("AGGRESSIVE")
         self.assertEqual(rules_agg["cash_buffer_pct"], 0.10)
-        
+
         rules_bal = game.get_strategy_rules("BALANCED")
         self.assertEqual(rules_bal["cash_buffer_pct"], 0.20)
-        
+
         rules_def = game.get_strategy_rules("DEFENSIVE")
         self.assertEqual(rules_def["cash_buffer_pct"], 0.50)
 
