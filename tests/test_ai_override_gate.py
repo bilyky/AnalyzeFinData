@@ -84,12 +84,13 @@ class TestAIOverrideGate(unittest.TestCase):
         self.assertIn("GMED", state["positions"])
         self.assertEqual(len(state["queued_orders"]), 0)
 
+    @mock.patch("aether.ai_client.evaluate", return_value="")
     @mock.patch("ai_portfolio_game.is_market_hours", return_value=True)
     @mock.patch("ai_portfolio_game.get_live_prices")
     @mock.patch("ai_portfolio_game.load_game")
     @mock.patch("ai_portfolio_game.save_game")
     @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
-    def test_sell_executes_without_override(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
+    def test_sell_executes_without_override(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours, mock_ai_eval):
         """Red-path: a SELL with no AI override verdict must actually execute (position removed)."""
         state = {
             "balance": 5000.0,

@@ -168,6 +168,22 @@ def create_app():
                 return {"markdown": f.read()}
         raise HTTPException(status_code=404, detail="AETHER_REFERENCE.md not found")
 
+    @app.get("/api/roadmap")
+    async def get_roadmap():
+        roadmap_path = _DIR / "plans" / "roadmap.md"
+        if roadmap_path.exists():
+            with open(roadmap_path, encoding="utf-8") as f:
+                return {"markdown": f.read()}
+        raise HTTPException(status_code=404, detail="plans/roadmap.md not found")
+
+    @app.get("/api/wiki")
+    async def get_wiki():
+        wiki_path = _DIR / "Data" / "wiki.json"
+        if wiki_path.exists():
+            with open(wiki_path, encoding="utf-8") as f:
+                return json.load(f)
+        raise HTTPException(status_code=404, detail="Data/wiki.json not found")
+
     # ── Portfolio ─────────────────────────────────────────────────────────────
 
     @app.get("/api/portfolio")
@@ -197,6 +213,16 @@ def create_app():
         except Exception:
             fresh = {}
         return {s: _price_cache.get(s, 0) for s in sym_list}
+
+    # ── Wiki Config Hook ──────────────────────────────────────────────────────
+
+    @app.get("/api/wiki/config")
+    async def wiki_config():
+        return {
+            "DEFENSIVE": ai_portfolio_game.get_strategy_rules("DEFENSIVE"),
+            "BALANCED": ai_portfolio_game.get_strategy_rules("BALANCED"),
+            "AGGRESSIVE": ai_portfolio_game.get_strategy_rules("AGGRESSIVE")
+        }
 
     # ── Picks ─────────────────────────────────────────────────────────────────
 

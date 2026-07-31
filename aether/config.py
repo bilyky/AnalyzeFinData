@@ -17,6 +17,7 @@ Usage:
 
 import json
 import os
+import sys
 from pathlib import Path
 
 _DIR      = str(Path(__file__).resolve().parent.parent)
@@ -126,6 +127,59 @@ class _Config:
         # HMAC signing secret for session tokens. Empty = server generates an
         # ephemeral one at startup (tokens don't survive a restart).
         self.web_secret = os.environ.get("WEB_SECRET") or web.get("secret", "")
+
+        # ── Configuration Health Checks ───────────────────────────────────────
+        self.verify_config_health()
+
+    def verify_config_health(self):
+        """Check for configuration placeholders (example.com, YOUR_...) and print high-visibility warning banners."""
+        placeholders = []
+        
+        # Check emails
+        email_fields = [
+            ("Chaikin Email", self.chaikin_email),
+            ("Sender Email", self.email_sender_address),
+            ("Recipient Email", self.email_recipient_address)
+        ]
+        for field, email_val in email_fields:
+            if email_val and "example.com" in email_val.lower():
+                placeholders.append(f"{field} is set to placeholder: '{email_val}'")
+                
+        for i, mb in enumerate(self.mailboxes):
+            mb_email = mb.get("email")
+            if mb_email and "example.com" in mb_email.lower():
+                placeholders.append(f"Mailbox {i+1} Email is set to placeholder: '{mb_email}'")
+                
+        # Check standard placeholder words
+        auth_fields = [
+            ("Chaikin Email", self.chaikin_email),
+            ("Chaikin Password", self.chaikin_password),
+            ("E*TRADE Username", self.etrade_username),
+            ("E*TRADE Password", self.etrade_password),
+            ("E*TRADE Sandbox Key", self.etrade_sandbox_key),
+            ("E*TRADE Sandbox Secret", self.etrade_sandbox_secret),
+            ("E*TRADE Production Key", self.etrade_production_key),
+            ("E*TRADE Production Secret", self.etrade_production_secret),
+            ("RapidAPI Key", self.rapidapi_key)
+        ]
+        for field, val in auth_fields:
+            if val and any(ph in str(val).lower() for ph in ["your_", "placeholder", "your-"]):
+                placeholders.append(f"{field} is set to placeholder value: '{val}'")
+                
+        if placeholders:
+            sys.stdout.write("\n" + "!" * 80 + "\n")
+            sys.stdout.write("🚨  [AETHER CONFIG HEALTH ALERT] Malconfigured Placeholders Detected!\n")
+            sys.stdout.write("!" * 80 + "\n")
+            for ph in placeholders:
+                sys.stdout.write(f"  🛑 {ph}\n")
+            sys.stdout.write("-" * 80 + "\n")
+            sys.stdout.write("  Please update your 'config.json' file or environment variables to use real keys/accounts.\n")
+            sys.stdout.write("!" * 80 + "\n\n")
+            self.has_placeholders = True
+            self.placeholder_details = placeholders
+        else:
+            self.has_placeholders = False
+            self.placeholder_details = []
 
     def require(self, *attrs: str) -> None:
         """Raise RuntimeError if any of the given attributes are empty."""

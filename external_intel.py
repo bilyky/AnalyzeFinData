@@ -174,7 +174,8 @@ def fetch_idea_emails():
                 if status != "OK" or not messages[0].split():
                     continue
 
-                for num in messages[0].split():
+                # Process newest emails first to prioritize today's fresh newsletters
+                for num in reversed(messages[0].split()):
                     try:
                         status, data = mail.fetch(num, "(BODY.PEEK[])")
                         if status != "OK":
@@ -203,6 +204,11 @@ def fetch_idea_emails():
                         if not (any(k in content_to_check for k in STOCK_KEYWORDS) or "$" in content_to_check):
                             continue
 
+                        # Skip automated system alerts, invoices, and personal notices to preserve our AI budget
+                        lower_subj = subject.lower()
+                        if any(ph in lower_subj for ph in ["aether alert", "invoice", "receipt", "milestone", "shopper", "transaction"]):
+                            continue
+
                         # 1. Standard ticker extraction (BUY/SELL/HOLD)
                         parsed_ideas = analyze_email_content(subject, body)
                         # 2. Structural intel extraction — capped to avoid runaway AI costs
@@ -211,7 +217,8 @@ def fetch_idea_emails():
                             intel = extract_email_intel.extract(subject, body)
                             intel_count += 1
                         else:
-                            _log.console(f"Intel cap ({max_intel}) reached; skipping: {subject[:60]}")
+                            _log.console(f"Intel cap ({max_intel}) reached; breaking email scan to protect rate-limits.")
+                            break
 
                         base = {"from": msg["from"], "subject": subject, "folder": folder, "intel": intel}
                         if parsed_ideas:

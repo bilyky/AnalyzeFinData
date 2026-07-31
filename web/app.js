@@ -6,6 +6,9 @@ const fmtPct = (n) => (n == null ? "—" : (n >= 0 ? "+" : "") + Number(n).toFix
 const cls = (n) => (n > 0 ? "pos" : n < 0 ? "neg" : "mut");
 const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+// ── central aether wiki database (loaded dynamically) ───────────────
+let AETHER_WIKI = {};
+
 async function api(path, opts) {
     const r = await fetch(path, opts);
     if (!r.ok) throw new Error(`${path} → ${r.status}`);
@@ -1274,27 +1277,40 @@ function loadTab(tab) {
     else if (tab === "chat") setTimeout(() => $("chat-input").focus(), 50);
     else if (tab === "scorecard") loadScorecard();
     else if (tab === "system") { loadSystem(); _startLogRefresh(); }
-    else if (tab === "about") loadAboutDocs();
+    else if (tab === "about") loadRoadmap();
 }
 
-async function loadAboutDocs() {
-    const el = $("docs-content");
+async function loadRoadmap() {
+    const el = $("roadmap-dynamic-content");
     if (!el) return;
-    el.innerHTML = '<span class="text-slate-500">Loading master reference manual…</span>';
+    el.innerHTML = '<span class="text-slate-500">Loading R&D roadmap from single source of truth…</span>';
     try {
-        const d = await api("/api/docs");
-        if (d.error) { el.textContent = "Error loading manual: " + d.error; return; }
-        if (window.marked) {
-            // Render beautiful rich Markdown HTML!
-            el.className = "text-sm text-slate-300 leading-relaxed overflow-y-auto max-h-[75vh] pr-2 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent space-y-4";
-            el.innerHTML = marked.parse(d.markdown);
+        const d = await api("/api/roadmap");
+        if (d.error) { el.textContent = "Error loading roadmap: " + d.error; return; }
+        
+        let parsedHTML = null;
+        try {
+            if (window.marked) {
+                if (typeof window.marked.parse === "function") {
+                    parsedHTML = window.marked.parse(d.markdown);
+                } else if (typeof window.marked === "function") {
+                    parsedHTML = window.marked(d.markdown);
+                }
+            }
+        } catch (parseError) {
+            console.error("Markdown parsing failed:", parseError);
+        }
+        
+        if (parsedHTML) {
+            el.className = "text-xs text-slate-300 leading-relaxed space-y-4 max-h-[60vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent mt-2";
+            el.innerHTML = parsedHTML;
         } else {
-            // Monospace raw fallback
-            el.className = "text-xs text-slate-300 leading-relaxed font-mono whitespace-pre-wrap overflow-y-auto max-h-[75vh] pr-2 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent";
+            // Fallback plaintext
+            el.className = "text-[11px] text-slate-300 leading-relaxed font-mono whitespace-pre-wrap max-h-[60vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent mt-2";
             el.textContent = d.markdown;
         }
     } catch (e) {
-        el.textContent = "Error: " + e.message;
+        el.textContent = "Error loading roadmap: " + e.message;
     }
 }
 
@@ -2008,6 +2024,87 @@ async function smRequalify() {
     await requalify(sym, cost, $("sm-rq-btn"));
 }
 
+// Wiki Modal Interactive Logic
+let AETHER_LIVE_RULES = null;
+async function fetchLiveRules() {
+    try {
+        AETHER_LIVE_RULES = await api("/api/wiki/config");
+        console.log("  [AETHER Wiki] Live rules hook connected successfully:", AETHER_LIVE_RULES);
+    } catch (e) {
+        console.log("  [AETHER Wiki] Live rules hook offline, falling back to static defaults:", e);
+    }
+}
+
+async function fetchWiki() {
+    try {
+        AETHER_WIKI = await api('/api/wiki');
+        console.log('  [AETHER Wiki] Wiki database loaded successfully:', Object.keys(AETHER_WIKI).length, 'entries');
+    } catch (e) {
+        console.error('  [AETHER Wiki] Failed to load wiki database:', e);
+    }
+}
+
+async function initWiki() {
+    await fetchWiki();
+    fetchLiveRules();
+    document.querySelectorAll("[data-wiki]").forEach((card) => {
+        card.classList.add("cursor-pointer", "transition", "duration-200", "hover:scale-[1.01]");
+        card.addEventListener("click", () => {
+            const key = card.getAttribute("data-wiki");
+            const entry = AETHER_WIKI[key];
+            if (entry) {
+                $("wiki-title").textContent = entry.title;
+                $("wiki-origin").innerHTML = "<b>Origin:</b> " + esc(entry.origin);
+                $("wiki-body").innerHTML = entry.body;
+
+                let configs = entry.config;
+                // Hook dynamic configurations from the live Python backend if available!
+                if (key === "strategy_profiles" && AETHER_LIVE_RULES) {
+                    configs = [
+                        `Defensive: Max ${AETHER_LIVE_RULES.DEFENSIVE.max_positions} positions, ${AETHER_LIVE_RULES.DEFENSIVE.max_allocation_pct * 100}% trade size, ${AETHER_LIVE_RULES.DEFENSIVE.cash_buffer_pct * 100}% cash buffer (Active when SPY L60 < -2)`,
+                        `Balanced: Max ${AETHER_LIVE_RULES.BALANCED.max_positions} positions, ${AETHER_LIVE_RULES.BALANCED.max_allocation_pct * 100}% trade size, ${AETHER_LIVE_RULES.BALANCED.cash_buffer_pct * 100}% cash buffer (Active when -2 <= SPY L60 <= 2)`,
+                        `Aggressive: Max ${AETHER_LIVE_RULES.AGGRESSIVE.max_positions} positions, ${AETHER_LIVE_RULES.AGGRESSIVE.max_allocation_pct * 100}% trade size, ${AETHER_LIVE_RULES.AGGRESSIVE.cash_buffer_pct * 100}% cash buffer (Active when SPY L60 > 2)`
+                    ];
+                } else if (key === "scarcity_core" && AETHER_LIVE_RULES) {
+                    configs = [
+                        `Core Allocation: ${AETHER_LIVE_RULES.BALANCED.scarcity_allocation_pct * 100}% of total portfolio equity strictly reserved for Scarcity plays.`,
+                        `Satellite Allocation: ${(1.0 - AETHER_LIVE_RULES.BALANCED.scarcity_allocation_pct) * 100}% for standard equities (Tech, Consumer, Energy).`,
+                        "Classifier: Dynamic LLM evaluation with local cache (Data/scarcity_cache.json).",
+                        "Shrink-Ray Sizer: Dynamically downsizes the order quantity to fit exactly under the remaining room in the scarcity bucket, rather than rejecting the buy."
+                    ];
+                } else if (key === "flower_protection" && AETHER_LIVE_RULES) {
+                    configs = [
+                        `Hard Exit: Close price <= Stop-Loss floor (Enforced immediately, ${AETHER_LIVE_RULES.DEFENSIVE.atr_multiplier}x/${AETHER_LIVE_RULES.BALANCED.atr_multiplier}x/${AETHER_LIVE_RULES.AGGRESSIVE.atr_multiplier}x ATR by profile).`,
+                        "Soft Exit: S10+L60 < 0 (Triggers sell unless protected).",
+                        "Flower Protection: Bypasses soft exit if position is in profit AND trades above its 50 SMA (downgrades to REVIEW)."
+                    ];
+                }
+
+                const configList = $("wiki-config");
+                configList.innerHTML = "";
+                configs.forEach((cfg) => {
+                    const li = document.createElement("li");
+                    li.className = "flex items-start gap-2 text-slate-300";
+                    li.innerHTML = `<span class="text-purple-400 font-semibold">•</span> <span>${esc(cfg)}</span>`;
+                    configList.appendChild(li);
+                });
+
+                $("wiki-modal").classList.remove("hidden");
+                document.body.style.overflow = "hidden";
+            }
+        });
+    });
+}
+
+$("wiki-close-btn").addEventListener("click", closeWiki);
+$("wiki-modal").addEventListener("click", (e) => {
+    if (e.target === $("wiki-modal")) closeWiki();
+});
+
+function closeWiki() {
+    $("wiki-modal").classList.add("hidden");
+    document.body.style.overflow = "";
+}
 // ── Init ─────────────────────────────────────────────────────────────────────
 setAdminUI(null);   // default to logged-out UI until whoami confirms
 refreshAuth();
@@ -2017,3 +2114,4 @@ const initialTab = window.location.hash.substring(1);
 switchTab(VALID_TABS.includes(initialTab) ? initialTab : "dashboard", true);
 
 startPolling();
+initWiki();

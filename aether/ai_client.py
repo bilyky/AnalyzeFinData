@@ -16,8 +16,10 @@ raises to its callers and never gates a trade.
 import json
 import os
 import subprocess
+import sys
 
 import requests
+from aether.config import CFG
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -52,7 +54,6 @@ def _resolve_key(source: str) -> str:
 # ── Provider registry ──────────────────────────────────────────────────────────
 
 def _providers() -> dict:
-    from aether.config import CFG
     return CFG.ai_providers or {}
 
 
@@ -72,7 +73,6 @@ def enabled_providers() -> list:
 def primary() -> str | None:
     """The provider that drives the surfaced verdict: the configured `primary` if
     it's usable, else the first enabled provider, else None."""
-    from aether.config import CFG
     enabled = enabled_providers()
     if CFG.ai_primary and CFG.ai_primary in enabled:
         return CFG.ai_primary
@@ -123,8 +123,11 @@ def _call_gemini_cli(pcfg, system, user, max_tokens, temperature) -> str:
     out = subprocess.run(
         ["gemini", "-m", pcfg.get("model", "gemini-2.5-flash"), "-p", prompt],
         capture_output=True, text=True, timeout=_TIMEOUT,
+        shell=(sys.platform == "win32")
     )
-    return out.stdout.strip() if out.returncode == 0 else ""
+    if out.returncode != 0:
+        raise RuntimeError(f"Gemini CLI execution failed (exit code {out.returncode}): {out.stderr.strip()}")
+    return out.stdout.strip()
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
@@ -132,85 +135,85 @@ def _call_gemini_cli(pcfg, system, user, max_tokens, temperature) -> str:
 def chat(messages: list, system: str = "", provider: str | None = None,
          max_tokens: int = 1000, temperature: float = 0.5) -> str:
     """Multi-turn chat: `messages` is [{role: user|assistant, content: str}].
-    The last message must be role=user. Returns the assistant reply or "" on failure."""
+    The last message must be role=user. Returns the assistant reply. Raises on failure."""
     name = provider or primary()
     if not name:
-        return ""
+        raise RuntimeError("No primary AI provider configured.")
     pcfg = _providers().get(name)
     if not pcfg or not pcfg.get("enabled"):
-        return ""
+        raise RuntimeError(f"AI provider '{name}' is disabled or not found.")
     ptype = pcfg.get("type")
-    try:
-        if ptype == "openai_compatible":
-            key = _resolve_key(pcfg.get("api_key_source", ""))
-            if not key:
-                return ""
-            payload_msgs = ([{"role": "system", "content": system}] if system else []) + messages
-            resp = requests.post(
-                pcfg.get("endpoint", ""),
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": pcfg.get("model", ""), "messages": payload_msgs,
-                      "max_tokens": max_tokens, "temperature": temperature},
-                timeout=_TIMEOUT,
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
-        if ptype == "anthropic":
-            key = _resolve_key(pcfg.get("api_key_source", ""))
-            if not key:
-                return ""
-            resp = requests.post(
-                _ANTHROPIC_URL,
-                headers={"x-api-key": key, "anthropic-version": "2023-06-01",
-                         "content-type": "application/json"},
-                json={"model": pcfg.get("model", "claude-opus-4-8"),
-                      "max_tokens": max_tokens,
-                      **({"system": system} if system else {}),
-                      "messages": messages},
-                timeout=_TIMEOUT,
-            )
-            resp.raise_for_status()
-            blocks = resp.json().get("content", [])
-            return "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
-        if ptype == "gemini_cli":
-            # Gemini CLI: flatten history into a single prompt
-            turns = "\n\n".join(f"[{m['role'].upper()}]: {m['content']}" for m in messages)
-            prompt = (f"{system}\n\n{turns}" if system else turns)
-            out = subprocess.run(
-                ["gemini", "-m", pcfg.get("model", "gemini-2.5-flash"), "-p", prompt],
-                capture_output=True, text=True, timeout=_TIMEOUT,
-            )
-            return out.stdout.strip() if out.returncode == 0 else ""
-    except Exception:
-        return ""
-    return ""
+    
+    if ptype == "openai_compatible":
+        key = _resolve_key(pcfg.get("api_key_source", ""))
+        if not key:
+            raise RuntimeError(f"API key missing for provider '{name}'.")
+        payload_msgs = ([{"role": "system", "content": system}] if system else []) + messages
+        resp = requests.post(
+            pcfg.get("endpoint", ""),
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"model": pcfg.get("model", ""), "messages": payload_msgs,
+                  "max_tokens": max_tokens, "temperature": temperature},
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+    elif ptype == "anthropic":
+        key = _resolve_key(pcfg.get("api_key_source", ""))
+        if not key:
+            raise RuntimeError(f"API key missing for provider '{name}'.")
+        resp = requests.post(
+            _ANTHROPIC_URL,
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+            json={"model": pcfg.get("model", "claude-opus-4-8"),
+                  "max_tokens": max_tokens,
+                  **({"system": system} if system else {}),
+                  "messages": messages},
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+        blocks = resp.json().get("content", [])
+        return "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+    elif ptype == "gemini_cli":
+        # Gemini CLI: flatten history into a single prompt
+        turns = "\n\n".join(f"[{m['role'].upper()}]: {m['content']}" for m in messages)
+        prompt = (f"{system}\n\n{turns}" if system else turns)
+        out = subprocess.run(
+            ["gemini", "-m", pcfg.get("model", "gemini-2.5-flash"), "-p", prompt],
+            capture_output=True, text=True, timeout=_TIMEOUT,
+            shell=(sys.platform == "win32")
+        )
+        if out.returncode != 0:
+            raise RuntimeError(f"Gemini CLI execution failed (exit code {out.returncode}): {out.stderr.strip()}")
+        return out.stdout.strip()
+    else:
+        raise NotImplementedError(f"Unsupported AI provider type: {ptype}")
 
 
 def evaluate(system: str, user: str, provider: str | None = None,
              max_tokens: int = 200, temperature: float = 0.3) -> str:
     """Run one advisory evaluation on `provider` (defaults to primary()).
-    Returns the model's text, or "" on any failure / no usable provider.
-    Never raises."""
+    Returns the model's text. Raises on failure."""
     name = provider or primary()
     if not name:
-        return ""
+        raise RuntimeError("No primary AI provider configured.")
     pcfg = _providers().get(name)
     if not pcfg or not pcfg.get("enabled"):
-        return ""
+        raise RuntimeError(f"AI provider '{name}' is disabled or not found.")
     ptype = pcfg.get("type")
-    try:
-        if ptype == "openai_compatible":
-            key = _resolve_key(pcfg.get("api_key_source", ""))
-            if not key:
-                return ""
-            return _call_openai_compatible(pcfg, key, system, user, max_tokens, temperature)
-        if ptype == "anthropic":
-            key = _resolve_key(pcfg.get("api_key_source", ""))
-            if not key:
-                return ""
-            return _call_anthropic(pcfg, key, system, user, max_tokens, temperature)
-        if ptype == "gemini_cli":
-            return _call_gemini_cli(pcfg, system, user, max_tokens, temperature)
-    except Exception:
-        return ""
-    return ""
+    
+    if ptype == "openai_compatible":
+        key = _resolve_key(pcfg.get("api_key_source", ""))
+        if not key:
+            raise RuntimeError(f"API key missing for provider '{name}'.")
+        return _call_openai_compatible(pcfg, key, system, user, max_tokens, temperature)
+    elif ptype == "anthropic":
+        key = _resolve_key(pcfg.get("api_key_source", ""))
+        if not key:
+            raise RuntimeError(f"API key missing for provider '{name}'.")
+        return _call_anthropic(pcfg, key, system, user, max_tokens, temperature)
+    elif ptype == "gemini_cli":
+        return _call_gemini_cli(pcfg, system, user, max_tokens, temperature)
+    else:
+        raise NotImplementedError(f"Unsupported AI provider type: {ptype}")
