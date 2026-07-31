@@ -213,6 +213,9 @@ def get_reserves_data():
 
 def get_reasoning(symbol, pgr, s10, l60, industry):
     """Retrieve live LLM reasoning via the GitHub Models API (gpt-4o-mini) with local heuristics fallback."""
+    # If in report-only/cached mode, bypass slow sequential AI calls to prevent subprocess deadlocks and timeouts
+    if "--report-only" in sys.argv or "--cached" in sys.argv:
+        return f"<b>Technical Setup Active:</b> Setup OK with total score: {s10+l60:.1f}.<br>🚨 <b>Local Fallback:</b> Running in report-only/cached mode."
     try:
         # Call the live LLM reasoning engine we just implemented
         return external_intel.get_ai_reasoning(symbol, industry, pgr, s10, l60)
