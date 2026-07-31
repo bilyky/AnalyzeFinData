@@ -66,6 +66,7 @@ from patterns import (
     chart_pattern_score  as _cp_score,
     momentum_pattern_score as _mo_score,
     pattern_summary      as _pattern_summary,
+    rubber_band_reversal_score as _rbr_score,
 )
 
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
@@ -1021,6 +1022,7 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
     _cs  = _cs_score(ohlcv_ts, _date_str) if ohlcv_ts else 0.0
     _cps, _ = _cp_score(ohlcv_ts, _date_str) if ohlcv_ts else (0.0, [])
     _ms,  _ = _mo_score(ohlcv_ts, _date_str) if ohlcv_ts else (0.0, [])
+    _vrec, _vrec_names = _rbr_score(ohlcv_ts, _date_str) if ohlcv_ts else (0.0, [])
 
     fields = {
         'pgr': pgr,
@@ -1048,6 +1050,9 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
         'momentum_score':    _ms,
         'pattern_score':     _pattern_score,
         'pattern_text':      _pattern_text,
+        # Rubber-Band Reversal — BULLISH, positively-signed (NOT contrarian)
+        'vrecovery_score':   _vrec,
+        'vrecovery_text':    ' '.join(_vrec_names),
     }
     fields['buying_ratio'] = _buying_ratio(power_g, fields)
     # Digit-sum close→next-day signal: prior close always available from OHLCV.

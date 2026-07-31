@@ -257,5 +257,20 @@
             "Scoring engine only loads signals passing layers 2+3+4 — stale/flip/sparse excluded",
             "473 raw digit-sum signals → 224 active after all filters (53% rejection rate)"
         ]
+    },
+    "rbr": {
+        "title": "Rubber-Band Reversal (RBR) — Overreaction Pullback + Fast Recovery",
+        "origin": "AETHER Internal R&D (Aug 2026 lab), anchored on INTC's Jul-2026 earnings gap. Formalizes the AI-age machine/headline-driven overshoot-then-V-recover tape.",
+        "body": "A positively-signed BULLISH factor: a big, fast overreaction drawdown (Leg 1) followed by a CONFIRMED higher-low green reversal bar sitting in the upper half of its range (Leg 2). Pure price/volume, no look-ahead — the trough must already be in before the recovery bar scores. The tradeable event is the confirmed recovery bar, not the gap (catching INTC's knife on day one ate another -11% before the bounce). Fed to <code>short_score</code> (+0.5) / <code>long_score</code> (+0.25) through the dedicated <code>vrecovery_score</code> field, never the negated contrarian chart path.",
+        "config": [
+            "Leg 1 depth: <= -10% overreaction floor; <= -15% = the validated deep pocket",
+            "Leg 1 speed: trough within <= 8 bars; <= 5 bars = the fast pocket",
+            "Leg 2: higher low + green close + close in upper half of range (range_pos >= 0.50)",
+            "+2.0 validated no-gap pocket (deep + fast + strong close)",
+            "+1.25 near-fast no-gap recovery (one bar outside the pocket)",
+            "+1.0 milder confirmed recovery",
+            "0.0 earnings-GAP cohort — WATCH-ONLY (tag RBR↑(gap,watch)): win ~0.52, never cleared its own gate, so it is surfaced to watch but carries no buy weight",
+            "Shared Leg-1 geometry: patterns.rbr_leg1(); live monitor: scripts/monitoring/rbr_watch.py; parameter sweep recalibrated MONTHLY"
+        ]
     }
 }

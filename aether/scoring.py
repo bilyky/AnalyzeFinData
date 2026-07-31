@@ -490,6 +490,8 @@ def short_score(pg_fields: dict) -> float:
       Chart Pattern  11.83% spread: contrarian, weight -0.75 (bearish patterns = recovery)
       Momentum       5.76% spread: contrarian, weight -0.75 (bearish momentum = reversal)
       Digit-sum      symbol-specific numerology (z>=2.0 signals only): +-1.0
+      RBR (V-recov)  1.26% 10d spread: BULLISH, weight +0.5 (score [0,+2]); confirmed
+                     overreaction-recovery bar; validated pocket win 0.552 > knife 0.544
     """
     score = 0.0
     rv = pg_fields.get('rel_vol')
@@ -506,6 +508,9 @@ def short_score(pg_fields: dict) -> float:
     score += pg_fields.get('chart_score', 0.0)        * -0.15
     score += pg_fields.get('momentum_score', 0.0)     * -0.15
     score += pg_fields.get('digit_sum', 0.0)
+    # Rubber-Band Reversal: BULLISH (+), so a POSITIVE weight. Score is [0,+2];
+    # 0.5 gives the validated reliable pocket up to +1.0. Defaults 0.0 = off.
+    score += pg_fields.get('vrecovery_score', 0.0) * 0.5
     return round(max(-10.0, min(10.0, score)), 1)
 
 
@@ -529,6 +534,7 @@ def long_score(pg_fields: dict) -> float:
       Chart Pattern  11.83% spread: contrarian, weight -0.375
       Momentum       5.76% spread: contrarian, weight -0.375
       Digit-sum      symbol-specific numerology (z>=2.0 signals only): +-0.5
+      RBR (V-recov)  BULLISH, weight +0.25 (half the S10 weight; score [0,+2])
     """
     score = 0.0
     score += {'Weak': 4.0, 'Neutral': 0.0, 'Strong': 0.0}.get(pg_fields.get('lt_trend', ''), 0.0)
@@ -545,5 +551,7 @@ def long_score(pg_fields: dict) -> float:
     score += pg_fields.get('chart_score', 0.0)        * -0.075
     score += pg_fields.get('momentum_score', 0.0)     * -0.075
     score += pg_fields.get('digit_sum', 0.0) * 0.5
+    # Rubber-Band Reversal: BULLISH (+), positive weight (half the S10 weight).
+    score += pg_fields.get('vrecovery_score', 0.0) * 0.25
     return round(max(-10.0, min(10.0, score)), 1)
 

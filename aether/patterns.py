@@ -311,6 +311,106 @@ def chart_pattern_score(ohlcv_ts: dict, date_str: str, lookback: int = 250):
     return round(max(-2.0, min(2.0, score)), 2), names
 
 
+# ── Rubber-Band Reversal (RBR) — AI-age overreaction pullback + fast recovery ──
+# Constants and conviction tiers are anchored on the discovery study
+# scripts/backtesting/pullback_recovery_study.py (recalibrated MONTHLY). The
+# validated reliable pocket (2026-07-31): depth <= -15%, speed <= 5 bars,
+# reversal close in the upper half of its range, and NO overnight gap
+# (n=2171, +1.26% 10d spread, t=3.70, confirmed win 0.552 > knife 0.544).
+# The INTC-style earnings-GAP cohort has a much fatter mean (~+12% 10d) but a
+# LOWER win-rate (~0.52) — higher variance — and did NOT clear the Phase-1 gate on
+# its own, so it is WATCH-ONLY (detected + tagged, zero buy weight) until it does.
+RBR_LOOKBACK      = 10     # bars back to find the pre-drop swing high
+RBR_DEPTH_MIN     = -0.10  # minimum drawdown to be an "overreaction" at all
+RBR_DEPTH_STRONG  = -0.15  # the validated reliable-pocket depth
+RBR_SPEED_MAX     = 8      # trough must arrive within this many bars
+RBR_SPEED_STRONG  = 5      # ... reliable-pocket speed
+RBR_GAP_PCT       = 0.03   # overnight gap-down >= 3% flags a catalyst bar
+RBR_VOL_WIN       = 20     # trailing window for the average-volume baseline
+RBR_RANGE_MIN     = 0.50   # reversal close must sit in the upper half of its range
+RBR_WARMUP        = RBR_VOL_WIN + RBR_LOOKBACK + 2   # 32 bars
+
+
+def rbr_leg1(o, h, l, c, i):
+    """Leg-1 overreaction-drawdown geometry at bar ``i``, using only bars <= i.
+
+    Returns a dict(h_idx, pre_high, t_idx, trough_low, drop_pct, speed, had_gap), or
+    None when no qualifying (deep-enough + fast-enough) drawdown is in force at bar i.
+    The trough may be TODAY (t_idx == i, a still-falling knife); callers that require
+    the trough to already be in — a confirmed recovery bar — must themselves check
+    ``t_idx < i``. Shared by rubber_band_reversal_score (the scoring detector) and
+    rbr_watch._leg1_state (the live monitor) so both agree on what a setup is.
+    """
+    lo = max(0, i - RBR_LOOKBACK)
+    h_idx = max(range(lo, i + 1), key=lambda j: c[j])
+    pre_high = c[h_idx]
+    if pre_high <= 0 or h_idx == i:
+        return None
+    t_idx = min(range(h_idx, i + 1), key=lambda j: l[j])
+    trough_low = l[t_idx]
+    drop_pct = (trough_low - pre_high) / pre_high
+    speed = t_idx - h_idx
+    if drop_pct > RBR_DEPTH_MIN or speed < 1 or speed > RBR_SPEED_MAX:
+        return None
+    had_gap = any(o[j] < c[j - 1] * (1 - RBR_GAP_PCT) for j in range(h_idx + 1, i + 1))
+    return {"h_idx": h_idx, "pre_high": pre_high, "t_idx": t_idx,
+            "trough_low": trough_low, "drop_pct": drop_pct,
+            "speed": speed, "had_gap": had_gap}
+
+
+def rubber_band_reversal_score(ohlcv_ts: dict, date_str: str):
+    """Detect a confirmed "Rubber-Band Reversal": a big, fast overreaction drawdown
+    followed by a higher-low green reversal bar. BULLISH and positively-signed —
+    unlike chart_pattern_score's contrarian factors, so it is consumed with a
+    POSITIVE weight (never routed through the negated pattern_summary).
+
+    Returns (score, names_list). Score in [0, +2] (0.0 when nothing scores):
+      +2.00  validated reliable pocket (deep, fast, strong close, no gap)
+      +1.25  near-fast NO-gap recovery (just outside the pocket)
+      +1.00  milder confirmed overreaction recovery
+      +0.00  GAP cohort — detected and tagged 'RBR↑(gap,watch)' for the monitor, but
+             WATCH-ONLY (zero buy weight) until it clears its own gate. The earnings-
+             gap pocket (INTC) has win ~0.52 — at or below the knife on some footprints
+             — so it is treated as paid-for information, not a scored signal. Only the
+             no-gap pocket cleared the Phase-1 gate (see plans/roadmap.md #19).
+    Pure price/volume, NO look-ahead: the trough must already be in (t_idx < i) and
+    every input uses only bars up to date_str. Needs >= RBR_WARMUP bars.
+    """
+    arr = ohlcv_to_array(ohlcv_ts, date_str, lookback=RBR_LOOKBACK + RBR_VOL_WIN + 10)
+    if arr is None or len(arr) < RBR_WARMUP:
+        return 0.0, []
+    # volume is intentionally unused: the validated pocket (vol>=0.0 in the sweep)
+    # carried no marginal edge, so the detector stays price-only.
+    o, h, l, c = (arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3])
+    i = len(arr) - 1
+
+    # ── Leg 1: overreaction drawdown (shared geometry) ──
+    leg1 = rbr_leg1(o, h, l, c, i)
+    if leg1 is None or leg1["t_idx"] >= i:   # need the trough already in — today is the recovery bar
+        return 0.0, []
+    trough_low, drop_pct, speed, had_gap = (
+        leg1["trough_low"], leg1["drop_pct"], leg1["speed"], leg1["had_gap"])
+
+    # ── Leg 2: recovery confirmation on today's bar ──
+    if not (l[i] > trough_low and c[i] > c[i - 1]):   # higher low + green close
+        return 0.0, []
+    rng = h[i] - l[i]
+    range_pos = (c[i] - l[i]) / rng if rng > 0 else 0.0
+    if range_pos < RBR_RANGE_MIN:                     # weak close = not a real reversal
+        return 0.0, []
+
+    # ── Grade. The gap cohort is watch-only: detected + tagged, but 0.0 buy weight. ──
+    if had_gap:
+        return 0.0, ['RBR↑(gap,watch)']
+    deep = drop_pct <= RBR_DEPTH_STRONG
+    fast = speed <= RBR_SPEED_STRONG
+    if deep and fast:
+        return 2.0, ['RBR↑']                          # the validated reliable pocket
+    if deep and speed <= RBR_SPEED_STRONG + 1:
+        return 1.25, ['RBR↑']                         # near-fast no-gap, just outside
+    return 1.0, ['RBR↑']                              # milder confirmed recovery
+
+
 # ── Momentum pattern score ────────────────────────────────────────────────────
 
 def momentum_pattern_score(ohlcv_ts: dict, date_str: str):
