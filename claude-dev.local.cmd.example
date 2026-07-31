@@ -1,0 +1,7 @@
+:: Template for claude-dev.local.cmd — copy this file to claude-dev.local.cmd
+:: and fill in your own values. claude-dev.local.cmd is gitignored so your
+:: host / port / API key never get committed.
+set DEV_HOST=<user>@<dev-host-or-ip>
+set DEV_PORT=<dev-port>
+:: base64("<user>:") — dev server decodes the Bearer token as HTTP Basic auth.
+set ANTHROPIC_API_KEY=<base64-token>

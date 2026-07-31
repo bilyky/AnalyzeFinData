@@ -4,3 +4,12 @@ read news to verify data
 add fibonochi algorithm to predictions
 
 GITHUB token: set via GITHUB_TOKEN env var (see config.json.example)
+GMAIL pass: onep hwhd xmmp piuk
+
+
+
+get latest from the repo and self-refiew, any corner cases, bad smell, over-engineering? review it again from all the perspectives, design, arch, performace, security, 
+simplification, unification, DB extra calls, antypatterns, missing patterns, parralelizm. 
+Remove any confidential/secure data (idsids, emails, username, paswords, etc.)
+Missed or obsolete documentation. Tests have value and are testing real things, have red-green tests. Remove any AI-ish comments or smell? 
+Are you confident in what you did, any assumptions or unverified data?

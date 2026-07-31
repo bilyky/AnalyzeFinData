@@ -10,9 +10,9 @@ Usage:
     python run_history.py 10         # last 10 trading days
 
 Proxy:
-    Inside Intel network  — proxy is auto-detected from environment or defaults
-                             to proxy-dmz.intel.com:912
-    Outside Intel network — set HTTP_PROXY= (empty) before running:
+    Behind a corporate proxy — proxy is auto-detected from the HTTP_PROXY /
+                               HTTPS_PROXY environment variables.
+    Direct connection       — clear the proxy env vars before running:
         Windows:  set HTTP_PROXY=  &&  set HTTPS_PROXY=
         macOS/Linux: unset HTTP_PROXY; unset HTTPS_PROXY
 

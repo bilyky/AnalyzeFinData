@@ -1,5 +1,5 @@
 @echo off
-:: claude (Claude Code) against dev GNAI API (fm7duybilyk001:8036)
+:: claude (Claude Code) against a dev GNAI API over an SSH tunnel.
 ::
 :: Usage:
 ::   claude-dev.cmd [claude args...]
@@ -9,21 +9,41 @@
 ::   claude-dev.cmd  (interactive session)
 ::
 :: First run sets up the SSH tunnel; subsequent runs reuse it.
+::
+:: Host / port / API key live in claude-dev.local.cmd, which is gitignored.
+:: Copy claude-dev.local.cmd.example to claude-dev.local.cmd and fill in
+:: DEV_HOST / DEV_PORT / ANTHROPIC_API_KEY before first use.
 
 setlocal
 
-set DEV_HOST=ybilyk@10.105.156.239
- ::https://fm7duybilyk001.fm.intel.com/
-set DEV_PORT=8036
+:: Load local (untracked) secrets: DEV_HOST, DEV_PORT, ANTHROPIC_API_KEY.
+if not exist "%~dp0claude-dev.local.cmd" (
+    echo [claude-dev] ERROR: claude-dev.local.cmd not found.
+    echo [claude-dev] Copy claude-dev.local.cmd.example to claude-dev.local.cmd and fill in your values.
+    exit /b 1
+)
+call "%~dp0claude-dev.local.cmd"
+
 set LOCAL_PORT=18036
 set SSH_KEY=%USERPROFILE%\.ssh\id_rsa
 :: /providers/anthropic prefix exposes the Anthropic-compatible endpoint
 set ANTHROPIC_BASE_URL=http://localhost:%LOCAL_PORT%/providers/anthropic
-:: base64("ybilyk:") — dev server decodes Bearer token as Basic auth
-set ANTHROPIC_API_KEY=eWJpbHlrOg==
+:: An inherited ANTHROPIC_AUTH_TOKEN (e.g. when launched from another Claude Code
+:: session) outranks ANTHROPIC_API_KEY and makes the relay answer 403; clear it.
+set ANTHROPIC_AUTH_TOKEN=
 :: Bypass corporate proxy for localhost tunnel traffic
 set NO_PROXY=localhost,127.0.0.1
-set DEV_MODEL=claude-4-6-sonnet
+:: Spell the model the way Anthropic does (claude-opus-4-8), not the reversed
+:: GNAI form (claude-4-8-opus) — config.yml accepts either as an alias, but the
+:: CLI's per-model capability tables key off the real id. The reversed spelling
+:: mis-detects support and sends betas the relay rejects (e.g. a 400 "role
+:: 'system' is not supported on this model" plus a silent retry every turn).
+set DEV_MODEL=claude-opus-4-8
+:: WA: the dev GNAI relay rejects newer anthropic-beta values with HTTP 400
+:: ("Unexpected value(s) `advisor-tool-2026-03-01` for the `anthropic-beta` header").
+:: This CLI adds that beta whenever the advisor gate is on; disable it here.
+:: Remove once the dev API relay is upgraded to accept the beta.
+set CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1
 
 :: Check if tunnel is already up
 netstat -an 2>nul | findstr /r ":%LOCAL_PORT%.*LISTEN" >nul 2>&1

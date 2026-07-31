@@ -1,6 +1,7 @@
 # Cache, API data, personal files — never commit
 Data/
 notes_fin_data.txt
+claude-dev.local.cmd
 config.json
 etrade_config.json
 chaikin_config.json
