@@ -477,77 +477,83 @@ def main():
 
     no_email = "--no-email" in sys.argv[1:]
     no_history = "--no-history" in sys.argv[1:]
+    report_only = "--report-only" in sys.argv[1:] or "--cached" in sys.argv[1:]
     
-    # 0. Gather External Intel (Emails & News)
-    log("Gathering external intelligence...")
     intel_ideas = []
-    try:
-        intel_ideas = external_intel.fetch_idea_emails()
-        if intel_ideas:
-            log(f"Fetched {len(intel_ideas)} ideas from email.")
-        else:
-            _pipeline_log.warning("External intel fetch returned 0 ideas — mailbox auth may have failed. Check aether.jsonl for details.")
-            log("Warning: 0 ideas from email scan — see log for details.")
-    except Exception as e:
-        _pipeline_log.error(f"Could not fetch external intel: {e}")
-        log(f"ERROR: Could not fetch external intel: {e}")
-
-    # 1. Sync history (Backfill cache for deltas)
-    if no_history:
-        log("Skipping history backfill via --no-history...")
+    if report_only:
+        log("⏩ Running in --report-only / --cached mode. Skipping email intelligence, history backfills, and workbook refreshes...")
     else:
-        log("Backfilling 5-day history (run_history.py)...")
+        # 0. Gather External Intel (Emails & News)
+        log("Gathering external intelligence...")
         try:
-            script_path = str(BASE_DIR / "run_history.py")
+            intel_ideas = external_intel.fetch_idea_emails()
+            if intel_ideas:
+                log(f"Fetched {len(intel_ideas)} ideas from email.")
+            else:
+                _pipeline_log.warning("External intel fetch returned 0 ideas — mailbox auth may have failed. Check aether.jsonl for details.")
+                log("Warning: 0 ideas from email scan — see log for details.")
+        except Exception as e:
+            _pipeline_log.error(f"Could not fetch external intel: {e}")
+            log(f"ERROR: Could not fetch external intel: {e}")
+
+    if not report_only:
+        # 1. Sync history (Backfill cache for deltas)
+        if no_history:
+            log("Skipping history backfill via --no-history...")
+        else:
+            log("Backfilling 5-day history (run_history.py)...")
+            try:
+                script_path = str(BASE_DIR / "run_history.py")
+                subprocess.run(
+                    [sys.executable, script_path, "5"], 
+                    check=True, capture_output=True, 
+                    encoding="utf-8", errors="replace",
+                    timeout=120  # Fail fast after 2 minutes!
+                )
+                log("History backfilled.")
+            except subprocess.TimeoutExpired as e:
+                log(f"Warning: run_history.py timed out after 120s (Playwright hang likely). Bypassing backfill...")
+            except subprocess.CalledProcessError as e:
+                log(f"Warning: run_history.py failed (will continue): {e.stderr}")
+
+        # 2. Execute main.py (writes today's closes into OHLCV JSON via _append_ohlcv_entry)
+        log("Refreshing workbook (main.py)...")
+        try:
+            script_path = str(BASE_DIR / "main.py")
             subprocess.run(
-                [sys.executable, script_path, "5"], 
+                [sys.executable, script_path], 
                 check=True, capture_output=True, 
                 encoding="utf-8", errors="replace",
-                timeout=120  # Fail fast after 2 minutes!
+                timeout=180  # Fail fast after 3 minutes!
             )
-            log("History backfilled.")
+            log("Workbook regenerated.")
         except subprocess.TimeoutExpired as e:
-            log(f"Warning: run_history.py timed out after 120s (Playwright hang likely). Bypassing backfill...")
+            error_msg = "main.py execution timed out after 180s (Playwright hang likely)."
+            log(error_msg)
+            if not no_email:
+                notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline failed: {error_msg}")
+            return
         except subprocess.CalledProcessError as e:
-            log(f"Warning: run_history.py failed (will continue): {e.stderr}")
+            error_msg = f"main.py failed: {e.stderr}"
+            log(error_msg)
+            if not no_email:
+                notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline failed during main.py execution.\n\n{error_msg}")
+            return
 
-    # 2. Execute main.py (writes today's closes into OHLCV JSON via _append_ohlcv_entry)
-    log("Refreshing workbook (main.py)...")
-    try:
-        script_path = str(BASE_DIR / "main.py")
-        subprocess.run(
-            [sys.executable, script_path], 
-            check=True, capture_output=True, 
-            encoding="utf-8", errors="replace",
-            timeout=180  # Fail fast after 3 minutes!
-        )
-        log("Workbook regenerated.")
-    except subprocess.TimeoutExpired as e:
-        error_msg = "main.py execution timed out after 180s (Playwright hang likely)."
-        log(error_msg)
-        if not no_email:
-            notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline failed: {error_msg}")
-        return
-    except subprocess.CalledProcessError as e:
-        error_msg = f"main.py failed: {e.stderr}"
-        log(error_msg)
-        if not no_email:
-            notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline failed during main.py execution.\n\n{error_msg}")
-        return
-
-    # 2b. OHLCV recovery pass — repair missing/corrupted/stale Symbol_full files via RapidAPI.
-    #     Today's closes are already written by main.py (Chaikin). This only touches symbols
-    #     with gaps > 30 days. Non-fatal: pipeline continues even if RapidAPI is unavailable.
-    log("OHLCV recovery pass (rapidapi.py)...")
-    try:
-        _ohlcv_syms = load_symbols()
-        _today_str = str(datetime.date.today())
-        _ohlcv_result = rapidapi.repair_missing(_ohlcv_syms, _today_str)
-        log(f"OHLCV: {_ohlcv_result['updated']} recovered, "
-            f"{_ohlcv_result['skipped']} already current, "
-            f"{len(_ohlcv_result['errors'])} errors")
-    except Exception as e:
-        log(f"Warning: OHLCV recovery failed (non-fatal, pipeline continues): {e}")
+    if not report_only:
+        # 2b. OHLCV recovery pass — repair missing/corrupted/stale Symbol_full files via RapidAPI.
+        #     Today's closes are already written by main.py (Chaikin). This only touches symbols
+        #     with gaps > 30 days. Non-fatal: pipeline continues even if RapidAPI is unavailable.
+        log("OHLCV recovery pass (rapidapi.py)...")
+        try:
+            _ohlcv_syms = load_symbols()
+            _today_str = str(datetime.date.today())
+            _ohlcv_result = rapidapi.repair_missing(_ohlcv_syms, _today_str)
+            log(f"OHLCV: {_ohlcv_result['updated']} recovered, "
+                f"{_ohlcv_result['skipped']} already current, "
+                f"{len(_ohlcv_result['errors'])} errors")
+        except Exception as e:
+            log(f"Warning: OHLCV recovery failed (non-fatal, pipeline continues): {e}")
 
     # 3. Verify data freshness
     fresh, msg = verify_data_freshness()

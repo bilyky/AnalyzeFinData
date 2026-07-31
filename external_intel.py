@@ -7,6 +7,7 @@ import email
 import extract_email_intel
 import openpyxl
 import ai_client
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from config import CFG
 from aether_logger import get_logger as _get_logger
@@ -134,7 +135,7 @@ def fetch_idea_emails():
     ideas = []
     processed_msg_ids = set()
     max_intel = _max_intel_emails()
-    intel_count = 0   # track how many AI extractions we've run
+    candidates = []
 
     for mb in CFG.mailboxes:
         email_user = mb["email"]
@@ -143,16 +144,11 @@ def fetch_idea_emails():
             continue
         pass_env = mb["password_env"]
         imap_server = mb["imap_server"]
-        # Resolve password: env var takes priority; fall back to CFG.smtp_password
-        # (which is loaded from config.json email_sender.password).
-        # This handles the common case where the password is only in config.json
-        # and the SMTP_PASSWORD env var is not set in the scheduled-task environment.
         email_pass = os.environ.get(pass_env) or CFG.smtp_password
 
         if not email_pass:
-            _log.error(f"No password for mailbox '{email_user}' "
-                       f"(checked env var '{pass_env}' and CFG.smtp_password) — mailbox skipped.")
-            continue
+            raise ValueError(f"No password for mailbox '{email_user}' "
+                             f"(checked env var '{pass_env}' and CFG.smtp_password)")
 
         _log.console(f"Scanning mailbox: {email_user} on {imap_server}...")
         mail = None
@@ -176,6 +172,8 @@ def fetch_idea_emails():
 
                 # Process newest emails first to prioritize today's fresh newsletters
                 for num in reversed(messages[0].split()):
+                    if len(candidates) >= max_intel:
+                        break
                     try:
                         status, data = mail.fetch(num, "(BODY.PEEK[])")
                         if status != "OK":
@@ -209,36 +207,64 @@ def fetch_idea_emails():
                         if any(ph in lower_subj for ph in ["aether alert", "invoice", "receipt", "milestone", "shopper", "transaction"]):
                             continue
 
-                        # 1. Standard ticker extraction (BUY/SELL/HOLD)
-                        parsed_ideas = analyze_email_content(subject, body)
-                        # 2. Structural intel extraction — capped to avoid runaway AI costs
-                        intel = {}
-                        if intel_count < max_intel:
-                            intel = extract_email_intel.extract(subject, body)
-                            intel_count += 1
-                        else:
-                            _log.console(f"Intel cap ({max_intel}) reached; breaking email scan to protect rate-limits.")
-                            break
-
-                        base = {"from": msg["from"], "subject": subject, "folder": folder, "intel": intel}
-                        if parsed_ideas:
-                            for idea in parsed_ideas:
-                                ideas.append({**base, "symbol": idea["symbol"],
-                                              "sentiment": idea["sentiment"], "thesis": idea["thesis"]})
-                        elif intel:
-                            # Intel found but no explicit ticker recs — still worth surfacing
-                            ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
+                        candidates.append({
+                            "from": msg["from"],
+                            "subject": subject,
+                            "body": body,
+                            "folder": folder
+                        })
                     except Exception as e:
                         _log.error(f"Failed to process message {num}: {e}")
 
+                if len(candidates) >= max_intel:
+                    _log.console(f"Intel candidate cap ({max_intel}) reached; breaking email scan to protect rate-limits.")
+                    break
         except Exception as e:
-            _log.error(f"Failed to fetch emails for {email_user}: {e}")
+            raise RuntimeError(f"Failed to fetch emails for {email_user}: {e}")
         finally:
             if mail:
                 try:
                     mail.logout()
                 except Exception:
                     pass
+
+    # Now, execute AI extractions on these candidates in parallel!
+    if candidates:
+        _log.console(f"Running parallel AI extractions on {len(candidates)} filtered newsletters...")
+        
+        def run_extractions(cand):
+            try:
+                # 1. Standard ticker extraction (BUY/SELL/HOLD)
+                parsed_ideas = analyze_email_content(cand["subject"], cand["body"])
+                # 2. Structural intel extraction via AI
+                intel = extract_email_intel.extract(cand["subject"], cand["body"])
+                return {
+                    "cand": cand,
+                    "parsed_ideas": parsed_ideas,
+                    "intel": intel
+                }
+            except Exception as e:
+                _log.error(f"Extraction failed for {cand['subject'][:40]}: {e}")
+                return None
+
+        # Execute concurrently with up to 5 parallel threads
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = [pool.submit(run_extractions, c) for c in candidates]
+            for fut in as_completed(futures):
+                res = fut.result()
+                if not res:
+                    continue
+                cand = res["cand"]
+                parsed_ideas = res["parsed_ideas"]
+                intel = res["intel"]
+                
+                base = {"from": cand["from"], "subject": cand["subject"], "folder": cand["folder"], "intel": intel}
+                if parsed_ideas:
+                    for idea in parsed_ideas:
+                        ideas.append({**base, "symbol": idea["symbol"],
+                                      "sentiment": idea["sentiment"], "thesis": idea["thesis"]})
+                elif intel:
+                    ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
 
     return ideas
 

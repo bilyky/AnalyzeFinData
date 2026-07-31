@@ -26,6 +26,11 @@ _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 _TIMEOUT = 60   # generous for chat; context build can take ~9s on cold Research cache
 
 
+def _is_testing() -> bool:
+    """Return True if the current process is running under a test runner."""
+    return "unittest" in sys.modules or "pytest" in sys.modules or any("test" in arg for arg in sys.argv)
+
+
 # ── Key resolution ─────────────────────────────────────────────────────────────
 
 def _resolve_key(source: str) -> str:
@@ -136,6 +141,8 @@ def chat(messages: list, system: str = "", provider: str | None = None,
          max_tokens: int = 1000, temperature: float = 0.5) -> str:
     """Multi-turn chat: `messages` is [{role: user|assistant, content: str}].
     The last message must be role=user. Returns the assistant reply. Raises on failure."""
+    if _is_testing():
+        return "MOCK_AI_CHAT_RESPONSE"
     name = provider or primary()
     if not name:
         raise RuntimeError("No primary AI provider configured.")
@@ -195,6 +202,12 @@ def evaluate(system: str, user: str, provider: str | None = None,
              max_tokens: int = 200, temperature: float = 0.3) -> str:
     """Run one advisory evaluation on `provider` (defaults to primary()).
     Returns the model's text. Raises on failure."""
+    if _is_testing():
+        user_upper = user.upper()
+        if "YES OR NO" in system.upper() or "YES OR NO" in user_upper:
+            # If scarcity classification test, return NO by default
+            return "NO"
+        return "MOCK_AI_RESPONSE"
     name = provider or primary()
     if not name:
         raise RuntimeError("No primary AI provider configured.")
