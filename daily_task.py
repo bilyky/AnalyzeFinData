@@ -27,7 +27,7 @@ if not _log.handlers:
     ch.setFormatter(logging.Formatter("%(message)s"))
     _log.addHandler(ch)
 
-def run_command(command_list, timeout=180):
+def run_command(command_list, timeout=600):
     _log.info(f"Running: {' '.join(command_list)}")
     # Use Path(__file__) for the script if it's a local script
     if len(command_list) > 1 and command_list[1].endswith(".py"):
@@ -307,7 +307,7 @@ def main():
         """
 
         _log.info("Generating rich HTML report...")
-        notify.send_email(f"Daily Trade Report: {today}", html, is_html=True)
+        notify.send_email(f"AETHER Daily Rotation & Momentum Report: {today}", html, is_html=True)
         _log.info("Automation completed successfully.")
 
     except Exception as e:

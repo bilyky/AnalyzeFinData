@@ -585,7 +585,7 @@ def main():
     if not no_email:
         log("Drafting and sending HTML report...")
         html = format_html_report(msg, picks, replacements, intel_ideas)
-        notify.send_email(f"Daily Trade Report: {datetime.date.today()}", html, is_html=True)
+        notify.send_email(f"AETHER Daily Autopilot Trading & Intelligence Report: {datetime.date.today()}", html, is_html=True)
     else:
         log("Drafting HTML report (email disabled via --no-email)...")
 
