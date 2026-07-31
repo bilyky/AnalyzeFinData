@@ -47,6 +47,23 @@ def main():
     os.makedirs(hooks_dir, exist_ok=True)
 
     hook_path = os.path.join(hooks_dir, "pre-commit")
+
+    # Don't silently clobber a pre-existing, unrelated hook — back it up first.
+    if os.path.exists(hook_path):
+        try:
+            with open(hook_path, "r", encoding="utf-8", errors="replace") as f:
+                existing = f.read()
+        except Exception:
+            existing = ""
+        if existing and "pre_commit_validator.py" not in existing:
+            backup = hook_path + ".local.bak"
+            try:
+                with open(backup, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(existing)
+                print(f"Backed up existing pre-commit hook -> {backup}")
+            except Exception:
+                print("Warning: could not back up the existing pre-commit hook; overwriting.")
+
     with open(hook_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(HOOK)
     try:
