@@ -2,10 +2,14 @@ import datetime
 import json
 import logging
 import os
+import re as _re
 import sys
 import time
 import pyetrade
+import pytz
 from zoneinfo import ZoneInfo
+from requests_oauthlib import OAuth1Session
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from aether.config import CFG
 
 _log = logging.getLogger("aether.etrade")
@@ -102,7 +106,6 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
         return tokens
 
     def _do_renew():
-        from requests_oauthlib import OAuth1Session
         ck, cs, _, _ = _load_config(env)
         session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
         try:
@@ -124,7 +127,6 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
 
 def revoke_tokens(tokens, env="sandbox") -> bool:
     """Revoke tokens at E*TRADE (e.g. on logout). Returns True on success."""
-    from requests_oauthlib import OAuth1Session
     ck, cs, _, _ = _load_config(env)
     session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
     try:
@@ -173,8 +175,6 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
     When supplied, E*TRADE's trusted-device cookie skips MFA on subsequent runs.
     After a successful auth the browser state is always re-saved to _BROWSER_STATE_PATH.
     """
-    from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-
     _USER_SELECTORS = ["input#USER", "input[name='USER']", "input[name='username']",
                        "input[type='text']", "input[autocomplete='username']"]
     _PASS_SELECTORS = ["input#PASSWORD", "input[name='PASSWORD']",
@@ -197,7 +197,6 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
         print(f"  [Auth] Could not auto-fill {step_name} — complete it manually in the browser.")
         return False
 
-    import re as _re
     verifier = None
 
     # Read proxy from config (env vars set by _load_config are not picked up by Playwright)
@@ -528,7 +527,7 @@ def get_tokens(env="sandbox", allow_browser=False):
             wait_timeout=150,
         )
         try:
-            tokens = reauth_renewer.ensure()
+            tokens = reauth_renewer.ensure(current_token=cached)
             if tokens and tokens.get("issued_date_et") == _et_today():
                 _log.info("E*TRADE: automatic re-authentication succeeded.")
                 return tokens
@@ -666,10 +665,6 @@ def is_market_open_now(tokens, env="production") -> bool | None:
     2. Empirically verifies that the SPY ETF has traded today.
     Returns True (Open), False (Closed/Holiday), or None on network failure.
     """
-    from requests_oauthlib import OAuth1Session
-    import datetime
-    import pytz
-    
     ck, cs, _, _ = _load_config(env)
     session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
     

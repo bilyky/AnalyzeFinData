@@ -26,6 +26,8 @@ _pg_log = _get_logger("powergauge")
 
 def is_nyse_market_open() -> bool:
     """Return True if the NYSE is currently open (9:30 AM - 4:00 PM Eastern, weekdays)."""
+    if os.environ.get("FORCE_MARKET_CLOSED") == "true":
+        return False
     try:
         tz_ny = pytz.timezone("America/New_York")
         now_ny = datetime.datetime.now(tz_ny)

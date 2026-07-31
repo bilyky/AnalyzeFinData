@@ -158,12 +158,19 @@ def fetch_idea_emails():
 
             date = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%d-%b-%Y")
 
+            connection_lost = False
             for folder in FOLDERS:
+                if connection_lost:
+                    break
                 try:
                     status, _ = mail.select(f'"{folder}"', readonly=True)
                     if status != "OK":
                         continue
-                except Exception:
+                except Exception as e:
+                    err_msg = str(e).lower()
+                    if any(x in err_msg for x in ["closed", "eof", "abort", "connection", "socket"]):
+                        _log.error(f"IMAP connection lost on select: {e}")
+                        break
                     continue
 
                 status, messages = mail.search(None, f'(SINCE "{date}")')
@@ -214,6 +221,11 @@ def fetch_idea_emails():
                             "folder": folder
                         })
                     except Exception as e:
+                        err_msg = str(e).lower()
+                        if any(x in err_msg for x in ["closed", "eof", "abort", "connection", "socket"]):
+                            _log.error(f"IMAP connection lost during message fetch: {e}")
+                            connection_lost = True
+                            break
                         _log.error(f"Failed to process message {num}: {e}")
 
                 if len(candidates) >= max_intel:

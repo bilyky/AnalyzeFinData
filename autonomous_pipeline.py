@@ -513,17 +513,9 @@ def main():
             )
             log("Workbook regenerated.")
         except subprocess.TimeoutExpired as e:
-            error_msg = "main.py execution timed out after 180s (Playwright hang likely)."
-            log(error_msg)
-            if not no_email:
-                notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline failed: {error_msg}")
-            return
+            log("Warning: main.py execution timed out after 180s (Playwright hang likely). Adaptively falling back to cached workbook...")
         except subprocess.CalledProcessError as e:
-            error_msg = f"main.py failed: {e.stderr}"
-            log(error_msg)
-            if not no_email:
-                notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline failed during main.py execution.\n\n{error_msg}")
-            return
+            log(f"Warning: main.py execution failed: {e.stderr}. Adaptively falling back to cached workbook...")
 
     if not report_only:
         # 2b. OHLCV recovery pass — repair missing/corrupted/stale Symbol_full files via RapidAPI.

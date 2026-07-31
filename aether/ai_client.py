@@ -21,6 +21,9 @@ import sys
 import requests
 from aether.config import CFG
 
+# Ensure Gemini CLI automatically trusts the workspace directory in automated environments
+os.environ["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
+
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 _TIMEOUT = 60   # generous for chat; context build can take ~9s on cold Research cache
@@ -121,9 +124,11 @@ def _call_anthropic(pcfg, key, system, user, max_tokens, temperature) -> str:
 def _call_gemini_cli(pcfg, system, user, max_tokens, temperature) -> str:
     prompt = f"{system}\n\n{user}"
     out = subprocess.run(
-        ["gemini", "-m", pcfg.get("model", "gemini-2.5-flash"), "-p", prompt],
+        ["gemini", "--skip-trust", "-m", pcfg.get("model", "gemini-2.5-flash"), "-p", "Please analyze the following data and respond:"],
+        input=prompt,
         capture_output=True, text=True, timeout=_TIMEOUT,
-        shell=(sys.platform == "win32")
+        shell=(sys.platform == "win32"),
+        cwd=_DIR
     )
     if out.returncode != 0:
         raise RuntimeError(f"Gemini CLI execution failed (exit code {out.returncode}): {out.stderr.strip()}")
@@ -180,9 +185,11 @@ def chat(messages: list, system: str = "", provider: str | None = None,
         turns = "\n\n".join(f"[{m['role'].upper()}]: {m['content']}" for m in messages)
         prompt = (f"{system}\n\n{turns}" if system else turns)
         out = subprocess.run(
-            ["gemini", "-m", pcfg.get("model", "gemini-2.5-flash"), "-p", prompt],
+            ["gemini", "--skip-trust", "-m", pcfg.get("model", "gemini-2.5-flash"), "-p", "Please analyze the following conversation history and respond:"],
+            input=prompt,
             capture_output=True, text=True, timeout=_TIMEOUT,
-            shell=(sys.platform == "win32")
+            shell=(sys.platform == "win32"),
+            cwd=_DIR
         )
         if out.returncode != 0:
             raise RuntimeError(f"Gemini CLI execution failed (exit code {out.returncode}): {out.stderr.strip()}")

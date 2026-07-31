@@ -167,14 +167,21 @@ class _Config:
                 placeholders.append(f"{field} is set to placeholder value: '{val}'")
                 
         if placeholders:
-            sys.stdout.write("\n" + "!" * 80 + "\n")
-            sys.stdout.write("🚨  [AETHER CONFIG HEALTH ALERT] Malconfigured Placeholders Detected!\n")
-            sys.stdout.write("!" * 80 + "\n")
+            def safe_write(s):
+                try:
+                    sys.stdout.write(s)
+                except UnicodeEncodeError:
+                    enc = getattr(sys.stdout, 'encoding', 'cp1252') or 'cp1252'
+                    sys.stdout.write(s.encode(enc, errors='replace').decode(enc))
+
+            safe_write("\n" + "!" * 80 + "\n")
+            safe_write("🚨  [AETHER CONFIG HEALTH ALERT] Malconfigured Placeholders Detected!\n")
+            safe_write("!" * 80 + "\n")
             for ph in placeholders:
-                sys.stdout.write(f"  🛑 {ph}\n")
-            sys.stdout.write("-" * 80 + "\n")
-            sys.stdout.write("  Please update your 'config.json' file or environment variables to use real keys/accounts.\n")
-            sys.stdout.write("!" * 80 + "\n\n")
+                safe_write(f"  🛑 {ph}\n")
+            safe_write("-" * 80 + "\n")
+            safe_write("  Please update your 'config.json' file or environment variables to use real keys/accounts.\n")
+            safe_write("!" * 80 + "\n\n")
             self.has_placeholders = True
             self.placeholder_details = placeholders
         else:
