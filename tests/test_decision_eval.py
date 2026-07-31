@@ -57,6 +57,13 @@ class TestLogRoundTrip(unittest.TestCase):
 
 
 class TestBuildEntry(unittest.TestCase):
+    def setUp(self):
+        self.ai_eval_patcher = mock.patch("ai_client.evaluate", return_value="NO")
+        self.mock_ai_eval = self.ai_eval_patcher.start()
+
+    def tearDown(self):
+        self.ai_eval_patcher.stop()
+
     def test_no_shadow_records_action_without_verdicts(self):
         # Winner on a soft signal, above its 50-DMA -> REVIEW, no AI calls.
         e = de.build_entry("RPD", price=100, cost=60, stop_loss=50,

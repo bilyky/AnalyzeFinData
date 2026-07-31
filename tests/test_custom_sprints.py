@@ -69,6 +69,7 @@ class TestExecuteBuys(unittest.TestCase):
         def verify(sym): return (False, "Failed check") if sym == "BSY" else (True, "Verified")
         with mock.patch.object(game, "backtrack_verify", side_effect=verify), \
              mock.patch.object(game, "calculate_bubble_z_score", return_value=None), \
+             mock.patch("aether.ai_client.evaluate", return_value="NO"), \
              mock.patch("risk_utils.calculate_atr", return_value=1.0):
             n = game._execute_buys(state, list(_TOP_BUYS), 1, state["equity"] * 0.50,
                                    _RULES, "2026-07-09", "10:00", new_tx)
@@ -89,6 +90,7 @@ class TestExecuteBuys(unittest.TestCase):
         def z(sym): return 3.1 if sym == "BSY" else 0.9
         with mock.patch.object(game, "calculate_bubble_z_score", side_effect=z), \
              mock.patch.object(game, "backtrack_verify", return_value=(True, "Verified")), \
+             mock.patch("aether.ai_client.evaluate", return_value="NO"), \
              mock.patch("risk_utils.calculate_atr", return_value=1.0):
             n = game._execute_buys(state, list(_TOP_BUYS), 1, state["equity"] * 0.50,
                                    _RULES, "2026-07-09", "10:00", new_tx)

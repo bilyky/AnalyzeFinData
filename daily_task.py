@@ -8,6 +8,7 @@ import traceback
 import json
 import powergauge
 import logging
+import argparse
 from config import CFG
 from pathlib import Path
 
@@ -26,7 +27,7 @@ if not _log.handlers:
     ch.setFormatter(logging.Formatter("%(message)s"))
     _log.addHandler(ch)
 
-def run_command(command_list, timeout=180):
+def run_command(command_list, timeout=600):
     _log.info(f"Running: {' '.join(command_list)}")
     # Use Path(__file__) for the script if it's a local script
     if len(command_list) > 1 and command_list[1].endswith(".py"):
@@ -132,6 +133,13 @@ def main():
     # Ensure we are in the script's directory
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
+    parser = argparse.ArgumentParser(description="AETHER Daily Task Automation & Reporter.")
+    parser.add_argument("--report-only", action="store_true", help="Generate and send HTML report from cached data immediately, skipping data fetching.")
+    parser.add_argument("--cached", action="store_true", help="Alias for --report-only.")
+    args = parser.parse_args()
+    
+    report_only = args.report_only or args.cached
+
     today = datetime.date.today()
     _log.info(f"Starting daily automation for {today}")
 
@@ -146,42 +154,43 @@ def main():
             _log.error(f"Failed to send configuration health alert email: {e}")
 
     try:
-        # 0. Self-Validation (Linting)
-        # We run ruff to catch errors like NameError before we even start
-        _log.info("Running self-validation (linting)...")
-        # We use --select E to focus on basic syntax and logic errors
-        ruff_cmd = [sys.executable, "-m", "ruff"]
-        venv_new_python = os.path.join("venv_new", "Scripts", "python.exe")
-        venv_python = os.path.join("venv", "Scripts", "python.exe")
-        
-        if not os.path.exists(venv_new_python) and os.path.exists(venv_python):
-            venv_new_python = venv_python
+        if not report_only:
+            # 0. Self-Validation (Linting)
+            # We run ruff to catch errors like NameError before we even start
+            _log.info("Running self-validation (linting)...")
+            # We use --select E to focus on basic syntax and logic errors
+            ruff_cmd = [sys.executable, "-m", "ruff"]
+            venv_new_python = os.path.join("venv_new", "Scripts", "python.exe")
+            venv_python = os.path.join("venv", "Scripts", "python.exe")
+            
+            if not os.path.exists(venv_new_python) and os.path.exists(venv_python):
+                venv_new_python = venv_python
 
-        try:
-            # Check if the primary interpreter has ruff available
             try:
-                test_res = subprocess.run(ruff_cmd + ["--version"], capture_output=True)
-                if test_res.returncode != 0:
-                    raise FileNotFoundError("Ruff not found in current python executable")
-            except Exception:
-                # If primary interpreter fails, fall back to virtual environment Python
-                if os.path.exists(venv_new_python):
-                    ruff_cmd = [venv_new_python, "-m", "ruff"]
+                # Check if the primary interpreter has ruff available
+                try:
+                    test_res = subprocess.run(ruff_cmd + ["--version"], capture_output=True)
+                    if test_res.returncode != 0:
+                        raise FileNotFoundError("Ruff not found in current python executable")
+                except Exception:
+                    # If primary interpreter fails, fall back to virtual environment Python
+                    if os.path.exists(venv_new_python):
+                        ruff_cmd = [venv_new_python, "-m", "ruff"]
 
-            lint_result = subprocess.run(ruff_cmd + ["check", "--select", "F,E9,F63,F7,F82", "daily_task.py"], capture_output=True, text=True)
-            if lint_result.returncode != 0:
-                raise RuntimeError(f"Self-validation failed:\n{lint_result.stdout}\n{lint_result.stderr}")
-            _log.info("Self-validation passed.")
-        except RuntimeError:
-            raise
-        except Exception as e:
-            _log.info(f"Warning: Self-validation skipped (ruff package not available): {e}")
+                lint_result = subprocess.run(ruff_cmd + ["check", "--select", "F,E9,F63,F7,F82", "daily_task.py"], capture_output=True, text=True)
+                if lint_result.returncode != 0:
+                    raise RuntimeError(f"Self-validation failed:\n{lint_result.stdout}\n{lint_result.stderr}")
+                _log.info("Self-validation passed.")
+            except RuntimeError:
+                raise
+            except Exception as e:
+                _log.info(f"Warning: Self-validation skipped (ruff package not available): {e}")
 
-        # 1. Sync last 5 days history
-        run_command([sys.executable, "run_history.py", "5"])
+            # 1. Sync last 5 days history
+            run_command([sys.executable, "run_history.py", "5"])
 
-        # 2. Run main script to populate Data and Excel
-        run_command([sys.executable, "main.py"])
+            # 2. Run main script to populate Data and Excel
+            run_command([sys.executable, "main.py"])
 
         # 3. Get all processed data
         all_symbols_data = get_all_data(today)
@@ -298,7 +307,7 @@ def main():
         """
 
         _log.info("Generating rich HTML report...")
-        notify.send_email(f"Daily Trade Report: {today}", html, is_html=True)
+        notify.send_email(f"AETHER Daily Rotation & Momentum Report: {today}", html, is_html=True)
         _log.info("Automation completed successfully.")
 
     except Exception as e:
