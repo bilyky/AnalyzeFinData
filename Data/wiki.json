@@ -58,7 +58,7 @@
         "title": "Fibonacci Channels & RSI Divergences",
         "origin": "J. Welles Wilder Jr. (RSI, 1978) & Classical Fibonacci Standards.",
         "body": "Maps price relative to Fibonacci retracement levels (23.6%, 38.2%, 50.0%, 61.8%) computed from historical high-low channels and tracks price-RSI(14) momentum divergences to spot bottoms.",
-        "config: [
+        "config": [
             "Fibonacci Channel: Based on 100-day High/Low range",
             "RSI Length: 14-period daily standard",
             "RSI Divergence: Bullish divergence (lower price low + higher RSI low) triggers +1.0 score boost."
