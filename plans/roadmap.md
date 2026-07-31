@@ -26,3 +26,10 @@ The active experimental backlog, scoring studies, and structural risk-mitigation
 16. **Market Summarization Skill Development:** Custom Gemini CLI Agent Skill headlessly ingests live index ticks and daily newsletters to generate cohesive, data-grounded macro market summaries.
 17. **Model-Agnostic Token Optimizer (`prompt_optimizer.py`):** Dynamic token and prompt optimizer that prunes, compresses, or stashes verbose instructions based on the active LLM provider limits.
 18. **Unified Agent Skills Registry (`skills_registry.py`):** Skills Registry that indexes and loads only the specific agent skills relevant to the active user inquiry.
+
+## 🛡️ Stability & Hardening Backlog (Anti-Fragility Sprints):
+
+19. **Complete Test Sandboxing & State Isolation:** Isolate all unit and integration tests from the production 'Data/' folder. Ensure the test suite writes/reads strictly from a temporary test sandbox ('tests/sandbox/'), preventing any collateral damage (like killing active servers or wiping game state) during automated test runs.
+20. **Pre-Flight Connection & Config Validator (pre_flight_check.py):** Build a 5-second CLI pre-flight diagnostic utility that actively tests Gmail IMAP connection, Gmail SMTP delivery, Chaikin session tokens, and E*TRADE API endpoints, printing a clean PASS/FAIL checklist before any cron runs.
+21. **Front-End Resilience & Offline Fallbacks:** Upgrade 'web/app.js' with global AJAX error handlers and retry fallbacks so that if the server goes down or is restarted mid-session, the dashboard displays a clean offline banner instead of freezing.
+22. **Autonomic Webserver Watchdog Healer:** Integrate the webserver's process status directly into the hourly 'watchdog.py' checker, automatically cleaning up stale PID files and restarting crashed server instances headlessly.
