@@ -463,36 +463,11 @@
                         📊 1. Quantitative Models & Scoring Engines
                     </h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div data-wiki="buying_ratio" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">`buying_ratio` (BR) Model (`powergauge.py`)</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Compiles relative volume, Money Flow, oscillators, and weekly seasonality into a unified score in <code>[-10.0, +10.0]</code>. Sourced from Marc Chaikin's PowerGauge Rating (PGR) methodology.
-                            </p>
-                        </div>
-                        <div data-wiki="s10_score" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">`S10` Short-Term Entry Score (`scoring.py`)</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Standardizes short-term entry quality over a 10-day trading horizon. Aggregates Relative Volume, Money Flow, contrarian Industry Strength, and technical pattern overlays.
-                            </p>
-                        </div>
-                        <div data-wiki="l60_score" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">`L60` Long-Term Trend Score (`scoring.py`)</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Measures intermediate-to-long-term trend strength and durability over a rolling 60-day horizon, focusing on core moving average alignments.
-                            </p>
-                        </div>
-                        <div data-wiki="seasonality_engine" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Weekly Seasonality Detection Engine</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Groups 25 years of historical closes by month and week-of-month, calculating the historical 10-day forward return of that calendar week to apply weighted tailwinds or headwinds.
-                            </p>
-                        </div>
-                        <div data-wiki="fibonacci_rsi" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Fibonacci Channels & RSI Divergences</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Maps price relative to Fibonacci retracement levels (23.6%, 38.2%, 50%, 61.8%) and tracks price-RSI(14) momentum divergences. Based on J. Welles Wilder Jr.'s RSI and classical Fibonacci standards.
-                            </p>
-                        </div>
+                        <div data-wiki="buying_ratio" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="s10_score" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="l60_score" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="seasonality_engine" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="fibonacci_rsi" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2"></div>
                     </div>
                 </div>
 
@@ -502,36 +477,11 @@
                         🔍 2. Advanced Pattern Recognition Suite
                     </h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div data-wiki="candlestick_engine" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Japanese Candlestick Recognition</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Aggregates 17 candlestick patterns over a rolling 5-day lookback window. Based on Munehisa Homma's original Japanese rice-trading methodology.
-                            </p>
-                        </div>
-                        <div data-wiki="chart_formations" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Classical Chart Formations</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Identifies structural technical formations including <b>Head & Shoulders</b>, <b>Double Tops/Bottoms</b>, <b>Cup & Handle</b>, and <b>Bull/Bear Flags</b>.
-                            </p>
-                        </div>
-                        <div data-wiki="trend_crossovers" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Trend Momentum Crossovers</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Monitors moving average crossings (Golden/Death Crosses) and MACD crossings (signal line and trend crossovers) to lock in entry direction.
-                            </p>
-                        </div>
-                        <div data-wiki="contrarian_calibration" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Contrarian Calibration Override</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Programmatically negates the combined pattern score (<code>-1.0 * score</code>) because backtests prove overbought patterns act as contrarian, prioritizing oversold bottoming plays.
-                            </p>
-                        </div>
-                        <div data-wiki="rbr" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Rubber-Band Reversal (RBR) — Overreaction Snap-Back (`patterns.py`)</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                A positively-signed <b>bullish</b> factor: a big, fast overreaction drawdown (Leg 1) followed by a <b>confirmed higher-low green reversal bar</b> in the upper half of its range (Leg 2). Pure price/volume, no look-ahead — the trough must already be in before the recovery bar scores. The tradeable event is the confirmed recovery bar, not the gap. Backtested on 25+ yr of OHLCV; only the reliable no-gap pocket scores, while the higher-variance earnings-<b>gap</b> cohort is <b>watch-only</b> (<code>RBR↑(gap,watch)</code>). Anchored on INTC's Jul-2026 snap-back.
-                            </p>
-                        </div>
+                        <div data-wiki="candlestick_engine" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="chart_formations" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="trend_crossovers" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="contrarian_calibration" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="rbr" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2"></div>
                     </div>
                 </div>
 
@@ -541,96 +491,21 @@
                         🛡️ 3. Risk Management & Exit Heuristics
                     </h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div data-wiki="strategy_profiles" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Regime-Adaptive Strategy Profiles</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Auto-scales risk based on market trend: <b>Defensive</b> (max 3 slots, 10% size, 50% cash), <b>Balanced</b> (max 5 slots, 15% size, 20% cash), and <b>Aggressive</b> (max 6 slots, 15% size, 0% cash).
-                            </p>
-                        </div>
-                        <div data-wiki="vic_snipers" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Trader Vic Reversal Bottom Snipers</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Mathematically scans trailing 80-bar price action to identify Victor Sperandeo's (Trader Vic) legendary <b>"1-2-3 Reversal"</b> (higher low + intermediate peak breakout) and <b>"2B Pattern"</b> (bear trap / liquidity grab reclaims) to execute high-conviction bottom entries.
-                            </p>
-                        </div>
-                        <div data-wiki="breadth_filter" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">S&P Market Breadth Filter</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Monitors the score gap between Cap-Weighted <b>SPY</b> and Equal-Weighted <b>RSP</b>. If delta <code>&gt; 4.0</code>, it flags a technology-concentrated, narrow market top and automatically downgrades the active risk profile. Based on John Bollinger's concepts of volatility and index breadth.
-                            </p>
-                        </div>
-                        <div data-wiki="bubble_guard" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">2.5-Sigma Bubble Guard</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Calculates standard deviation distance from the 500-day mean. If Z-score <code>&gt; 2.5</code>, the stock is blacklisted to avoid deploying cash at overextended bubble peaks. Inspired by John Bollinger's standard-deviation volatility band concepts.
-                            </p>
-                        </div>
-                        <div data-wiki="flower_protection" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Unified Exit Policy & Flower Protection</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Hard ATR stop-loss floor always overrides soft signals. Based on Peter Lynch's 'Flower Protection' trailing stops concept where soft exits on profitable, above-50-DMA positions are downgraded to REVIEW to let winners run.
-                            </p>
-                        </div>
-                        <div data-wiki="profit_lock" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">AETHER Profit-Lock (Trailing Stop Ratchet)</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Dynamically ratchets trailing stops upward as positions rally. If the price rises by <code>&gt; 1.5x ATR</code>, it instantly triggers a <b>Breakeven Lock</b> (bumping stop floor to cost basis) to guarantee a 100% risk-free trade early in the trend!
-                            </p>
-                        </div>
-                        <div data-wiki="zero_cash_drag" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Zero-Cash Drag Autopilot & Fractional Sizing</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Dynamically drops cash buffers to <code>0.0%</code> during <b>BULLISH</b> market regimes to maximize capital deployment. Supports 3-decimal fractional share sizing precision (up to <code>1.458</code> shares) for S&P 100 blue chips and core ETFs (DIA, SPY, QQQ, IWM) to eliminate cash leftovers!
-                            </p>
-                        </div>
-                        <div data-wiki="gap_guard" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Catastrophic Gap Guard (CNXC Trap)</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Instantly rejects any buy order if today's price is more than 8% below yesterday's workbook close, protecting capital from waterfall crashes on earnings panics.
-                            </p>
-                        </div>
-                        <div data-wiki="momentum_floor" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Strict Short10 Momentum Floor (s10 &ge; 2.5)</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Backtest-proven entry filter that strictly blocks buying any setup if its Short-Term entry score (Short10) is <code>&lt; 2.5</code>. Backtracking verifies that this single filter successfully avoids 40% of historically losing trades (including PKX, ETHT, and SA), <b>boosting our historical Win Rate from 50.0% to 66.7% and nearly tripling net P&L from +7.75% to +27.88%!</b>
-                            </p>
-                        </div>
-                        <div data-wiki="antifragile_gate" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Antifragile Safety Gates</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Employs zero-trust risk safety gates. Logs a 'Failure DNA' ledger of closed losses, programmatically adjusting model coefficients over future runs to prevent repeating errors. Based on Nassim Nicholas Taleb's concepts of antifragility.
-                            </p>
-                        </div>
-                        <div data-wiki="scarcity_core" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Dynamic Structural Scarcity Core (80/20)</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Enforces a strict 20% portfolio allocation cap reserved strictly for metals, agriculture, and grid utility assets. Employs a dynamic, LLM-powered asset classifier with local JSON caching and a custom sizer that dynamically downsizes buy quantities to fit perfectly under the cap. Based on Jeremy Grantham's concepts of hard asset secular scarcity supercycles.
-                            </p>
-                        </div>
-                        <div data-wiki="capital_flexibility" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Dynamic Pyramiding & Adaptive Cap Relaxation</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Automatically expands maximum position slots (up to 7 or 8) when cash balance exceeds 15% to prevent cash drag. Includes <b>Adaptive Cap Relaxation</b> to completely suspend the standard/scarcity caps for top breakout candidates scoring <code>&ge; 8.0</code>, and <b>Dynamic Pyramiding</b> to deploy idle cash by sizing up active green winners near peak closes.
-                            </p>
-                        </div>
-                        <div data-wiki="decision_eval" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Systemic Sell & Decision Quality Evaluation (`decision_eval.py`)</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Evaluates exits with a hybrid qualitative rubric combining fundamental risks with charts. Automatically logs, scores, and audits decision quality for both closed trades and active reviews.
-                            </p>
-                        </div>
-                        <div data-wiki="circuit_breaker" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">Systemic Crash Circuit Breaker & Elastic Memory</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Enforces a multi-factor systemic risk gate that automatically freezes buying and tightens stop-losses to a tight 1.0x ATR floor during black swans. Features an <b>Elastic Memory</b> restorer to dynamically relax stops back to normal when market panic stabilizes.
-                            </p>
-                        </div>
-                        <div data-wiki="risk_reward_gate" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">2:1 Risk-Reward Gate & 5% Target Gain Filter</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Guarantees capital efficiency by strictly requiring a minimum 2:1 Reward-to-Risk ratio and a minimum 5.0% projected target gain percentage before executing buys on autopilot, completely preventing capital lock-up on flat consolidations.
-                            </p>
-                        </div>
+                        <div data-wiki="strategy_profiles" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="vic_snipers" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="breadth_filter" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="bubble_guard" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="flower_protection" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="profit_lock" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="zero_cash_drag" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="gap_guard" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="momentum_floor" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="antifragile_gate" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="scarcity_core" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="capital_flexibility" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="decision_eval" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2"></div>
+                        <div data-wiki="circuit_breaker" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="risk_reward_gate" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
                     </div>
                 </div>
 
@@ -673,34 +548,9 @@
                         🔬 5. Experimental Research Factors
                     </h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div data-wiki="digit_sum_numerology" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">🔢 Digit-Sum Numerology Factor</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Backtested across 522 symbols × 9+ years. Tests whether the digit-sum of a stock's open/close price predicts same-day or next-day direction.
-                                Two variants (integer and full-cents) cover 228 unique symbols with 95%+ confidence signals.
-                                Of 473 raw signals, <b>224 pass the full 4-layer quality validator</b> and are active in scoring.
-                                Symbol page shows a Stability column: <b class="text-green-400">stable</b> / <b class="text-amber-400">mixed</b> / <b class="text-orange-400">sparse</b> / <b class="text-red-400">flip</b>.
-                            </p>
-                        </div>
-                        <div data-wiki="signal_quality_validator" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">🛡️ Signal Quality Validator</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                4-layer filter pipeline that rejects statistical signals concentrated in the wrong time period, self-contradicting across eras, or from price regimes no longer relevant.
-                                Checks: (1) |z|≥2.0 significance, (2) temporal persistence across 6 rolling 2-year windows,
-                                (3) no direction flip between eras, (4) adequate coverage at current price level.
-                                Reusable framework for all future experimental factors.
-                            </p>
-                        </div>
-                        <div data-wiki="pattern_discovery" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
-                            <h4 class="font-semibold text-slate-200 text-sm mb-1">🔍 Pattern Discovery Agent — Missed Winners Retrospective</h4>
-                            <p class="text-xs text-slate-400 leading-relaxed">
-                                Weekly self-improvement loop: replay a past date, find the top 10 actual winners, diagnose why each was missed, and extract candidate new scoring factors.
-                                Two-layer design — a Python computation engine reconstructs 475 symbol scores from the Chaikin cache in ~14s (parallelized),
-                                followed by an LLM agent that reasons about <em>why</em> patterns exist and names them.
-                                <b>First finding (Jul 2026):</b> <code>lt_trend=Strong</code> penalized -3.0 in L60 appeared in 95% of missed 60-day winners across 3 dates —
-                                weight corrected to 0. Run from the System page or via <code>/pattern-discover</code>.
-                            </p>
-                        </div>
+                        <div data-wiki="digit_sum_numerology" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="signal_quality_validator" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
+                        <div data-wiki="pattern_discovery" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2"></div>
                         <div data-wiki="aether_rd_roadmap" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2">
                             <h4 class="font-semibold text-slate-200 text-sm mb-1">🔬 Project AETHER R&D Roadmap & Lab Agenda</h4>
                             <div id="roadmap-dynamic-content" class="text-xs text-slate-400 leading-relaxed mt-2">
@@ -855,6 +705,24 @@
                     </div>
                 </div>
             </div><!-- /sm-body -->
+        </div>
+    </div>
+
+    <!-- ===================== WIKI / FEATURE DETAIL MODAL ===================== -->
+    <!-- Rendered from the single source of truth (Data/wiki.json via /api/wiki).
+         Node ids here are the ones web/app.js initWiki()/closeWiki() reference. -->
+    <div id="wiki-modal" class="hidden fixed inset-0 z-40 bg-black/70 flex items-start justify-center overflow-y-auto py-8 px-4">
+        <div class="card w-full max-w-2xl relative">
+            <div class="flex items-start justify-between gap-4 mb-4">
+                <h3 id="wiki-title" class="text-xl font-bold text-slate-100"></h3>
+                <button id="wiki-close-btn" title="Close" class="text-slate-400 hover:text-white text-xl leading-none ml-1 shrink-0">✕</button>
+            </div>
+            <div id="wiki-origin" class="text-xs mut mb-4"></div>
+            <div id="wiki-body" class="text-sm text-slate-300 leading-relaxed space-y-2"></div>
+            <div class="mt-5">
+                <div class="card-label mb-2">Configuration</div>
+                <ul id="wiki-config" class="space-y-1 text-sm"></ul>
+            </div>
         </div>
     </div>
 

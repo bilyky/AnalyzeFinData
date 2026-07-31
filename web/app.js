@@ -2048,11 +2048,27 @@ async function initWiki() {
     await fetchWiki();
     fetchLiveRules();
     document.querySelectorAll("[data-wiki]").forEach((card) => {
+        const key = card.getAttribute("data-wiki");
+        // The roadmap card is not wiki-backed — its body is hydrated from
+        // /api/roadmap (single-sourced already). Leave it entirely untouched.
+        if (key === "aether_rd_roadmap") return;
+
+        const entry = AETHER_WIKI[key];
+        if (!entry) {
+            // Never silently blank a card — surface the drift instead.
+            console.warn(`[wiki] no wiki.json entry for data-wiki="${key}"`);
+            return;
+        }
+
+        // Single source of truth: render the card face (title + summary) from
+        // the wiki entry. summary is trusted HTML from our own wiki (same as body).
+        card.innerHTML =
+            `<h4 class="font-semibold text-slate-200 text-sm mb-1">${esc(entry.title)}</h4>` +
+            `<p class="text-xs text-slate-400 leading-relaxed">${entry.summary}</p>`;
+
         card.classList.add("cursor-pointer", "transition", "duration-200", "hover:scale-[1.01]");
         card.addEventListener("click", () => {
-            const key = card.getAttribute("data-wiki");
-            const entry = AETHER_WIKI[key];
-            if (entry) {
+            {
                 $("wiki-title").textContent = entry.title;
                 $("wiki-origin").innerHTML = "<b>Origin:</b> " + esc(entry.origin);
                 $("wiki-body").innerHTML = entry.body;
@@ -2099,13 +2115,21 @@ async function initWiki() {
     });
 }
 
-$("wiki-close-btn").addEventListener("click", closeWiki);
-$("wiki-modal").addEventListener("click", (e) => {
-    if (e.target === $("wiki-modal")) closeWiki();
-});
+// Null-safe: if the wiki modal markup is ever removed again, degrade gracefully
+// instead of throwing a TypeError at module load (which would abort the rest of
+// this classic script — including startPolling() and initWiki() below).
+const wikiModal = $("wiki-modal");
+if (wikiModal) {
+    const wikiCloseBtn = $("wiki-close-btn");
+    if (wikiCloseBtn) wikiCloseBtn.addEventListener("click", closeWiki);
+    wikiModal.addEventListener("click", (e) => {
+        if (e.target === wikiModal) closeWiki();
+    });
+}
 
 function closeWiki() {
-    $("wiki-modal").classList.add("hidden");
+    const wm = $("wiki-modal");
+    if (wm) wm.classList.add("hidden");
     document.body.style.overflow = "";
 }
 // ── Init ─────────────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 {
     "buying_ratio": {
         "title": "Marc Chaikin Buying Ratio (BR) Model",
+        "summary": "Compiles relative volume, Money Flow, oscillators, and weekly seasonality into a unified score in <code>[-10.0, +10.0]</code>. Sourced from Marc Chaikin's PowerGauge Rating (PGR) methodology.",
         "origin": "Marc Chaikin - Founder of Chaikin Analytics, creator of Chaikin Money Flow.",
         "body": "Compiles relative volume, Money Flow, oscillators, and weekly seasonality into a unified momentum score in the range <code>[-10.0, +10.0]</code>. Sourced directly from Chaikin's PowerGauge rating parameters.",
         "config": [
@@ -14,6 +15,7 @@
     },
     "s10_score": {
         "title": "S10 Short-Term Entry Score",
+        "summary": "Standardizes short-term entry quality over a 10-day trading horizon. Aggregates Relative Volume, Money Flow, contrarian Industry Strength, and technical pattern overlays.",
         "origin": "Project AETHER Core Team (Calibration Backtest, 336k observations, 2023-2025). Contrarian weights calibrated for mean-reversion over a 10-day horizon.",
         "body": "Standardizes short-term entry quality over a 10-day trading horizon. Aggregates volume spikes, momentum exhaustion oscillators, and contrarian overlays. Contrarian weights (negative for Strong signals) reflect the hypothesis that overbought conditions revert over 10 days.",
         "config": [
@@ -29,6 +31,7 @@
     },
     "l60_score": {
         "title": "L60 Long-Term Position Score",
+        "summary": "Measures intermediate-to-long-term trend strength and durability over a rolling 60-day horizon, focusing on core moving average alignments.",
         "origin": "Project AETHER Core Team (Calibration Backtest, 336k obs 2023-2025) + Pattern Discovery calibration (Jul 2026). LT Trend and Industry Strength contrarian weights removed after retrospective analysis showed they systematically excluded 95% and 81% of 60-day winners.",
         "body": "<p>Measures intermediate-to-long-term trend quality over a 60-day horizon. Note: the L60 contrarian logic for LT Trend and Industry Strength was <b>removed in July 2026</b> after Pattern Discovery analysis across 3 historical replay dates showed these penalized factors were present in the vast majority of 60-day winners — the opposite of the intended contrarian effect.</p>\n<p class=\"mt-2\"><b>Key calibration change (Jul 2026):</b></p>\n<ul class=\"list-disc pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>LT Trend=Strong:</b> was -3.0 → now <b>0.0</b>. In 95% of L60 missed winners across 3 test dates (Oct 2025, Dec 2025, Mar 2026), the stock had Strong lt_trend. The contrarian assumption (\"strong trend = overbought\") does not hold for 60-day holds.</li>\n  <li><b>Industry Strength=Strong:</b> was -1.5 → now <b>0.0</b>. Present in 81% of L60 missed winners. Sector leadership is a feature for 60-day holds, not a mean-reversion warning.</li>\n</ul>\n<p class=\"mt-2\">The contrarian logic was correct for S10 (10-day mean reversion) but incorrect for L60 (60-day trend following). These are now treated as neutral signals in L60.</p>",
         "config": [
@@ -44,6 +47,7 @@
     },
     "seasonality_engine": {
         "title": "Weekly Seasonality Detection Engine",
+        "summary": "Groups 25 years of historical closes by month and week-of-month, calculating the historical 10-day forward return of that calendar week to apply weighted tailwinds or headwinds.",
         "origin": "Quantitative Research standard, analyzing 25 years of historical closes.",
         "body": "Groups historical closing prices by month and week-of-month, calculating the historical 10-day forward return of that calendar week to apply weighted tailwinds or headwinds.",
         "config": [
@@ -56,6 +60,7 @@
     },
     "fibonacci_rsi": {
         "title": "Fibonacci Channels & RSI Divergences",
+        "summary": "Maps price relative to Fibonacci retracement levels (23.6%, 38.2%, 50%, 61.8%) and tracks price-RSI(14) momentum divergences. Based on J. Welles Wilder Jr.'s RSI and classical Fibonacci standards.",
         "origin": "J. Welles Wilder Jr. (RSI, 1978) & Classical Fibonacci Standards.",
         "body": "Maps price relative to Fibonacci retracement levels (23.6%, 38.2%, 50.0%, 61.8%) computed from historical high-low channels and tracks price-RSI(14) momentum divergences to spot bottoms.",
         "config": [
@@ -66,6 +71,7 @@
     },
     "candlestick_engine": {
         "title": "Japanese Candlestick Recognition Engine",
+        "summary": "Aggregates 17 candlestick patterns over a rolling 5-day lookback window. Based on Munehisa Homma's original Japanese rice-trading methodology.",
         "origin": "Munehisa Homma (1700s, original Japanese rice-trading methodology).",
         "body": "Aggregates 17 distinct candlestick patterns over a rolling 5-day lookback window. Based on traditional Japanese pattern configurations.",
         "config": [
@@ -75,6 +81,7 @@
     },
     "chart_formations": {
         "title": "Classical Chart Formations",
+        "summary": "Identifies structural technical formations including <b>Head & Shoulders</b>, <b>Double Tops/Bottoms</b>, <b>Cup & Handle</b>, and <b>Bull/Bear Flags</b>.",
         "origin": "Classical technical analysis standards.",
         "body": "Identifies structural technical formations including Head & Shoulders (bearish), Inverse Head & Shoulders (bullish bottoming), Double Tops/Bottoms, Cup & Handle, and Bull/Bear Flags.",
         "config": [
@@ -85,6 +92,7 @@
     },
     "trend_crossovers": {
         "title": "Trend Momentum Crossovers",
+        "summary": "Monitors moving average crossings (Golden/Death Crosses) and MACD crossings (signal line and trend crossovers) to lock in entry direction.",
         "origin": "Classical moving average crossover standards.",
         "body": "Monitors moving average crossings (Golden/Death Crosses) and MACD crossings (signal line and trend crossovers) to lock in entry direction and confirm trend reversals.",
         "config": [
@@ -95,6 +103,7 @@
     },
     "contrarian_calibration": {
         "title": "Contrarian Calibration Override",
+        "summary": "Programmatically negates the combined pattern score (<code>-1.0 * score</code>) because backtests prove overbought patterns act as contrarian, prioritizing oversold bottoming plays.",
         "origin": "AETHER Backtest Calibration Research (Phase A).",
         "body": "Programmatically negates the combined pattern score (multiplying it by -1.0) because backtests prove overbought patterns act as contrarian indicators, prioritizing oversold, bottoming, and recovery plays.",
         "config": [
@@ -104,6 +113,7 @@
     },
     "strategy_profiles": {
         "title": "Regime-Adaptive Strategy Profiles",
+        "summary": "Auto-scales risk based on market trend: <b>Defensive</b> (max 3 slots, 10% size, 50% cash), <b>Balanced</b> (max 5 slots, 15% size, 20% cash), and <b>Aggressive</b> (max 6 slots, 15% size, 0% cash).",
         "origin": "Modern Portfolio Theory (MPT) & Adaptive Capital Sizing standards.",
         "body": "Auto-scales risk parameters based on the broad market's intermediate trend score (SPY Long60): Defensive, Balanced, and Aggressive profiles.",
         "config": [
@@ -114,6 +124,7 @@
     },
     "vic_snipers": {
         "title": "Trader Vic Reversal Bottom Snipers",
+        "summary": "Mathematically scans trailing 80-bar price action to identify Victor Sperandeo's (Trader Vic) legendary <b>\"1-2-3 Reversal\"</b> (higher low + intermediate peak breakout) and <b>\"2B Pattern\"</b> (bear trap / liquidity grab reclaims) to execute high-conviction bottom entries.",
         "origin": "Victor Sperandeo ('Trader Vic') - Principles of Professional Speculation.",
         "body": "Mathematically scans trailing 80-bar price action to identify Trader Vic's legendary bottom-reconstruction setups, completely eliminating false breakout traps.",
         "config": [
@@ -124,6 +135,7 @@
     },
     "breadth_filter": {
         "title": "S&P Market Breadth Filter",
+        "summary": "Monitors the score gap between Cap-Weighted <b>SPY</b> and Equal-Weighted <b>RSP</b>. If delta <code>&gt; 4.0</code>, it flags a technology-concentrated, narrow market top and automatically downgrades the active risk profile. Based on John Bollinger's concepts of volatility and index breadth.",
         "origin": "John Bollinger (Volatility & Index Breadth) & S&P Equal-Weight Delta standards.",
         "body": "Monitors the score gap between Cap-Weighted SPY and Equal-Weighted RSP. If SPY is rising but RSP is weak, it flags a technology-concentrated, narrow market top and automatically downgrades the active risk profile.",
         "config": [
@@ -134,6 +146,7 @@
     },
     "bubble_guard": {
         "title": "2.5-Sigma Bubble Guard",
+        "summary": "Calculates standard deviation distance from the 500-day mean. If Z-score <code>&gt; 2.5</code>, the stock is blacklisted to avoid deploying cash at overextended bubble peaks. Inspired by John Bollinger's standard-deviation volatility band concepts.",
         "origin": "Standard Deviation Volatility Band standards.",
         "body": "Calculates standard deviation distance from the 500-day moving average. If a stock exceeds 2.5 standard deviations above its 500 SMA, it is blacklisted from new purchases, avoiding overextended parabolic peaks.",
         "config": [
@@ -144,6 +157,7 @@
     },
     "scarcity_core": {
         "title": "Dynamic Structural Scarcity Core (80/20)",
+        "summary": "Enforces a strict 20% portfolio allocation cap reserved strictly for metals, agriculture, and grid utility assets. Employs a dynamic, LLM-powered asset classifier with local JSON caching and a custom sizer that dynamically downsizes buy quantities to fit perfectly under the cap. Based on Jeremy Grantham's concepts of hard asset secular scarcity supercycles.",
         "origin": "Jeremy Grantham - Founder of Grantham, Mayo, & van Otterloo (GMO), 'Hard Asset Secular Supercycle'.",
         "body": "Reserves a base 20% portfolio allocation for metals, agriculture, and grid utility assets to insulate cash from tech-led market downturns. The cap is dynamic: it ramps smoothly from the 20% base toward a per-profile ceiling as a candidate's conviction score (Short10 + Long60) rises, and every buy is additionally clamped to a per-position ceiling so no single name can dominate. Employs a dynamic LLM-powered asset classifier.",
         "config": [
@@ -157,6 +171,7 @@
     },
     "flower_protection": {
         "title": "Unified Exit Policy & Flower Protection",
+        "summary": "Hard ATR stop-loss floor always overrides soft signals. Based on Peter Lynch's 'Flower Protection' trailing stops concept where soft exits on profitable, above-50-DMA positions are downgraded to REVIEW to let winners run.",
         "origin": "Peter Lynch - Famous manager of Fidelity Magellan Fund (14-year +29% CAGR), 'Weed Cutting'.",
         "body": "Enforces Peter Lynch's core philosophy of 'watering your flowers and cutting your weeds'. Hard ATR stop-loss floors always override soft exit signals. Soft exits on profitable, above-50-DMA positions are downgraded to REVIEW to let winners run.",
         "config": [
@@ -167,6 +182,7 @@
     },
     "gap_guard": {
         "title": "Catastrophic Gap Guard (CNXC Trap)",
+        "summary": "Instantly rejects any buy order if today's price is more than 8% below yesterday's workbook close, protecting capital from waterfall crashes on earnings panics.",
         "origin": "Project AETHER Loss Minimization Heuristic.",
         "body": "Instantly rejects any buy order if today's price is more than 8% below yesterday's workbook close, protecting capital from waterfall crashes on earnings panics.",
         "config": [
@@ -177,6 +193,7 @@
     },
     "antifragile_gate": {
         "title": "Antifragile Feedback Analyzer & Failure DNA Loop",
+        "summary": "Employs zero-trust risk safety gates. Logs a 'Failure DNA' ledger of closed losses, programmatically adjusting model coefficients over future runs to prevent repeating errors. Based on Nassim Nicholas Taleb's concepts of antifragility.",
         "origin": "Nassim Nicholas Taleb - Author of 'Fooled by Randomness', 'The Black Swan', 'Antifragile'.",
         "body": "Employs zero-trust risk safety principles. Operates a closed-loop retrospective feedback analyzer that dynamically clusters true losses (bad habits) into active rejections to immunize the portfolio against repeating errors.",
         "config": [
@@ -187,6 +204,7 @@
     },
     "decision_eval": {
         "title": "Systematic Sell & Decision Quality Evaluation",
+        "summary": "Evaluates exits with a hybrid qualitative rubric combining fundamental risks with charts. Automatically logs, scores, and audits decision quality for both closed trades and active reviews.",
         "origin": "Decision Quality Theory & Backtracking Analytics standards.",
         "body": "Evaluates exits with a hybrid qualitative rubric combining fundamental risks with technical charts. Automatically logs, scores, and audits decision quality for both closed trades and active reviews.",
         "config": [
@@ -197,6 +215,7 @@
     },
     "circuit_breaker": {
         "title": "Systemic Crash Circuit Breaker & Elastic Memory",
+        "summary": "Enforces a multi-factor systemic risk gate that automatically freezes buying and tightens stop-losses to a tight 1.0x ATR floor during black swans. Features an <b>Elastic Memory</b> restorer to dynamically relax stops back to normal when market panic stabilizes.",
         "origin": "Quantitative Risk Management (QRM) & Black Swan Protection standards.",
         "body": "Erects an indestructible defensive shield around your portfolio during market panic. Features Two-Factor Confirmation (SPY return and VXX Volatility ETF surge), a 30-minute opening stabilization window, dynamic 1.0x ATR stop tightening, and a self-healing 'Elastic Memory' stop-loss restorer upon market recovery.",
         "config": [
@@ -208,6 +227,7 @@
     },
     "risk_reward_gate": {
         "title": "2:1 Risk-Reward Gate & 5% Target Gain Filter",
+        "summary": "Guarantees capital efficiency by strictly requiring a minimum 2:1 Reward-to-Risk ratio and a minimum 5.0% projected target gain percentage before executing buys on autopilot, completely preventing capital lock-up on flat consolidations.",
         "origin": "Professional Risk-Asymmetry & Portfolio Alpha Optimization standards.",
         "body": "Guarantees capital efficiency by blocking low-upside, high-risk trades. The autopilot strictly audits the projected Reward-to-Risk ratio and minimum target gain percentage before deploying any cash.",
         "config": [
@@ -218,6 +238,7 @@
     },
     "digit_sum_numerology": {
         "title": "Digit-Sum Numerology Factor",
+        "summary": "Backtested across 522 symbols × 9+ years. Tests whether the digit-sum of a stock's open/close price predicts same-day or next-day direction. Two variants (integer and full-cents) cover 228 unique symbols with 95%+ confidence signals. Of 473 raw signals, <b>224 pass the full 4-layer quality validator</b> and are active in scoring. Symbol page shows a Stability column: <b class=\"text-green-400\">stable</b> / <b class=\"text-amber-400\">mixed</b> / <b class=\"text-orange-400\">sparse</b> / <b class=\"text-red-400\">flip</b>.",
         "origin": "Inspired by W.D. Gann's numerology research (1878–1955). Empirically backtested by AETHER across 522 symbols × 9+ years of daily OHLCV data (2014–2026).",
         "body": "<p>Tests whether the <b>digit-sum of a stock's price</b> predicts short-term direction. Digit-sum collapses any price to a single digit: <code>$247.35 → 2+4+7+3+5=21 → 3</code>.</p>\n<p class=\"mt-2\">AETHER runs <b>two variants</b> simultaneously:</p>\n<ul class=\"list-disc pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>Integer digit-sum</b> — whole-dollar only ($247 → 4). 162/522 symbols with 95%+ signals.</li>\n  <li><b>Full-cents digit-sum</b> — includes cents ($247.35 → 3). Adds 106 unique symbols not captured by integer-only.</li>\n</ul>\n<p class=\"mt-2\"><b>Two timing modes:</b></p>\n<ul class=\"list-disc pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>Prior-close → next-day</b>: standing factor in S10/L60, computed nightly from OHLCV cache.</li>\n  <li><b>Today's open → same-day</b>: real-time tiebreaker in <code>_execute_buys()</code> using live open price. Logged as <code>🔢 [Digit-Sum]</code>.</li>\n</ul>\n<p class=\"mt-2\">Of 473 signals at 95%+ confidence, <b>only 224 pass all four quality gates</b> and are used in scoring. See the Signal Quality Validator wiki entry for the full filter pipeline.</p>\n<p class=\"mt-2\">The Symbol detail modal shows a digit table with a <b>Stability</b> column: <span class=\"text-green-400\">stable</span> / <span class=\"text-amber-400\">mixed</span> / <span class=\"text-orange-400\">sparse</span> / <span class=\"text-red-400\">flip</span> / <span class=\"text-slate-500\">stale</span>.</p>",
         "config": [
@@ -232,6 +253,7 @@
     },
     "pattern_discovery": {
         "title": "Pattern Discovery Agent — Missed Winners Retrospective",
+        "summary": "Weekly self-improvement loop: replay a past date, find the top 10 actual winners, diagnose why each was missed, and extract candidate new scoring factors. Two-layer design — a Python computation engine reconstructs 475 symbol scores from the Chaikin cache in ~14s (parallelized), followed by an LLM agent that reasons about <em>why</em> patterns exist and names them. <b>First finding (Jul 2026):</b> <code>lt_trend=Strong</code> penalized -3.0 in L60 appeared in 95% of missed 60-day winners across 3 dates — weight corrected to 0. Run from the System page or via <code>/pattern-discover</code>.",
         "origin": "AETHER Internal R&D (July 2026). Inspired by W.D. Gann's retrospective analysis approach and Amy Edmondson's Right Kind of Wrong — learning from intelligent failures.",
         "body": "<p>A self-improving learning loop that finds stocks the system missed, diagnoses <em>why</em> it missed them, and extracts candidate new scoring factors.</p>\n<p class=\"mt-2\"><b>How it works (run weekly on Saturdays):</b></p>\n<ol class=\"list-decimal pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>Historical replay</b> — reconstructs every symbol's AETHER scores as they were on a past date (reads from the Chaikin per-symbol cache, no live API needed).</li>\n  <li><b>Forward returns</b> — computes actual 10-day (S10) and 60-day (L60) returns from OHLCV for all symbols.</li>\n  <li><b>Classify winners</b> — ranks actual winners; marks each as <em>bought</em> (system selected it), <em>missed</em> (system rejected it despite being in universe), or <em>not in universe</em>.</li>\n  <li><b>Diagnose misses</b> — for each missed winner records the exact filter that rejected it (score &lt; threshold, wrong PGR, setup=False) and which factor was most anomalous vs the universe.</li>\n  <li><b>Extract patterns</b> — two types: (a) <em>missed-winner patterns</em>: factor combos present in missed winners but penalized in the model; (b) <em>false-positive guards</em>: signals common in stocks the system bought that then lost.</li>\n  <li><b>Validate</b> — rolls candidate patterns across 16 historical dates. Only patterns with |z|≥2.0 and N≥30 are promoted to the scoring backlog.</li>\n</ol>\n<p class=\"mt-2\"><b>First finding (Jul 2026):</b> <code>lt_trend=Strong</code> appeared in 95% of L60 missed winners across 3 dates. The -3.0 contrarian penalty was excluding exactly the stocks that performed best over 60 days. <b>Weight updated: Strong → 0 (was -3.0) in L60.</b></p>\n<p class=\"mt-2\">Run from the System page, or invoke the <code>/pattern-discover</code> skill for full LLM reasoning over the results.</p>",
         "config": [
@@ -246,6 +268,7 @@
     },
     "signal_quality_validator": {
         "title": "Signal Quality Validator — 4-Layer Filter Pipeline",
+        "summary": "4-layer filter pipeline that rejects statistical signals concentrated in the wrong time period, self-contradicting across eras, or from price regimes no longer relevant. Checks: (1) |z|≥2.0 significance, (2) temporal persistence across 6 rolling 2-year windows, (3) no direction flip between eras, (4) adequate coverage at current price level. Reusable framework for all future experimental factors.",
         "origin": "AETHER Internal R&D — discovered during temporal distribution audit of digit-sum signals (July 2026).",
         "body": "<p>Before any statistical signal enters the scoring engine, AETHER runs it through a <b>4-layer quality filter</b> to reject noise masquerading as signal.</p>\n<p class=\"mt-2\">The problem discovered: a signal can show z=+2.5 overall yet be completely unreliable — if it fired 700 times when a stock was at $15 and only 30 times at today's $200, or if it was bullish in 2016 and bearish in 2022.</p>\n<p class=\"mt-2\"><b>The 4 filters applied in sequence:</b></p>\n<ol class=\"list-decimal pl-4 mt-1 space-y-2 text-sm\">\n  <li><b>Statistical significance</b> — |z| ≥ 2.0 (95%+ confidence) with N ≥ 50 days per bucket. Eliminates weak correlations.</li>\n  <li><b>Temporal consistency</b> — Signal is tested across 6 rolling 2-year windows (2014–2026). Must fire in same direction in ≥ 2 windows to be kept; ≥ 4 windows = \"stable\". Rejects historically-concentrated signals.</li>\n  <li><b>Direction stability</b> (<code>has_flip</code>) — If the signal is bullish in some windows and bearish in others, it is rejected. A self-contradicting signal has no predictive value regardless of overall z-score.</li>\n  <li><b>Coverage adequacy</b> (<code>is_sparse</code>) — The digit must appear in ≥ 3 of 6 windows (coverage ≥ 50%). Low coverage means the digit barely exists at the stock's current price level — the signal has no recent history to validate.</li>\n</ol>\n<p class=\"mt-2\"><b>Result for digit-sum:</b> 473 signals at 95%+ → <b>224 pass all four gates</b> (53% rejection rate). Each rejected signal is still displayed in the Symbol modal Stability column so you can see exactly why it was downgraded.</p>\n<p class=\"mt-2\">This pipeline is reusable — future experimental factors (Gann levels, gap persistence, round-number proximity) will run through the same 4-layer validator before entering the score.</p>",
         "config": [
@@ -260,6 +283,7 @@
     },
     "rbr": {
         "title": "Rubber-Band Reversal (RBR) — Overreaction Pullback + Fast Recovery",
+        "summary": "A positively-signed <b>bullish</b> factor: a big, fast overreaction drawdown (Leg 1) followed by a <b>confirmed higher-low green reversal bar</b> in the upper half of its range (Leg 2). Pure price/volume, no look-ahead — the trough must already be in before the recovery bar scores. The tradeable event is the confirmed recovery bar, not the gap. Backtested on 25+ yr of OHLCV; only the reliable no-gap pocket scores, while the higher-variance earnings-<b>gap</b> cohort is <b>watch-only</b> (<code>RBR↑(gap,watch)</code>). Anchored on INTC's Jul-2026 snap-back.",
         "origin": "AETHER Internal R&D (Aug 2026 lab), anchored on INTC's Jul-2026 earnings gap. Formalizes the AI-age machine/headline-driven overshoot-then-V-recover tape.",
         "body": "A positively-signed BULLISH factor: a big, fast overreaction drawdown (Leg 1) followed by a CONFIRMED higher-low green reversal bar sitting in the upper half of its range (Leg 2). Pure price/volume, no look-ahead — the trough must already be in before the recovery bar scores. The tradeable event is the confirmed recovery bar, not the gap (catching INTC's knife on day one ate another -11% before the bounce). Fed to <code>short_score</code> (+0.5) / <code>long_score</code> (+0.25) through the dedicated <code>vrecovery_score</code> field, never the negated contrarian chart path.",
         "config": [
@@ -271,6 +295,56 @@
             "+1.0 milder confirmed recovery",
             "0.0 earnings-GAP cohort — WATCH-ONLY (tag RBR↑(gap,watch)): win ~0.52, never cleared its own gate, so it is surfaced to watch but carries no buy weight",
             "Shared Leg-1 geometry: patterns.rbr_leg1(); live monitor: scripts/monitoring/rbr_watch.py; parameter sweep recalibrated MONTHLY"
+        ]
+    },
+    "profit_lock": {
+        "title": "AETHER Profit-Lock (Trailing Stop Ratchet)",
+        "origin": "Project AETHER Loss-Minimization core, extending Peter Lynch's 'let winners run' with a mechanical breakeven ratchet (plans/trailing-stop-adjuster.md).",
+        "summary": "Ratchets the trailing stop upward as a position rallies. Once unrealized profit exceeds <code>1.0&times; ATR</code> the stop begins climbing behind price; past <code>1.5&times; ATR</code> it locks the stop to the cost basis &mdash; a <b>breakeven lock</b> that makes the trade risk-free early in the trend.",
+        "body": "Dynamically tightens the stop-loss floor upward as an open position moves into profit, so gains are progressively protected without capping the upside. Two rungs, both measured in ATR of unrealized profit above the cost basis: at <b>&gt; 1.0&times; ATR</b> the stop ratchets up to trail price, and at <b>&gt; 1.5&times; ATR</b> it jumps to the cost basis (breakeven), so the position can no longer close red. Structural-Scarcity holdings use a tighter 1.5&times; ATR multiplier; standard satellites use the profile ATR multiplier (2.5&times;). The stop is only ever moved <i>up</i>, never down.",
+        "config": [
+            "Ratchet rung: unrealized profit > 1.0x ATR -> stop trails up behind price",
+            "Breakeven lock: unrealized profit > 1.5x ATR -> stop floor bumped to cost basis",
+            "ATR multiplier: 1.5x for Scarcity-core names, else the profile ATR multiplier (2.5x)",
+            "Monotonic: the stop is only raised, never lowered",
+            "Source: ai_portfolio_game.py profit-lock ratchet (see plans/trailing-stop-adjuster.md)"
+        ]
+    },
+    "zero_cash_drag": {
+        "title": "Zero-Cash Drag Autopilot & Fractional Sizing",
+        "origin": "Project AETHER capital-efficiency core; regime read from get_market_regime() (SPY Long60).",
+        "summary": "Drops the cash buffer to <code>0.0%</code> in the <b>AGGRESSIVE</b> market regime (<code>SPY L60 &gt; 2</code>) to fully deploy capital when the broad trend is strong. Pairs with 3-decimal <b>fractional share sizing</b> (e.g. <code>1.458</code> shares) on S&amp;P 100 blue chips and core ETFs (DIA, SPY, QQQ, IWM) so almost no cash sits idle.",
+        "body": "Eliminates the drag of uninvested cash when the market regime justifies it. When <code>get_market_regime()</code> returns <b>AGGRESSIVE</b> &mdash; the strong-bull state defined by <code>SPY Long60 &gt; 2</code> &mdash; the required cash buffer is dropped to 0%, so the autopilot can deploy fully. To spend the last sliver of cash instead of leaving a stub, sizing supports <b>fractional shares to 3 decimals</b> (values like 1.458 shares) on S&amp;P 100 blue chips and the core ETFs (DIA, SPY, QQQ, IWM). In weaker regimes the profile's normal cushion still applies (Balanced 20%, Defensive 50%) &mdash; zero-drag is specifically the AGGRESSIVE-regime behavior, not a blanket setting.",
+        "config": [
+            "Trigger: market regime == AGGRESSIVE (SPY Long60 > 2)",
+            "Effect: required cash buffer dropped to 0.0% for full deployment",
+            "Fractional sizing: 3-decimal share quantities (e.g. 1.458) on S&P 100 names + DIA/SPY/QQQ/IWM",
+            "Non-aggressive regimes retain their normal cash cushion (Balanced 20%, Defensive 50%)",
+            "Source: ai_portfolio_game.py regime/cash-buffer logic + aether/instruments.py fractional sizing"
+        ]
+    },
+    "momentum_floor": {
+        "title": "Strict Short10 Momentum Floor (S10 ≥ 2.5)",
+        "origin": "AETHER backtrack calibration (scripts/backtesting/backtrack_rules.py) — a single-filter entry gate proven on historical replay.",
+        "summary": "Backtest-proven entry filter that strictly blocks buying any setup whose Short-Term entry score (Short10) is <code>&lt; 2.5</code>. Backtracking verifies this single filter avoids ~40% of historically losing trades (including PKX, ETHT, SA), <b>boosting the historical Win Rate from 50.0% to 66.7% and nearly tripling net P&amp;L from +7.75% to +27.88%.</b>",
+        "body": "A hard pre-buy gate: on autopilot, any candidate whose <code>Short10</code> entry score is below <b>2.5</b> is rejected outright, regardless of its long-term score or PGR. The threshold was not guessed &mdash; backtracking the rule over historical trades showed it filters out roughly 40% of the losers (PKX, ETHT, SA among them) while keeping the winners, lifting the sample win rate from 50.0% to 66.7% and net P&amp;L from +7.75% to +27.88%. It enforces the discipline of never buying weak short-term momentum just because the long-term thesis looks attractive.",
+        "config": [
+            "Gate: reject buy when Short10 < 2.5",
+            "Scope: applied on autopilot at buy-selection time",
+            "Backtest lift: win rate 50.0% -> 66.7%, net P&L +7.75% -> +27.88%",
+            "Source: ai_portfolio_game.py buy loop; evidence scripts/backtesting/backtrack_rules.py"
+        ]
+    },
+    "capital_flexibility": {
+        "title": "Dynamic Slot Expansion & Pyramiding",
+        "origin": "Project AETHER capital-efficiency core — anti-cash-drag deployment logic.",
+        "summary": "Automatically expands the maximum position-slot count by one when idle cash exceeds <code>15%</code> and all slots are already full, so strong markets are not left under-deployed. Complements this with <b>Dynamic Pyramiding</b> &mdash; scaling additional cash into existing green winners near their breakout closes.",
+        "body": "Prevents cash drag when the portfolio is fully allocated but still holding idle cash. <b>Dynamic Slot Expansion:</b> when the cash ratio exceeds 15% and every position slot is occupied, the maximum-positions limit is bumped by one so a fresh high-conviction candidate can still be entered rather than leaving cash uninvested. <b>Dynamic Pyramiding:</b> instead of only opening new names, the autopilot can add to existing winning positions trading near their recent peak closes, concentrating capital into what is already working. Both mechanisms remain bounded by the standard per-position and Scarcity-bucket caps &mdash; they deploy idle cash, they do not override the allocation ceilings.",
+        "config": [
+            "Slot Expansion: cash ratio > 15% AND all slots full -> max_positions += 1",
+            "Dynamic Pyramiding: add idle cash to existing green winners near peak closes",
+            "Bounded: still clamped by the per-position ceiling and the Scarcity-core cap",
+            "Source: ai_portfolio_game.py slot-expansion + pyramiding blocks"
         ]
     }
 }
