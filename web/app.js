@@ -2066,11 +2066,14 @@ async function initWiki() {
                         `Aggressive: Max ${AETHER_LIVE_RULES.AGGRESSIVE.max_positions} positions, ${AETHER_LIVE_RULES.AGGRESSIVE.max_allocation_pct * 100}% trade size, ${AETHER_LIVE_RULES.AGGRESSIVE.cash_buffer_pct * 100}% cash buffer (Active when SPY L60 > 2)`
                     ];
                 } else if (key === "scarcity_core" && AETHER_LIVE_RULES) {
+                    const base = AETHER_LIVE_RULES.BALANCED.scarcity_allocation_pct * 100;
+                    const ceilPct = (r) => ((r.scarcity_cap_ceiling_pct ?? r.scarcity_allocation_pct) * 100);
                     configs = [
-                        `Core Allocation: ${AETHER_LIVE_RULES.BALANCED.scarcity_allocation_pct * 100}% of total portfolio equity strictly reserved for Scarcity plays.`,
-                        `Satellite Allocation: ${(1.0 - AETHER_LIVE_RULES.BALANCED.scarcity_allocation_pct) * 100}% for standard equities (Tech, Consumer, Energy).`,
+                        `Base Allocation: ${base}% of equity reserved for Scarcity plays (satellite ${100 - base}% for standard equities).`,
+                        `Conviction Ramp: cap grows from the ${base}% base to a per-profile ceiling as Short10+Long60 rises — Aggressive ${ceilPct(AETHER_LIVE_RULES.AGGRESSIVE)}%, Balanced ${ceilPct(AETHER_LIVE_RULES.BALANCED)}%, Defensive ${ceilPct(AETHER_LIVE_RULES.DEFENSIVE)}% (no cliff, never fully suspended).`,
+                        `Per-Position Ceiling: any single name capped at the profile's max trade size — Defensive ${AETHER_LIVE_RULES.DEFENSIVE.max_allocation_pct * 100}%, Balanced ${AETHER_LIVE_RULES.BALANCED.max_allocation_pct * 100}%, Aggressive ${AETHER_LIVE_RULES.AGGRESSIVE.max_allocation_pct * 100}%.`,
                         "Classifier: Dynamic LLM evaluation with local cache (Data/scarcity_cache.json).",
-                        "Shrink-Ray Sizer: Dynamically downsizes the order quantity to fit exactly under the remaining room in the scarcity bucket, rather than rejecting the buy."
+                        "Shrink-Ray Sizer: Dynamically downsizes the order quantity to fit the remaining bucket room, rather than rejecting the buy."
                     ];
                 } else if (key === "flower_protection" && AETHER_LIVE_RULES) {
                     configs = [

@@ -249,6 +249,11 @@ def _active_setup_symbols(ws):
     return out
 
 
+# @doc-sync-start: scarcity_core
+# Behavior documented in: Data/wiki.json["scarcity_core"], AETHER_REFERENCE.md
+# ("Dynamic Structural Scarcity Core"), and plans/dynamic-scarcity-cap.md. If you
+# change the cap math, the ramp, or the ceilings, update those surfaces in the same
+# commit (enforced by scripts/utils/pre_commit_validator.py :: check_feature_doc_sync).
 def _conviction_cap_pct(total, base_pct, ceiling_pct, relax_start, relax_full):
     """Dynamic (per-profile) bucket-allocation cap that scales with conviction.
 
@@ -276,6 +281,7 @@ def _conviction_cap_pct(total, base_pct, ceiling_pct, relax_start, relax_full):
         return ceiling_pct
     frac = (total - relax_start) / (relax_full - relax_start)
     return base_pct + frac * (ceiling_pct - base_pct)
+# @doc-sync-end: scarcity_core
 
 
 def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
@@ -571,12 +577,14 @@ def get_strategy_rules(profile):
         return {
             "max_positions": 6,
             "max_allocation_pct": 0.15, # Optimized from 0.25 to minimize drawdowns
+            # @doc-sync-start: scarcity_core
             "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite scarcity bucket base cap
             # Dynamic scarcity cap (Option C): bucket cap ramps 20%->40% as conviction
             # rises from min_score_threshold (2.0) to 10.0. See plans/dynamic-scarcity-cap.md.
             "scarcity_cap_ceiling_pct": 0.40,
             "cap_relax_start": 2.0,      # = min_score_threshold (no cliff, ramp starts here)
             "cap_relax_full": 10.0,      # calibrated to eligible-score p90 (~+10.1, validate_scarcity_cap.py, 2026-07-30; n=26)
+            # @doc-sync-end: scarcity_core
             "atr_multiplier": 3.5,       # Loose stop to avoid shakeouts in high-beta stocks
             "min_score_threshold": 2.0,
             "cash_buffer_pct": 0.0 if is_bullish else 0.10
@@ -585,6 +593,7 @@ def get_strategy_rules(profile):
         return {
             "max_positions": 3,          # Restrict to top 3 ultra-conviction plays
             "max_allocation_pct": 0.10, # Optimized from 0.15 for maximum capital preservation (Capped at $1,000 per trade)
+            # @doc-sync-start: scarcity_core
             "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite scarcity bucket base cap
             # Dynamic scarcity cap (Option C): tightest ramp — 20%->25% only, and it does
             # not even begin until score 10.0 (= min_score_threshold). This fixes the old
@@ -593,6 +602,7 @@ def get_strategy_rules(profile):
             "scarcity_cap_ceiling_pct": 0.25,
             "cap_relax_start": 10.0,     # = min_score_threshold
             "cap_relax_full": 16.0,      # validate_scarcity_cap.py 2026-07-30: eligible p90≈+16.7 (OK), but n=3 — hold pending multi-day data
+            # @doc-sync-end: scarcity_core
             "atr_multiplier": 1.5,       # Tight stop-loss to preserve capital
             "min_score_threshold": 10.0,
             "cash_buffer_pct": 0.0 if is_bullish else 0.50
@@ -601,12 +611,14 @@ def get_strategy_rules(profile):
         return {
             "max_positions": 5,
             "max_allocation_pct": 0.15, # Optimized from 0.20 (Perfect sweet spot between risk and growth)
+            # @doc-sync-start: scarcity_core
             "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite scarcity bucket base cap
             # Dynamic scarcity cap (Option C): mid ramp — 20%->35% as conviction rises
             # from min_score_threshold (5.0) to 11.0. See plans/dynamic-scarcity-cap.md.
             "scarcity_cap_ceiling_pct": 0.35,
             "cap_relax_start": 5.0,      # = min_score_threshold
             "cap_relax_full": 11.0,      # validate_scarcity_cap.py 2026-07-30: eligible p90≈+16.1 suggests higher, but n=9 — hold pending multi-day data
+            # @doc-sync-end: scarcity_core
             "atr_multiplier": 2.5,
             "min_score_threshold": 5.0,
             "cash_buffer_pct": 0.0 if is_bullish else 0.20

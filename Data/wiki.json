@@ -145,12 +145,14 @@
     "scarcity_core": {
         "title": "Dynamic Structural Scarcity Core (80/20)",
         "origin": "Jeremy Grantham - Founder of Grantham, Mayo, & van Otterloo (GMO), 'Hard Asset Secular Supercycle'.",
-        "body": "Enforces a strict 20% portfolio allocation cap reserved strictly for metals, agriculture, and grid utility assets to insulate cash from tech-led market downturns. Employs a dynamic LLM-powered asset classifier.",
+        "body": "Reserves a base 20% portfolio allocation for metals, agriculture, and grid utility assets to insulate cash from tech-led market downturns. The cap is dynamic: it ramps smoothly from the 20% base toward a per-profile ceiling as a candidate's conviction score (Short10 + Long60) rises, and every buy is additionally clamped to a per-position ceiling so no single name can dominate. Employs a dynamic LLM-powered asset classifier.",
         "config": [
-            "Core Allocation: 20% of total portfolio equity strictly reserved for Scarcity plays.",
-            "Satellite Allocation: 80% for standard equities (Tech, Consumer, Energy).",
+            "Base Allocation: 20% of equity reserved for Scarcity plays; ramps to a per-profile ceiling (Aggressive 40%, Balanced 35%, Defensive 25%) as conviction rises.",
+            "Conviction Ramp: cap grows linearly from the 20% base (at each profile's min-score threshold) to its ceiling (at the profile's relax-full score) — no binary cliff, and it is never fully suspended.",
+            "Per-Position Ceiling: any single name is capped at the profile's max trade size (Defensive 10%, Balanced/Aggressive 15%), in either bucket.",
+            "Satellite Allocation: remaining equity for standard equities (Tech, Consumer, Energy).",
             "Classifier: Dynamic LLM evaluation with local cache (Data/scarcity_cache.json).",
-            "Shrink-Ray Sizer: Dynamically downsizes the order quantity to fit exactly under the remaining room in the 20% bucket, rather than rejecting the buy."
+            "Shrink-Ray Sizer: Dynamically downsizes the order quantity to fit the remaining bucket room, rather than rejecting the buy."
         ]
     },
     "flower_protection": {
