@@ -2108,6 +2108,7 @@ async function initWiki() {
                     configList.appendChild(li);
                 });
 
+                setWikiExpanded(false);   // always open at the default width
                 $("wiki-modal").classList.remove("hidden");
                 document.body.style.overflow = "hidden";
             }
@@ -2122,9 +2123,29 @@ const wikiModal = $("wiki-modal");
 if (wikiModal) {
     const wikiCloseBtn = $("wiki-close-btn");
     if (wikiCloseBtn) wikiCloseBtn.addEventListener("click", closeWiki);
+    const wikiExpandBtn = $("wiki-expand-btn");
+    if (wikiExpandBtn) wikiExpandBtn.addEventListener("click", toggleWikiExpanded);
     wikiModal.addEventListener("click", (e) => {
         if (e.target === wikiModal) closeWiki();
     });
+}
+
+// Expand/restore the wiki panel between the default reading width and a wide view
+// (handy for long, link-rich entries like the candlestick catalogue).
+function setWikiExpanded(on) {
+    const panel = $("wiki-panel");
+    if (!panel) return;
+    panel.classList.toggle("max-w-2xl", !on);
+    panel.classList.toggle("max-w-6xl", on);
+    const btn = $("wiki-expand-btn");
+    if (btn) {
+        btn.textContent = on ? "⤡ Restore" : "⤢ Expand";
+        btn.title = on ? "Restore" : "Expand";
+    }
+}
+function toggleWikiExpanded() {
+    const panel = $("wiki-panel");
+    if (panel) setWikiExpanded(!panel.classList.contains("max-w-6xl"));
 }
 
 function closeWiki() {
