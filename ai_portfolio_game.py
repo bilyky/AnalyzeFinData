@@ -249,6 +249,35 @@ def _active_setup_symbols(ws):
     return out
 
 
+def _conviction_cap_pct(total, base_pct, ceiling_pct, relax_start, relax_full):
+    """Dynamic (per-profile) bucket-allocation cap that scales with conviction.
+
+    Below ``relax_start`` the ``base_pct`` cap applies unchanged; between
+    ``relax_start`` and ``relax_full`` the cap ramps linearly ``base_pct``→``ceiling_pct``;
+    at or above ``relax_full`` it clamps at ``ceiling_pct``. The cap never disappears.
+
+    This replaces the old binary "suspend the scarcity cap entirely when total >= 8.0"
+    cliff, which had two flaws: (a) a 0.01-point score difference at the 8.0 boundary
+    produced a ~10x position-size jump (a discontinuity that noise or a factor tweak
+    could trip), and (b) because the relaxation threshold was a global 8.0 while
+    DEFENSIVE's min_score_threshold is 10.0, *every* DEFENSIVE buy already cleared 8.0 —
+    so the capital-preservation profile had its scarcity cap permanently suspended.
+    Tying ``relax_start`` to each profile's own min_score_threshold (see
+    get_strategy_rules) fixes that; the ramp keeps conviction rewarded but bounded.
+
+    This is Option C from plans/dynamic-scarcity-cap.md (per-profile ramp); Options A
+    (global ramp) and B (ramp, no per-position ceiling) are documented there too.
+    """
+    if ceiling_pct <= base_pct or relax_full <= relax_start:
+        return base_pct
+    if total <= relax_start:
+        return base_pct
+    if total >= relax_full:
+        return ceiling_pct
+    frac = (total - relax_start) / (relax_full - relax_start)
+    return base_pct + frac * (ceiling_pct - base_pct)
+
+
 def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                   today, now_time, new_transactions, prices=None):
     """Fill up to available_slots from ranked top_buys while preserving the cash
@@ -310,36 +339,61 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                 _dir = "UP" if _open_digit_z > 0 else "DOWN"
                 _log.console(f"🔢 [Digit-Sum] {buy['sym']} open digit signal: {_dir} bias (score={_open_digit_z:+.2f})")
 
-            # Core-Satellite Allocation Checking & Downsizing logic
-            # Adaptive Cap Relaxation: Automatically suspend core-satellite caps if the candidate is an ultra-high-conviction setup (score >= 8.0)
-            is_ultra_conviction = (buy.get("total", 0.0) >= 8.0)
+            # Core-Satellite Allocation Checking & Downsizing logic.
+            # Dynamic per-profile conviction ramp (Option C, plans/dynamic-scarcity-cap.md):
+            # the scarcity bucket cap scales base→ceiling with the candidate's conviction
+            # score instead of the old all-or-nothing suspension at total>=8.0. Standard
+            # bucket keeps its flat base cap. Both are then bounded by a per-position ceiling.
             cost = qty * buy["price"]
-            if is_scarcity and not is_ultra_conviction:
+            total = buy.get("total", 0.0)
+            if is_scarcity:
+                cap_pct = _conviction_cap_pct(
+                    total,
+                    base_pct=scarcity_allocation_pct,
+                    ceiling_pct=rules.get("scarcity_cap_ceiling_pct", scarcity_allocation_pct),
+                    relax_start=rules.get("cap_relax_start", 8.0),
+                    relax_full=rules.get("cap_relax_full", 12.0),
+                )
+                scarcity_limit_usd = state["equity"] * cap_pct
                 remaining_scarcity_room_usd = scarcity_limit_usd - current_scarcity_usd
                 if remaining_scarcity_room_usd <= 0:
-                    _log.warning(f"🛑 AI BUY REJECTED (Scarcity Limit Full): {buy['sym']} is scarcity play, but 20% scarcity bucket is fully allocated.")
+                    _log.warning(f"🛑 AI BUY REJECTED (Scarcity Limit Full): {buy['sym']} is a scarcity play, but the {cap_pct:.0%} scarcity bucket is fully allocated.")
                     continue
                 if cost > remaining_scarcity_room_usd:
                     old_qty = qty
                     qty = calculate_share_qty(buy["sym"], remaining_scarcity_room_usd, buy["price"])
-                    _log.warning(f"⚠️ Downsizing scarcity buy {buy['sym']} from {old_qty} to {qty} shares to fit 20% scarcity cap.")
+                    _log.warning(f"⚠️ Downsizing scarcity buy {buy['sym']} from {old_qty} to {qty} shares to fit the {cap_pct:.0%} scarcity cap (conviction {total:.1f}).")
                     if qty <= 0:
                         _log.warning(f"🛑 AI BUY REJECTED (Scarcity Limit Full): Remaining room is less than 1 share of {buy['sym']}.")
                         continue
                     cost = qty * buy["price"]
-            elif not is_scarcity and not is_ultra_conviction:
+            else:
                 remaining_standard_room_usd = standard_limit_usd - current_standard_usd
                 if remaining_standard_room_usd <= 0:
-                    _log.warning(f"🛑 AI BUY REJECTED (Standard Cap Full): {buy['sym']} is standard play, but 80% standard bucket is fully allocated.")
+                    _log.warning(f"🛑 AI BUY REJECTED (Standard Cap Full): {buy['sym']} is a standard play, but the {(1.0 - scarcity_allocation_pct):.0%} standard bucket is fully allocated.")
                     continue
                 if cost > remaining_standard_room_usd:
                     old_qty = qty
                     qty = calculate_share_qty(buy["sym"], remaining_standard_room_usd, buy["price"])
-                    _log.warning(f"⚠️ Downsizing standard buy {buy['sym']} from {old_qty} to {qty} shares to fit 80% standard cap.")
+                    _log.warning(f"⚠️ Downsizing standard buy {buy['sym']} from {old_qty} to {qty} shares to fit the standard bucket cap.")
                     if qty <= 0:
                         _log.warning(f"🛑 AI BUY REJECTED (Standard Cap Full): Remaining room is less than 1 share of {buy['sym']}.")
                         continue
                     cost = qty * buy["price"]
+
+            # Per-position ceiling on EVERY buy: no single name may exceed
+            # equity * max_allocation_pct. Previously _execute_buys never applied this
+            # cap (only the pyramiding path did), so a single buy into an empty bucket
+            # could consume the whole bucket. Now concentration is capped per name too.
+            max_pos_usd = state["equity"] * rules.get("max_allocation_pct", 0.15)
+            if cost > max_pos_usd and max_pos_usd > 0:
+                old_qty = qty
+                qty = calculate_share_qty(buy["sym"], max_pos_usd, buy["price"])
+                _log.warning(f"⚠️ Capping {buy['sym']} from {old_qty} to {qty} shares to fit the {rules.get('max_allocation_pct', 0.15):.0%} per-position ceiling.")
+                if qty <= 0:
+                    _log.warning(f"🛑 AI BUY REJECTED: Per-position ceiling leaves less than 1 share of {buy['sym']}.")
+                    continue
+                cost = qty * buy["price"]
 
             state["balance"] -= cost
             # Update cumulative bucket counts for sequence
@@ -506,32 +560,53 @@ def get_market_regime():
 def get_strategy_rules(profile):
     """Define risk and size rules based on the chosen strategy profile."""
     # Profile options: BALANCED, AGGRESSIVE, DEFENSIVE
+    # Regime is read independently of the (possibly manually-overridden) profile:
+    # get_market_regime() labels a strong bull market "AGGRESSIVE" (SPY L60 > 2),
+    # so that is the bull signal — deploy fully (zero cash buffer) when it fires,
+    # regardless of which profile is active (Zero-Cash-Drag Autopilot).
     regime = get_market_regime()
-    is_bullish = (regime == "BULLISH")
+    is_bullish = (regime == "AGGRESSIVE")
 
     if profile == "AGGRESSIVE":
         return {
             "max_positions": 6,
             "max_allocation_pct": 0.15, # Optimized from 0.25 to minimize drawdowns
-            "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite hard asset cap
+            "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite scarcity bucket base cap
+            # Dynamic scarcity cap (Option C): bucket cap ramps 20%->40% as conviction
+            # rises from min_score_threshold (2.0) to 10.0. See plans/dynamic-scarcity-cap.md.
+            "scarcity_cap_ceiling_pct": 0.40,
+            "cap_relax_start": 2.0,      # = min_score_threshold (no cliff, ramp starts here)
+            "cap_relax_full": 10.0,      # calibrated to eligible-score p90 (~+10.1, validate_scarcity_cap.py, 2026-07-30; n=26)
             "atr_multiplier": 3.5,       # Loose stop to avoid shakeouts in high-beta stocks
-            "min_score_threshold": 2.0,  
-            "cash_buffer_pct": 0.0 if is_bullish else 0.10      
+            "min_score_threshold": 2.0,
+            "cash_buffer_pct": 0.0 if is_bullish else 0.10
         }
     elif profile == "DEFENSIVE":
         return {
             "max_positions": 3,          # Restrict to top 3 ultra-conviction plays
             "max_allocation_pct": 0.10, # Optimized from 0.15 for maximum capital preservation (Capped at $1,000 per trade)
-            "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite hard asset cap
+            "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite scarcity bucket base cap
+            # Dynamic scarcity cap (Option C): tightest ramp — 20%->25% only, and it does
+            # not even begin until score 10.0 (= min_score_threshold). This fixes the old
+            # pathology where the global 8.0 relaxation left DEFENSIVE (min_score 10.0)
+            # permanently uncapped. See plans/dynamic-scarcity-cap.md.
+            "scarcity_cap_ceiling_pct": 0.25,
+            "cap_relax_start": 10.0,     # = min_score_threshold
+            "cap_relax_full": 16.0,      # validate_scarcity_cap.py 2026-07-30: eligible p90≈+16.7 (OK), but n=3 — hold pending multi-day data
             "atr_multiplier": 1.5,       # Tight stop-loss to preserve capital
-            "min_score_threshold": 10.0, 
-            "cash_buffer_pct": 0.0 if is_bullish else 0.50      
+            "min_score_threshold": 10.0,
+            "cash_buffer_pct": 0.0 if is_bullish else 0.50
         }
     else: # BALANCED (Default)
         return {
             "max_positions": 5,
             "max_allocation_pct": 0.15, # Optimized from 0.20 (Perfect sweet spot between risk and growth)
-            "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite hard asset cap
+            "scarcity_allocation_pct": 0.20, # Dynamic Core-Satellite scarcity bucket base cap
+            # Dynamic scarcity cap (Option C): mid ramp — 20%->35% as conviction rises
+            # from min_score_threshold (5.0) to 11.0. See plans/dynamic-scarcity-cap.md.
+            "scarcity_cap_ceiling_pct": 0.35,
+            "cap_relax_start": 5.0,      # = min_score_threshold
+            "cap_relax_full": 11.0,      # validate_scarcity_cap.py 2026-07-30: eligible p90≈+16.1 suggests higher, but n=9 — hold pending multi-day data
             "atr_multiplier": 2.5,
             "min_score_threshold": 5.0,
             "cash_buffer_pct": 0.0 if is_bullish else 0.20

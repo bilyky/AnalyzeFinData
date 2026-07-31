@@ -76,8 +76,11 @@ class TestExecuteBuys(unittest.TestCase):
         self.assertIn("APA", state["positions"])
         self.assertNotIn("BSY", state["positions"])
         self.assertEqual([t["symbol"] for t in new_tx], ["APA"])
-        # (7746.29 - 5147.50) / 1 // 33.825 = 76 shares
-        self.assertEqual(state["positions"]["APA"]["qty"], 76)
+        # Dynamic sizing wants (7746.29 - 5147.50) / 1 // 33.825 = 76 shares (~$2,571),
+        # but that is ~25% of the $10,295 portfolio — a gross breach of DEFENSIVE's 10%
+        # per-position ceiling. Option C now enforces that ceiling on every buy:
+        # 10% * 10295 = $1,029.50 // 33.825 = 30 shares ($1,014.75).
+        self.assertEqual(state["positions"]["APA"]["qty"], 30)
 
     def test_bubble_guard_rejects_and_falls_through(self):
         # BSY trades >2.5 SD above its mean -> rejected; APA (0.9 SD) fills the slot.
@@ -163,7 +166,10 @@ class TestCoreSatelliteAllocation(unittest.TestCase):
         # With $5,000 cash and 1 available slot, dynamic sizing wants to buy $5,000 worth (500 shares).
         # But the 20% scarcity cap should restrict/downsize this to exactly 50 shares ($500).
         rules = {"scarcity_allocation_pct": 0.20, "max_allocation_pct": 0.50, "atr_multiplier": 2.5}
-        top_buys = [{"sym": "SLV", "price": 10.0, "total": 12.0, "industry": "Gold Mining", "bottom_desc": ""}]
+        # total (conviction score) stays below cap_relax_start (default 8.0), so the
+        # dynamic conviction ramp leaves the base 20% cap unchanged (see the ramp tests
+        # test_scarcity_cap_ramps_with_conviction / _clamps_at_ceiling below).
+        top_buys = [{"sym": "SLV", "price": 10.0, "total": 5.0, "industry": "Gold Mining", "bottom_desc": ""}]
         new_tx = []
         
         # Mock instruments classification so SLV is treated as scarcity
@@ -179,6 +185,87 @@ class TestCoreSatelliteAllocation(unittest.TestCase):
         # Verified: Downsized to exactly 50 shares to fit the $500 remaining room in the 20% scarcity bucket!
         self.assertEqual(state["positions"]["SLV"]["qty"], 50)
         self.assertEqual(state["positions"]["SLV"]["is_scarcity"], True)
+
+    # ---- Option C: dynamic per-profile conviction ramp for the scarcity cap ----
+    # (plans/dynamic-scarcity-cap.md). These replace the old binary
+    # "test_ultra_conviction_suspends_scarcity_cap" which asserted the whole cap was
+    # suspended at total>=8.0. Option C ramps the cap base->ceiling with conviction and
+    # never removes it, so the same scenario now downsizes rather than buying the full
+    # $5,000. Shared fixture: equity $10k, cash $5k, $1,500 GLD scarcity already held
+    # (=> $500 room at the 20% base cap), buying SLV @ $10 (dynamic sizing wants 500 sh).
+
+    def _run_scarcity_buy(self, rules, total, is_scarcity=True, positions=None):
+        state = {
+            "balance": 5000.0,
+            "equity": 10000.0,
+            "positions": {"GLD": {"qty": 75, "cost": 20.0, "is_scarcity": True}}
+                          if positions is None else positions,
+            "history": [],
+        }
+        top_buys = [{"sym": "SLV", "price": 10.0, "total": total,
+                     "industry": "Gold Mining", "bottom_desc": ""}]
+        new_tx = []
+        with mock.patch("instruments.is_scarcity_asset", return_value=is_scarcity), \
+             mock.patch.object(game, "calculate_bubble_z_score", return_value=None), \
+             mock.patch.object(game, "backtrack_verify", return_value=(True, "Verified")), \
+             mock.patch("risk_utils.calculate_atr", return_value=1.0):
+            n = game._execute_buys(state, top_buys, 1, 0.0, rules, "2026-07-11",
+                                   "11:30", new_tx, prices={"GLD": 20.0, "SLV": 10.0})
+        return n, state
+
+    def test_scarcity_cap_ramps_with_conviction(self):
+        # Ceiling 40%, ramp 8.0->12.0. At total=10.0 (midpoint) the cap is
+        # 0.20 + 0.5*(0.40-0.20) = 0.30 => $3,000 limit, $1,500 room left => 150 shares.
+        rules = {"scarcity_allocation_pct": 0.20, "scarcity_cap_ceiling_pct": 0.40,
+                 "cap_relax_start": 8.0, "cap_relax_full": 12.0,
+                 "max_allocation_pct": 0.50, "atr_multiplier": 2.5}
+        n, state = self._run_scarcity_buy(rules, total=10.0)
+        self.assertEqual(n, 1)
+        self.assertEqual(state["positions"]["SLV"]["qty"], 150)
+
+    def test_scarcity_cap_clamps_at_ceiling(self):
+        # At/above cap_relax_full the cap clamps at the 40% ceiling (never higher, never
+        # fully suspended). 0.40 => $4,000 limit, $2,500 room => 250 shares (not 500).
+        rules = {"scarcity_allocation_pct": 0.20, "scarcity_cap_ceiling_pct": 0.40,
+                 "cap_relax_start": 8.0, "cap_relax_full": 12.0,
+                 "max_allocation_pct": 0.50, "atr_multiplier": 2.5}
+        n, state = self._run_scarcity_buy(rules, total=12.0)
+        self.assertEqual(n, 1)
+        self.assertEqual(state["positions"]["SLV"]["qty"], 250)
+
+    def test_per_position_ceiling_binds_on_scarcity_buy(self):
+        # Bucket room allows 250 shares ($2,500 at the 40% ceiling), but the 15%
+        # per-position ceiling ($1,500) is tighter => downsize to 150 shares.
+        rules = {"scarcity_allocation_pct": 0.20, "scarcity_cap_ceiling_pct": 0.40,
+                 "cap_relax_start": 8.0, "cap_relax_full": 12.0,
+                 "max_allocation_pct": 0.15, "atr_multiplier": 2.5}
+        n, state = self._run_scarcity_buy(rules, total=12.0)
+        self.assertEqual(n, 1)
+        self.assertEqual(state["positions"]["SLV"]["qty"], 150)
+
+    def test_per_position_ceiling_binds_on_standard_buy(self):
+        # Regression guard: _execute_buys previously applied NO per-position ceiling to
+        # standard (non-scarcity) buys, so a single name could swallow the whole 80%
+        # bucket. Now the 15% ceiling ($1,500) caps it at 150 shares even though the
+        # standard bucket ($8,000) has ample room.
+        rules = {"scarcity_allocation_pct": 0.20, "max_allocation_pct": 0.15,
+                 "atr_multiplier": 2.5}
+        n, state = self._run_scarcity_buy(rules, total=5.0, is_scarcity=False,
+                                          positions={})
+        self.assertEqual(n, 1)
+        self.assertEqual(state["positions"]["SLV"]["qty"], 150)
+
+    def test_defensive_min_score_buy_not_prematurely_relaxed(self):
+        # DEFENSIVE pathology fix: its min_score_threshold is 10.0, so under the old
+        # global 8.0 suspension EVERY DEFENSIVE buy cleared the bar and ran uncapped.
+        # With relax_start tied to the profile's own 10.0, a buy AT total=10.0 still gets
+        # the base 20% cap (not relaxed) => $500 room => 50 shares (old code: 500).
+        rules = {"scarcity_allocation_pct": 0.20, "scarcity_cap_ceiling_pct": 0.25,
+                 "cap_relax_start": 10.0, "cap_relax_full": 16.0,
+                 "max_allocation_pct": 0.50, "atr_multiplier": 2.5}
+        n, state = self._run_scarcity_buy(rules, total=10.0)
+        self.assertEqual(n, 1)
+        self.assertEqual(state["positions"]["SLV"]["qty"], 50)
 
 
 class TestAfterHoursOrderQueuing(unittest.TestCase):
