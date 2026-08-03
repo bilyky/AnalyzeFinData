@@ -49,7 +49,7 @@ def send_email(subject, body, is_html=False):
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'html' if is_html else 'plain'))
     try:
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30)
         server.starttls()
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         server.send_message(msg)

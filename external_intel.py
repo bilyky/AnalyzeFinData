@@ -84,11 +84,14 @@ def analyze_email_content(subject, body):
     universe = list(get_existing_symbols())[:150]  # sample to fit prompt limits
     system = ("You are a precise financial data extractor. You only output valid "
               "JSON. No markdown wrappers like ```json.")
+    body_display = body[:1500]
+    if len(body) > 1500:
+        body_display += "\n\n[... content truncated for safety ...]"
     user = f"""
     You are Project AETHER, an elite AI hedge fund analyst. Read this financial email and extract concrete stock recommendations.
 
     Email Subject: {subject}
-    Email Body: {body[:1500]}
+    Email Body: {body_display}
 
     Instructions:
     1. Extract the specific stock tickers being recommended.
@@ -272,9 +275,21 @@ def fetch_idea_emails():
                 
                 base = {"from": cand["from"], "subject": cand["subject"], "folder": cand["folder"], "intel": intel}
                 if parsed_ideas:
-                    for idea in parsed_ideas:
-                        ideas.append({**base, "symbol": idea["symbol"],
-                                      "sentiment": idea["sentiment"], "thesis": idea["thesis"]})
+                    if isinstance(parsed_ideas, dict):
+                        parsed_ideas = [parsed_ideas]
+                    if isinstance(parsed_ideas, list):
+                        for idea in parsed_ideas:
+                            if isinstance(idea, dict):
+                                ideas.append({
+                                    **base,
+                                    "symbol": idea.get("symbol"),
+                                    "sentiment": idea.get("sentiment"),
+                                    "thesis": idea.get("thesis")
+                                })
+                            else:
+                                _log.warning(f"Unexpected idea format (not a dict): {idea}")
+                    else:
+                        _log.warning(f"Unexpected parsed_ideas format: {parsed_ideas}")
                 elif intel:
                     ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
 
