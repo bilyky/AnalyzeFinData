@@ -192,10 +192,38 @@ def is_active_nyse_market_hours() -> bool:
         return False
 
 
+def _get_chaikin_price(sym: str) -> float | None:
+    """Read the newest cached Chaikin closing price for a symbol on disk."""
+    try:
+        symbol_dir = _DATA_DIR / "Symbol" / sym
+        if not symbol_dir.exists():
+            return None
+        json_files = sorted(list(symbol_dir.glob(f"{sym}_*.json")), reverse=True)
+        if not json_files:
+            return None
+        
+        newest_file = json_files[0]
+        with open(newest_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+        meta = data.get("metaInfo")
+        if isinstance(meta, list) and len(meta) > 0:
+            return float(meta[0].get("Last", 0.0))
+        elif isinstance(meta, dict):
+            return float(meta.get("Last", 0.0))
+            
+        checklist = data.get("checklist_stocks")
+        if isinstance(checklist, dict):
+            return float(checklist.get("lastPrice", 0.0))
+    except Exception:
+        pass
+    return None
+
+
 def verify_price_integrity(symbol: str, price: float, source: str) -> None:
-    """Raise PricingDiscrepancyError when a price deviates from a *fresh* OHLCV cache
-    beyond tolerance. Skips exempt/leveraged symbols and stale caches (>10 days old).
-    Bypasses cache comparisons during active market hours to accommodate intra-day volatility."""
+    """Raise PricingDiscrepancyError when a price deviates from our fresh OHLCV cache
+    or Chaikin PG cache beyond tolerance. Skips stale caches (>10 days old).
+    Performs a strict 3-way cross-verification: E*TRADE (live) vs RapidAPI (Symbol_full) vs Chaikin (PG)."""
     sym = (symbol or "").strip().upper()
     if sym in _PRICE_CHECK_EXEMPT or instruments.is_excluded(sym):
         return
@@ -227,18 +255,48 @@ def verify_price_integrity(symbol: str, price: float, source: str) -> None:
 
     if cache_close <= 0:
         return
-    diff = abs(price - cache_close)
-    if diff > 0.05:
-        pct_diff = (diff / cache_close) * 100
-        # Enforce strict 3.0% percentage-based tolerance outside of market hours
+
+    # ── 1. Compare Active Price (Source) vs. RapidAPI (Symbol_full) ──
+    diff_rap = abs(price - cache_close)
+    if diff_rap > 0.05:
+        pct_diff = (diff_rap / cache_close) * 100
         if pct_diff > 3.0:
             raise PricingDiscrepancyError(
-                f"🛑 [PRICING DISCREPANCY] Price discrepancy detected for {sym}!\n"
+                f"🛑 [PRICING DISCREPANCY] 2-Way Pricing discrepancy detected for {sym}!\n"
                 f"  Active Price (Source: {source}): ${price:.4f}\n"
                 f"  Cache Price (Symbol_full):       ${cache_close:.4f}\n"
-                f"  Difference:                      ${diff:.4f} ({pct_diff:.2f}% - Max tolerance: 3.0%)\n"
+                f"  Difference:                      ${diff_rap:.4f} ({pct_diff:.2f}% - Max tolerance: 3.0%)\n"
                 f"  Action required: Re-sync Data/Symbol_full or Excel workbook immediately!"
             )
+
+    # ── 2. Compare Active Price (Source) and RapidAPI vs. Chaikin PowerGauge (PG) ──
+    chaikin_close = _get_chaikin_price(sym)
+    if chaikin_close is not None and chaikin_close > 0:
+        # Check Active Price vs Chaikin
+        diff_pg1 = abs(price - chaikin_close)
+        if diff_pg1 > 0.05:
+            pct_diff1 = (diff_pg1 / chaikin_close) * 100
+            if pct_diff1 > 3.0:
+                raise PricingDiscrepancyError(
+                    f"🛑 [PRICING DISCREPANCY] 3-Way Pricing discrepancy detected for {sym}!\n"
+                    f"  Active Price (Source: {source}): ${price:.4f}\n"
+                    f"  Chaikin PG Price (Cached):       ${chaikin_close:.4f}\n"
+                    f"  Difference:                      ${diff_pg1:.4f} ({pct_diff1:.2f}% - Max tolerance: 3.0%)\n"
+                    f"  Action required: Re-authenticate Chaikin or check Data/Symbol cache!"
+                )
+                
+        # Check RapidAPI vs Chaikin
+        diff_pg2 = abs(cache_close - chaikin_close)
+        if diff_pg2 > 0.05:
+            pct_diff2 = (diff_pg2 / chaikin_close) * 100
+            if pct_diff2 > 3.0:
+                raise PricingDiscrepancyError(
+                    f"🛑 [PRICING DISCREPANCY] 3-Way Pricing discrepancy detected for {sym}!\n"
+                    f"  Cache Price (Symbol_full):       ${cache_close:.4f}\n"
+                    f"  Chaikin PG Price (Cached):       ${chaikin_close:.4f}\n"
+                    f"  Difference:                      ${diff_pg2:.4f} ({pct_diff2:.2f}% - Max tolerance: 3.0%)\n"
+                    f"  Action required: Re-sync Data/Symbol_full or Chaikin cache immediately!"
+                )
 
 
 # ── Portfolio ─────────────────────────────────────────────────────────────────
