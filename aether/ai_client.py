@@ -82,6 +82,61 @@ def primary() -> str | None:
     return enabled[0] if enabled else None
 
 
+def _parse_openai_response(resp) -> str:
+    """Robust, type-safe parsing of OpenAI-compatible chat completion responses."""
+    try:
+        data = resp.json()
+    except Exception as e:
+        raise ValueError(f"Failed to decode response JSON: {e}") from e
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Unexpected JSON response (not a dict): {data}")
+
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError(f"Unexpected JSON response: missing or empty 'choices': {data}")
+
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        raise ValueError(f"Unexpected JSON response: 'choices[0]' is not a dict: {data}")
+
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        raise ValueError(f"Unexpected JSON response: 'message' is not a dict: {data}")
+
+    content = message.get("content")
+    if not isinstance(content, str):
+        raise ValueError(f"Unexpected JSON response: 'content' is not a string: {data}")
+
+    return content.strip()
+
+
+def _parse_anthropic_response(resp) -> str:
+    """Robust, type-safe parsing of Anthropic API message responses."""
+    try:
+        data = resp.json()
+    except Exception as e:
+        raise ValueError(f"Failed to decode response JSON: {e}") from e
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Unexpected JSON response (not a dict): {data}")
+
+    blocks = data.get("content", [])
+    if isinstance(blocks, str):
+        blocks = [blocks]
+    if not isinstance(blocks, list):
+        return ""
+
+    texts = []
+    for b in blocks:
+        if isinstance(b, dict):
+            if b.get("type") == "text" and isinstance(b.get("text"), str):
+                texts.append(b.get("text", ""))
+        elif isinstance(b, str):
+            texts.append(b)
+    return "".join(texts).strip()
+
+
 # ── Per-type transports ────────────────────────────────────────────────────────
 
 def _call_openai_compatible(pcfg, key, system, user, max_tokens, temperature) -> str:
@@ -98,7 +153,7 @@ def _call_openai_compatible(pcfg, key, system, user, max_tokens, temperature) ->
         timeout=_TIMEOUT,
     )
     resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
+    return _parse_openai_response(resp)
 
 
 def _call_anthropic(pcfg, key, system, user, max_tokens, temperature) -> str:
@@ -117,18 +172,19 @@ def _call_anthropic(pcfg, key, system, user, max_tokens, temperature) -> str:
         timeout=_TIMEOUT,
     )
     resp.raise_for_status()
-    blocks = resp.json().get("content", [])
-    return "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+    return _parse_anthropic_response(resp)
 
 
 def _call_gemini_cli(pcfg, system, user, max_tokens, temperature) -> str:
+    import tempfile
     prompt = f"{system}\n\n{user}"
     out = subprocess.run(
-        ["gemini", "--skip-trust", "-m", pcfg.get("model", "gemini-2.5-flash"), "-p", "Please analyze the following data and respond:"],
+        ["gemini", "--skip-trust", "-m", pcfg.get("model", "gemini-2.5-flash"), "--approval-mode", "plan", "-p", "Please analyze the following data and respond:"],
         input=prompt,
         capture_output=True, text=True, timeout=_TIMEOUT,
         shell=(sys.platform == "win32"),
-        cwd=_DIR
+        cwd=tempfile.gettempdir(),
+        encoding="utf-8"
     )
     if out.returncode != 0:
         raise RuntimeError(f"Gemini CLI execution failed (exit code {out.returncode}): {out.stderr.strip()}")
@@ -162,7 +218,7 @@ def chat(messages: list, system: str = "", provider: str | None = None,
             timeout=_TIMEOUT,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        return _parse_openai_response(resp)
     elif ptype == "anthropic":
         key = _resolve_key(pcfg.get("api_key_source", ""))
         if not key:
@@ -178,8 +234,7 @@ def chat(messages: list, system: str = "", provider: str | None = None,
             timeout=_TIMEOUT,
         )
         resp.raise_for_status()
-        blocks = resp.json().get("content", [])
-        return "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+        return _parse_anthropic_response(resp)
     elif ptype == "gemini_cli":
         # Gemini CLI: flatten history into a single prompt
         turns = "\n\n".join(f"[{m['role'].upper()}]: {m['content']}" for m in messages)
@@ -189,7 +244,8 @@ def chat(messages: list, system: str = "", provider: str | None = None,
             input=prompt,
             capture_output=True, text=True, timeout=_TIMEOUT,
             shell=(sys.platform == "win32"),
-            cwd=_DIR
+            cwd=_DIR,
+            encoding="utf-8"
         )
         if out.returncode != 0:
             raise RuntimeError(f"Gemini CLI execution failed (exit code {out.returncode}): {out.stderr.strip()}")

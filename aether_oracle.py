@@ -129,11 +129,23 @@ def get_oracle_buy_candidates(acct):
                 if z_score is not None and z_score >= 2.5:
                     continue  # bubble zone
                     
+                # Enforce strict Risk/Reward verification gate (Reward must be >= 1.5x of the Risk)
+                price = r.get("price", 0.0) or 0.0
+                stop = r.get("stop", 0.0) or 0.0
+                target = r.get("target", 0.0) or 0.0
+                
+                risk = price - stop
+                reward = target - price
+                rr_ratio = (reward / risk) if risk > 0 else 0.0
+                
+                if rr_ratio < 1.5:
+                    continue  # Fail-safe R:R check: reject unfavorable narrow-upside setups
+                    
                 candidates.append({
                     "symbol": sym,
-                    "price": r.get("price", 0.0),
-                    "stop": r.get("stop"),
-                    "target": r.get("target"),
+                    "price": price,
+                    "stop": stop,
+                    "target": target,
                     "s10": s10,
                     "l60": l60,
                     "combined": combined,

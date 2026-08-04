@@ -26,9 +26,15 @@ _CFG_PATH = os.path.join(_DIR, "config.json")
 
 def _load_file() -> dict:
     try:
-        with open(_CFG_PATH) as f:
+        with open(_CFG_PATH, encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
+        import sys
+        sys.stderr.write(
+            f"\n⚠️  [CONFIG WARNING] config.json was not found at:\n"
+            f"  {_CFG_PATH}\n"
+            f"  Falling back to empty default settings. Please ensure this is intended!\n\n"
+        )
         return {}
     except json.JSONDecodeError as e:
         raise RuntimeError(f"config.json is malformed: {e}") from e

@@ -69,15 +69,17 @@ class TestAETHEROracle(unittest.TestCase):
         mock_research = {
             "rows": [
                 # Held symbol (AAPL) - must be ignored
-                {"symbol": "AAPL", "setup": True, "s10": 4.0, "l60": 6.0, "combined": 10.0, "price": 160.0, "pgr": "Bu"},
+                {"symbol": "AAPL", "setup": True, "s10": 4.0, "l60": 6.0, "combined": 10.0, "price": 160.0, "stop": 150.0, "target": 180.0, "pgr": "Bu"},
                 # Not a setup - must be ignored
-                {"symbol": "MSFT", "setup": False, "s10": 5.0, "l60": 5.0, "combined": 10.0, "price": 400.0, "pgr": "Bu"},
-                # High score candidate
-                {"symbol": "GOOGL", "setup": True, "s10": 5.0, "l60": 6.0, "combined": 11.0, "price": 180.0, "pgr": "Bu"},
+                {"symbol": "MSFT", "setup": False, "s10": 5.0, "l60": 5.0, "combined": 10.0, "price": 400.0, "stop": 380.0, "target": 440.0, "pgr": "Bu"},
+                # High score candidate (favorable R:R = 2.0 >= 1.5)
+                {"symbol": "GOOGL", "setup": True, "s10": 5.0, "l60": 6.0, "combined": 11.0, "price": 180.0, "stop": 160.0, "target": 220.0, "pgr": "Bu"},
                 # Low score candidate (below momentum floor s10 < 2.5)
-                {"symbol": "AMZN", "setup": True, "s10": 1.5, "l60": 8.0, "combined": 9.5, "price": 190.0, "pgr": "Bu"},
-                # Valid medium candidate
-                {"symbol": "NVDA", "setup": True, "s10": 3.0, "l60": 4.0, "combined": 7.0, "price": 120.0, "pgr": "Bu"}
+                {"symbol": "AMZN", "setup": True, "s10": 1.5, "l60": 8.0, "combined": 9.5, "price": 190.0, "stop": 170.0, "target": 230.0, "pgr": "Bu"},
+                # Unfavorable R:R candidate (R:R = 0.5 < 1.5) - must be ignored
+                {"symbol": "QYLD", "setup": True, "s10": 5.0, "l60": 5.0, "combined": 10.0, "price": 18.0, "stop": 17.0, "target": 18.5, "pgr": "Be"},
+                # Valid medium candidate (favorable R:R = 2.0 >= 1.5)
+                {"symbol": "NVDA", "setup": True, "s10": 3.0, "l60": 4.0, "combined": 7.0, "price": 120.0, "stop": 100.0, "target": 160.0, "pgr": "Bu"}
             ]
         }
         
