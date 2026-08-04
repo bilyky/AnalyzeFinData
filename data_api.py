@@ -30,10 +30,80 @@ from autonomous_pipeline import (
     get_replacement_pairs as _ap_replacements,
     get_reserves_data as _ap_reserves,
 )
-from ai_portfolio_game import get_live_prices, get_google_prices_fallback
+import requests
 import powergauge as _pg
 
 _log = logging.getLogger("aether.data_api")
+
+def _get_live_google_price(symbol: str) -> float | None:
+    exchanges = ["NASDAQ", "NYSE", "NYSEARCA", "AMEX"]
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    for ex in exchanges:
+        url = f'https://www.google.com/finance/quote/{symbol}:{ex}'
+        try:
+            r = requests.get(url, headers=headers, timeout=5)
+            if r.status_code == 200:
+                match = re.search(r'jsname="Pdsbrc"[^>]*>\s*<span>\$([0-9,.]+)<', r.text)
+                if match:
+                    price_str = match.group(1).replace(',', '')
+                    return float(price_str)
+        except Exception:
+            pass
+    return None
+
+def _get_google_prices_fallback(symbols: list[str]) -> dict[str, float]:
+    quotes = {}
+    for sym in symbols:
+        price = _get_live_google_price(sym)
+        if price and price > 0:
+            quotes[sym] = price
+    return quotes
+
+def _get_json_prices_fallback(symbols: list[str]) -> dict[str, float]:
+    quotes = {}
+    try:
+        today = date.today()
+        today_str = str(today)
+        is_weekend = today.weekday() in (5, 6)
+        cutoff = (today - timedelta(days=4)).isoformat()
+        for sym in symbols:
+            path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
+            if path.exists():
+                with open(path) as f:
+                    ts = json.load(f).get("Time Series (Daily)", {})
+                if ts:
+                    newest_date = sorted(ts.keys())[-1]
+                    if newest_date == today_str or is_weekend or newest_date >= cutoff:
+                        quotes[sym] = float(ts[newest_date]["4. close"])
+    except Exception:
+        pass
+    return quotes
+
+def _get_live_prices_internal(symbols: list[str]) -> dict[str, float]:
+    quotes = {}
+    try:
+        today = date.today()
+        is_weekend = today.weekday() in (5, 6)
+        if is_weekend:
+            quotes = _get_json_prices_fallback(symbols)
+            missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
+            if missing:
+                quotes.update(_get_google_prices_fallback(missing))
+            return quotes
+            
+        tokens = etrade.get_tokens("production")
+        if tokens:
+            quotes = etrade.fetch_quotes(tokens, symbols, env="production")
+            
+        missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
+        if missing:
+            quotes.update(_get_google_prices_fallback(missing))
+    except Exception:
+        try:
+            quotes.update(_get_google_prices_fallback(symbols))
+        except Exception:
+            pass
+    return quotes
 
 _DIR      = Path(__file__).resolve().parent
 _DATA_DIR = _DIR / "Data"
@@ -813,7 +883,7 @@ def read_accounts() -> dict:
         game_symbols = [p["symbol"] for p in pf.get("positions", [])]
         game_prices = {}
         try:
-            game_prices = get_live_prices(game_symbols)
+            game_prices = _get_live_prices_internal(game_symbols)
         except Exception:
             pass
             
@@ -1320,7 +1390,7 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
         pass
     if not price:
         try:
-            goog = get_google_prices_fallback([sym])
+            goog = _get_google_prices_fallback([sym])
             price = goog.get(sym)
         except Exception:
             pass

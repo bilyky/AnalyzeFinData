@@ -1,0 +1,108 @@
+"""
+Dedicated unit tests for the AETHER Oracle financial advisory logic.
+"""
+import os
+import sys
+import unittest
+from unittest import mock
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import aether_oracle as oracle
+
+class TestAETHEROracle(unittest.TestCase):
+
+    def test_get_oracle_account_fallback(self):
+        """When data_api returns empty or raises exception, get_oracle_account returns default fallback."""
+        with mock.patch("data_api.read_accounts", side_effect=Exception("API Error")):
+            acct = oracle.get_oracle_account()
+            self.assertEqual(acct["id"], "0053")
+            self.assertEqual(acct["equity"], 22978.72)
+
+    def test_get_oracle_account_finds_0053(self):
+        """get_oracle_account correctly scans accounts and returns the one with ID 0053."""
+        mock_data = {
+            "accounts": [
+                {"id": "1111", "label": "Other Account", "equity": 1000},
+                {"id": "0053", "label": "Target Account", "equity": 24000}
+            ]
+        }
+        with mock.patch("data_api.read_accounts", return_value=mock_data):
+            acct = oracle.get_oracle_account()
+            self.assertEqual(acct["id"], "0053")
+            self.assertEqual(acct["label"], "Target Account")
+            self.assertEqual(acct["equity"], 24000)
+
+    def test_audit_oracle_portfolio(self):
+        """audit_oracle_portfolio detects stop breaches and momentum decay correctly."""
+        acct = {
+            "id": "0053",
+            "holdings": [
+                # Normal healthy holding
+                {"symbol": "AAPL", "qty": 10, "buy": 150.0, "current": 160.0, "stop": 140.0, "pnl_pct": 6.67, "s10": 3.0, "l60": 5.0, "status": "Hold"},
+                # Stop breach (current <= stop)
+                {"symbol": "MSFT", "qty": 5, "buy": 400.0, "current": 370.0, "stop": 380.0, "pnl_pct": -7.5, "s10": -1.0, "l60": 2.0, "status": "Neutral"},
+                # Momentum decay (combined score < -2.0)
+                {"symbol": "TSLA", "qty": 8, "buy": 220.0, "current": 210.0, "stop": 190.0, "pnl_pct": -4.54, "s10": -4.0, "l60": -1.0, "status": "REDUCE"}
+            ]
+        }
+        
+        sells, holds = oracle.audit_oracle_portfolio(acct)
+        
+        # We expect AAPL to be in holds, MSFT and TSLA to be in sells
+        self.assertEqual(len(holds), 1)
+        self.assertEqual(holds[0]["symbol"], "AAPL")
+        
+        self.assertEqual(len(sells), 2)
+        sell_syms = {s["symbol"] for s in sells}
+        self.assertIn("MSFT", sell_syms)
+        self.assertIn("TSLA", sell_syms)
+
+    def test_get_oracle_buy_candidates(self):
+        """get_oracle_buy_candidates filters held positions, checks setups, and sorts by combined score descending."""
+        acct = {
+            "id": "0053",
+            "holdings": [
+                {"symbol": "AAPL", "qty": 10, "buy": 150.0}
+            ]
+        }
+        
+        mock_research = {
+            "rows": [
+                # Held symbol (AAPL) - must be ignored
+                {"symbol": "AAPL", "setup": True, "s10": 4.0, "l60": 6.0, "combined": 10.0, "price": 160.0, "pgr": "Bu"},
+                # Not a setup - must be ignored
+                {"symbol": "MSFT", "setup": False, "s10": 5.0, "l60": 5.0, "combined": 10.0, "price": 400.0, "pgr": "Bu"},
+                # High score candidate
+                {"symbol": "GOOGL", "setup": True, "s10": 5.0, "l60": 6.0, "combined": 11.0, "price": 180.0, "pgr": "Bu"},
+                # Low score candidate (below momentum floor s10 < 2.5)
+                {"symbol": "AMZN", "setup": True, "s10": 1.5, "l60": 8.0, "combined": 9.5, "price": 190.0, "pgr": "Bu"},
+                # Valid medium candidate
+                {"symbol": "NVDA", "setup": True, "s10": 3.0, "l60": 4.0, "combined": 7.0, "price": 120.0, "pgr": "Bu"}
+            ]
+        }
+        
+        with mock.patch("data_api.read_research", return_value=mock_research), \
+             mock.patch("ai_portfolio_game.calculate_bubble_z_score", return_value=1.0):
+            buys = oracle.get_oracle_buy_candidates(acct)
+            
+            # We expect GOOGL and NVDA (AAPL filtered, MSFT filtered, AMZN momentum floor filtered)
+            self.assertEqual(len(buys), 2)
+            self.assertEqual(buys[0]["symbol"], "GOOGL")
+            self.assertEqual(buys[1]["symbol"], "NVDA")
+
+    def test_generate_oracle_html(self):
+        """generate_oracle_html runs successfully and contains standard Oracle copy."""
+        acct = {"id": "0053", "balance": 1.70, "equity": 24042.19, "holdings": []}
+        sells = [{"symbol": "MSFT", "qty": 5, "cost": 400.0, "current": 370.0, "stop": 380.0, "pnl_pct": -7.5, "s10": -1.0, "l60": 2.0, "reason": "Breached"}]
+        holds = [{"symbol": "AAPL", "qty": 10, "cost": 150.0, "current": 160.0, "pnl_pct": 6.67, "total": 8.0}]
+        buys = [{"symbol": "GOOGL", "price": 180.0, "stop": 160.0, "target": 210.0, "combined": 11.0, "pgr": "Bu", "patterns": "Breakout"}]
+        
+        html = oracle.generate_oracle_html(acct, sells, holds, buys)
+        self.assertIn("AETHER Oracle Market Advisory", html)
+        self.assertIn("Double Real Account (...0053)", html)
+        self.assertIn("GOOGL", html)
+        self.assertIn("MSFT", html)
+        self.assertIn("AAPL", html)
+
+if __name__ == "__main__":
+    unittest.main()

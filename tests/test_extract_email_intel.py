@@ -50,6 +50,10 @@ class TestParse(unittest.TestCase):
     def test_invalid_json(self):
         self.assertEqual(ex._parse("not json"), {})
 
+    def test_non_dict_json(self):
+        self.assertEqual(ex._parse('"just a string"'), {})
+        self.assertEqual(ex._parse('[1, 2, 3]'), {})
+
 
 class TestExtract(unittest.TestCase):
     def test_returns_structured_intel(self):
@@ -76,6 +80,32 @@ class TestExtract(unittest.TestCase):
         with mock.patch("ai_client.primary", return_value="gpt"), \
              mock.patch("ai_client.evaluate", return_value=""):
             self.assertEqual(ex.extract("s", "b"), {})
+
+    def test_malformed_nested_structures_does_not_crash(self):
+        # AI returns unexpected types (e.g. lists of strings, dicts instead of list of dicts, etc.)
+        malformed_response = json.dumps({
+            "summary": "AI datacenter expansion",
+            "dated_catalysts": "not-a-list-but-a-string",
+            "supply_chain_facts": {"fact1": "mining deficit"},
+            "missing_symbols": ["LEU", "CCJ"], # list of strings instead of list of dicts
+            "tickers_mentioned": {"symbol": "CCJ", "sentiment": "BUY"} # dict instead of list of dicts
+        })
+        verify_resp = json.dumps({
+            "dated_catalysts": ["catalyst-string"],
+            "supply_chain_facts": "fact-string"
+        })
+        with mock.patch("ai_client.primary", return_value="gpt"), \
+             mock.patch("ai_client.evaluate", side_effect=[malformed_response, verify_resp]), \
+             mock.patch("data_api.read_research", return_value={"rows": []}):
+            result = ex.extract("Test Subject", "Test body.")
+            
+        self.assertEqual(result["summary"], "AI datacenter expansion")
+        self.assertIn("_verification", result)
+        self.assertIn("_validation", result)
+        
+        # Verify formatting the report on malformed structures also is safe and doesn't crash
+        rep = ex.report(result)
+        self.assertIn("Thesis", rep)
 
 
 class TestReport(unittest.TestCase):

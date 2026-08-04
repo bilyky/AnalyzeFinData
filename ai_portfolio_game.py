@@ -13,6 +13,7 @@ import circuit_breaker
 import aether.notify as notify
 import argparse
 from pathlib import Path
+import aether_oracle
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
 # before the first non-ASCII print. Reduces, not eliminates, cp1252 crashes in
@@ -951,7 +952,7 @@ def get_google_prices_fallback(symbols):
             _log.info(f"    - Google Verified {sym}: ${price:.2f}")
     return quotes
 
-def send_daily_summary():
+def send_daily_summary(return_html=False):
     state = load_game()
     today = str(datetime.date.today())
     today_tx = [tx for tx in state.get("history", []) if tx["date"] == today]
@@ -1104,8 +1105,63 @@ def send_daily_summary():
     </body>
     </html>
     """
+    if return_html:
+        return html
     notify.send_email(f"AI Portfolio Summary: {today}", html, is_html=True)
     _log.info(f"Summary email sent for {today}.")
+
+def send_consolidated_morning_report():
+    """
+    Compile both the Virtual AI-Game morning actions and the Real-Account Oracle Advisory,
+    wrapping them in a single consolidated HTML email dispatched immediately at 7:00 AM.
+    """
+    _log.info("📧 COMPILING CONSOLIDATED AETHER MORNING BRIEFING...")
+    today = str(datetime.date.today())
+    
+    # 1. Compile the AI-game summary
+    ai_html = send_daily_summary(return_html=True)
+    
+    # Extract only the body contents of the AI HTML to prevent nested <html>/<body> tags
+    body_content = ai_html
+    body_start = ai_html.find('<body')
+    if body_start != -1:
+        body_start = ai_html.find('>', body_start) + 1
+        body_end = ai_html.find('</body>')
+        if body_end != -1:
+            body_content = ai_html[body_start:body_end]
+
+    # 2. Compile the Oracle Advisory HTML
+    oracle_html = aether_oracle.run_oracle_advisory()
+    
+    # 3. Concatenate both into a single cohesive, high-quality, professional layout
+    unified_html = f"""
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>AETHER Consolidated Morning Briefing</title>
+    </head>
+    <body style="font-family: sans-serif; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f8f9fa;">
+        <div style="background-color: #ffffff; border: 1px solid #e1e4e8; border-radius: 8px; padding: 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+            <div style="text-align: center; border-bottom: 3px double #3498db; padding-bottom: 15px; margin-bottom: 25px;">
+                <h1 style="color: #2c3e50; margin: 0; font-size: 24px; font-weight: bold; letter-spacing: 0.5px;">☀️ AETHER DAILY MORNING BRIEFING</h1>
+                <p style="color: #7f8c8d; margin: 5px 0 0 0; font-size: 13px;">Date: {today} | Unified Trading & Market Intelligence Report</p>
+            </div>
+            
+            <!-- Section 1: AI Virtual Portfolio Summary -->
+            {body_content}
+            
+            <hr style="border: 0; border-top: 2px dashed #e1e4e8; margin: 40px 0;">
+            
+            <!-- Section 2: Real-Account Oracle Advisory -->
+            {oracle_html}
+        </div>
+    </body>
+    </html>
+    """
+    
+    subject = f"☀️ AETHER Morning Briefing: {today} (AI-Game Actions & Oracle Advice)"
+    notify.send_email(subject, unified_html, is_html=True)
+    _log.info(f"Consolidated morning briefing sent successfully for {today}.")
 
 def _has_strong_setups_today(min_score=9.5) -> bool:
     """Return True if we have 2 or more strong, verified bottom setups in the workbook today."""
@@ -1725,6 +1781,7 @@ if __name__ == "__main__":
 
     if args.run:
         run_daily_ai_management(force=args.force, manual_profile=args.profile)
+        send_consolidated_morning_report()
     elif args.summary:
         send_daily_summary()
     else:

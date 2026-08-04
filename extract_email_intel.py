@@ -11,11 +11,17 @@ The rubric lives in prompts/email_intel_extraction.md and is versioned
 alongside the code.
 """
 
+import sys
 import html as _html
 import json
+import datetime
 from pathlib import Path
 
 import ai_client
+import data_api
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("extract_email_intel")
 
 
 def _esc(v) -> str:
@@ -46,7 +52,8 @@ def _parse(text: str) -> dict:
         return {}
     t = text.replace("```json", "").replace("```", "").strip()
     try:
-        return json.loads(t)
+        parsed = json.loads(t)
+        return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
 
@@ -65,9 +72,30 @@ _VERIFY_SYSTEM = (
 
 def _verify(intel: dict, provider: str) -> dict:
     """Adversarial second-pass: ask the AI to rate each extracted claim."""
+    dated_catalysts = intel.get("dated_catalysts", [])
+    if isinstance(dated_catalysts, dict):
+        dated_catalysts = [dated_catalysts]
+    if not isinstance(dated_catalysts, list):
+        dated_catalysts = []
+
+    catalysts_events = []
+    for c in dated_catalysts:
+        if isinstance(c, dict):
+            event = c.get("event", "")
+            if event:
+                catalysts_events.append(event)
+        elif isinstance(c, str) and c:
+            catalysts_events.append(c)
+
+    supply_chain_facts = intel.get("supply_chain_facts", [])
+    if isinstance(supply_chain_facts, str):
+        supply_chain_facts = [supply_chain_facts]
+    if not isinstance(supply_chain_facts, list):
+        supply_chain_facts = []
+
     claims = {
-        "dated_catalysts": [c.get("event", "") for c in intel.get("dated_catalysts", [])],
-        "supply_chain_facts": intel.get("supply_chain_facts", []),
+        "dated_catalysts": catalysts_events,
+        "supply_chain_facts": [str(f) for f in supply_chain_facts if f],
     }
     if not any(claims.values()):
         return {}
@@ -108,26 +136,47 @@ def verify_symbols(intel: dict) -> dict:
     """Cross-check extracted symbols against the Research universe and return a
     validation summary. Follows Zero-Trust: never assume a ticker is valid."""
     try:
-        import data_api
         rows = data_api.read_research()["rows"]
         known = {r["symbol"]: r for r in rows}
     except Exception:
         known = {}
 
     missing_in_universe = []
-    for m in intel.get("missing_symbols", []):
+    missing_symbols = intel.get("missing_symbols", [])
+    if isinstance(missing_symbols, dict):
+        missing_symbols = [missing_symbols]
+    if not isinstance(missing_symbols, list):
+        missing_symbols = []
+
+    for m in missing_symbols:
+        if not isinstance(m, dict):
+            continue
         sym = m.get("symbol", "")
+        if not isinstance(sym, str):
+            sym = str(sym) if sym is not None else ""
+        sym = sym.strip().upper()
         if sym and sym not in known:
             missing_in_universe.append(sym)
         elif sym:
             m["in_universe"] = True
             r = known[sym]
-            m["pgr"] = r.get("pgr")
-            m["combined"] = r.get("combined")
+            if isinstance(r, dict):
+                m["pgr"] = r.get("pgr")
+                m["combined"] = r.get("combined")
 
-    # Also tag tickers_mentioned
-    for t in intel.get("tickers_mentioned", []):
+    tickers_mentioned = intel.get("tickers_mentioned", [])
+    if isinstance(tickers_mentioned, dict):
+        tickers_mentioned = [tickers_mentioned]
+    if not isinstance(tickers_mentioned, list):
+        tickers_mentioned = []
+
+    for t in tickers_mentioned:
+        if not isinstance(t, dict):
+            continue
         sym = t.get("symbol", "")
+        if not isinstance(sym, str):
+            sym = str(sym) if sym is not None else ""
+        sym = sym.strip().upper()
         if sym in known:
             t["in_universe"] = True
         else:
@@ -155,11 +204,20 @@ def report(intel: dict) -> str:
     if v.get("missing_from_universe"):
         lines.append(f"Not in our 506-symbol universe: {', '.join(v['missing_from_universe'])}")
 
-    import datetime as _dt
-    _cutoff = (_dt.date.today() - _dt.timedelta(days=15)).isoformat()
-    cats = [c for c in intel.get("dated_catalysts", [])
-            if not (len(str(c.get("date") or "")) >= 10 and str(c.get("date",""))[:10] < _cutoff)]
-    vcat = {c.get("claim", ""): c for c in intel.get("_verification", {}).get("dated_catalysts", [])}
+    _cutoff = (datetime.date.today() - datetime.timedelta(days=15)).isoformat()
+    
+    cats = intel.get("dated_catalysts", [])
+    if not isinstance(cats, list):
+        cats = []
+    cats = [c for c in cats if isinstance(c, dict) and not (len(str(c.get("date") or "")) >= 10 and str(c.get("date",""))[:10] < _cutoff)]
+    
+    verif = intel.get("_verification")
+    vcat = {}
+    if isinstance(verif, dict):
+        vcat_list = verif.get("dated_catalysts", [])
+        if isinstance(vcat_list, list):
+            vcat = {c.get("claim", ""): c for c in vcat_list if isinstance(c, dict)}
+            
     if cats:
         lines.append(f"\nDated catalysts ({len(cats)}):")
         for c in cats:
@@ -169,7 +227,15 @@ def report(intel: dict) -> str:
             lines.append(f"  {c.get('date','?')}: {c.get('event','')}{status} — {c.get('impact','')}{note}")
 
     facts = intel.get("supply_chain_facts", [])
-    vfacts = {c.get("claim", ""): c for c in intel.get("_verification", {}).get("supply_chain_facts", [])}
+    if not isinstance(facts, list):
+        facts = []
+        
+    vfacts = {}
+    if isinstance(verif, dict):
+        vfacts_list = verif.get("supply_chain_facts", [])
+        if isinstance(vfacts_list, list):
+            vfacts = {c.get("claim", ""): c for c in vfacts_list if isinstance(c, dict)}
+            
     if facts:
         lines.append(f"\nSupply chain facts ({len(facts)}):")
         for f in facts:
@@ -178,18 +244,26 @@ def report(intel: dict) -> str:
             lines.append(f"  • {f}{status}")
 
     missing = intel.get("missing_symbols", [])
+    if not isinstance(missing, list):
+        missing = []
     if missing:
         lines.append(f"\nMissing from watchlist ({len(missing)}):")
         for m in missing:
-            lines.append(f"  {m.get('symbol','?'):6} — {m.get('reason','')}")
+            if isinstance(m, dict):
+                lines.append(f"  {m.get('symbol','?'):6} — {m.get('reason','')}")
 
     tickers = intel.get("tickers_mentioned", [])
+    if not isinstance(tickers, list):
+        tickers = []
     if tickers:
         lines.append(f"\nTickers mentioned ({len(tickers)}):")
         for t in tickers:
-            lines.append(f"  {t.get('symbol','?'):6} [{t.get('sentiment','?')}] {t.get('thesis','')}")
+            if isinstance(t, dict):
+                lines.append(f"  {t.get('symbol','?'):6} [{t.get('sentiment','?')}] {t.get('thesis','')}")
 
     topics = intel.get("rd_topics", [])
+    if not isinstance(topics, list):
+        topics = []
     if topics:
         lines.append("\nR&D topics implied:")
         for t in topics:
@@ -199,11 +273,9 @@ def report(intel: dict) -> str:
 
 
 if __name__ == "__main__":
-    import sys
-
     if len(sys.argv) < 2:
-        print("Usage: python extract_email_intel.py <email_file.txt>  (or pipe via stdin)")
-        print("File format: first line = subject, blank line, rest = body")
+        _log.info("Usage: python extract_email_intel.py <email_file.txt>  (or pipe via stdin)")
+        _log.info("File format: first line = subject, blank line, rest = body")
         sys.exit(1)
 
     path = sys.argv[1]
@@ -214,6 +286,6 @@ if __name__ == "__main__":
     body = parts[1].strip() if len(parts) > 1 else ""
 
     intel = extract(subject, body)
-    print(report(intel))
-    print("\n--- raw JSON ---")
-    print(json.dumps(intel, indent=2))
+    _log.info(report(intel))
+    _log.info("\n--- raw JSON ---")
+    _log.info(json.dumps(intel, indent=2))
