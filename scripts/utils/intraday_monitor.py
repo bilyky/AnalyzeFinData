@@ -161,11 +161,14 @@ def monitor():
             "📊 DIFFERENCE SUMMARY:",
             "\n".join(f"  * {m}" for m in diff_msgs),
             "\n" + "=" * 80,
-            "🔬 QUALITATIVE ANALYSIS & RISK REASONING FOR EACH BREACHED POSITION:",
+            "🔬 QUALITATIVE ANALYSIS & RISK REASONING FOR ACTIONABLE BREACHES:",
             "=" * 80 + "\n"
         ]
 
-        for sym, data in current_breaches.items():
+        actionable_symbols = sorted(list(set(new_breaches + modified_breaches)))
+        
+        for sym in actionable_symbols:
+            data = current_breaches[sym]
             price = data["price"]
             stop = data["stop"]
             
@@ -173,13 +176,21 @@ def monitor():
             ai_reasoning = generate_ai_analysis(sym, price, stop)
             
             body_parts.append(
-                f"📈 {sym} — BREACHED!"
+                f"📈 {sym} — BREACH UPDATE!"
                 f"\n  * Current Price:   ${price:.2f}"
                 f"\n  * Stop-Loss Level: ${stop:.2f}"
                 f"\n  * Technical Delta: {round(((price - stop)/stop)*100, 2):+.2f}%"
                 f"\n  * AI Risk Analysis & Reasoning:"
                 f"\n    {ai_reasoning}"
                 f"\n\n" + "-" * 80
+            )
+
+        # Include a quiet list of other active, unchanged breaches
+        unchanged_breaches = [s for s in current_breaches if s not in actionable_symbols]
+        if unchanged_breaches:
+            body_parts.append(
+                "ℹ️ OTHER UNCHANGED ACTIVE BREACHES (Already Alerted):\n" +
+                ", ".join(f"{s} (${current_breaches[s]['price']:.2f})" for s in sorted(unchanged_breaches)) + "\n"
             )
 
         body_parts.append(
