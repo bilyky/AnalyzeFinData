@@ -411,11 +411,11 @@ async function loadAccounts() {
         }).join("");
 
         const scoreHdr = isGame
-            ? `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th><th data-sort="days_held" class="cursor-pointer hover:text-blue-400">Days</th><th data-sort="buy_date" class="cursor-pointer hover:text-blue-400">Bought</th><th data-sort="streak" class="cursor-pointer hover:text-blue-400 text-center" title="Consecutive green/red days">G/R</th><th data-sort="status" class="cursor-pointer hover:text-blue-400 text-right">Status</th>`
+            ? `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th><th data-sort="days_held" class="cursor-pointer hover:text-blue-400">Days</th><th data-sort="buy_date" class="cursor-pointer hover:text-blue-400">Bought</th><th data-sort="streak" class="cursor-pointer hover:text-blue-400 text-center" title="Daily Close Streak (consecutive green/red closing days), independent of total position PnL">G/R</th><th data-sort="status" class="cursor-pointer hover:text-blue-400 text-right">Status</th>`
             : `<th data-sort="stop" class="cursor-pointer hover:text-blue-400">Stop</th>
                <th data-sort="target" class="cursor-pointer hover:text-blue-400">Target</th>
                <th data-sort="buy_date" class="cursor-pointer hover:text-blue-400">Bought</th>
-               <th data-sort="streak" class="cursor-pointer hover:text-blue-400 text-center" title="Consecutive green/red days">G/R</th>
+               <th data-sort="streak" class="cursor-pointer hover:text-blue-400 text-center" title="Daily Close Streak (consecutive green/red closing days), independent of total position PnL">G/R</th>
                <th data-sort="s10" class="cursor-pointer hover:text-blue-400">S10</th>
                <th data-sort="l60" class="cursor-pointer hover:text-blue-400">L60</th>
                <th data-sort="total" class="cursor-pointer hover:text-blue-400">Score</th>
@@ -1419,8 +1419,11 @@ function renderCandlestick(allBars, days, wrapEl, tooltipEl) {
         b.className = `${btnClass} px-2 py-0.5 rounded text-xs ${active ? "bg-blue-700 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`;
     });
 
-    const W = wrap.clientWidth  || (wrapEl ? window.innerWidth  : 600);
-    const H = wrap.clientHeight || (wrapEl ? window.innerHeight - 48 : 220);
+    // Ensure W and H have healthy safe minimums (cures collapsed modal clientWidth transition bugs)
+    let W = wrap.clientWidth;
+    if (!W || W < 300) W = wrapEl ? window.innerWidth : 600;
+    let H = wrap.clientHeight;
+    if (!H || H < 150) H = wrapEl ? window.innerHeight - 48 : 220;
     const volH = 36;           // volume panel height
     const padL = 52, padR = 8, padT = 10, padB = 20;
     const plotW = W - padL - padR;
