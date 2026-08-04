@@ -53,25 +53,26 @@ class TestExecutables(unittest.TestCase):
 
     def test_server_cli_smoke(self):
         """Verify that server.py CLI commands (status, stop) execute without crashing on NameErrors or runtime scope errors."""
-        import subprocess
-        base_dir = Path(__file__).resolve().parent.parent
-        server_py = base_dir / "server.py"
+        import tempfile
+        from unittest import mock
         
-        # Test 1: server.py status
-        res = subprocess.run([sys.executable, str(server_py), "status"], capture_output=True, text=True)
-        self.assertEqual(res.returncode, 0, f"server.py status failed with exit code {res.returncode}:\n{res.stdout}\n{res.stderr}")
-        self.assertNotIn("Traceback", res.stdout)
-        self.assertNotIn("NameError", res.stdout)
-        self.assertNotIn("Traceback", res.stderr)
-        self.assertNotIn("NameError", res.stderr)
-
-        # Test 2: server.py stop
-        res_stop = subprocess.run([sys.executable, str(server_py), "stop"], capture_output=True, text=True)
-        self.assertEqual(res_stop.returncode, 0, f"server.py stop failed with exit code {res_stop.returncode}:\n{res_stop.stdout}\n{res_stop.stderr}")
-        self.assertNotIn("Traceback", res_stop.stdout)
-        self.assertNotIn("NameError", res_stop.stdout)
-        self.assertNotIn("Traceback", res_stop.stderr)
-        self.assertNotIn("NameError", res_stop.stderr)
+        # Isolate the import and configuration so we never touch the production server PID file
+        sys.modules.pop("server", None)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_pid_path = Path(tmpdir) / "webserver.pid"
+            
+            with mock.patch("server._PID", temp_pid_path), \
+                 mock.patch("server._is_running", return_value=False), \
+                 mock.patch("server._log.info") as mock_info:
+                
+                # Import server inside the safe isolated context
+                import server
+                
+                # 1. Test server.cmd_status
+                server.cmd_status()
+                
+                # 2. Test server.cmd_stop
+                server.cmd_stop()
 
 if __name__ == "__main__":
     unittest.main()
