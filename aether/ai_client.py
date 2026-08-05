@@ -135,15 +135,23 @@ def _parse_anthropic_response(resp) -> str:
 
 
 # ── Per-type transports ────────────────────────────────────────────────────────
+# Each takes a pre-built `messages` list so evaluate() (single system+user turn)
+# and chat() (full history) share ONE wire path per provider — no duplicated POST.
 
-def _call_openai_compatible(pcfg, key, system, user, max_tokens, temperature) -> str:
+def _require_key(pcfg, name) -> str:
+    key = _resolve_key(pcfg.get("api_key_source", ""))
+    if not key:
+        raise RuntimeError(f"API key missing for provider '{name}'.")
+    return key
+
+
+def _call_openai_compatible(pcfg, key, messages, max_tokens, temperature) -> str:
     resp = requests.post(
         pcfg.get("endpoint", ""),
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         json={
             "model": pcfg.get("model", ""),
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
+            "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
         },
@@ -153,9 +161,10 @@ def _call_openai_compatible(pcfg, key, system, user, max_tokens, temperature) ->
     return _parse_openai_response(resp)
 
 
-def _call_anthropic(pcfg, key, system, user, max_tokens, temperature) -> str:
+def _call_anthropic(pcfg, key, system, messages, max_tokens) -> str:
     # Note: temperature is intentionally omitted — recent Claude models (Opus 4.7+)
     # reject it. If the anthropic SDK is later added, swap this raw call for it.
+    # `system` is sent out-of-band (Anthropic has no system role in `messages`).
     resp = requests.post(
         _ANTHROPIC_URL,
         headers={"x-api-key": key, "anthropic-version": "2023-06-01",
@@ -163,8 +172,8 @@ def _call_anthropic(pcfg, key, system, user, max_tokens, temperature) -> str:
         json={
             "model": pcfg.get("model", "claude-opus-4-8"),
             "max_tokens": max_tokens,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
+            **({"system": system} if system else {}),
+            "messages": messages,
         },
         timeout=_TIMEOUT,
     )
@@ -214,37 +223,13 @@ def chat(messages: list, system: str = "", provider: str | None = None,
     if not pcfg or not pcfg.get("enabled"):
         raise RuntimeError(f"AI provider '{name}' is disabled or not found.")
     ptype = pcfg.get("type")
-    
+
     if ptype == "openai_compatible":
-        key = _resolve_key(pcfg.get("api_key_source", ""))
-        if not key:
-            raise RuntimeError(f"API key missing for provider '{name}'.")
         payload_msgs = ([{"role": "system", "content": system}] if system else []) + messages
-        resp = requests.post(
-            pcfg.get("endpoint", ""),
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": pcfg.get("model", ""), "messages": payload_msgs,
-                  "max_tokens": max_tokens, "temperature": temperature},
-            timeout=_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return _parse_openai_response(resp)
+        return _call_openai_compatible(pcfg, _require_key(pcfg, name),
+                                       payload_msgs, max_tokens, temperature)
     elif ptype == "anthropic":
-        key = _resolve_key(pcfg.get("api_key_source", ""))
-        if not key:
-            raise RuntimeError(f"API key missing for provider '{name}'.")
-        resp = requests.post(
-            _ANTHROPIC_URL,
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
-                     "content-type": "application/json"},
-            json={"model": pcfg.get("model", "claude-opus-4-8"),
-                  "max_tokens": max_tokens,
-                  **({"system": system} if system else {}),
-                  "messages": messages},
-            timeout=_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return _parse_anthropic_response(resp)
+        return _call_anthropic(pcfg, _require_key(pcfg, name), system, messages, max_tokens)
     elif ptype == "gemini_cli":
         # Gemini CLI: flatten history into a single stdin payload.
         turns = "\n\n".join(f"[{m['role'].upper()}]: {m['content']}" for m in messages)
@@ -267,17 +252,14 @@ def evaluate(system: str, user: str, provider: str | None = None,
     if not pcfg or not pcfg.get("enabled"):
         raise RuntimeError(f"AI provider '{name}' is disabled or not found.")
     ptype = pcfg.get("type")
-    
+
     if ptype == "openai_compatible":
-        key = _resolve_key(pcfg.get("api_key_source", ""))
-        if not key:
-            raise RuntimeError(f"API key missing for provider '{name}'.")
-        return _call_openai_compatible(pcfg, key, system, user, max_tokens, temperature)
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        return _call_openai_compatible(pcfg, _require_key(pcfg, name),
+                                       messages, max_tokens, temperature)
     elif ptype == "anthropic":
-        key = _resolve_key(pcfg.get("api_key_source", ""))
-        if not key:
-            raise RuntimeError(f"API key missing for provider '{name}'.")
-        return _call_anthropic(pcfg, key, system, user, max_tokens, temperature)
+        return _call_anthropic(pcfg, _require_key(pcfg, name), system,
+                               [{"role": "user", "content": user}], max_tokens)
     elif ptype == "gemini_cli":
         return _call_gemini_cli(pcfg, system, user, max_tokens, temperature)
     else:
