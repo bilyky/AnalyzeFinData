@@ -58,11 +58,11 @@
         "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "api_key_source": "env:GEMINI_API_KEY"
       },
-      "deepseek": {
-        "_note": "DeepSeek via OpenRouter (free route) — sign up at openrouter.ai (no credit card), create a key, set OPENROUTER_API_KEY. The `:free` DeepSeek variants rotate in/out of the catalog, so verify the model name at openrouter.ai/models on the day you enable this. For a stable paid backend instead, use endpoint https://api.deepseek.com/chat/completions, model 'deepseek-chat', and DEEPSEEK_API_KEY ($2 min top-up).",
+      "openrouter": {
+        "_note": "OpenRouter (free route) — sign up at openrouter.ai (no credit card), create a key, set OPENROUTER_API_KEY. Free models rotate in/out and rate-limit (429), so check openrouter.ai/models for a current ':free' model. DeepSeek's :free variant is often OUT of rotation; for real DeepSeek top up credits and use model 'deepseek/deepseek-chat'.",
         "enabled": false,
         "type": "openai_compatible",
-        "model": "deepseek/deepseek-chat-v3-0324:free",
+        "model": "poolside/laguna-s-2.1:free",
         "endpoint": "https://openrouter.ai/api/v1/chat/completions",
         "api_key_source": "env:OPENROUTER_API_KEY"
       },
