@@ -11,31 +11,44 @@ import aether_oracle as oracle
 
 class TestAETHEROracle(unittest.TestCase):
 
-    def test_get_oracle_account_fallback(self):
-        """When data_api returns empty or raises exception, get_oracle_account returns default fallback."""
-        with mock.patch("data_api.read_accounts", side_effect=Exception("API Error")):
-            acct = oracle.get_oracle_account()
-            self.assertEqual(acct["id"], "0053")
-            self.assertEqual(acct["equity"], 22978.72)
+    def test_get_oracle_account_returns_none_on_error(self):
+        """Zero-Trust: when data_api raises, get_oracle_account returns None (never a fabricated balance)."""
+        with mock.patch.object(oracle.CFG, "oracle_account", "9999"), \
+             mock.patch("data_api.read_accounts", side_effect=Exception("API Error")):
+            self.assertIsNone(oracle.get_oracle_account())
 
-    def test_get_oracle_account_finds_0053(self):
-        """get_oracle_account correctly scans accounts and returns the one with ID 0053."""
+    def test_get_oracle_account_returns_none_when_not_found(self):
+        """When the configured account is absent from live data, return None rather than a guess."""
+        mock_data = {"accounts": [{"id": "1111", "label": "Other Account", "equity": 1000}]}
+        with mock.patch.object(oracle.CFG, "oracle_account", "9999"), \
+             mock.patch("data_api.read_accounts", return_value=mock_data):
+            self.assertIsNone(oracle.get_oracle_account())
+
+    def test_get_oracle_account_finds_configured(self):
+        """get_oracle_account scans accounts and returns the one matching the configured id."""
         mock_data = {
             "accounts": [
                 {"id": "1111", "label": "Other Account", "equity": 1000},
-                {"id": "0053", "label": "Target Account", "equity": 24000}
+                {"id": "9999", "label": "Target Account", "equity": 24000}
             ]
         }
-        with mock.patch("data_api.read_accounts", return_value=mock_data):
+        with mock.patch.object(oracle.CFG, "oracle_account", "9999"), \
+             mock.patch("data_api.read_accounts", return_value=mock_data):
             acct = oracle.get_oracle_account()
-            self.assertEqual(acct["id"], "0053")
+            self.assertEqual(acct["id"], "9999")
             self.assertEqual(acct["label"], "Target Account")
             self.assertEqual(acct["equity"], 24000)
+
+    def test_run_advisory_unavailable_when_account_none(self):
+        """run_oracle_advisory renders the data-unavailable notice instead of advising on nothing."""
+        with mock.patch("aether_oracle.get_oracle_account", return_value=None):
+            html = oracle.run_oracle_advisory()
+        self.assertIn("unavailable", html.lower())
 
     def test_audit_oracle_portfolio(self):
         """audit_oracle_portfolio detects stop breaches and momentum decay correctly."""
         acct = {
-            "id": "0053",
+            "id": "9999",
             "holdings": [
                 # Normal healthy holding
                 {"symbol": "AAPL", "qty": 10, "buy": 150.0, "current": 160.0, "stop": 140.0, "pnl_pct": 6.67, "s10": 3.0, "l60": 5.0, "status": "Hold"},
@@ -60,7 +73,7 @@ class TestAETHEROracle(unittest.TestCase):
     def test_get_oracle_buy_candidates(self):
         """get_oracle_buy_candidates filters held positions, checks setups, and sorts by combined score descending."""
         acct = {
-            "id": "0053",
+            "id": "9999",
             "holdings": [
                 {"symbol": "AAPL", "qty": 10, "buy": 150.0}
             ]
@@ -94,14 +107,14 @@ class TestAETHEROracle(unittest.TestCase):
 
     def test_generate_oracle_html(self):
         """generate_oracle_html runs successfully and contains standard Oracle copy."""
-        acct = {"id": "0053", "balance": 1.70, "equity": 24042.19, "holdings": []}
+        acct = {"id": "9999", "balance": 100.0, "equity": 20000.0, "holdings": []}
         sells = [{"symbol": "MSFT", "qty": 5, "cost": 400.0, "current": 370.0, "stop": 380.0, "pnl_pct": -7.5, "s10": -1.0, "l60": 2.0, "reason": "Breached"}]
         holds = [{"symbol": "AAPL", "qty": 10, "cost": 150.0, "current": 160.0, "pnl_pct": 6.67, "total": 8.0}]
         buys = [{"symbol": "GOOGL", "price": 180.0, "stop": 160.0, "target": 210.0, "combined": 11.0, "pgr": "Bu", "patterns": "Breakout"}]
         
         html = oracle.generate_oracle_html(acct, sells, holds, buys)
         self.assertIn("AETHER Oracle Market Advisory", html)
-        self.assertIn("Double Real Account (...0053)", html)
+        self.assertIn("Double Real Account (...9999)", html)
         self.assertIn("GOOGL", html)
         self.assertIn("MSFT", html)
         self.assertIn("AAPL", html)

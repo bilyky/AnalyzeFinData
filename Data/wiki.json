@@ -353,11 +353,11 @@
   },
   "aether_oracle": {
     "title": "AETHER Oracle (Project Oracle)",
-    "summary": "A real-account financial advisory and Market Guru engine. Audits live holdings in account ...0053, calculates stop breaches and momentum decay, and pitches top breakout setups to double equity by 12/31/2026.",
+    "summary": "A read-only real-account advisory engine. Audits live holdings in the configured real account, calculates stop breaches and momentum decay, and surfaces top breakout setups toward a doubling goal set in config.",
     "origin": "Project AETHER Core Team (R&D Sprints, August 2026). Decoupled read-only advisory architecture.",
-    "body": "The AETHER Oracle acts as a professional-grade quantitative advisor and Market Guru. It dynamically connects to E*TRADE's production API to query the active state of joint account ...0053 (balances and holdings). Because the account state is uncontrolled and can change at any time due to manual user executions, the Oracle adaptively recalculates risk parameters (trailing stops, technical decay) and recommends capital rotations every single morning. It compiles a highly persuasive, data-backed Investment Thesis and merges it with the Virtual AI-Game report into a single consolidated morning email briefing.",
+    "body": "The AETHER Oracle is a quantitative advisory layer. It connects to E*TRADE's production API to read the active state of the configured real account (balances and holdings). Because that account state is uncontrolled and can change at any time from manual executions, the Oracle recalculates risk parameters (trailing stops, technical decay) and recommends capital rotations each morning. It compiles a data-backed thesis and merges it with the virtual AI-Game report into a single consolidated morning email briefing. When the account cannot be read, it renders a data-unavailable notice rather than advising on unverified balances.",
     "config": [
-      "Target: Double account ...0053 from ~,000 to ~,000 by 12/31/2026.",
+      "Target: Double the configured real account by its target date (config oracle.start_equity / oracle.target_date).",
       "Execution: Runs daily at 7:00 AM PST immediately following ai_portfolio_game.py.",
       "Auditing: Flags CRITICAL BREACHES when current price <= technical stop loss.",
       "Rotations: Chooses the single highest-scoring, non-overlapping bullish setup (s10 >= 2.5).",

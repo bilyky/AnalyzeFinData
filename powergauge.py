@@ -25,7 +25,11 @@ _pg_log = _get_logger("powergauge")
 
 
 def is_nyse_market_open() -> bool:
-    """Return True if the NYSE is currently open (9:30 AM - 4:00 PM Eastern, weekdays)."""
+    """Return True if the NYSE is currently open (9:30 AM - 4:00 PM Eastern, weekdays).
+
+    Setting FORCE_MARKET_CLOSED=true forces a CLOSED result. This is a test /
+    dry-run seam only, and it can only ever suppress live-market behavior (the
+    conservative direction) — it can never force the market falsely OPEN."""
     if os.environ.get("FORCE_MARKET_CLOSED") == "true":
         return False
     try:

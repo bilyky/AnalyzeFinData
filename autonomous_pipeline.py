@@ -496,8 +496,8 @@ def main():
                     timeout=120  # Fail fast after 2 minutes!
                 )
                 log("History backfilled.")
-            except subprocess.TimeoutExpired as e:
-                log(f"Warning: run_history.py timed out after 120s (Playwright hang likely). Bypassing backfill...")
+            except subprocess.TimeoutExpired:
+                log("Warning: run_history.py timed out after 120s (Playwright hang likely). Bypassing backfill...")
             except subprocess.CalledProcessError as e:
                 log(f"Warning: run_history.py failed (will continue): {e.stderr}")
 
@@ -512,10 +512,21 @@ def main():
                 timeout=180  # Fail fast after 3 minutes!
             )
             log("Workbook regenerated.")
-        except subprocess.TimeoutExpired as e:
-            log("Warning: main.py execution timed out after 180s (Playwright hang likely). Adaptively falling back to cached workbook...")
+        except subprocess.TimeoutExpired:
+            # The workbook is the day's source of truth — do NOT silently continue on
+            # stale data (Zero-Trust). Alert and abort so nothing downstream trades on it.
+            error_msg = "main.py execution timed out after 180s (Playwright hang likely)."
+            log(f"ABORT: {error_msg}")
+            if not no_email:
+                notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline aborted: {error_msg}")
+            return
         except subprocess.CalledProcessError as e:
-            log(f"Warning: main.py execution failed: {e.stderr}. Adaptively falling back to cached workbook...")
+            error_msg = f"main.py failed: {e.stderr}"
+            log(f"ABORT: {error_msg}")
+            if not no_email:
+                notify.send_email("ALERT: Daily Pipeline Failed",
+                                  f"Pipeline aborted during main.py execution.\n\n{error_msg}")
+            return
 
     if not report_only:
         # 2b. OHLCV recovery pass — repair missing/corrupted/stale Symbol_full files via RapidAPI.

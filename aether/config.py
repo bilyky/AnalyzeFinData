@@ -29,7 +29,6 @@ def _load_file() -> dict:
         with open(_CFG_PATH, encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
-        import sys
         sys.stderr.write(
             f"\n⚠️  [CONFIG WARNING] config.json was not found at:\n"
             f"  {_CFG_PATH}\n"
@@ -111,6 +110,21 @@ class _Config:
                 self.accounts_real = []
         else:
             self.accounts_real = accounts.get("real") or []
+
+        # ── AETHER Oracle advisory (real-account doubling goal) ─────────────────
+        # account: last-4 of the real account to audit (defaults to the first
+        #          real account). start_equity: baseline for the doubling target
+        #          (PII — never hardcode in source). target_date: goal deadline.
+        oracle = raw.get("oracle") or {}
+        self.oracle_account = (
+            os.environ.get("ORACLE_ACCOUNT")
+            or oracle.get("account")
+            or (self.accounts_real[0] if self.accounts_real else "")
+        )
+        self.oracle_start_equity = float(
+            os.environ.get("ORACLE_START_EQUITY") or oracle.get("start_equity") or 0.0
+        )
+        self.oracle_target_date = os.environ.get("ORACLE_TARGET_DATE") or oracle.get("target_date", "")
 
         # ── Legacy PostgreSQL (database.py — unused in normal operation) ────────
         db = raw.get("database") or {}

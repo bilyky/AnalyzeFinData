@@ -1,45 +1,45 @@
 """
-Project AETHER Oracle: Standalone Financial Advisor & Market Guru Engine.
-This module audits E*TRADE account '0053' in real-time, detects stop-loss breaches
-and technical decay, and pitches high-conviction buy setups to double the account by 12/31/2026.
+Project AETHER Oracle: real-account advisory engine.
+Audits the configured real E*TRADE account (config `oracle.account`, defaults to
+the first real account) for stop-loss breaches and technical decay, and surfaces
+buy setups toward the doubling goal in config `oracle.target_date`.
+
+Account id, baseline equity, and target date come from config (gitignored) — never
+hardcode account numbers or balances in source.
 """
-import os
-import sys
-import json
 import datetime
-import openpyxl
-import data_api
-import risk_utils
-import instruments
+
 import ai_portfolio_game
+import data_api
+from aether.config import CFG
 from aether_logger import get_logger as _get_logger
 
 _oracle_log = _get_logger("oracle")
 
+
 def get_oracle_account():
-    """Retrieve account data for 0053 from the data API."""
+    """Return live data for the configured real account, or None if unavailable.
+
+    Zero-Trust: never fabricate balances. When the account cannot be read, callers
+    render a "data unavailable" state rather than advising against a made-up equity.
+    """
+    target = CFG.oracle_account
+    if not target:
+        _oracle_log.warning("Oracle has no configured account (config oracle.account / accounts.real).")
+        return None
     try:
         accts_data = data_api.read_accounts()
         for acct in accts_data.get("accounts", []):
-            if acct.get("id") == "0053":
+            if acct.get("id") == target:
                 return acct
+        _oracle_log.warning(f"Oracle account {target} not found in live E*TRADE accounts.")
     except Exception as e:
         _oracle_log.warning(f"Failed to load E*TRADE accounts for Oracle: {e}")
-    
-    # Fallback structure if completely missing or empty
-    return {
-        "id": "0053",
-        "label": "Real · Joint JTWROS (...0053) [Fallback]",
-        "type": "real",
-        "balance": 1.70,
-        "equity": 22978.72,
-        "holdings": [],
-        "count": 0
-    }
+    return None
 
 def audit_oracle_portfolio(acct):
     """
-    Audit active holdings for E*TRADE account 0053.
+    Audit active holdings for the configured real E*TRADE account.
     Returns: (sells, holds) lists of formatted dicts.
     """
     sells = []
@@ -48,8 +48,10 @@ def audit_oracle_portfolio(acct):
     holdings = acct.get("holdings", [])
     for h in holdings:
         sym = h.get("symbol", "").upper()
-        if sym == "931CVR013" or not sym: 
-            continue  # ignore non-tradable proxy symbols
+        # Skip non-tradable proxy/cash entries (CUSIP-like symbols contain digits;
+        # real equity tickers are alpha-only).
+        if not sym or any(c.isdigit() for c in sym):
+            continue
             
         qty = h.get("qty", 0.0)
         cost = h.get("buy", 0.0)
@@ -103,7 +105,7 @@ def get_oracle_buy_candidates(acct):
     """
     held_syms = {h.get("symbol", "").upper() for h in acct.get("holdings", [])}
     candidates = []
-    
+
     try:
         research_data = data_api.read_research()
         rows = research_data.get("rows", [])
@@ -160,40 +162,51 @@ def get_oracle_buy_candidates(acct):
         
     return candidates
 
+def _target_date() -> datetime.date | None:
+    raw = (CFG.oracle_target_date or "").strip()
+    try:
+        return datetime.date.fromisoformat(raw) if raw else None
+    except ValueError:
+        return None
+
+
 def generate_oracle_html(acct, sells, holds, buys):
-    """
-    Renders a stunning HTML layout representing the 'AETHER Oracle' workspace section.
-    """
-    target_date = datetime.date(2026, 12, 31)
+    """Render the AETHER Oracle advisory section as HTML."""
     today = datetime.date.today()
-    days_left = (target_date - today).days
-    
-    current_equity = acct.get("equity", 24042.19)
-    start_equity = 22978.72
+    target_date = _target_date()
+    days_left = (target_date - today).days if target_date else None
+    target_label = target_date.strftime("%m/%d/%Y") if target_date else "N/A"
+    acct_id = (acct.get("id") or CFG.oracle_account or "").strip()
+
+    current_equity = acct.get("equity")
+    start_equity = CFG.oracle_start_equity or 0.0
     double_target = start_equity * 2
-    progress_pct = min(100.0, max(0.0, (current_equity / double_target) * 100.0))
-    
+    if current_equity and double_target > 0:
+        progress_pct = min(100.0, max(0.0, (current_equity / double_target) * 100.0))
+    else:
+        progress_pct = 0.0
+
     # Render progress bar
     progress_bar = f"""
     <div style="background: #30363d; border-radius: 4px; height: 16px; width: 100%; margin: 10px 0; overflow: hidden; border: 1px solid #444c56;">
         <div style="background: linear-gradient(90deg, #58a6ff 0%, #1f6feb 100%); width: {progress_pct:.1f}%; height: 100%; border-radius: 3px;"></div>
     </div>
     """
-    
-    # Create Persuasive Guru Pitch
+
+    # Factual advisory summary (capital-preservation tone — no hype)
     pitch = ""
     if sells:
-        pitch += f"Sir, we have a vital tactical maneuver to execute. Currently, <b>{len(sells)} positions</b> in your real portfolio are in severe stop-loss breach or experiencing fatal momentum decay. We are holding too much non-performing dead weight! Reclaiming this capital is our absolute highest priority. "
+        pitch += f"<b>{len(sells)} position(s)</b> in the real portfolio are in stop-loss breach or technical-momentum decay. Reclaiming that capital is the priority. "
         if buys:
             best_buy = buys[0]
-            pitch += f"By cutting these under-performing names, we can raise cash to rotate into <b>{best_buy['symbol']}</b>. {best_buy['symbol']} is in a confirmed bullish breakout with an explosive momentum score of +{best_buy['combined']:.1f} (PGR: {best_buy['pgr']}). This high-velocity compound setup is mathematically designed to bridge the gap and propel us toward our 12/31/2026 double target of <b>${double_target:,.2f}</b>!"
+            pitch += f"Cutting them frees cash to rotate into <b>{best_buy['symbol']}</b>, a confirmed setup with a combined momentum score of +{best_buy['combined']:.1f} (PGR: {best_buy['pgr']})."
         else:
-            pitch += "We should cut these names to protect your remaining capital and build a robust cash cushion until explosive setups emerge."
+            pitch += "No qualifying buy setups today — hold the freed capital as a cash cushion until one appears."
     elif buys:
         best_buy = buys[0]
-        pitch += f"Sir, the markets are highly active! Our portfolio is robust and stable. Our highest-conviction tactical recommendation today is to deploy any dry powder or compound into <b>{best_buy['symbol']}</b>. It is trading at ${best_buy['price']:.2f} with solid support stop at ${best_buy['stop'] or 0.0:.2f} and an ATR-projected target of ${best_buy['target'] or 0.0:.2f}. Its combined momentum is exceptional (+{best_buy['combined']:.1f}), making it our primary weapon of choice today!"
+        pitch += f"All positions are above their technical floors. The highest-conviction candidate today is <b>{best_buy['symbol']}</b> at ${best_buy['price']:.2f} (stop ${best_buy['stop'] or 0.0:.2f}, target ${best_buy['target'] or 0.0:.2f}, combined score +{best_buy['combined']:.1f})."
     else:
-        pitch += "Sir, today is a day of absolute patience. All active positions are healthy, holding strong above their technical floors, and no explosive buy candidates meet our rigorous risk-reward guidelines today. We stand firm and let our winners compound."
+        pitch += "All active positions are holding above their technical floors and no buy candidate meets the risk-reward threshold today. No action recommended — hold."
 
     # Sells Table/Cards
     sells_html = ""
@@ -236,31 +249,36 @@ def generate_oracle_html(acct, sells, holds, buys):
             buys_html += f"""
             <div style="background-color: #0f1c13; border: 1px solid #56d364; border-radius: 6px; padding: 12px; margin-bottom: 10px; border-left: 5px solid #56d364;">
                 <div style="font-weight: bold; font-size: 15px; color: #7ee787;">🟢 TRIGGER ACTIVE: {b['symbol']} (Entry Price: ${b['price']:.2f})</div>
-                <div style="font-size: 13px; color: #c9d1d9; margin: 5px 0;"><b>Advisor Note:</b> Confirmed bottom setup with explosive trend momentum score of +{b['combined']:.1f} (PGR: {b['pgr']}). Patterns: {b['patterns'] or 'Breakout'}.</div>
+                <div style="font-size: 13px; color: #c9d1d9; margin: 5px 0;"><b>Advisor Note:</b> Confirmed bottom setup, trend-momentum score +{b['combined']:.1f} (PGR: {b['pgr']}). Patterns: {b['patterns'] or 'Breakout'}.</div>
                 <div style="font-size: 12px; color: #8b949e;">Est. Stop-Loss: ${b['stop'] or 0.0:.2f} | Profit Target: ${b['target'] or 0.0:.2f}</div>
             </div>
             """
     else:
         buys_html = "<div style='color: #8b949e; font-style: italic; padding: 10px;'>No new buy setups meet our strict qualification threshold today.</div>"
 
+    acct_mask = f"...{acct_id}" if acct_id else "real account"
+    days_str = str(days_left) if days_left is not None else "N/A"
+    equity_str = f"${current_equity:,.2f}" if current_equity else "unavailable"
+    balance = acct.get("balance", 0.0) or 0.0
+
     html_content = f"""
     <div style="font-family: monospace; background-color: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 8px; padding: 25px; margin-top: 40px; box-shadow: 0 4px 6px rgba(0,0,0,0.15);">
         <h2 style="color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 12px; margin-top: 0; font-size: 20px; font-weight: bold; letter-spacing: 0.5px;">
             💎 AETHER Oracle Market Advisory (Project Oracle)
         </h2>
-        
+
         <!-- Objective Progress Card -->
         <table border="0" cellpadding="10" cellspacing="0" style="width: 100%; border-collapse: collapse; background: #161b22; border-radius: 6px; margin-bottom: 20px; border: 1px solid #30363d;">
             <tr>
                 <td style="padding: 15px; vertical-align: top; width: 50%;">
                     <div style="font-size: 11px; color: #8b949e; text-transform: uppercase; font-weight: bold;">Advisory Target</div>
-                    <div style="font-size: 20px; font-weight: bold; color: #58a6ff; margin: 4px 0;">Double Real Account (...0053)</div>
-                    <div style="font-size: 12px; color: #8b949e;">Target date: 12/31/2026 | Days Remaining: <b>{days_left}</b></div>
+                    <div style="font-size: 20px; font-weight: bold; color: #58a6ff; margin: 4px 0;">Double Real Account ({acct_mask})</div>
+                    <div style="font-size: 12px; color: #8b949e;">Target date: {target_label} | Days Remaining: <b>{days_str}</b></div>
                 </td>
                 <td style="padding: 15px; vertical-align: top; width: 50%; border-left: 1px solid #30363d;">
                     <div style="font-size: 11px; color: #8b949e; text-transform: uppercase; font-weight: bold;">Portfolio Standing</div>
-                    <div style="font-size: 20px; font-weight: bold; color: #7ee787; margin: 4px 0;">${current_equity:,.2f} / ${double_target:,.2f}</div>
-                    <div style="font-size: 12px; color: #8b949e;">Current Balance: <b>${acct.get('balance', 0.0):,.2f}</b> | Progress: <b>{progress_pct:.1f}%</b></div>
+                    <div style="font-size: 20px; font-weight: bold; color: #7ee787; margin: 4px 0;">{equity_str} / ${double_target:,.2f}</div>
+                    <div style="font-size: 12px; color: #8b949e;">Current Balance: <b>${balance:,.2f}</b> | Progress: <b>{progress_pct:.1f}%</b></div>
                 </td>
             </tr>
             <tr>
@@ -272,7 +290,7 @@ def generate_oracle_html(acct, sells, holds, buys):
         
         <!-- Guru Pitch -->
         <div style="background-color: #1f242c; border: 1px solid #388bfd; border-radius: 6px; padding: 15px; line-height: 1.6; font-size: 14px; margin-bottom: 25px; border-left: 5px solid #388bfd; color: #e6edf3;">
-            <b>🔮 Market Guru Perspective:</b><br>
+            <b>🔮 Advisory Perspective:</b><br>
             {pitch}
         </div>
         
@@ -309,16 +327,30 @@ def generate_oracle_html(acct, sells, holds, buys):
         </table>
         
         <p style="margin-top: 35px; border-top: 1px solid #30363d; padding-top: 15px; font-size: 11px; color: #8b949e; line-height: 1.5;">
-            ⚠️ <i><b>Advisor Disclosure:</b> AETHER Oracle is a quantitative, data-driven reasoning framework. All advice is informational. This model adapts to any uncontrolled manual state in account ...0053 and continuously recalculates optimal reallocations to meet the 12/31/2026 milestone. No automated trading orders have been placed on your real-money brokerage account.</i>
+            ⚠️ <i><b>Advisor Disclosure:</b> AETHER Oracle is a quantitative, data-driven reasoning framework. All advice is informational. This model adapts to any uncontrolled manual state in account {acct_mask} and recalculates reallocations toward the {target_label} milestone. No automated trading orders have been placed on your real-money brokerage account.</i>
         </p>
     </div>
     """
     return html_content
 
+def _unavailable_html() -> str:
+    """Rendered when the real account cannot be read — never advise on fabricated data."""
+    return (
+        "<div style='font-family: monospace; background:#0d1117; color:#c9d1d9; "
+        "border:1px solid #30363d; border-radius:8px; padding:25px; margin-top:40px;'>"
+        "<h2 style='color:#58a6ff; margin-top:0;'>💎 AETHER Oracle Market Advisory (Project Oracle)</h2>"
+        "<p style='color:#d29922;'>⚠️ Real account data is currently unavailable "
+        "(E*TRADE not reachable or account not configured). No advisory is generated — "
+        "Zero-Trust policy forbids recommending actions against unverified balances.</p></div>"
+    )
+
+
 def run_oracle_advisory():
     """Main entry point to fetch and compile the Oracle advisory report."""
     try:
         acct = get_oracle_account()
+        if acct is None:
+            return _unavailable_html()
         sells, holds = audit_oracle_portfolio(acct)
         buys = get_oracle_buy_candidates(acct)
         return generate_oracle_html(acct, sells, holds, buys)

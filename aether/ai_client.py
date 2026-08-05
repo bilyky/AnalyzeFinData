@@ -13,16 +13,13 @@ provider, and callers MUST degrade to deterministic behavior. This module never
 raises to its callers and never gates a trade.
 """
 
-import json
 import os
 import subprocess
 import sys
+import tempfile
 
 import requests
 from aether.config import CFG
-
-# Ensure Gemini CLI automatically trusts the workspace directory in automated environments
-os.environ["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -175,20 +172,33 @@ def _call_anthropic(pcfg, key, system, user, max_tokens, temperature) -> str:
     return _parse_anthropic_response(resp)
 
 
-def _call_gemini_cli(pcfg, system, user, max_tokens, temperature) -> str:
-    import tempfile
-    prompt = f"{system}\n\n{user}"
+def _run_gemini(model: str, context: str, instruction: str) -> str:
+    """Single invocation path for the gemini CLI, shared by evaluate() and chat().
+
+    Bulk `context` is fed on stdin (gemini prepends stdin to the -p text), which
+    keeps large financial payloads off the Windows command line; `instruction` is
+    the trailing -p directive. Workspace-trust is scoped to the child env rather
+    than mutating this process's os.environ. Not exercisable where the gemini CLI
+    is absent — advisory callers must degrade to deterministic behavior on any
+    RuntimeError raised here."""
     out = subprocess.run(
-        ["gemini", "--skip-trust", "-m", pcfg.get("model", "gemini-2.5-flash"), "--approval-mode", "plan", "-p", "Please analyze the following data and respond:"],
-        input=prompt,
+        ["gemini", "--skip-trust", "-m", model, "-p", instruction],
+        input=context,
         capture_output=True, text=True, timeout=_TIMEOUT,
         shell=(sys.platform == "win32"),
         cwd=tempfile.gettempdir(),
-        encoding="utf-8"
+        encoding="utf-8",
+        env={**os.environ, "GEMINI_CLI_TRUST_WORKSPACE": "true"},
     )
     if out.returncode != 0:
         raise RuntimeError(f"Gemini CLI execution failed (exit code {out.returncode}): {out.stderr.strip()}")
     return out.stdout.strip()
+
+
+def _call_gemini_cli(pcfg, system, user, max_tokens, temperature) -> str:
+    return _run_gemini(pcfg.get("model", "gemini-2.5-flash"),
+                       f"{system}\n\n{user}",
+                       "Please analyze the above data and respond:")
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
@@ -236,20 +246,12 @@ def chat(messages: list, system: str = "", provider: str | None = None,
         resp.raise_for_status()
         return _parse_anthropic_response(resp)
     elif ptype == "gemini_cli":
-        # Gemini CLI: flatten history into a single prompt
+        # Gemini CLI: flatten history into a single stdin payload.
         turns = "\n\n".join(f"[{m['role'].upper()}]: {m['content']}" for m in messages)
-        prompt = (f"{system}\n\n{turns}" if system else turns)
-        out = subprocess.run(
-            ["gemini", "--skip-trust", "-m", pcfg.get("model", "gemini-2.5-flash"), "-p", "Please analyze the following conversation history and respond:"],
-            input=prompt,
-            capture_output=True, text=True, timeout=_TIMEOUT,
-            shell=(sys.platform == "win32"),
-            cwd=_DIR,
-            encoding="utf-8"
-        )
-        if out.returncode != 0:
-            raise RuntimeError(f"Gemini CLI execution failed (exit code {out.returncode}): {out.stderr.strip()}")
-        return out.stdout.strip()
+        context = (f"{system}\n\n{turns}" if system else turns)
+        return _run_gemini(pcfg.get("model", "gemini-2.5-flash"),
+                           context,
+                           "Please analyze the above conversation history and respond:")
     else:
         raise NotImplementedError(f"Unsupported AI provider type: {ptype}")
 

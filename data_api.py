@@ -6,7 +6,6 @@ All functions are safe to call from async FastAPI route handlers.
 
 import json
 import logging
-import os
 import re
 import subprocess
 import sys
@@ -19,6 +18,7 @@ from pathlib import Path
 from scripts.backtesting import backtest_levels
 from aether import decision_eval as _decision_eval
 from aether.config import CFG as _cfg
+import ai_portfolio_game
 import instruments
 import risk_utils
 import sell_rules
@@ -30,80 +30,20 @@ from autonomous_pipeline import (
     get_replacement_pairs as _ap_replacements,
     get_reserves_data as _ap_reserves,
 )
-import requests
 import powergauge as _pg
 
 _log = logging.getLogger("aether.data_api")
 
-def _get_live_google_price(symbol: str) -> float | None:
-    exchanges = ["NASDAQ", "NYSE", "NYSEARCA", "AMEX"]
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-    for ex in exchanges:
-        url = f'https://www.google.com/finance/quote/{symbol}:{ex}'
-        try:
-            r = requests.get(url, headers=headers, timeout=5)
-            if r.status_code == 200:
-                match = re.search(r'jsname="Pdsbrc"[^>]*>\s*<span>\$([0-9,.]+)<', r.text)
-                if match:
-                    price_str = match.group(1).replace(',', '')
-                    return float(price_str)
-        except Exception:
-            pass
-    return None
 
-def _get_google_prices_fallback(symbols: list[str]) -> dict[str, float]:
-    quotes = {}
-    for sym in symbols:
-        price = _get_live_google_price(sym)
-        if price and price > 0:
-            quotes[sym] = price
-    return quotes
+def _live_prices(symbols: list[str]) -> dict[str, float]:
+    """Canonical live-price fetch — the single source of truth for the
+    E*TRADE/JSON/Google fallback ladder lives in ai_portfolio_game."""
+    return ai_portfolio_game.get_live_prices(symbols)
 
-def _get_json_prices_fallback(symbols: list[str]) -> dict[str, float]:
-    quotes = {}
-    try:
-        today = date.today()
-        today_str = str(today)
-        is_weekend = today.weekday() in (5, 6)
-        cutoff = (today - timedelta(days=4)).isoformat()
-        for sym in symbols:
-            path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
-            if path.exists():
-                with open(path) as f:
-                    ts = json.load(f).get("Time Series (Daily)", {})
-                if ts:
-                    newest_date = sorted(ts.keys())[-1]
-                    if newest_date == today_str or is_weekend or newest_date >= cutoff:
-                        quotes[sym] = float(ts[newest_date]["4. close"])
-    except Exception:
-        pass
-    return quotes
 
-def _get_live_prices_internal(symbols: list[str]) -> dict[str, float]:
-    quotes = {}
-    try:
-        today = date.today()
-        is_weekend = today.weekday() in (5, 6)
-        if is_weekend:
-            quotes = _get_json_prices_fallback(symbols)
-            missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
-            if missing:
-                quotes.update(_get_google_prices_fallback(missing))
-            return quotes
-            
-        tokens = etrade.get_tokens("production")
-        if tokens:
-            quotes = etrade.fetch_quotes(tokens, symbols, env="production")
-            
-        missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
-        if missing:
-            quotes.update(_get_google_prices_fallback(missing))
-    except Exception:
-        try:
-            quotes.update(_get_google_prices_fallback(symbols))
-        except Exception:
-            pass
-    return quotes
+def _google_prices(symbols: list[str]) -> dict[str, float]:
+    """Canonical Google-Finance fallback (see _live_prices)."""
+    return ai_portfolio_game.get_google_prices_fallback(symbols)
 
 _DIR      = Path(__file__).resolve().parent
 _DATA_DIR = _DIR / "Data"
@@ -193,7 +133,13 @@ def is_active_nyse_market_hours() -> bool:
 
 
 def _get_chaikin_price(sym: str) -> float | None:
-    """Read the newest cached Chaikin closing price for a symbol on disk."""
+    """Read the newest cached Chaikin closing price for a symbol on disk.
+
+    Deliberately re-reads on each call rather than memoizing: verify_price_integrity
+    fires only on held positions / account holdings (dozens per run, not the full
+    universe), and the sole long-lived caller (server.py) must see fresh Chaikin
+    files as they land on disk — a process-lifetime memo would freeze prices and
+    defeat the drift detection this feeds."""
     try:
         symbol_dir = _DATA_DIR / "Symbol" / sym
         if not symbol_dir.exists():
@@ -201,17 +147,17 @@ def _get_chaikin_price(sym: str) -> float | None:
         json_files = sorted(list(symbol_dir.glob(f"{sym}_*.json")), reverse=True)
         if not json_files:
             return None
-        
+
         newest_file = json_files[0]
         with open(newest_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-            
+
         meta = data.get("metaInfo")
         if isinstance(meta, list) and len(meta) > 0:
             return float(meta[0].get("Last", 0.0))
         elif isinstance(meta, dict):
             return float(meta.get("Last", 0.0))
-            
+
         checklist = data.get("checklist_stocks")
         if isinstance(checklist, dict):
             return float(checklist.get("lastPrice", 0.0))
@@ -223,7 +169,12 @@ def _get_chaikin_price(sym: str) -> float | None:
 def verify_price_integrity(symbol: str, price: float, source: str) -> None:
     """Raise PricingDiscrepancyError when a price deviates from our fresh OHLCV cache
     or Chaikin PG cache beyond tolerance. Skips stale caches (>10 days old).
-    Performs a strict 3-way cross-verification: E*TRADE (live) vs RapidAPI (Symbol_full) vs Chaikin (PG)."""
+
+    Cross-verification degrades gracefully by available sources: the active price
+    (from `source`, e.g. E*TRADE) is always checked against the RapidAPI Symbol_full
+    cache (2-way); when a fresh Chaikin PG price is also available it escalates to a
+    3-way check (active vs Chaikin, and Symbol_full vs Chaikin). Error messages are
+    tagged "2-Way"/"3-Way" to reflect which comparison actually fired."""
     sym = (symbol or "").strip().upper()
     if sym in _PRICE_CHECK_EXEMPT or instruments.is_excluded(sym):
         return
@@ -941,7 +892,7 @@ def read_accounts() -> dict:
         game_symbols = [p["symbol"] for p in pf.get("positions", [])]
         game_prices = {}
         try:
-            game_prices = _get_live_prices_internal(game_symbols)
+            game_prices = _live_prices(game_symbols)
         except Exception:
             pass
             
@@ -1448,7 +1399,7 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
         pass
     if not price:
         try:
-            goog = _get_google_prices_fallback([sym])
+            goog = _google_prices([sym])
             price = goog.get(sym)
         except Exception:
             pass
