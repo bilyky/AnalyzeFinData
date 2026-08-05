@@ -997,8 +997,10 @@ def read_equity_curve() -> list[dict]:
         d = tx.get("date", "")[:10]
         if not d:
             continue
-        pnl = tx.get("pnl") or 0
-        # Approximate: BUY reduces balance, SELL adds back cost + pnl
+        # Cash-only curve: BUY spends price*qty, SELL returns price*qty — which
+        # already equals buy cost + realized pnl (pnl = (price-cost)*qty), so pnl
+        # must NOT be added again or profit double-counts. Mirrors the live game's
+        # own `balance += proceeds`; open positions are not marked to market here.
         if tx.get("type") == "BUY":
             balance -= (tx.get("price", 0) * tx.get("qty", 0))
         elif tx.get("type") == "SELL":
