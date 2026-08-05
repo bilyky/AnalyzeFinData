@@ -1,12 +1,9 @@
-import os
 import sys
 import console_safe
 import datetime
 import subprocess
 import openpyxl
 import notify
-import traceback
-import json
 import html
 import rapidapi
 from config import CFG
@@ -24,15 +21,19 @@ console_safe.install()
 import external_intel
 
 # Custom modules
-import risk_utils
 import performance_tracker
+from workbook_read import (
+    get_top_5_picks,
+    get_market_regime,
+    get_replacement_pairs,
+    get_reserves_data,
+)
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
 SRC_XLSX  = BASE_DIR / "state_of_the_day.xlsx"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 LOG_FILE_PATH = BASE_DIR / "Data" / "autonomous_run.log"
-ACCOUNT_RISK_USD = 500  # Amount to lose if stop is hit
 
 def log(msg):
     """Pipeline log — routes through the AETHER logger (txt + jsonl + stdout)
@@ -73,125 +74,8 @@ def validate_sheets():
     except Exception as e:
         return False, f"Validation error: {e}"
 
-def get_top_5_picks():
-    try:
-        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
-        ws = wb["Research"]
-        
-        candidates = []
-        seen_symbols = set()
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            sym = row[3]
-            if not sym: continue
-            
-            # De-duplicate: Ensure each symbol is only processed once
-            sym_clean = str(sym).strip().upper()
-            if sym_clean in seen_symbols:
-                continue
-            seen_symbols.add(sym_clean)
-            
-            pgr = str(row[6] or "")
-            price = row[10] or 0.0
-            stop = row[9] or 0.0
-            target = row[11] or 0.0
-            setup = str(row[20] or "")
-            
-            is_setup_ok = (setup == "1" or setup == "OK" or setup == 1)
-            
-            win_pct = row[23] or 0.0
-            s10 = row[24] or 0.0
-            l60 = row[25] or 0.0
-            pattern_text = str(row[26] or "").strip() if len(row) > 26 else ""
-            industry = str(row[4] or "")
-
-            if is_setup_ok:
-                atr = risk_utils.calculate_atr(sym)
-                shares_atr = risk_utils.get_atr_position_size(price, atr, ACCOUNT_RISK_USD)
-                shares_stop = risk_utils.get_position_size(price, stop, ACCOUNT_RISK_USD)
-
-                candidates.append({
-                    "Symbol": sym,
-                    "PGR": pgr,
-                    "Price": price,
-                    "Stop": stop,
-                    "Target": target,
-                    "S10": s10,
-                    "L60": l60,
-                    "WinPct": win_pct,
-                    "Total": s10 + l60,
-                    "ATR": atr,
-                    "Shares_ATR": shares_atr,
-                    "Shares_Stop": shares_stop,
-                    "Patterns": pattern_text,
-                    "Industry": industry
-                })
-        
-        candidates.sort(key=lambda x: x["Total"], reverse=True)
-        return candidates[:5]
-    except Exception as e:
-        log(f"Error computing picks: {e}")
-        traceback.print_exc()
-        return []
-
 def check_earnings(symbol):
     return "Check Required"
-
-def get_replacement_pairs():
-    try:
-        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
-        if "Replacements" not in wb.sheetnames:
-            return []
-        
-        ws = wb["Replacements"]
-        pairs = []
-        for row in ws.iter_rows(min_row=3, max_row=13, values_only=True):
-            if row[1] and row[7]:
-                pairs.append({
-                    "Sell": row[1],
-                    "Sell_Score": row[4],
-                    "Sell_Status": row[5],
-                    "Buy": row[7],
-                    "Buy_Score": row[10],
-                    "Buy_PGR": row[11]
-                })
-        return pairs
-    except Exception as e:
-        log(f"Error reading replacements: {e}")
-        return []
-
-def get_reserves_data():
-    """Extract today's scores for our dynamic A-Reserves (Backup Players) list loaded from the central JSON."""
-    reserves_syms = ['EIX', 'AMAT', 'URI', 'VLO', 'RS'] # Standard Fallback
-    try:
-        game_file = BASE_DIR / "Data" / "ai_portfolio_game.json"
-        if game_file.exists():
-            with open(game_file, "r", encoding="utf-8") as f:
-                state = json.load(f)
-                reserves_syms = state.get("reserves", reserves_syms)
-    except Exception as e:
-        log(f"Warning: Could not load dynamic reserves from JSON (using fallback): {e}")
-
-    reserves_data = []
-    try:
-        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
-        ws = wb["Research"]
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            sym = row[3]
-            if sym in reserves_syms:
-                reserves_data.append({
-                    "Symbol": sym,
-                    "Industry": row[4],
-                    "PGR": row[6],
-                    "S10": row[24] or 0,
-                    "L60": row[25] or 0,
-                    "Total": (row[24] or 0) + (row[25] or 0),
-                    "Price": row[10] or 0
-                })
-        # Sort to preserve priority order
-        reserves_data.sort(key=lambda x: reserves_syms.index(x["Symbol"]))
-    except Exception as e:
-        log(f"Error loading reserves data: {e}")
-    return reserves_data
 
 def get_reasoning(symbol, pgr, s10, l60, industry):
     """Retrieve live LLM reasoning via the GitHub Models API (gpt-4o-mini) with local heuristics fallback."""
@@ -205,21 +89,6 @@ def get_reasoning(symbol, pgr, s10, l60, industry):
         log(f"Warning: Live AI reasoning failed for {symbol}: {e}")
         # Standard Fallback
         return f"<b>Technical Setup Active:</b> Setup OK with total score: {s10+l60:.1f}.<br>🚨 <b>Devil's Advocate:</b> High market volatility could override technical momentum."
-
-def get_market_regime():
-    """Detect current market regime based on SPY momentum."""
-    try:
-        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
-        ws = wb["Research"]
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if row[3] == "SPY":
-                s10, l60 = row[24] or 0, row[25] or 0
-                if l60 > 2: return "🚀 BULLISH (Risk-On)", "#2ecc71"
-                if l60 < -2: return "⚠️ BEARISH (Risk-Off / Defensive)", "#e74c3c"
-                return "⚖️ NEUTRAL (Consolidation)", "#f39c12"
-    except:
-        pass
-    return "Unknown", "#7f8c8d"
 
 def cleanup_orphaned_processes():
     """Ensure no Excel-locking processes are hung."""
@@ -329,7 +198,6 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
     
     picks_rows = ""
     for i, p in enumerate(picks, 1):
-        win_display = f"{p['WinPct'] * 100:.1f}%"
         earnings = check_earnings(p['Symbol'])
         reasoning = get_reasoning(p['Symbol'], p['PGR'], p['S10'], p['L60'], p['Industry'])
         
@@ -382,7 +250,10 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
         </tr>
         """
 
-    html = f"""
+    # NOTE: this local MUST NOT be named `html` — the nested _e() helper above
+    # calls html.escape(), and a local `html` here would shadow the module for
+    # the whole function, making _e() raise NameError once intel is non-empty.
+    html_doc = f"""
     <html>
     <body style="font-family: 'Segoe UI', Tahoma, sans-serif; color: #333; line-height: 1.6; max-width: 1100px; margin: auto;">
         <div style="background: #2c3e50; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
@@ -444,7 +315,7 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
     </body>
     </html>
     """
-    return html
+    return html_doc
 
 def main():
     cleanup_orphaned_processes()

@@ -46,24 +46,25 @@
     "real": ["XXXX", "YYYY"]
   },
   "ai": {
-    "primary": "github_gpt",
+    "_note": "GitHub Models (the old free 'github_gpt' provider on models.inference.ai.azure.com) was RETIRED on 2026-07-30 and removed here. Pick any provider below as `primary`.",
+    "primary": "gemini_oai",
     "max_intel_emails": 20,
     "providers": {
-      "github_gpt": {
-        "_note": "Free via GitHub personal access token — github.com/settings/tokens. Set GITHUB_TOKEN env var or paste the ghp_... token as api_key_source literal.",
-        "enabled": true,
-        "type": "openai_compatible",
-        "model": "gpt-4o-mini",
-        "endpoint": "https://models.inference.ai.azure.com/chat/completions",
-        "api_key_source": "env:GITHUB_TOKEN"
-      },
       "gemini_oai": {
         "_note": "Free tier via Google AI Studio — aistudio.google.com. Get GEMINI_API_KEY there (no credit card). Uses OpenAI-compatible REST so no extra dependencies.",
-        "enabled": false,
+        "enabled": true,
         "type": "openai_compatible",
         "model": "gemini-2.5-flash",
         "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "api_key_source": "env:GEMINI_API_KEY"
+      },
+      "deepseek": {
+        "_note": "DeepSeek via OpenRouter (free route) — sign up at openrouter.ai (no credit card), create a key, set OPENROUTER_API_KEY. The `:free` DeepSeek variants rotate in/out of the catalog, so verify the model name at openrouter.ai/models on the day you enable this. For a stable paid backend instead, use endpoint https://api.deepseek.com/chat/completions, model 'deepseek-chat', and DEEPSEEK_API_KEY ($2 min top-up).",
+        "enabled": false,
+        "type": "openai_compatible",
+        "model": "deepseek/deepseek-chat-v3-0324:free",
+        "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+        "api_key_source": "env:OPENROUTER_API_KEY"
       },
       "claude": {
         "_note": "Anthropic API — console.anthropic.com. Set ANTHROPIC_API_KEY env var.",
