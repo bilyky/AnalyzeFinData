@@ -95,9 +95,8 @@ class TestIntradayMonitor(unittest.TestCase):
         
         monitor.monitor()
         
-        # Cleared confirmation email sent
-        mock_send_email.assert_called_once()
-        self.assertIn("Cleared/Exited", mock_send_email.call_args[0][0])
+        # Cleared confirmation email bypassed to avoid noise
+        mock_send_email.assert_not_called()
         
         # Saved state is now clean
         mock_save.assert_called_with({"last_breached": {}})

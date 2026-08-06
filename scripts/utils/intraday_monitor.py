@@ -203,14 +203,7 @@ def monitor():
     else:
         if cleared_breaches:
             # If breaches exist in memory but are now cleared (e.g. they were sold!)
-            _log.warning("All stop breaches cleared! Sending confirmation email...")
-            subject = "AETHER ALERT: All Stop Breaches Cleared/Exited"
-            body = (
-                "Great news! All previously detected stop-loss breaches have been successfully cleared or exited.\n\n"
-                f"Cleared Positions: {', '.join(cleared_breaches)}\n\n"
-                "Your portfolio risk profile is now fully stabilized and nominal."
-            )
-            notify.send_email(subject, body)
+            _log.info(f"All stop breaches cleared (bypassed email notification to avoid noise): {', '.join(cleared_breaches)}")
         else:
             _log.info("No stop breaches detected.")
 
