@@ -118,12 +118,32 @@ class _Config:
         #          real account). start_equity: baseline for the doubling target
         #          (PII — never hardcode in source). target_date: goal deadline.
         oracle = raw.get("oracle") or {}
-        self.oracle_account = (
+        target = (
             os.environ.get("ORACLE_ACCOUNT")
             or oracle.get("account")
             or oracle.get("account_id")
-            or (self.accounts_real[0] if self.accounts_real else "")
         )
+
+        if "oracle" in raw:
+            # If the user explicitly configured 'oracle', they MUST define a valid account
+            if not target:
+                raise ValueError(
+                    "🚨 [AETHER CONFIG ERROR] The 'oracle' section is configured in config.json, "
+                    "but no valid 'account' or 'account_id' was specified! "
+                    "Please define 'account_id' inside the 'oracle' block."
+                )
+            # The configured target MUST exist in the accounts_real list to prevent trading on incorrect accounts
+            if target not in self.accounts_real:
+                raise ValueError(
+                    f"🚨 [AETHER CONFIG ERROR] Configured Oracle account '{target}' was not found "
+                    f"in the real accounts list: {self.accounts_real}! "
+                    "Please verify your config.json accounts.real and oracle.account_id."
+                )
+            self.oracle_account = target
+        else:
+            # Legacy default fallback if the entire 'oracle' block is absent
+            self.oracle_account = target or (self.accounts_real[0] if self.accounts_real else "")
+
         self.oracle_start_equity = float(
             os.environ.get("ORACLE_START_EQUITY") or oracle.get("start_equity") or 0.0
         )
