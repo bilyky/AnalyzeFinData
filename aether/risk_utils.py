@@ -25,8 +25,10 @@ def calculate_atr(symbol, period=14):
     df.index = pd.to_datetime(df.index)
     df = df.sort_index()
     
-    # Standard Alpha Vantage columns
-    df.columns = ["open", "high", "low", "close", "volume"]
+    # Select only standard Alpha Vantage columns by name to ignore provenance stamps/custom metadata
+    standard_cols = ["1. open", "2. high", "3. low", "4. close", "5. volume"]
+    df = df[[c for c in standard_cols if c in df.columns]]
+    df.columns = ["open", "high", "low", "close", "volume"][:len(df.columns)]
     df = df.astype(float)
     
     # True Range components
@@ -281,6 +283,4 @@ def get_atr_position_size(price, atr, risk_usd=500):
     risk_per_share = 2 * atr
     return int(risk_usd // risk_per_share)
 
-if __name__ == "__main__":
-    # Test
-    print(f"ATR for AAPL: {calculate_atr('AAPL')}")
+

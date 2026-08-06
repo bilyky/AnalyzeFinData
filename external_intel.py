@@ -81,7 +81,7 @@ def extract_tickers(text):
 def analyze_email_content(subject, body):
     """Semantically analyze email content into structured trade ideas via the
     configured AI provider (see ai_client). Returns [] when unavailable."""
-    universe = list(get_existing_symbols())[:150]  # sample to fit prompt limits
+    universe = extract_tickers(subject + " " + body)  # dynamically extract potential tickers to fit prompt limits
     system = ("You are a precise financial data extractor. You only output valid "
               "JSON. No markdown wrappers like ```json.")
     body_display = body[:1500]
@@ -141,12 +141,15 @@ def fetch_idea_emails():
     candidates = []
 
     for mb in CFG.mailboxes:
-        email_user = mb["email"]
-        if "example.com" in email_user.lower():
-            _log.console(f"Skipping placeholder mailbox: {email_user}")
+        if not isinstance(mb, dict):
+            _log.warning(f"Unexpected mailbox config format (not a dict): {mb}")
             continue
-        pass_env = mb["password_env"]
-        imap_server = mb["imap_server"]
+        email_user = mb.get("email")
+        if not email_user or "example.com" in str(email_user).lower():
+            _log.console(f"Skipping placeholder/invalid mailbox: {email_user}")
+            continue
+        pass_env = mb.get("password_env", "SMTP_PASSWORD")
+        imap_server = mb.get("imap_server", "imap.gmail.com")
         email_pass = os.environ.get(pass_env) or CFG.smtp_password
 
         if not email_pass:
@@ -156,7 +159,7 @@ def fetch_idea_emails():
         _log.console(f"Scanning mailbox: {email_user} on {imap_server}...")
         mail = None
         try:
-            mail = imaplib.IMAP4_SSL(imap_server)
+            mail = imaplib.IMAP4_SSL(imap_server, timeout=30)
             mail.login(email_user, email_pass)
 
             date = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%d-%b-%Y")
@@ -267,13 +270,36 @@ def fetch_idea_emails():
             futures = [pool.submit(run_extractions, c) for c in candidates]
             for fut in as_completed(futures):
                 res = fut.result()
-                if not res:
+                if not res or not isinstance(res, dict):
                     continue
-                cand = res["cand"]
-                parsed_ideas = res["parsed_ideas"]
-                intel = res["intel"]
+                cand = res.get("cand")
+                if not isinstance(cand, dict):
+                    continue
+                parsed_ideas = res.get("parsed_ideas")
+                intel = res.get("intel")
                 
-                base = {"from": cand["from"], "subject": cand["subject"], "folder": cand["folder"], "intel": intel}
+                base = {
+                    "from": cand.get("from"),
+                    "subject": cand.get("subject"),
+                    "folder": cand.get("folder"),
+                    "intel": intel
+                }
+                
+                tickers = []
+                if isinstance(intel, dict):
+                    tickers = intel.get("tickers_mentioned") or []
+                
+                # Fallback: if parsed_ideas is empty, populate from modern tickers_mentioned in intel
+                if not parsed_ideas and tickers:
+                    parsed_ideas = []
+                    for t in tickers:
+                        if isinstance(t, dict) and t.get("in_universe"):
+                            parsed_ideas.append({
+                                "symbol": t.get("symbol"),
+                                "sentiment": t.get("sentiment"),
+                                "thesis": t.get("thesis")
+                            })
+                
                 if parsed_ideas:
                     if isinstance(parsed_ideas, dict):
                         parsed_ideas = [parsed_ideas]

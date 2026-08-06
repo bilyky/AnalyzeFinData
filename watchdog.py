@@ -67,6 +67,8 @@ def _check_plain_logs(now: datetime.datetime) -> list[str]:
                 lines = f.readlines()
             for line in lines[-50:]:
                 upper = line.upper()
+                if "OHLCV:" in upper:
+                    continue
                 if not any(w in upper for w in _error_words):
                     continue
                 if any(w in upper for w in _skip_words):

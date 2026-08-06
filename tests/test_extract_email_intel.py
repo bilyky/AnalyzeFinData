@@ -107,6 +107,17 @@ class TestExtract(unittest.TestCase):
         rep = ex.report(result)
         self.assertIn("Thesis", rep)
 
+    def test_malformed_research_rows_does_not_crash(self):
+        # Test when read_research returns rows containing unexpected string elements (which would raise TypeError: string indices must be integers)
+        with mock.patch("data_api.read_research", return_value={"rows": ["malformed_string_row_element", {"symbol": "CCJ", "pgr": 3}]}):
+            try:
+                intel = {"missing_symbols": [{"symbol": "CCJ", "reason": "overlooked miner"}]}
+                res = ex.verify_symbols(intel)
+                # It should skip the malformed string row element and correctly resolve the dict element
+                self.assertTrue(res["missing_symbols"][0]["in_universe"])
+            except Exception as e:
+                self.fail(f"verify_symbols failed on malformed rows element: {e}")
+
 
 class TestReport(unittest.TestCase):
     def test_empty_intel(self):

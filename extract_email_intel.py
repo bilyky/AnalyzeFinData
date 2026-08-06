@@ -137,7 +137,7 @@ def verify_symbols(intel: dict) -> dict:
     validation summary. Follows Zero-Trust: never assume a ticker is valid."""
     try:
         rows = data_api.read_research()["rows"]
-        known = {r["symbol"]: r for r in rows}
+        known = {r["symbol"]: r for r in rows if isinstance(r, dict) and "symbol" in r}
     except Exception:
         known = {}
 

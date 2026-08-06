@@ -480,7 +480,8 @@ class TestPersistentProfileModes(unittest.TestCase):
         for label, series, prices, expected_reason in cases:
             with self.subTest(label=label):
                 with mock.patch("circuit_breaker.load_spy_history", return_value=series), \
-                     mock.patch("circuit_breaker.load_vxx_prev_close", return_value=100.0):
+                     mock.patch("circuit_breaker.load_vxx_prev_close", return_value=100.0), \
+                     mock.patch("circuit_breaker.is_market_opening_window", return_value=False):
                     is_active, reason = circuit_breaker.check_systemic_risk(prices=prices)
                 self.assertTrue(is_active, label)
                 self.assertIn(expected_reason, reason, label)
@@ -540,8 +541,9 @@ class TestPersistentProfileModes(unittest.TestCase):
         # Mock yesterday's VXX close to 100.0, and today's VXX price to 116.0 (up 16.0%!)
         mock_series = [{"close": 100.0}] * 15
         
-        with mock.patch("circuit_breaker.load_spy_history", return_value=mock_series):
-            with mock.patch("circuit_breaker.load_vxx_prev_close", return_value=100.0):
+        with mock.patch("circuit_breaker.load_spy_history", return_value=mock_series), \
+             mock.patch("circuit_breaker.load_vxx_prev_close", return_value=100.0), \
+             mock.patch("circuit_breaker.is_market_opening_window", return_value=False):
                 is_active, reason = circuit_breaker.check_systemic_risk(prices={"SPY": 100.0, "VXX": 116.0})
                 self.assertTrue(is_active)
                 self.assertIn("Volatility Capitulation", reason)

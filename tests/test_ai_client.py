@@ -110,6 +110,43 @@ class TestAIClientTransport(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 ai_client.evaluate("s", "u", provider="gpt")
 
+    @mock.patch.object(ai_client, "_resolve_key", return_value="KEY")
+    @mock.patch("aether.ai_client.requests.post")
+    @mock.patch("aether.ai_client.subprocess.run")
+    def test_evaluate_fallback_on_primary_failure(self, m_run, m_post, _key):
+        # Primary provider 'gem' (gemini_cli) fails, secondary 'gpt' (openai_compatible) succeeds.
+        m_run.return_value = mock.MagicMock(returncode=2, stdout="", stderr="gemini error")
+        m_post.return_value = _resp({"choices": [{"message": {"content": "gpt response"}}]})
+        
+        # We need both providers to be enabled and resolve.
+        # Ensure 'gem' is primary.
+        with mock.patch("aether.ai_client.primary", return_value="gem"), \
+             mock.patch("aether.ai_client.enabled_providers", return_value=["gem", "gpt"]), \
+             self._providers({"gem": _GEMINI, "gpt": _GPT}):
+            out = ai_client.evaluate("SYS", "USR")
+        
+        self.assertEqual(out, "gpt response")
+        m_run.assert_called_once()
+        m_post.assert_called_once()
+
+    @mock.patch.object(ai_client, "_resolve_key", return_value="KEY")
+    @mock.patch("aether.ai_client.requests.post")
+    @mock.patch("aether.ai_client.subprocess.run")
+    def test_chat_fallback_on_primary_failure(self, m_run, m_post, _key):
+        # Primary provider 'gem' (gemini_cli) fails, secondary 'gpt' (openai_compatible) succeeds.
+        m_run.return_value = mock.MagicMock(returncode=2, stdout="", stderr="gemini error")
+        m_post.return_value = _resp({"choices": [{"message": {"content": "gpt chat response"}}]})
+        
+        history = [{"role": "user", "content": "hello"}]
+        with mock.patch("aether.ai_client.primary", return_value="gem"), \
+             mock.patch("aether.ai_client.enabled_providers", return_value=["gem", "gpt"]), \
+             self._providers({"gem": _GEMINI, "gpt": _GPT}):
+            out = ai_client.chat(history, system="SYS")
+            
+        self.assertEqual(out, "gpt chat response")
+        m_run.assert_called_once()
+        m_post.assert_called_once()
+
 
 class TestAIClientParsers(unittest.TestCase):
 

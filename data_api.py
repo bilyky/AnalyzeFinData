@@ -67,8 +67,9 @@ def _get_digit_study(sym: str) -> list:
                          _DATA_DIR / "digit_sum_full_study.json"]:
                 if path.exists():
                     try:
-                        for r in json.load(open(path)):
-                            idx.setdefault(r["symbol"], []).append(r)
+                        with open(path, "r", encoding="utf-8") as f:
+                            for r in json.load(f):
+                                idx.setdefault(r["symbol"], []).append(r)
                     except Exception:
                         pass
             _digit_study_index = idx  # lock held for entire build; no duplicate work
@@ -200,12 +201,32 @@ def verify_price_integrity(symbol: str, price: float, source: str) -> None:
         if stale_days > _PRICE_CACHE_MAX_STALE_DAYS:
             return  # cache is stale — not authoritative, skip check
         cache_close = float(ts[newest_date]["4. close"])
+        cache_open = float(ts[newest_date].get("1. open", 0.0))
+        cache_high = float(ts[newest_date].get("2. high", 0.0))
+        cache_low = float(ts[newest_date].get("3. low", 0.0))
     except Exception as e:
         _log.warning(f"[PRICING] {sym}: could not read OHLCV cache for integrity check: {e}")
         return
 
     if cache_close <= 0:
         return
+
+    # ── 0. Detect Flat Placeholders (OHLC Validation) ──
+    # Weekday prices must have an active trading range; if they are perfectly flat,
+    # it indicates a fake placeholder written by powergauge._append_ohlcv_entry.
+    is_weekday = date.fromisoformat(newest_date).weekday() not in (5, 6)
+    if is_weekday and cache_open == cache_high == cache_low == cache_close:
+        # Ignore flat placeholder if it is for today's date, as it's a temporary entry
+        # before the official after-hours RapidAPI sync succeeds.
+        if newest_date == date.today().isoformat():
+            _log.debug(f"[PRICING] {sym}: today's temporary flat placeholder tolerated.")
+        else:
+            raise PricingDiscrepancyError(
+                f"🛑 [PRICING DISCREPANCY] Flat placeholder detected for {sym}!\n"
+                f"  Date:                            {newest_date}\n"
+                f"  Cache OHLC (Symbol_full):       ${cache_close:.4f} (Open == High == Low == Close)\n"
+                f"  Action required: This is a stale placeholder. Force-refresh Symbol_full history immediately!"
+            )
 
     # ── 1. Compare Active Price (Source) vs. RapidAPI (Symbol_full) ──
     diff_rap = abs(price - cache_close)
@@ -287,7 +308,10 @@ def read_portfolio() -> dict:
 
         # Load actual correct close from JSON cache instead of defaulting to cost
         current = _load_latest_close_from_cache(sym) or cost
-        verify_price_integrity(sym, current, "Game Portfolio")
+        try:
+            verify_price_integrity(sym, current, "Game Portfolio")
+        except PricingDiscrepancyError as e:
+            _log.warning(f"[PRICING] Game position {sym} has discrepancy: {e}")
         pnl = round((current - cost) * qty, 2)
         pnl_pct = round((current - cost) / cost * 100, 2) if cost > 0 else 0.0
         total_value += qty * current
@@ -1335,7 +1359,8 @@ def read_symbol(symbol: str) -> dict:
         chart = []
         if path.exists():
             try:
-                ts = json.load(open(path)).get("Time Series (Daily)", {})
+                with open(path, "r", encoding="utf-8") as f:
+                    ts = json.load(f).get("Time Series (Daily)", {})
                 dates = sorted(ts.keys())[-365:]
                 chart = [{"date": d,
                           "open":   round(float(ts[d]["1. open"]),  2),
@@ -1418,7 +1443,8 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
                 ohlcv_ts: dict = {}
                 if ohlcv_path.exists():
                     try:
-                        ohlcv_ts = json.load(open(ohlcv_path)).get("Time Series (Daily)", {})
+                        with open(ohlcv_path, "r", encoding="utf-8") as f_ohlcv:
+                            ohlcv_ts = json.load(f_ohlcv).get("Time Series (Daily)", {})
                     except Exception:
                         pass
                 f = _pg._compute_pgr_fields(pg, ohlcv_ts=ohlcv_ts)

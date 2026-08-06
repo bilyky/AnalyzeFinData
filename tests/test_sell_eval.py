@@ -70,6 +70,12 @@ class TestEvaluateExit(unittest.TestCase):
         self.assertEqual(out["provider"], "claude")
         self.assertEqual(ev.call_args.kwargs["provider"], "claude")
 
+    def test_evaluate_exit_handles_exceptions_gracefully(self):
+        with mock.patch("sell_eval.ai_client.primary", return_value="github_gpt"), \
+             mock.patch("sell_eval.ai_client.evaluate", side_effect=RuntimeError("API Failure")):
+            out = sell_eval.evaluate_exit(_CTX)
+        self.assertEqual(out, {})
+
 
 if __name__ == "__main__":
     unittest.main()

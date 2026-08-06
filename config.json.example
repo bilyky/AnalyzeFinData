@@ -1,7 +1,9 @@
 {
   "chaikin": {
     "email": "your_chaikin_email@example.com",
-    "password": "your_chaikin_password"
+    "password": "your_chaikin_password",
+    "uid": "your_chaikin_uid_here",
+    "api_key": ""
   },
   "etrade": {
     "username": "your_etrade_username",
@@ -50,6 +52,7 @@
     "primary": "gemini_oai",
     "max_intel_emails": 20,
     "providers": {
+
       "gemini_oai": {
         "_note": "Free tier via Google AI Studio — aistudio.google.com. Get GEMINI_API_KEY there (no credit card). Uses OpenAI-compatible REST so no extra dependencies.",
         "enabled": true,
@@ -88,5 +91,14 @@
     "admins": [
       { "user": "admin", "pass": "change_me" }
     ]
+  },
+  "oracle": {
+    "account_id": "0053",
+    "start_equity": 22978.72,
+    "target_date": "2026-12-31",
+    "s10_floor": 2.5,
+    "bubble_limit": 2.5,
+    "min_rr_ratio": 1.5,
+    "decay_limit": -2.0
   }
 }

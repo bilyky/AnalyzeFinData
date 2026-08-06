@@ -17,13 +17,17 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 
 import requests
+from aether_logger import get_logger as _get_logger
 from aether.config import CFG
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 _TIMEOUT = 60   # generous for chat; context build can take ~9s on cold Research cache
+
+_gemini_cli_lock = threading.Lock()
 
 
 # ── Key resolution ─────────────────────────────────────────────────────────────
@@ -181,6 +185,12 @@ def _call_anthropic(pcfg, key, system, messages, max_tokens) -> str:
     return _parse_anthropic_response(resp)
 
 
+def _get_gemini_sandbox() -> str:
+    sandbox = os.path.join(tempfile.gettempdir(), "aether_gemini_cli_sandbox")
+    os.makedirs(sandbox, exist_ok=True)
+    return sandbox
+
+
 def _run_gemini(model: str, context: str, instruction: str) -> str:
     """Single invocation path for the gemini CLI, shared by evaluate() and chat().
 
@@ -190,24 +200,38 @@ def _run_gemini(model: str, context: str, instruction: str) -> str:
     than mutating this process's os.environ. Not exercisable where the gemini CLI
     is absent — advisory callers must degrade to deterministic behavior on any
     RuntimeError raised here."""
-    out = subprocess.run(
-        ["gemini", "--skip-trust", "-m", model, "-p", instruction],
-        input=context,
-        capture_output=True, text=True, timeout=_TIMEOUT,
-        shell=(sys.platform == "win32"),
-        cwd=tempfile.gettempdir(),
-        encoding="utf-8",
-        env={**os.environ, "GEMINI_CLI_TRUST_WORKSPACE": "true"},
-    )
+    # Suppress true color terminal warnings in headless environments
+    env = os.environ.copy()
+    env["COLORTERM"] = "truecolor"
+    env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
+
+    with _gemini_cli_lock:
+        out = subprocess.run(
+            ["gemini", "--skip-trust", "-m", model, "--approval-mode", "yolo", "--allowed-mcp-server-names", "none", "-p", instruction],
+            input=context,
+            capture_output=True, text=True, timeout=_TIMEOUT,
+            shell=(sys.platform == "win32"),
+            cwd=_get_gemini_sandbox(),
+            encoding="utf-8",
+            env=env,
+        )
+
     if out.returncode != 0:
-        raise RuntimeError(f"Gemini CLI execution failed (exit code {out.returncode}): {out.stderr.strip()}")
+        err_msg = ""
+        if out.stderr.strip():
+            err_msg += out.stderr.strip()
+        if out.stdout.strip():
+            if err_msg:
+                err_msg += "\n"
+            err_msg += out.stdout.strip()
+        raise RuntimeError(f"Gemini CLI execution failed (exit code {out.returncode}): {err_msg}")
     return out.stdout.strip()
 
 
 def _call_gemini_cli(pcfg, system, user, max_tokens, temperature) -> str:
     return _run_gemini(pcfg.get("model", "gemini-2.5-flash"),
                        f"{system}\n\n{user}",
-                       "Please analyze the above data and respond:")
+                       "Please analyze the following data and respond. Do NOT use any tools. Rely ONLY on the text below:")
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
@@ -216,9 +240,36 @@ def chat(messages: list, system: str = "", provider: str | None = None,
          max_tokens: int = 1000, temperature: float = 0.5) -> str:
     """Multi-turn chat: `messages` is [{role: user|assistant, content: str}].
     The last message must be role=user. Returns the assistant reply. Raises on failure."""
-    name = provider or primary()
-    if not name:
+    if provider:
+        return _chat_one(messages, system, provider, max_tokens, temperature)
+
+    primary_name = primary()
+    if not primary_name:
         raise RuntimeError("No primary AI provider configured.")
+
+    providers_to_try = [primary_name] + [name for name in enabled_providers() if name != primary_name]
+
+    last_err = None
+    for name in providers_to_try:
+        try:
+            return _chat_one(messages, system, name, max_tokens, temperature)
+        except Exception as e:
+            try:
+                _ai_client_log = _get_logger("ai_client")
+                _ai_client_log.warning(
+                    f"AI chat failed for provider '{name}'; attempting fallback...",
+                    extra={"provider": name, "error": str(e)}
+                )
+            except Exception:
+                pass
+            last_err = e
+
+    if last_err:
+        raise last_err
+    raise RuntimeError("No AI providers were successful.")
+
+
+def _chat_one(messages: list, system: str, name: str, max_tokens: int, temperature: float) -> str:
     pcfg = _providers().get(name)
     if not pcfg or not pcfg.get("enabled"):
         raise RuntimeError(f"AI provider '{name}' is disabled or not found.")
@@ -236,7 +287,7 @@ def chat(messages: list, system: str = "", provider: str | None = None,
         context = (f"{system}\n\n{turns}" if system else turns)
         return _run_gemini(pcfg.get("model", "gemini-2.5-flash"),
                            context,
-                           "Please analyze the above conversation history and respond:")
+                           "Please analyze the following conversation history and respond. Do NOT use any tools. Rely ONLY on the text below:")
     else:
         raise NotImplementedError(f"Unsupported AI provider type: {ptype}")
 
@@ -245,9 +296,36 @@ def evaluate(system: str, user: str, provider: str | None = None,
              max_tokens: int = 200, temperature: float = 0.3) -> str:
     """Run one advisory evaluation on `provider` (defaults to primary()).
     Returns the model's text. Raises on failure."""
-    name = provider or primary()
-    if not name:
+    if provider:
+        return _evaluate_one(system, user, provider, max_tokens, temperature)
+
+    primary_name = primary()
+    if not primary_name:
         raise RuntimeError("No primary AI provider configured.")
+
+    providers_to_try = [primary_name] + [name for name in enabled_providers() if name != primary_name]
+
+    last_err = None
+    for name in providers_to_try:
+        try:
+            return _evaluate_one(system, user, name, max_tokens, temperature)
+        except Exception as e:
+            try:
+                _ai_client_log = _get_logger("ai_client")
+                _ai_client_log.warning(
+                    f"AI evaluation failed for provider '{name}'; attempting fallback...",
+                    extra={"provider": name, "error": str(e)}
+                )
+            except Exception:
+                pass
+            last_err = e
+
+    if last_err:
+        raise last_err
+    raise RuntimeError("No AI providers were successful.")
+
+
+def _evaluate_one(system: str, user: str, name: str, max_tokens: int, temperature: float) -> str:
     pcfg = _providers().get(name)
     if not pcfg or not pcfg.get("enabled"):
         raise RuntimeError(f"AI provider '{name}' is disabled or not found.")

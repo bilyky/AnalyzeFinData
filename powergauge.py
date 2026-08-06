@@ -77,8 +77,12 @@ from patterns import (
 
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
 
-# Chaikin Analytics app-level API key — set via CHAIKIN_API_KEY env var.
-_CHAIKIN_API_KEY = os.environ.get("CHAIKIN_API_KEY") or ""
+# Chaikin Analytics app-level API key — set via config or env var.
+try:
+    from config import CFG
+    _CHAIKIN_API_KEY = CFG.chaikin_api_key or os.environ.get("CHAIKIN_API_KEY") or ""
+except Exception:
+    _CHAIKIN_API_KEY = os.environ.get("CHAIKIN_API_KEY") or ""
 
 
 def _pgr_str(v: int) -> str:
@@ -215,9 +219,14 @@ XLSX_BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
 
 # ── Chaikin API ───────────────────────────────────────────────────────────────
-# Set CHAIKIN_API_KEY and CHAIKIN_UID env vars (see .env.example).
-_CHAIKIN_API_KEY = os.environ.get("CHAIKIN_API_KEY") or ""
-_CHAIKIN_UID = os.environ.get("CHAIKIN_UID") or ""
+# Loaded dynamically from central config (config.json / env vars)
+try:
+    from config import CFG
+    _CHAIKIN_API_KEY = CFG.chaikin_api_key or os.environ.get("CHAIKIN_API_KEY") or ""
+    _CHAIKIN_UID = CFG.chaikin_uid or os.environ.get("CHAIKIN_UID") or ""
+except Exception:
+    _CHAIKIN_API_KEY = os.environ.get("CHAIKIN_API_KEY") or ""
+    _CHAIKIN_UID = os.environ.get("CHAIKIN_UID") or ""
 # Concurrent workers for parallel symbol fetch in check_from_xls.
 _FETCH_WORKERS = int(os.environ.get("CHAIKIN_WORKERS", "10"))
 
@@ -284,6 +293,25 @@ class PowerGauge:
                     or (m.get('etf_data') or {}).get('list_name')
                     or m.get('name') or '')
         self.industry_name = industry.replace(',', '')
+        if not self.industry_name:
+            if _cache_file_index is None:
+                _build_cache_index()
+            candidates = (_cache_file_index or {}).get(self.symbol, [])
+            for path in reversed(candidates):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        prev_data = json.load(f)
+                    prev_meta = prev_data.get("metaInfo") or []
+                    if prev_meta and isinstance(prev_meta, list) and len(prev_meta) > 0:
+                        pm = prev_meta[0]
+                        prev_ind = (pm.get('industry_name') or pm.get('etf_group_name') or pm.get('industry_logo_name')
+                                    or (pm.get('etf_data') or {}).get('list_name')
+                                    or pm.get('name') or '')
+                        if prev_ind:
+                            self.industry_name = prev_ind.replace(',', '')
+                            break
+                except Exception:
+                    continue
         self.price = m.get('Last') if m.get('Last') is not None else _to_float(cl.get('lastPrice'), -1)
         self.max_price = self.price
         self.signals = m.get('signals')
@@ -1211,7 +1239,8 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
 
         final_price = power_g.price
 
-        row[4].value = power_g.industry_name
+        if power_g.industry_name:
+            row[4].value = power_g.industry_name
         row[5].value = f['prev_pgr']
         row[6].value = f['pgr']
         row[7].value = power_g.industry_strength

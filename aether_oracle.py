@@ -69,8 +69,10 @@ def audit_oracle_portfolio(acct):
             in_breach = True
             
         # ── Criteria 2: Technical Momentum Collapse ──
+        decay_limit = getattr(CFG, "oracle_decay_limit", -2.0)
+
         tech_decay = False
-        if total < -2.0 or status == "REDUCE":
+        if total < decay_limit or status == "REDUCE":
             tech_decay = True
 
         h_data = {
@@ -106,6 +108,10 @@ def get_oracle_buy_candidates(acct):
     held_syms = {h.get("symbol", "").upper() for h in acct.get("holdings", [])}
     candidates = []
 
+    s10_floor = getattr(CFG, "oracle_s10_floor", 2.5)
+    bubble_limit = getattr(CFG, "oracle_bubble_limit", 2.5)
+    min_rr = getattr(CFG, "oracle_min_rr_ratio", 1.5)
+
     try:
         research_data = data_api.read_research()
         rows = research_data.get("rows", [])
@@ -123,12 +129,12 @@ def get_oracle_buy_candidates(acct):
                 combined = s10 + l60
                 
                 # Check momentum floor
-                if s10 < 2.5:
+                if s10 < s10_floor:
                     continue
                     
                 # Rejects if bubble guard trips
                 z_score = ai_portfolio_game.calculate_bubble_z_score(sym)
-                if z_score is not None and z_score >= 2.5:
+                if z_score is not None and z_score >= bubble_limit:
                     continue  # bubble zone
                     
                 # Enforce strict Risk/Reward verification gate (Reward must be >= 1.5x of the Risk)
@@ -140,7 +146,7 @@ def get_oracle_buy_candidates(acct):
                 reward = target - price
                 rr_ratio = (reward / risk) if risk > 0 else 0.0
                 
-                if rr_ratio < 1.5:
+                if rr_ratio < min_rr:
                     continue  # Fail-safe R:R check: reject unfavorable narrow-upside setups
                     
                 candidates.append({

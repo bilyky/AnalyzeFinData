@@ -13,6 +13,9 @@ import json
 import os
 
 from aether import ai_client
+from aether.logger import get_logger as _get_logger
+
+_log = _get_logger("sell_eval")
 
 _RUBRIC_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "prompts", "sell_evaluation.md")
@@ -80,14 +83,18 @@ def _parse(text: str) -> dict:
 def evaluate_exit(ctx: dict, provider: str | None = None) -> dict:
     """Return {'verdict': ..., 'note': ..., 'provider': name} or {} if unavailable.
     Advisory; never raises."""
-    rubric = _rubric()
-    if not rubric:
+    try:
+        rubric = _rubric()
+        if not rubric:
+            return {}
+        name = provider or ai_client.primary()
+        if not name:
+            return {}
+        text = ai_client.evaluate(rubric, build_user_prompt(ctx), provider=name, max_tokens=120)
+        parsed = _parse(text)
+        if parsed:
+            parsed["provider"] = name
+        return parsed
+    except Exception as e:
+        _log.warning(f"AI exit evaluation failed for provider '{provider or 'primary'}': {e}")
         return {}
-    name = provider or ai_client.primary()
-    if not name:
-        return {}
-    text = ai_client.evaluate(rubric, build_user_prompt(ctx), provider=name, max_tokens=120)
-    parsed = _parse(text)
-    if parsed:
-        parsed["provider"] = name
-    return parsed

@@ -1,4 +1,5 @@
 import sys
+import json
 import console_safe
 import datetime
 import subprocess
@@ -74,6 +75,7 @@ def validate_sheets():
     except Exception as e:
         return False, f"Validation error: {e}"
 
+
 def check_earnings(symbol):
     return "Check Required"
 
@@ -132,19 +134,34 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
         _cutoff = (datetime.date.today() - datetime.timedelta(days=15)).isoformat()
         all_catalysts, all_missing, all_rd = [], [], []
         for i in intel_ideas:
+            if not isinstance(i, dict):
+                continue
             iv = i.get("intel") or {}
-            for c in iv.get("dated_catalysts", []):
-                d = str(c.get("date") or "")
-                # Keep: future/near dates (>= cutoff) OR year-only entries like "2026"
-                # Drop: specific past dates older than 15 days
-                try:
-                    if len(d) >= 10 and d[:10] < _cutoff:
+            if isinstance(iv, dict):
+                for c in iv.get("dated_catalysts", []):
+                    if not isinstance(c, dict):
                         continue
-                except Exception:
-                    pass
-                all_catalysts.append(c)
-            all_missing.extend(iv.get("missing_symbols", []))
-            all_rd.extend(iv.get("rd_topics", []))
+                    d = str(c.get("date") or "")
+                    # Keep: future/near dates (>= cutoff) OR year-only entries like "2026"
+                    # Drop: specific past dates older than 15 days
+                    try:
+                        if len(d) >= 10 and d[:10] < _cutoff:
+                            continue
+                    except Exception:
+                        pass
+                    all_catalysts.append(c)
+                
+                missing_syms = iv.get("missing_symbols", [])
+                if isinstance(missing_syms, list):
+                    all_missing.extend(missing_syms)
+                elif isinstance(missing_syms, dict):
+                    all_missing.append(missing_syms)
+                
+                rd_topics_list = iv.get("rd_topics", [])
+                if isinstance(rd_topics_list, list):
+                    all_rd.extend(rd_topics_list)
+                elif isinstance(rd_topics_list, str):
+                    all_rd.append(rd_topics_list)
 
         structural = ""
         if all_catalysts:
@@ -167,12 +184,18 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
             seen = set()
             badges = ""
             for m in all_missing:
-                if m.get("in_universe"):
-                    continue
-                sym = m.get("symbol", "")
+                if not isinstance(m, dict):
+                    # Handle robustly when elements are strings instead of dict objects
+                    sym = str(m).strip().upper()
+                    tip = ""
+                else:
+                    if m.get("in_universe"):
+                        continue
+                    sym = m.get("symbol", "")
+                    tip = _e(m.get("reason", ""))
+                
                 if sym and sym not in seen:
                     seen.add(sym)
-                    tip = _e(m.get("reason", ""))
                     badges += (f'<span title="{tip}" style="display:inline-block;margin:2px 4px;'
                                f'padding:2px 8px;background:#fff3e0;border:1px solid #ffb74d;'
                                f'border-radius:3px;font-size:12px;cursor:help;"><b>{_e(sym)}</b></span>')
@@ -336,8 +359,18 @@ def main():
     report_only = "--report-only" in sys.argv[1:] or "--cached" in sys.argv[1:]
     
     intel_ideas = []
+    cache_path = BASE_DIR / "Data" / "intel_ideas_cache.json"
+
     if report_only:
         log("⏩ Running in --report-only / --cached mode. Skipping email intelligence, history backfills, and workbook refreshes...")
+        if cache_path.exists():
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    intel_ideas = json.load(f)
+                if intel_ideas:
+                    log(f"Loaded {len(intel_ideas)} cached ideas from {cache_path.name}.")
+            except Exception as e:
+                log(f"Warning: Failed to load cached email ideas: {e}")
     else:
         # 0. Gather External Intel (Emails & News)
         log("Gathering external intelligence...")
@@ -345,6 +378,12 @@ def main():
             intel_ideas = external_intel.fetch_idea_emails()
             if intel_ideas:
                 log(f"Fetched {len(intel_ideas)} ideas from email.")
+                try:
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(cache_path, "w", encoding="utf-8") as f:
+                        json.dump(intel_ideas, f, indent=2)
+                except Exception as e:
+                    log(f"Warning: Failed to cache email ideas: {e}")
             else:
                 _pipeline_log.warning("External intel fetch returned 0 ideas — mailbox auth may have failed. Check aether.jsonl for details.")
                 log("Warning: 0 ideas from email scan — see log for details.")
@@ -362,13 +401,13 @@ def main():
                 script_path = str(BASE_DIR / "run_history.py")
                 subprocess.run(
                     [sys.executable, script_path, "5"], 
-                    check=True, capture_output=True, 
+                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, 
                     encoding="utf-8", errors="replace",
-                    timeout=120  # Fail fast after 2 minutes!
+                    timeout=300  # Fail fast after 5 minutes!
                 )
                 log("History backfilled.")
             except subprocess.TimeoutExpired:
-                log("Warning: run_history.py timed out after 120s (Playwright hang likely). Bypassing backfill...")
+                log("Warning: run_history.py timed out after 300s (Playwright hang likely). Bypassing backfill...")
             except subprocess.CalledProcessError as e:
                 log(f"Warning: run_history.py failed (will continue): {e.stderr}")
 
@@ -378,15 +417,15 @@ def main():
             script_path = str(BASE_DIR / "main.py")
             subprocess.run(
                 [sys.executable, script_path], 
-                check=True, capture_output=True, 
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, 
                 encoding="utf-8", errors="replace",
-                timeout=180  # Fail fast after 3 minutes!
+                timeout=300  # Fail fast after 5 minutes!
             )
             log("Workbook regenerated.")
         except subprocess.TimeoutExpired:
             # The workbook is the day's source of truth — do NOT silently continue on
             # stale data (Zero-Trust). Alert and abort so nothing downstream trades on it.
-            error_msg = "main.py execution timed out after 180s (Playwright hang likely)."
+            error_msg = "main.py execution timed out after 300s (Playwright hang likely)."
             log(f"ABORT: {error_msg}")
             if not no_email:
                 notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline aborted: {error_msg}")

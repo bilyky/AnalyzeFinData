@@ -93,6 +93,9 @@ _SYMBOL_OVERRIDES = {
     "IAC": "IACVV",
 }
 
+# Pure index tickers or other symbols that Alpha Vantage does not support via standard daily endpoints.
+_UNSUPPORTED_SYMBOLS = {"NDX", "SPX", "COMP", "DJI"}
+
 def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
     """Single Alpha Vantage HTTP call. Returns parsed JSON. Raises on error."""
     key = CFG.rapidapi_key
@@ -195,6 +198,10 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> d
     results = {"updated": 0, "skipped": 0, "errors": []}
 
     for i, sym in enumerate(symbols, 1):
+        if sym.upper() in _UNSUPPORTED_SYMBOLS:
+            results["skipped"] += 1
+            continue
+
         path = os.path.join(OHLCV_DIR, f"{sym}_daily.json")
         needs, existing = _check_recovery(path, today_str)
         if not needs and not force:

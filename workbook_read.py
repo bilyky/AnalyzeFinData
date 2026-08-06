@@ -59,6 +59,14 @@ def get_top_5_picks():
             industry = str(row[4] or "")
 
             if is_setup_ok:
+                # Enforce strict Risk/Reward filter (Reward must be >= 1.5x of the Risk)
+                risk = price - stop
+                reward = target - price
+                rr_ratio = (reward / risk) if risk > 0 else 0.0
+
+                if rr_ratio < 1.5:
+                    continue  # Fail-safe R:R check: reject unfavorable narrow-upside setups
+
                 atr = risk_utils.calculate_atr(sym)
                 shares_atr = risk_utils.get_atr_position_size(price, atr, ACCOUNT_RISK_USD)
                 shares_stop = risk_utils.get_position_size(price, stop, ACCOUNT_RISK_USD)
