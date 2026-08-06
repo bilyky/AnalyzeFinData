@@ -95,8 +95,11 @@ _SYMBOL_OVERRIDES = {
     "IAC": "IACVV",
 }
 
-# Pure index tickers or other symbols that Alpha Vantage does not support via standard daily endpoints.
-_UNSUPPORTED_SYMBOLS = {"NDX", "SPX", "COMP", "DJI"}
+# Index pseudo-tickers that Alpha Vantage's TIME_SERIES_DAILY endpoint cannot serve.
+# None are in the traded universe today; the set only documents intent. Do NOT add real
+# equity tickers here — e.g. COMP is Compass, Inc. (a live NYSE stock with real-volume
+# history in the universe), NOT the Nasdaq Composite; excluding it silently starves it of repair.
+_UNSUPPORTED_SYMBOLS = {"NDX", "SPX", "DJI"}
 
 def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
     """Single Alpha Vantage HTTP call. Returns parsed JSON. Raises on error."""

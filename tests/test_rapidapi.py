@@ -185,5 +185,37 @@ class TestAppendOhlcvEntry(unittest.TestCase):
         self.assertTrue(bar_provenance.is_provisional(bar))  # recognized by the gate
 
 
+class TestUnsupportedSymbols(unittest.TestCase):
+    """repair_missing skips only true index aliases — never a real universe equity."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_dir = rapidapi.OHLCV_DIR
+        rapidapi.OHLCV_DIR = self.dir
+        self.addCleanup(lambda: setattr(rapidapi, "OHLCV_DIR", self._orig_dir))
+
+    def test_index_alias_is_skipped_without_fetch(self):
+        # A true index pseudo-ticker AV's daily endpoint can't serve is skipped, no HTTP.
+        with mock.patch.object(rapidapi, "_fetch_raw") as m:
+            res = rapidapi.repair_missing(["SPX"], TODAY, force=True)
+        m.assert_not_called()
+        self.assertEqual(res["skipped"], 1)
+        self.assertEqual(res["updated"], 0)
+
+    def test_real_equity_ticker_is_not_excluded(self):
+        # Regression: COMP is Compass, Inc. (NYSE), not the Nasdaq Composite. It must NOT be
+        # hardcoded-excluded, or its stale cache would never get repaired.
+        self.assertNotIn("COMP", rapidapi._UNSUPPORTED_SYMBOLS)
+        raw = {"Meta Data": {"3. Last Refreshed": TODAY},
+               "Time Series (Daily)": {TODAY: _real_bar(7.8, 8.0, 7.7, 7.85, 6208611)}}
+        with mock.patch.object(rapidapi, "SLEEP_SEC", 0), \
+             mock.patch.object(rapidapi, "_fetch_raw", return_value=raw) as m:
+            res = rapidapi.repair_missing(["COMP"], TODAY, force=True)
+        m.assert_called_once()                       # a fetch was actually attempted
+        self.assertEqual(res["updated"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
