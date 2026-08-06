@@ -941,12 +941,16 @@ def _append_ohlcv_entry(symbol: str, date_str: str, power_g: "PowerGauge", ohlcv
 
     close = round(power_g.price, 4)
     high  = round(power_g.max_price, 4) if power_g.max_price and power_g.max_price >= close else close
+    # Close-only placeholder: Chaikin/PowerGauge exposes no real low/volume. Mark it
+    # provisional so the RapidAPI recovery pass (rapidapi._check_recovery) overwrites it
+    # with settled OHLCV and volume/range consumers (MFI, RBR) skip it. The close is real.
     entry = {
         "1. open":   str(close),
         "2. high":   str(high),
         "3. low":    str(close),
         "4. close":  str(close),
         "5. volume": "0",
+        "provisional": True,
     }
 
     try:

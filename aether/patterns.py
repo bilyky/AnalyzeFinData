@@ -6,7 +6,9 @@ Weights are PLACEHOLDER until backtest_ratings.py Phase A runs produce spread da
 """
 
 import numpy as np
+
 from aether import signals as sig
+from bar_provenance import is_provisional
 
 
 # ── OHLCV adapter ────────────────────────────────────────────────────────────
@@ -20,6 +22,10 @@ def ohlcv_to_array(ohlcv_ts: dict, date_str: str, lookback: int = 250):
         return None
     dates = sorted(ohlcv_ts.keys())
     past = [d for d in dates if d <= date_str]
+    # Drop trailing provisional bars (Chaikin close-only placeholders): their open/high/low
+    # and volume are unreliable, which would mis-fire volume (MFI) and candlestick logic.
+    while past and is_provisional(ohlcv_ts[past[-1]]):
+        past.pop()
     if len(past) < 10:
         return None
     window = past[-lookback:]

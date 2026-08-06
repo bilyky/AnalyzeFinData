@@ -25,9 +25,15 @@ import os
 import sys
 import time
 
+import numpy as np
 import requests
 
+from aether.logger import get_logger as _get_logger
+from bar_provenance import is_provisional, mark_verified as _mark_verified
 from config import CFG
+from run_history import load_symbols
+
+_log = _get_logger("rapidapi")
 
 _DIR      = os.path.dirname(os.path.abspath(__file__))
 OHLCV_DIR = os.path.join(_DIR, "Data", "Symbol_full")
@@ -58,6 +64,11 @@ def _latest_date(ts: dict) -> str | None:
     return max(ts.keys()) if ts else None
 
 
+# Bar-provenance predicates (is_provisional / is_verified / _mark_verified) live in the
+# stdlib-only leaf module ``bar_provenance`` and are re-exported above so both this recovery
+# layer and the pattern/volume consumers share one definition without importing each other.
+
+
 def _check_recovery(path: str, today_str: str) -> tuple[bool, dict | None]:
     """Return (needs_repair, cache_or_None). Loads the file once; caller reuses the cache."""
     cache = _load_cache(path)
@@ -68,7 +79,14 @@ def _check_recovery(path: str, today_str: str) -> tuple[bool, dict | None]:
     if not latest:
         return True, None
     gap = (datetime.date.fromisoformat(today_str) - datetime.date.fromisoformat(latest)).days
-    return gap > MAX_GAP_DAYS, cache
+    if gap > MAX_GAP_DAYS:
+        return True, cache
+    # A provisional (Chaikin close-only) latest bar has no real volume/range, so repair it
+    # even though its date is current (gap == 0) — this is what the old gap-only gate missed.
+    # Any bar with real volume (verified or legacy) is trusted and skipped.
+    if is_provisional(ts[latest]):
+        return True, cache
+    return False, cache
 
 
 _SYMBOL_OVERRIDES = {
@@ -117,8 +135,20 @@ def _write_atomic(path: str, data: dict) -> None:
 
 
 def _fetch_and_merge(symbol: str, path: str, outputsize: str = "compact") -> None:
-    """Fetch from RapidAPI and merge into existing file (or write fresh)."""
+    """Fetch from RapidAPI and merge into the existing file (or write fresh).
+
+    The overwrite of the last 3 days replaces any Chaikin ``provisional`` placeholder with
+    settled OHLCV. Bars carrying real volume are stamped ``"verified": True`` — a provenance
+    marker for volume-confirmation consumers (MFI, RBR); see ``_mark_verified``.
+    """
     raw = _fetch_raw(symbol, outputsize)
+    new_ts = raw["Time Series (Daily)"]
+
+    # Stamp the newest bar (full/fresh-write path). A zero-volume API bar (delisted/dead
+    # symbol) is left unstamped — see _mark_verified.
+    latest_new = max(new_ts.keys()) if new_ts else None
+    if latest_new:
+        _mark_verified(new_ts[latest_new])
 
     if outputsize == "full" or not os.path.exists(path):
         _write_atomic(path, raw)
@@ -129,20 +159,20 @@ def _fetch_and_merge(symbol: str, path: str, outputsize: str = "compact") -> Non
         _write_atomic(path, raw)
         return
 
-    new_ts      = raw["Time Series (Daily)"]
     existing_ts = existing["Time Series (Daily)"]
-    
-    # Always explicitly overwrite today's and the last 3 days of bars in the cache 
-    # with fresh API data. This guarantees that any low-volume, pre-market, or 
-    # intraday placeholder prints are always overridden with the official settled closes.
+
+    # Always overwrite the last 3 days of bars with fresh API data, so any Chaikin
+    # placeholder (provisional) print is replaced by the official settled close. Bars
+    # with real volume are stamped verified (provenance for MFI/RBR).
     new_dates = sorted(new_ts.keys(), reverse=True)
     for d in new_dates[:3]:
+        _mark_verified(new_ts[d])
         existing_ts[d] = new_ts[d]
 
     # Plus, append any older historical dates that are missing
     added = {d: v for d, v in new_ts.items() if d not in existing_ts}
     existing_ts.update(added)
-    
+
     latest = max(existing_ts.keys())
     existing.setdefault("Meta Data", {})["3. Last Refreshed"] = latest
     _write_atomic(path, existing)
@@ -175,12 +205,12 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> d
         try:
             _fetch_and_merge(sym, path, outputsize=outputsize)
             results["updated"] += 1
-            print(f"  [RapidAPI] {sym}: {outputsize} fetch OK "
-                  f"({i}/{len(symbols)}, updated={results['updated']})")
+            _log.console("  [RapidAPI] %s: %s fetch OK (%d/%d, updated=%d)",
+                         sym, outputsize, i, len(symbols), results["updated"])
             time.sleep(SLEEP_SEC)
         except Exception as e:
             results["errors"].append((sym, str(e)))
-            print(f"  [RapidAPI] {sym}: ERROR - {e}")
+            _log.error("  [RapidAPI] %s: ERROR - %s", sym, e)
 
     return results
 
@@ -207,7 +237,6 @@ def get_data(symbol: str, outputsize: str = "compact") -> str:
 
 
 def get_quotes(time_frame, year=2022, month=1, day=1, symbol='MSFT'):
-    import numpy as np
     result = []
     if time_frame == 'D1':
         path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
@@ -239,15 +268,12 @@ if __name__ == "__main__":
         syms = [s.upper() for s in args]
     else:
         # Load all symbols from Research sheet
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from run_history import load_symbols
         syms = load_symbols()
 
-    print(f"[RapidAPI] Recovery pass — {len(syms)} symbols, today={today_str}, force={force}")
+    _log.console("[RapidAPI] Recovery pass — %d symbols, today=%s, force=%s",
+                 len(syms), today_str, force)
     result = repair_missing(syms, today_str, force=force)
-    print(f"\n[RapidAPI] Done: {result['updated']} fetched, "
-          f"{result['skipped']} already current, "
-          f"{len(result['errors'])} errors")
-    if result["errors"]:
-        for sym, err in result["errors"]:
-            print(f"  ERROR {sym}: {err}")
+    _log.console("[RapidAPI] Done: %d fetched, %d already current, %d errors",
+                 result["updated"], result["skipped"], len(result["errors"]))
+    for sym, err in result["errors"]:
+        _log.error("  ERROR %s: %s", sym, err)
