@@ -3,9 +3,9 @@ Red-green tests for the OHLCV real-volume data-integrity fix.
 
 Covers the bar-provenance model:
   - Chaikin close-only bars are marked ``provisional`` (powergauge._append_ohlcv_entry).
-  - RapidAPI-fetched bars with real volume are stamped ``verified`` (rapidapi._fetch_and_merge).
   - The recovery gate (rapidapi._check_recovery) repairs a provisional/volume==0 latest
     bar even when its date is current, and skips any bar with real volume.
+  - _fetch_and_merge overwrites a provisional latest bar with the real API bar.
 
 All HTTP is mocked; no network, no live RapidAPI key required.
 """
@@ -54,12 +54,6 @@ class TestProvenanceHelpers(unittest.TestCase):
         self.assertFalse(bar_provenance.is_provisional(_real_bar(10, 11, 9, 10, 500000)))
         self.assertFalse(bar_provenance.is_provisional(None))
         self.assertFalse(bar_provenance.is_provisional({"5. volume": "not-a-number"}))
-
-    def test_is_verified(self):
-        self.assertTrue(bar_provenance.is_verified({"4. close": "10", "verified": True}))
-        self.assertFalse(bar_provenance.is_verified(_real_bar(10, 11, 9, 10, 500000)))
-        self.assertFalse(bar_provenance.is_verified(None))
-
 
 class TestCheckRecovery(unittest.TestCase):
 
@@ -111,7 +105,7 @@ class TestFetchAndMerge(unittest.TestCase):
         self.dir = self._tmp.name
         self.addCleanup(self._tmp.cleanup)
 
-    def test_overwrites_provisional_latest_with_real_verified_bar(self):
+    def test_overwrites_provisional_latest_with_real_bar(self):
         # Existing cache: real history + a provisional today bar (volume 0, low==close).
         ts = {"2026-08-03": _real_bar(10, 11, 9, 10, 300000),
               "2026-08-04": _real_bar(10, 12, 10, 11, 350000),
@@ -131,12 +125,12 @@ class TestFetchAndMerge(unittest.TestCase):
         bar = merged[TODAY]
         self.assertEqual(float(bar["5. volume"]), 1250000)   # real volume in
         self.assertNotIn("provisional", bar)                 # placeholder gone
-        self.assertTrue(bar.get("verified"))                 # provenance stamp
+        self.assertFalse(bar_provenance.is_provisional(bar))  # recognized as a real bar
         # A subsequent recovery check now skips this symbol.
         needs, _ = rapidapi._check_recovery(path, TODAY)
         self.assertFalse(needs)
 
-    def test_full_fetch_stamps_latest_verified(self):
+    def test_full_fetch_writes_real_nonprovisional_bar(self):
         raw = {"Meta Data": {"3. Last Refreshed": TODAY},
                "Time Series (Daily)": {
                    "2026-08-04": _real_bar(10, 12, 10, 11, 350000),
@@ -146,12 +140,12 @@ class TestFetchAndMerge(unittest.TestCase):
             rapidapi._fetch_and_merge("GGG", path, outputsize="full")
         with open(path) as f:
             ts = json.load(f)["Time Series (Daily)"]
-        self.assertTrue(ts[TODAY].get("verified"))
+        self.assertFalse(bar_provenance.is_provisional(ts[TODAY]))
 
-    def test_zero_volume_api_bar_is_not_verified(self):
+    def test_zero_volume_api_bar_stays_provisional(self):
         # Real API data whose latest bar has volume 0 (delisted/dead symbol's final print).
-        # It must NOT be stamped verified — verified means confirmed real volume, and a
-        # zero-volume bar is still provisional. (Regression: caught on live HOLX/IRBT/K/PCH.)
+        # A zero-volume bar must still be treated as provisional so consumers skip it.
+        # (Regression: caught on live HOLX/IRBT/K/PCH.)
         raw = {"Meta Data": {"3. Last Refreshed": TODAY},
                "Time Series (Daily)": {
                    "2026-08-03": _real_bar(10, 12, 10, 11, 350000),
@@ -161,9 +155,7 @@ class TestFetchAndMerge(unittest.TestCase):
             rapidapi._fetch_and_merge("III", path, outputsize="full")
         with open(path) as f:
             bar = json.load(f)["Time Series (Daily)"][TODAY]
-        self.assertNotIn("verified", bar)                       # not confirmed real volume
-        self.assertTrue(bar_provenance.is_provisional(bar))     # still a placeholder (vol 0)
-        self.assertFalse(bar_provenance.is_verified(bar))
+        self.assertTrue(bar_provenance.is_provisional(bar))     # vol 0 → still a placeholder
 
 
 class TestAppendOhlcvEntry(unittest.TestCase):

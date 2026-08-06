@@ -8,6 +8,8 @@ This module handles recovery only:
   - Missing Symbol_full/{sym}_daily.json files  → full fetch
   - Corrupted files (bad JSON, missing key)      → full fetch
   - Files with gap > MAX_GAP_DAYS               → compact fetch (last 100 days merged)
+  - Latest bar is provisional (Chaikin close-only, volume 0) → compact fetch to
+    overwrite it with settled real-volume OHLCV (see bar_provenance.is_provisional)
 
 Usage:
     python rapidapi.py                 # repair all symbols from Research sheet
@@ -29,7 +31,7 @@ import numpy as np
 import requests
 
 from aether.logger import get_logger as _get_logger
-from bar_provenance import is_provisional, mark_verified as _mark_verified
+from bar_provenance import is_provisional
 from config import CFG
 from run_history import load_symbols
 
@@ -64,9 +66,9 @@ def _latest_date(ts: dict) -> str | None:
     return max(ts.keys()) if ts else None
 
 
-# Bar-provenance predicates (is_provisional / is_verified / _mark_verified) live in the
-# stdlib-only leaf module ``bar_provenance`` and are re-exported above so both this recovery
-# layer and the pattern/volume consumers share one definition without importing each other.
+# The is_provisional predicate lives in the stdlib-only leaf module ``bar_provenance`` and is
+# imported above so both this recovery layer and the pattern/volume consumers share one
+# definition without importing each other.
 
 
 def _check_recovery(path: str, today_str: str) -> tuple[bool, dict | None]:
@@ -83,7 +85,7 @@ def _check_recovery(path: str, today_str: str) -> tuple[bool, dict | None]:
         return True, cache
     # A provisional (Chaikin close-only) latest bar has no real volume/range, so repair it
     # even though its date is current (gap == 0) — this is what the old gap-only gate missed.
-    # Any bar with real volume (verified or legacy) is trusted and skipped.
+    # Any bar with real volume (volume > 0) is trusted and skipped.
     if is_provisional(ts[latest]):
         return True, cache
     return False, cache
@@ -141,17 +143,10 @@ def _fetch_and_merge(symbol: str, path: str, outputsize: str = "compact") -> Non
     """Fetch from RapidAPI and merge into the existing file (or write fresh).
 
     The overwrite of the last 3 days replaces any Chaikin ``provisional`` placeholder with
-    settled OHLCV. Bars carrying real volume are stamped ``"verified": True`` — a provenance
-    marker for volume-confirmation consumers (MFI, RBR); see ``_mark_verified``.
+    settled real-volume OHLCV, so volume-confirmation consumers (MFI, RBR) see real bars.
     """
     raw = _fetch_raw(symbol, outputsize)
     new_ts = raw["Time Series (Daily)"]
-
-    # Stamp the newest bar (full/fresh-write path). A zero-volume API bar (delisted/dead
-    # symbol) is left unstamped — see _mark_verified.
-    latest_new = max(new_ts.keys()) if new_ts else None
-    if latest_new:
-        _mark_verified(new_ts[latest_new])
 
     if outputsize == "full" or not os.path.exists(path):
         _write_atomic(path, raw)
@@ -165,11 +160,9 @@ def _fetch_and_merge(symbol: str, path: str, outputsize: str = "compact") -> Non
     existing_ts = existing["Time Series (Daily)"]
 
     # Always overwrite the last 3 days of bars with fresh API data, so any Chaikin
-    # placeholder (provisional) print is replaced by the official settled close. Bars
-    # with real volume are stamped verified (provenance for MFI/RBR).
+    # placeholder (provisional) print is replaced by the official settled close.
     new_dates = sorted(new_ts.keys(), reverse=True)
     for d in new_dates[:3]:
-        _mark_verified(new_ts[d])
         existing_ts[d] = new_ts[d]
 
     # Plus, append any older historical dates that are missing
