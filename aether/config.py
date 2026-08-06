@@ -121,6 +121,7 @@ class _Config:
         self.oracle_account = (
             os.environ.get("ORACLE_ACCOUNT")
             or oracle.get("account")
+            or oracle.get("account_id")
             or (self.accounts_real[0] if self.accounts_real else "")
         )
         self.oracle_start_equity = float(
