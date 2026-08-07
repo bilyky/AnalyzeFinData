@@ -88,12 +88,61 @@ def audit_oracle_portfolio(acct):
             "status": status,
             "reason": ""
         }
-        
+
+        # Determine technical action
+        action = "HOLD"
+        reason = ""
         if in_breach:
-            h_data["reason"] = f"CRITICAL STOP BREACH: Price ${current:.2f} fell below stop floor of ${stop:.2f}."
-            sells.append(h_data)
+            action = "SELL"
+            reason = f"CRITICAL STOP BREACH: Price ${current:.2f} fell below stop floor of ${stop:.2f}."
         elif tech_decay:
-            h_data["reason"] = f"MOMENTUM COLLAPSE: Technical score is decaying heavily at {total:.1f} (Short10: {s10:.1f}, Long60: {l60:.1f})."
+            action = "SELL"
+            reason = f"MOMENTUM COLLAPSE: Technical score is decaying heavily at {total:.1f} (Short10: {s10:.1f}, Long60: {l60:.1f})."
+
+        # AI Exit Override Gate
+        ai_override = False
+        override_verdict = ""
+        override_reason = ""
+
+        # 1. Check standard shadow_verdict / ai_verdict / verdict keys in the holding
+        for key in ["shadow_verdict", "ai_verdict", "verdict"]:
+            if key in h:
+                val = h[key]
+                if isinstance(val, dict):
+                    v = val.get("verdict", "").upper()
+                    note = val.get("note", "")
+                else:
+                    v = str(val).upper()
+                    note = ""
+                if v in ("FLAG-FOR-REVIEW", "HOLD"):
+                    ai_override = True
+                    override_verdict = v
+                    override_reason = f"AI Second-Opinion ({key}) returned {v}" + (f": {note}" if note else "")
+                    break
+
+        # 2. Check verdicts dictionary inside the holding
+        if not ai_override:
+            pos_verdicts = h.get("verdicts", {})
+            if isinstance(pos_verdicts, dict):
+                for prov, v_info in pos_verdicts.items():
+                    v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
+                    if v in ("FLAG-FOR-REVIEW", "HOLD"):
+                        ai_override = True
+                        override_verdict = v
+                        override_reason = f"AI Second-Opinion verdicts ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
+                        break
+
+        # Apply AI Exit Override Gate to downgrade SELL decisions
+        if action == "SELL" and ai_override:
+            old_action = action
+            action = "HOLD" if override_verdict == "HOLD" else "WATCH"
+            reason = f"⚠️ [AI EXIT OVERRIDE] {old_action} overridden! Downgraded to {action} due to {override_reason} (was {reason})"
+            _oracle_log.info(f"🛡️ [AI OVERRIDE] Real-account position {sym} sell overridden! Downgraded to {action} due to: {override_reason}")
+
+        h_data["reason"] = reason
+        h_data["action"] = action
+        
+        if action in ("SELL", "REDUCE"):
             sells.append(h_data)
         else:
             holds.append(h_data)
