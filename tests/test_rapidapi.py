@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest import mock
@@ -237,6 +238,58 @@ class TestRepairMissingRateLimiting(unittest.TestCase):
         self.assertEqual(len(res["errors"]), 2)
         self.assertEqual(mock_sleep.call_count, 2)
         mock_sleep.assert_has_calls([mock.call(rapidapi.SLEEP_SEC), mock.call(rapidapi.SLEEP_SEC)])
+
+
+class TestCrossProcessLock(unittest.TestCase):
+    """repair_missing serializes concurrent recovery via a Data/rapidapi.lock sentinel."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        # OHLCV_DIR is a subdir so the lock (dirname(OHLCV_DIR)/rapidapi.lock) lands inside
+        # the tempdir and is removed with it — never the real repo Data/rapidapi.lock.
+        self.dir = os.path.join(self._tmp.name, "Symbol_full")
+        os.makedirs(self.dir)
+        self.lock_path = os.path.join(self._tmp.name, "rapidapi.lock")
+        self._orig_dir = rapidapi.OHLCV_DIR
+        rapidapi.OHLCV_DIR = self.dir
+        self.addCleanup(lambda: setattr(rapidapi, "OHLCV_DIR", self._orig_dir))
+
+    def _raw(self):
+        return {"Meta Data": {"3. Last Refreshed": TODAY},
+                "Time Series (Daily)": {TODAY: _real_bar(10, 11, 9, 10, 500000)}}
+
+    def test_lock_released_after_normal_run(self):
+        with mock.patch.object(rapidapi, "SLEEP_SEC", 0), \
+             mock.patch.object(rapidapi, "_fetch_raw", return_value=self._raw()):
+            rapidapi.repair_missing(["AAA"], TODAY, force=True)
+        self.assertFalse(os.path.exists(self.lock_path))   # released in finally
+
+    def test_held_lock_skips_without_fetching(self):
+        # A fresh lock simulates another live process mid-recovery.
+        with open(self.lock_path, "w"):
+            pass
+        with mock.patch.object(rapidapi, "_fetch_raw") as m:
+            res = rapidapi.repair_missing(["AAA"], TODAY, force=True)
+        m.assert_not_called()                              # no collision on the API
+        self.assertTrue(res.get("locked"))                # contention signalled distinctly
+        self.assertEqual(res["updated"], 0)
+        self.assertEqual(res["skipped"], 1)
+        self.assertTrue(os.path.exists(self.lock_path))    # the holder's lock left intact
+
+    def test_stale_lock_is_reclaimed(self):
+        # A lock older than the TTL (crashed run) must not block recovery forever.
+        with open(self.lock_path, "w"):
+            pass
+        old = time.time() - 9001                           # just past the 2.5h TTL
+        os.utime(self.lock_path, (old, old))
+        with mock.patch.object(rapidapi, "SLEEP_SEC", 0), \
+             mock.patch.object(rapidapi, "_fetch_raw", return_value=self._raw()) as m:
+            res = rapidapi.repair_missing(["AAA"], TODAY, force=True)
+        m.assert_called_once()                             # reclaimed → fetch proceeded
+        self.assertEqual(res["updated"], 1)
+        self.assertFalse(res.get("locked"))
+        self.assertFalse(os.path.exists(self.lock_path))   # reclaimed then released
 
 
 if __name__ == "__main__":
