@@ -130,6 +130,23 @@ class TestResolveStop(unittest.TestCase):
             self.assertLess(s, 100.0)
             self.assertGreater(s, 0)
 
+    @mock.patch("aether.risk_utils.pd.DataFrame.from_dict")
+    @mock.patch("aether.risk_utils.Path.exists", return_value=True)
+    @mock.patch("builtins.open", mock.mock_open(read_data="{\"Time Series (Daily)\": {\"2026-08-01\": {}}}"))
+    def test_calculate_atr_duplicate_columns(self, mock_exists, mock_from_dict):
+        import pandas as pd
+        # Return a dataframe with 15 rows and duplicate '5. volume' columns to trigger the Length mismatch on broken code
+        df = pd.DataFrame(
+            [[10.0, 12.0, 8.0, 11.0, 1000.0, 1000.0]] * 15, 
+            columns=['1. open', '2. high', '3. low', '4. close', '5. volume', '5. volume'],
+            index=[f"2026-08-{i:02d}" for i in range(1, 16)]
+        )
+        mock_from_dict.return_value = df
+        
+        # This will raise a Length mismatch exception on the broken codebase and pass on the fixed codebase
+        atr = risk_utils.calculate_atr("MOCK_SYM")
+        self.assertEqual(atr, 4.0)
+
 
 if __name__ == "__main__":
     unittest.main()

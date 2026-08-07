@@ -148,6 +148,10 @@ class _Config:
             os.environ.get("ORACLE_START_EQUITY") or oracle.get("start_equity") or 0.0
         )
         self.oracle_target_date = os.environ.get("ORACLE_TARGET_DATE") or oracle.get("target_date", "")
+        self.oracle_s10_floor = float(os.environ.get("ORACLE_S10_FLOOR") or oracle.get("s10_floor", 2.5))
+        self.oracle_bubble_limit = float(os.environ.get("ORACLE_BUBBLE_LIMIT") or oracle.get("bubble_limit", 2.5))
+        self.oracle_min_rr_ratio = float(os.environ.get("ORACLE_MIN_RR_RATIO") or oracle.get("min_rr_ratio", 1.5))
+        self.oracle_decay_limit = float(os.environ.get("ORACLE_DECAY_LIMIT") or oracle.get("decay_limit", -2.0))
 
         # ── Legacy PostgreSQL (database.py — unused in normal operation) ────────
         db = raw.get("database") or {}
@@ -170,16 +174,6 @@ class _Config:
         # HMAC signing secret for session tokens. Empty = server generates an
         # ephemeral one at startup (tokens don't survive a restart).
         self.web_secret = os.environ.get("WEB_SECRET") or web.get("secret", "")
-
-        # ── AETHER Oracle ───────────────────────────────────────────────────
-        oracle = raw.get("oracle") or {}
-        self.oracle_account_id = os.environ.get("ORACLE_ACCOUNT_ID") or oracle.get("account_id", "0053")
-        self.oracle_start_equity = float(os.environ.get("ORACLE_START_EQUITY") or oracle.get("start_equity", 22978.72))
-        self.oracle_target_date = os.environ.get("ORACLE_TARGET_DATE") or oracle.get("target_date", "2026-12-31")
-        self.oracle_s10_floor = float(os.environ.get("ORACLE_S10_FLOOR") or oracle.get("s10_floor", 2.5))
-        self.oracle_bubble_limit = float(os.environ.get("ORACLE_BUBBLE_LIMIT") or oracle.get("bubble_limit", 2.5))
-        self.oracle_min_rr_ratio = float(os.environ.get("ORACLE_MIN_RR_RATIO") or oracle.get("min_rr_ratio", 1.5))
-        self.oracle_decay_limit = float(os.environ.get("ORACLE_DECAY_LIMIT") or oracle.get("decay_limit", -2.0))
 
         # ── Configuration Health Checks ───────────────────────────────────────
         self.verify_config_health()

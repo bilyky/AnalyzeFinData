@@ -3,6 +3,9 @@ import json
 import os
 import pandas as pd
 from pathlib import Path
+from aether.logger import get_logger as _get_logger
+
+_log = _get_logger("risk_utils")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 OHLCV_DIR = BASE_DIR / "Data" / "Symbol_full"
@@ -12,35 +15,52 @@ def calculate_atr(symbol, period=14):
     path = OHLCV_DIR / f"{symbol}_daily.json"
     if not path.exists():
         return None
-    
-    with open(path) as f:
-        data = json.load(f)
-    
-    ts = data.get("Time Series (Daily)")
-    if not ts:
+
+    try:
+        with open(path) as f:
+            data = json.load(f)
+
+        ts = data.get("Time Series (Daily)")
+        if not ts:
+            return None
+
+        # Convert to DataFrame
+        df = pd.DataFrame.from_dict(ts, orient="index")
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()
+
+        # De-duplicate columns (bug-fix: prevents Length mismatch on duplicate columns)
+        df = df.loc[:, ~df.columns.duplicated()]
+
+        # Select only standard Alpha Vantage columns by name to ignore provenance stamps/custom metadata
+        standard_cols = ["1. open", "2. high", "3. low", "4. close", "5. volume"]
+        existing_cols = [c for c in standard_cols if c in df.columns]
+        df = df[existing_cols]
+
+        # Safely rename columns to avoid length mismatch issues
+        mapping = {
+            "1. open": "open",
+            "2. high": "high",
+            "3. low": "low",
+            "4. close": "close",
+            "5. volume": "volume"
+        }
+        df = df.rename(columns=mapping)
+        df = df.astype(float)
+
+        # True Range components
+        df["h-l"] = df["high"] - df["low"]
+        df["h-pc"] = (df["high"] - df["close"].shift(1)).abs()
+        df["l-pc"] = (df["low"] - df["close"].shift(1)).abs()
+
+        df["tr"] = df[["h-l", "h-pc", "l-pc"]].max(axis=1)
+
+        # ATR is a simple moving average of TR
+        atr = df["tr"].rolling(window=period).mean().iloc[-1]
+        return round(atr, 2) if not pd.isna(atr) else None
+    except Exception as e:
+        _log.error(f"Error calculating ATR for {symbol}: {e}")
         return None
-    
-    # Convert to DataFrame
-    df = pd.DataFrame.from_dict(ts, orient="index")
-    df.index = pd.to_datetime(df.index)
-    df = df.sort_index()
-    
-    # Select only standard Alpha Vantage columns by name to ignore provenance stamps/custom metadata
-    standard_cols = ["1. open", "2. high", "3. low", "4. close", "5. volume"]
-    df = df[[c for c in standard_cols if c in df.columns]]
-    df.columns = ["open", "high", "low", "close", "volume"][:len(df.columns)]
-    df = df.astype(float)
-    
-    # True Range components
-    df["h-l"] = df["high"] - df["low"]
-    df["h-pc"] = (df["high"] - df["close"].shift(1)).abs()
-    df["l-pc"] = (df["low"] - df["close"].shift(1)).abs()
-    
-    df["tr"] = df[["h-l", "h-pc", "l-pc"]].max(axis=1)
-    
-    # ATR is a simple moving average of TR
-    atr = df["tr"].rolling(window=period).mean().iloc[-1]
-    return round(atr, 2) if not pd.isna(atr) else None
 
 _SWING_LOOKBACK = 3     # days for the swing-low technical stop
 _ATR_STOP_MULT  = 2.5   # ATR multiple for the volatility stop
