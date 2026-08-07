@@ -86,7 +86,7 @@ $("login-form").addEventListener("submit", async (e) => {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 let activeTab = "dashboard";
-const VALID_TABS = ["dashboard", "research", "accounts", "rotation", "history", "chat", "scorecard", "system", "about"];
+const VALID_TABS = ["dashboard", "research", "accounts", "chat", "system", "about"];
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
@@ -107,9 +107,33 @@ function switchTab(tab, updateHash = true) {
     }
 }
 
+// Handle legacy deep links (#rotation / #history) that no longer map to top-nav tabs.
+// They now live as sub-views under Accounts, so redirect to the Accounts tab and stash a
+// pending sub-view that renderAccounts() applies once the async account payload arrives.
+// Returns true if the hash was a redirected deep link.
+function handleAcctDeepLink(hash) {
+    if (hash === "rotation") {
+        pendingAcctSub = { sub: "rotation", type: "real" };
+        switchTab("accounts", false);
+        return true;
+    }
+    if (hash === "history") {
+        pendingAcctSub = { sub: "history", type: "game" };
+        switchTab("accounts", false);
+        return true;
+    }
+    if (hash === "scorecard") {
+        pendingAcctSub = { sub: "scorecard", type: "game" };
+        switchTab("accounts", false);
+        return true;
+    }
+    return false;
+}
+
 // Support browser Back/Forward navigation and direct URL sharing!
 window.addEventListener("hashchange", () => {
     const tab = window.location.hash.substring(1);
+    if (handleAcctDeepLink(tab)) return;
     if (VALID_TABS.includes(tab) && tab !== activeTab) {
         switchTab(tab, false);
     }
@@ -284,6 +308,15 @@ async function refreshPrices() {
 // ── Accounts tab ─────────────────────────────────────────────────────────────
 let acctHoldings = [];   // flat [{acctId, symbol, buy, qty}] for live-price refresh
 let gameCashBalance = 0;
+let accountsCache = null;                 // last /api/accounts payload (all accounts) — cached so
+                                          // tab switches + column re-sorts render without re-fetching
+const LS_ACCT_KEY = "aether.acct";        // localStorage key for the remembered account tab
+let selectedAcctId = localStorage.getItem(LS_ACCT_KEY) || null;
+
+// Accounts sub-view state: "holdings" | "rotation" (real accts) | "history" (game acct)
+let acctSubView = "holdings";
+// Deep-link pending sub-view: {sub, type} consumed by renderAccounts() once accounts load async
+let pendingAcctSub = null;
 
 // Accounts tab sorting state
 let accountsSort = { key: "symbol", dir: 1 };
@@ -325,47 +358,126 @@ function _updateBrokerStatus(status) {
 
 async function loadAccounts() {
     const data = await api("/api/accounts");
-    const box = $("accounts-container");
-    const accts = data.accounts || [];
+    accountsCache = data;                        // cache the whole payload for instant tab switches
     _updateBrokerStatus(data.broker_status || "live");
-    acctHoldings = [];
 
-    // Dynamically populate our global held symbols set for the Research tab badges
+    // Seed the global held-symbols set from ALL accounts (not just the visible one) so the
+    // Research tab's "HELD" badges stay correct regardless of which account tab is showing.
+    const accts = data.accounts || [];
     heldSymbolsGlobal.clear();
     accts.forEach((a) => {
-        if (a.holdings) {
-            a.holdings.forEach((h) => {
-                if (h.symbol) {
-                    heldSymbolsGlobal.add(h.symbol.trim().toUpperCase());
-                }
-            });
-        }
+        (a.holdings || []).forEach((h) => {
+            if (h.symbol) heldSymbolsGlobal.add(h.symbol.trim().toUpperCase());
+        });
     });
     // Trigger a live re-render of the Research table if already loaded to overlay badges instantly!
     if (typeof researchRows !== "undefined" && researchRows.length > 0) {
         renderResearch();
     }
 
-    // Sort holdings for each account dynamically before mapping
-    const { key, dir } = accountsSort;
-    accts.forEach((a) => {
-        if (a.holdings) {
-            a.holdings.sort((x, y) => {
+    renderAccounts();
+}
+
+// Render ONE account (the selected tab) from the cached payload — no network. Called on load,
+// on tab switch, and on column re-sort, so switching accounts / re-sorting is instant and only
+// the visible account's holdings get live-price fanned out (lazy load).
+function renderAccounts() {
+    const box = $("accounts-container");
+    const tabsBox = $("accounts-tabs");
+    const accts = (accountsCache && accountsCache.accounts) || [];
+    if (!accts.length) {
+        if (tabsBox) tabsBox.innerHTML = "";
+        box.innerHTML = `<div class="text-center text-slate-500 py-6">No accounts.</div>`;
+        acctHoldings = [];
+        return;
+    }
+
+    // Consume a pending deep-link sub-view (#rotation → real acct, #history → game acct):
+    // pick the account matching the requested type and set the sub-view.
+    if (pendingAcctSub) {
+        const want = accts.find((a) => a.type === pendingAcctSub.type);
+        if (want) {
+            selectedAcctId = want.id;
+            acctSubView = pendingAcctSub.sub;
+        }
+        pendingAcctSub = null;
+    }
+
+    // Resolve the active account: the remembered id if it still exists, else the first account.
+    let active = accts.find((a) => a.id === selectedAcctId) || accts[0];
+    selectedAcctId = active.id;
+    localStorage.setItem(LS_ACCT_KEY, selectedAcctId);
+
+    // Tab bar — one button per account, matching the app's top-nav tab-btn look.
+    if (tabsBox) {
+        tabsBox.innerHTML = accts.map((a) => {
+            const isGame = a.type === "game";
+            const tbadge = isGame
+                ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-900/60 text-purple-300">AI GAME</span>`
+                : `<span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-900/60 text-blue-300">REAL</span>`;
+            const isActive = a.id === selectedAcctId;
+            return `<button class="acct-tab tab-btn px-4 py-2 border-b-2 border-transparent flex items-center gap-2 ${isActive ? "active" : ""}" data-acct="${esc(a.id)}">
+                <span>${esc(a.label)}</span>${tbadge}
+            </button>`;
+        }).join("");
+    }
+
+    // Validate the sub-view for the active account type; fall back to Holdings if invalid.
+    // Game account: holdings | history | scorecard.  Real account: holdings | rotation.
+    const isGameActive = active.type === "game";
+    const validSubs = isGameActive ? ["holdings", "history", "scorecard"] : ["holdings", "rotation"];
+    if (!validSubs.includes(acctSubView)) acctSubView = "holdings";
+
+    // Sub-tab pill bar — depends on the active account's type.
+    const subBox = $("accounts-subtabs");
+    if (subBox) {
+        const subs = isGameActive
+            ? [["holdings", "Holdings"], ["history", "History"], ["scorecard", "Scorecard"]]
+            : [["holdings", "Holdings"], ["rotation", "Rotation"]];
+        subBox.innerHTML = subs.map(([k, label]) =>
+            `<button class="subtab-btn ${acctSubView === k ? "active" : ""}" data-acct-sub="${k}">${label}</button>`
+        ).join("");
+    }
+
+    // Toggle the sibling sub-view panels.
+    const rotBox = $("accounts-rotation");
+    const histBox = $("accounts-history");
+    const scoreBox = $("accounts-scorecard");
+    box.classList.toggle("hidden", acctSubView !== "holdings");
+    if (rotBox) rotBox.classList.toggle("hidden", acctSubView !== "rotation");
+    if (histBox) histBox.classList.toggle("hidden", acctSubView !== "history");
+    if (scoreBox) scoreBox.classList.toggle("hidden", acctSubView !== "scorecard");
+
+    if (acctSubView === "holdings") {
+        // Sort the visible account's holdings per the current sort state.
+        const { key, dir } = accountsSort;
+        if (active.holdings) {
+            active.holdings.sort((x, y) => {
                 let xv = accountsSortValue(x, key);
                 let yv = accountsSortValue(y, key);
-                if (typeof xv === "string") {
-                    return xv.localeCompare(yv) * dir;
-                }
+                if (typeof xv === "string") return xv.localeCompare(yv) * dir;
                 return (xv - yv) * dir;
             });
         }
-    });
 
-    box.innerHTML = accts.map((a) => {
+        // Rebuild the flat holdings list for the live-price refresh — VISIBLE account only.
+        acctHoldings = [];
+        box.innerHTML = renderAccountBlock(active);
+        refreshAccountPrices();
+    } else if (acctSubView === "rotation") {
+        loadRotation();   // lazy — only when shown
+    } else if (acctSubView === "history") {
+        loadHistory();    // lazy — only when shown
+    } else if (acctSubView === "scorecard") {
+        loadScorecard();  // lazy — only when shown (/api/scorecard is cheap)
+    }
+}
+
+// Build the header + summary + holdings table markup for a single account.
+// Side-effect: pushes the account's holdings onto acctHoldings for refreshAccountPrices().
+function renderAccountBlock(a) {
+    {
         const isGame = a.type === "game";
-        const badge = isGame
-            ? `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-purple-900/60 text-purple-300">AI GAME</span>`
-            : `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-blue-900/60 text-blue-300">REAL</span>`;
         if (isGame) {
             gameCashBalance = a.balance || 0;
         }
@@ -424,7 +536,6 @@ async function loadAccounts() {
         return `
         <div>
             <div class="flex items-center gap-3 mb-2">
-                <h2 class="section-title mb-0">${a.label}</h2>${badge}
                 <div class="flex-1"></div>${summary}
             </div>
             <div class="overflow-x-auto">
@@ -442,10 +553,44 @@ async function loadAccounts() {
                 </table>
             </div>
         </div>`;
-    }).join("");
-
-    refreshAccountPrices();
+    }
 }
+
+// Switch account tabs — instant, from cache (no /api/accounts re-fetch).
+$("accounts-tabs").addEventListener("click", (e) => {
+    const btn = e.target.closest(".acct-tab");
+    if (!btn) return;
+    selectedAcctId = btn.dataset.acct;
+    localStorage.setItem(LS_ACCT_KEY, selectedAcctId);
+    acctSubView = "holdings";   // switching accounts always starts on Holdings
+    renderAccounts();
+});
+
+// Sub-tab pill clicks (Holdings / Rotation / History) — switch the visible sub-view.
+$("accounts-subtabs").addEventListener("click", (e) => {
+    const btn = e.target.closest(".subtab-btn");
+    if (!btn) return;
+    acctSubView = btn.dataset.acctSub;
+    renderAccounts();
+});
+
+// Research sub-tabs (Screener / Predictions) — toggle panels; lazy-load reserves once.
+let _reservesLoaded = false;
+document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-research-sub]");
+    if (!btn) return;
+    const sub = btn.dataset.researchSub;
+    document.querySelectorAll("[data-research-sub]").forEach((b) =>
+        b.classList.toggle("active", b === btn));
+    const screener = $("research-screener");
+    const predictions = $("research-predictions");
+    if (screener) screener.classList.toggle("hidden", sub !== "screener");
+    if (predictions) predictions.classList.toggle("hidden", sub !== "predictions");
+    if (sub === "predictions" && !_reservesLoaded) {
+        _reservesLoaded = true;
+        loadReserves();
+    }
+});
 
 // Delegate table header clicks for accounts-container sorting
 $("accounts-container").addEventListener("click", (e) => {
@@ -458,7 +603,7 @@ $("accounts-container").addEventListener("click", (e) => {
         accountsSort.dir = ACCTS_TEXT_COLS.includes(key) ? 1 : -1;
     }
     accountsSort.key = key;
-    loadAccounts();
+    renderAccounts();   // re-sort from cache — no /api/accounts re-fetch
 });
 
 async function refreshAccountPrices() {
@@ -502,9 +647,9 @@ async function refreshAccountPrices() {
     }
 }
 
-// ── Rotation tab ─────────────────────────────────────────────────────────────
+// ── Rotation (pairs) — sub-view under real Accounts ───────────────────────────
 async function loadRotation() {
-    const [rep, res] = await Promise.all([api("/api/replacements"), api("/api/reserves")]);
+    const rep = await api("/api/replacements");
     const rb = $("rotation-body");
     const pairs = rep.pairs || [];
     rb.innerHTML = pairs.length ? pairs.map((p) => `
@@ -518,7 +663,11 @@ async function loadRotation() {
             <td>${p.Buy_PGR || "—"}</td>
         </tr>`).join("")
         : `<tr><td colspan="7" class="text-center text-slate-500 py-6">No rotation pairs.</td></tr>`;
+}
 
+// ── Reserves (A-Reserves / Backup Players) — Predictions sub-tab under Research ─
+async function loadReserves() {
+    const res = await api("/api/reserves");
     const resb = $("reserves-body");
     const rv = res.reserves || [];
     resb.innerHTML = rv.length ? rv.map((r) => `
@@ -1408,10 +1557,7 @@ function loadTab(tab) {
     if (tab === "dashboard") loadDashboard();
     else if (tab === "research") loadResearch();
     else if (tab === "accounts") loadAccounts();
-    else if (tab === "rotation") loadRotation();
-    else if (tab === "history") loadHistory();
     else if (tab === "chat") setTimeout(() => $("chat-input").focus(), 50);
-    else if (tab === "scorecard") loadScorecard();
     else if (tab === "system") { loadSystem(); _startLogRefresh(); }
     else if (tab === "about") loadRoadmap();
 }
@@ -1983,9 +2129,9 @@ document.addEventListener("click", (e) => {
     const cell = e.target.closest("[data-open]");
     if (cell) { openSymbol(cell.dataset.open); return; }
 
-    // Status inline click: automatically open the Scorecard & Retrospective page
+    // Status inline click: open the Scorecard (now the AI-Game account's Scorecard sub-tab)
     const statusLink = e.target.closest("[data-to-scorecard]");
-    if (statusLink) { switchTab("scorecard"); return; }
+    if (statusLink) { handleAcctDeepLink("scorecard"); return; }
 
     // Accounts page status inline click: open AETHER AI Requalification modal
     const rqBtn = e.target.closest(".rq-btn");
@@ -2296,9 +2442,12 @@ function closeWiki() {
 setAdminUI(null);   // default to logged-out UI until whoami confirms
 refreshAuth();
 
-// Initialize the active tab from the URL hash if present, otherwise default to dashboard
+// Initialize the active tab from the URL hash if present, otherwise default to dashboard.
+// Legacy #rotation / #history deep links redirect to their new Accounts sub-views.
 const initialTab = window.location.hash.substring(1);
-switchTab(VALID_TABS.includes(initialTab) ? initialTab : "dashboard", true);
+if (!handleAcctDeepLink(initialTab)) {
+    switchTab(VALID_TABS.includes(initialTab) ? initialTab : "dashboard", true);
+}
 
 startPolling();
 initWiki();
