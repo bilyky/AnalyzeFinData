@@ -10,7 +10,7 @@ import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import openpyxl
-from excel_output import update_short_long_scores
+from workbook_write import update_short_long_scores
 
 
 def _make_wb(rows: list[dict]) -> openpyxl.Workbook:

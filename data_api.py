@@ -524,7 +524,7 @@ def read_research() -> dict:
 
 # ── Accounts (2 real from Short_Long sheet + 1 AI game) ────────────────────────
 
-# Short_Long column layout (0-based), matching excel_output.update_short_long_scores.
+# Short_Long column layout (0-based), matching workbook_write.update_short_long_scores.
 _SL = {"sym": 1, "qty": 2, "buy": 3, "top": 4, "target": 5, "stop": 6, "buy_date": 10,
        "s10": 16, "l60": 17, "winpct": 18, "status": 19, "in_profit": 22,
        "streak_green": 20, "streak_red": 21}

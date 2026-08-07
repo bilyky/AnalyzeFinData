@@ -33,7 +33,7 @@ powergauge.py  ←── Chaikin API (live PGR, signals, price)
        │
 scoring.py  ──── pure functions: streaks, seasonality, regime, short/long scores
        │
-excel_output.py ── Research + Picks sheet formatting
+workbook_write.py ── Research + Picks sheet formatting
 ```
 
 **Three-phase run inside `check_from_xls`:**
@@ -175,7 +175,7 @@ AnalyzeFinData/
 │
 ├── powergauge.py          # Main screener: API client, check_from_xls, PowerGauge class
 ├── scoring.py             # Pure scoring functions (no API dependency)
-├── excel_output.py        # openpyxl helpers: Research headers, Picks sheet, shapeId fix
+├── workbook_write.py      # openpyxl helpers: Research headers, Picks sheet, shapeId fix
 ├── utils.py               # Shared helpers (_to_float)
 ├── autonomous_pipeline.py # Pre-open daily execution pipeline (5:30 AM PST cron)
 ├── ai_portfolio_game.py   # Virtual portfolio simulation & adaptive risk manager

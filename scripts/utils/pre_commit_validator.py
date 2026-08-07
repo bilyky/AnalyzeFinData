@@ -295,11 +295,11 @@ def main():
                 continue
 
             # Files exempt from inline-import check:
-            # - excel_output.py: pre-existing lazy-load inside openpyxl callbacks
+            # - workbook_write.py: pre-existing lazy-load inside openpyxl callbacks
             # - test_*.py: inline imports inside test methods are legitimate (isolate failures)
             # - powergauge.py: optional try/except imports for Playwright automation
             # - run_history.py: historical backfill parallelized launcher script
-            _skip_imports = ("excel_output.py", "test_", "powergauge.py", "run_history.py")
+            _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py")
             if not any(x in fpath for x in _skip_imports):
                 if not check_no_inline_imports(fpath):
                     success = False
