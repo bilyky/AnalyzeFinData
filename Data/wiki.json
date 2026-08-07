@@ -240,6 +240,19 @@
       "Mirage Auditing: Standard ATR cushions override tight paper stop-loss mirages automatically."
     ]
   },
+  "stock_compare": {
+    "title": "Multi-Stock Comparison & Ranking",
+    "summary": "Select any symbols and get a deterministic side-by-side of their AETHER factors plus a single ranked verdict. One engine backs every surface &mdash; the Research page, the web chat, the console, and the agent skill &mdash; so they all rank the identical numbers the identical way.",
+    "origin": "Project AETHER Core Team (R&D Sprints, August 2026). Single-source-of-truth comparison engine.",
+    "body": "One pure, deterministic engine (<code>aether/stock_compare.py</code>) selects the requested symbols straight from the already-computed Research rows &mdash; no recompute, no extra workbook reads &mdash; and ranks them by combined score, breaking ties by a confirmed setup, then reward:risk, then symbol, for fully stable ordering. Each row carries a <code>stale</code> flag when its stop or target fell back to a fixed % off price because the OHLCV cache was old, and a comparison-wide warning fires if any symbol is stale, so levels are never presented as exact when they are only approximate. An optional AI &lsquo;WHY&rsquo; narrative (the shared <code>prompts/compare_stocks.md</code> rubric) is layered on demand; it synthesizes on the quantitative factors only (no web access) and, when a provider is unavailable, degrades to a plain-language reason rather than a bare error. The same engine powers the Research-page selection panel, the web chat &lsquo;compare&rsquo; intent, the console script, and the <code>/compare-stocks</code> agent skill &mdash; the agent surface adds live news/events search on top.",
+    "config": [
+      "Engine: aether/stock_compare.compare_data() &mdash; pure, no LLM, no network; the single source of truth for facts + ranking.",
+      "Ranking: combined score (desc), then confirmed setup, then reward:risk, then alphabetical &mdash; fully deterministic.",
+      "Surfaces: Research-page row selection + inline panel, web chat 'compare/vs' intent, console script, /compare-stocks agent skill.",
+      "Freshness: per-symbol stale flag plus a comparison-wide warning whenever a stop/target is a % fallback.",
+      "AI WHY (optional): prompts/compare_stocks.md rubric, quantitative factors only; on-demand, and states why if a provider is unavailable."
+    ]
+  },
   "digit_sum_numerology": {
     "title": "Digit-Sum Numerology Factor",
     "summary": "Backtested across 522 symbols \u00d7 9+ years. Tests whether the digit-sum of a stock's open/close price predicts same-day or next-day direction. Two variants (integer and full-cents) cover 228 unique symbols with 95%+ confidence signals. Of 473 raw signals, <b>224 pass the full 4-layer quality validator</b> and are active in scoring. Symbol page shows a Stability column: <b class=\"text-green-400\">stable</b> / <b class=\"text-amber-400\">mixed</b> / <b class=\"text-orange-400\">sparse</b> / <b class=\"text-red-400\">flip</b>.",

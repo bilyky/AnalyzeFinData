@@ -1137,6 +1137,11 @@ function researchSortValue(r, key) {
 let heldSymbolsGlobal = new Set();
 let researchRows = [];
 let researchSort = { key: "combined", dir: -1 };
+// Multi-stock comparison: symbols (uppercased) checked on the Research page. Held in a
+// Set so selection survives search/sort re-renders; compareLastRun keeps the last compared
+// set so the "Summarize with AI" button re-POSTs the same symbols.
+let compareSelected = new Set();
+let compareLastRun = [];
 // Columns that sort as text (ascending default). PGR and Industry sort by numeric
 // rank (see researchSortValue), so they default to descending = best/strongest first.
 const RESEARCH_TEXT_COLS = ["symbol", "status", "patterns", "industry_name"];
@@ -1198,6 +1203,7 @@ function renderResearch() {
     const num = (v, d = 2) => (v == null ? "—" : Number(v).toFixed(d));
     $("research-body").innerHTML = rows.length ? rows.map((r) => `
         <tr>
+            <td class="text-center"><input type="checkbox" class="cmp-check accent-blue-500" data-sym="${esc(r.symbol)}" ${compareSelected.has(String(r.symbol).toUpperCase()) ? "checked" : ""}></td>
             <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${r.symbol}">
                 ${r.symbol}${r.fractional ? ' <span class="text-[9px] px-1 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/40 font-bold ml-1 uppercase" title="Fractional Share Order Entry Eligible (E*TRADE Production)">FRAC</span>' : ''}${heldSymbolsGlobal.has(r.symbol.toUpperCase()) ? ' <span class="text-[9px] px-1.5 py-0.5 rounded bg-green-900/80 text-green-300 font-bold ml-1" title="Currently held in your accounts">HELD</span>' : ''}${instrumentBadge(r.instrument)}
             </td>
@@ -1226,9 +1232,139 @@ function renderResearch() {
             <td class="text-right text-xs">${r.lt_trend || "—"}</td>
             <td>${renderPatternsHTML(r.patterns)}</td>
         </tr>`).join("")
-        : `<tr><td colspan="18" class="text-center text-slate-500 py-6">No matching symbols.</td></tr>`;
+        : `<tr><td colspan="19" class="text-center text-slate-500 py-6">No matching symbols.</td></tr>`;
     $("research-count").textContent = `${rows.length} of ${researchRows.length} symbols`;
 }
+
+// ── Multi-stock comparison (Research-page selection) ─────────────────────────
+function updateCompareButton() {
+    const n = compareSelected.size;
+    const btn = $("compare-run");
+    btn.textContent = `Compare selected (${n})`;
+    btn.disabled = n < 2;
+    $("compare-clear").classList.toggle("hidden", n === 0);
+}
+
+// Delegated: a checkbox toggle updates the Set + the action bar (no full re-render).
+$("research-body").addEventListener("change", (e) => {
+    const cb = e.target.closest(".cmp-check");
+    if (!cb) return;
+    const sym = (cb.dataset.sym || "").toUpperCase();
+    if (!sym) return;
+    if (cb.checked) compareSelected.add(sym);
+    else compareSelected.delete(sym);
+    updateCompareButton();
+});
+
+async function runCompare() {
+    const syms = [...compareSelected];
+    if (syms.length < 2) return;
+    const panel = $("compare-panel"), body = $("compare-body");
+    panel.classList.remove("hidden");
+    body.innerHTML = `<tr><td colspan="14" class="text-center text-slate-500 py-4">Comparing…</td></tr>`;
+    $("compare-summary").classList.add("hidden");
+    $("compare-summary").innerHTML = "";
+    $("compare-summarize").disabled = true;
+    try {
+        const data = await api("/api/compare", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ symbols: syms }),
+        });
+        if (data.error) { body.innerHTML = `<tr><td colspan="14" class="text-center neg py-4">${esc(data.error)}</td></tr>`; return; }
+        compareLastRun = syms;
+        renderComparePanel(data);
+        $("compare-summarize").disabled = false;
+    } catch (e) {
+        body.innerHTML = `<tr><td colspan="14" class="text-center neg py-4">Error: ${esc(e.message)}</td></tr>`;
+    }
+}
+
+function renderComparePanel(data) {
+    const meta = data.meta || {};
+    $("compare-regime").textContent = meta.market_regime ? "Regime: " + meta.market_regime : "";
+    // Freshness banner
+    const stale = $("compare-stale");
+    if (meta.stale_warning) {
+        stale.textContent = "⚠ " + meta.stale_warning;
+        stale.classList.remove("hidden");
+    } else {
+        stale.classList.add("hidden");
+    }
+    // Ranking line
+    const rank = (data.ranking || [])
+        .map((x) => `${x.rank}. <span class="font-semibold">${esc(x.symbol)}</span> (${x.combined == null ? "—" : Number(x.combined).toFixed(1)})`)
+        .join("  ›  ");
+    $("compare-ranking").innerHTML = rank ? `<span class="mut">Ranking:</span> ${rank}` : "";
+    // Missing symbols
+    const missing = meta.missing || [];
+    $("compare-missing").textContent = missing.length ? `Not covered (not on Research sheet): ${missing.join(", ")}` : "";
+    // Table body — only found rows, in requested order
+    const num = (v, d = 2, signed = false) =>
+        (v == null ? "—" : (signed && v >= 0 ? "+" : "") + Number(v).toFixed(d));
+    const rows = (data.rows || []).filter((r) => r.found);
+    $("compare-body").innerHTML = rows.length ? rows.map((r) => `
+        <tr>
+            <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${esc(r.symbol)}">${esc(r.symbol)}</td>
+            <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
+            <td class="text-right font-semibold ${cls(r.combined)}">${num(r.combined, 1, true)}</td>
+            <td class="text-right ${cls(r.s10)}">${num(r.s10, 1, true)}</td>
+            <td class="text-right ${cls(r.l60)}">${num(r.l60, 1, true)}</td>
+            <td class="text-xs">${esc(r.pgr ?? "—")}</td>
+            <td class="text-right text-xs">${esc(r.money_flow || "—")}</td>
+            <td class="text-right text-xs">${esc(r.lt_trend || "—")}</td>
+            <td>${r.setup ? '<span class="pos font-semibold">OK</span>' : '<span class="mut">—</span>'}</td>
+            <td class="text-right ${r.stale ? "text-amber-400" : ""}" title="stop source: ${esc(r.stop_source || "?")}">${r.stop == null ? "—" : fmt$(r.stop)}</td>
+            <td class="text-right ${r.stale ? "text-amber-400" : ""}" title="target source: ${esc(r.target_source || "?")}">${r.target == null ? "—" : fmt$(r.target)}</td>
+            <td class="text-right">${num(r.risk_ratio, 2)}</td>
+            <td>${renderPatternsHTML(r.patterns)}</td>
+            <td class="text-xs">${esc(r.status || "—")}</td>
+        </tr>`).join("")
+        : `<tr><td colspan="14" class="text-center text-slate-500 py-4">No comparable symbols.</td></tr>`;
+}
+
+async function summarizeCompare() {
+    if (compareLastRun.length < 2) return;
+    const box = $("compare-summary");
+    box.classList.remove("hidden");
+    box.textContent = "Thinking…";
+    $("compare-summarize").disabled = true;
+    try {
+        const data = await api("/api/compare", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ symbols: compareLastRun, summarize: true }),
+        });
+        const summary = data.summary;
+        if (!summary) {
+            const why = data.summary_error ? " — " + data.summary_error : "";
+            box.textContent = "AI summary unavailable" + why + ".";
+            return;
+        }
+        if (window.marked && typeof window.marked.parse === "function") {
+            box.innerHTML = window.marked.parse(summary);
+        } else {
+            box.innerHTML = esc(summary).replace(/\n/g, "<br>");
+        }
+    } catch (e) {
+        box.textContent = "AI summary unavailable — the request failed: " + e.message;
+    } finally {
+        $("compare-summarize").disabled = false;
+    }
+}
+
+function clearCompare() {
+    compareSelected.clear();
+    compareLastRun = [];
+    document.querySelectorAll("#research-body .cmp-check").forEach((cb) => { cb.checked = false; });
+    $("compare-panel").classList.add("hidden");
+    updateCompareButton();
+}
+
+$("compare-run").addEventListener("click", runCompare);
+$("compare-clear").addEventListener("click", clearCompare);
+$("compare-close").addEventListener("click", () => $("compare-panel").classList.add("hidden"));
+$("compare-summarize").addEventListener("click", summarizeCompare);
 
 function setResearchSort(key) {
     if (researchSort.key === key) researchSort.dir *= -1;

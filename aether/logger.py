@@ -4,7 +4,7 @@ Centralised logging for Project AETHER.
 Three output channels:
   1. Rotating plain-text  — Data/logs/aether.log       (5 MB × 5 backups, human-readable)
   2. Rotating JSON Lines  — Data/logs/aether.jsonl      (5 MB × 5 backups, grep/parse friendly)
-  3. Stdout               — INFO+ in development, WARNING+ in prod (respects LOG_LEVEL env var)
+  3. Stderr               — INFO+ in development, WARNING+ in prod (respects LOG_LEVEL env var)
 
 Usage:
     from aether_logger import get_logger
@@ -113,12 +113,17 @@ def _init():
     jsonl_handler.setFormatter(_JsonlFormatter())
     root.addHandler(jsonl_handler)
 
-    # ── 3. Stdout — include CONSOLE(15) when env level is INFO or lower ──────
+    # ── 3. Stderr — include CONSOLE(15) when env level is INFO or lower ──────
+    # Diagnostics/progress go to STDERR (Unix convention) so a script's real
+    # output on stdout — e.g. `compare_stocks.py --json` — stays clean and
+    # `2>/dev/null` actually silences the logs. Terminal users still see these
+    # (stderr prints to the console); console_safe wraps stderr too, so emoji
+    # in log lines don't crash on Windows.
     # If LOG_LEVEL=WARNING/ERROR, respect that — suppress CONSOLE noise.
     # If LOG_LEVEL=INFO/DEBUG (default), also show CONSOLE progress messages.
-    stdout_level_eff = CONSOLE if stdout_level <= logging.INFO else stdout_level
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setLevel(stdout_level_eff)
+    stderr_level_eff = CONSOLE if stdout_level <= logging.INFO else stdout_level
+    stream_handler = logging.StreamHandler(sys.stderr)
+    stream_handler.setLevel(stderr_level_eff)
     stream_handler.setFormatter(logging.Formatter(_TEXT_FMT, _DATE_FMT))
     root.addHandler(stream_handler)
 

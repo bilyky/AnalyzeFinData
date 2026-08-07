@@ -46,6 +46,7 @@ import ai_portfolio_game
 import ai_client
 import watchdog
 import sell_eval
+from aether import stock_compare
 from aether_logger import get_logger
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -421,6 +422,30 @@ def create_app():
             return {"status": "pending"}
         return {"status": "done", **{k: v for k, v in entry.items() if k not in ("status", "ts")}}
 
+    # ── Multi-stock comparison ──────────────────────────────────────────────────
+
+    @app.post("/api/compare")
+    async def compare(body: dict = Body(...)):
+        """Structured side-by-side comparison + deterministic ranking for a list of
+        symbols. Pure data (no LLM) — the single source of truth any client (UI, chat,
+        agent skill) summarizes. Body: {"symbols": ["TG","CC",...], "as_of"?: "YYYY-MM-DD",
+        "summarize"?: bool}. With summarize=true, attaches an on-demand AI WHY narrative
+        (quantitative factors only) under data["summary"], or a plain-language
+        data["summary_error"] saying why it is unavailable."""
+        symbols = [s.upper().strip() for s in (body.get("symbols") or []) if str(s).strip()]
+        if not symbols:
+            return {"error": "symbols required"}
+        as_of = body.get("as_of")
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(None, stock_compare.compare_data, symbols, as_of)
+        if body.get("summarize"):
+            # Blocking network call — keep it off the event loop.
+            summary, summary_error = await loop.run_in_executor(
+                None, stock_compare.summarize_comparison, data)
+            data["summary"] = summary
+            data["summary_error"] = summary_error
+        return data
+
     # ── History ───────────────────────────────────────────────────────────────
 
     @app.get("/api/history")
@@ -528,6 +553,15 @@ def create_app():
             (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
         )
         raw_candidates = re.findall(r'\b[A-Z]{2,5}\b', last_user)
+        # Compare intent: an explicit "compare / vs / versus / side by side" cue, or a
+        # ticker-adjacent "A or B" (kept tight so "buy or sell AAPL" does NOT match).
+        # When present with >=2 known tickers we render the shared ranked comparison block
+        # (relaxing the per-symbol [:3] cap) instead of independent per-symbol lines.
+        _lc = last_user.lower()
+        compare_intent = any(cue in _lc for cue in
+                             ("compare", " vs ", " vs.", "versus", "compared to",
+                              "side by side", "side-by-side")) \
+            or bool(re.search(r'\b[A-Z]{2,5}\s+or\s+[A-Z]{2,5}\b', last_user))
 
         def _build_context():
             """Build the system prompt. Runs in a thread via run_in_executor so
@@ -549,8 +583,25 @@ def create_app():
                     try:
                         research_rows = {r["symbol"]: r
                                          for r in data_api.read_research().get("rows", [])}
-                        mentioned = [w for w in raw_candidates if w in research_rows][:3]
-                        if mentioned:
+                        # Compare intent: up to 6 tickers ranked side-by-side; else the
+                        # usual per-symbol lines capped at 3.
+                        cap = 6 if compare_intent else 3
+                        mentioned = [w for w in raw_candidates if w in research_rows][:cap]
+                        if compare_intent and len(mentioned) >= 2:
+                            cmp = stock_compare.compare_data(mentioned)
+                            block = stock_compare.render_for_summary(cmp)
+                            symbol_context = (
+                                "\nThe user is COMPARING these symbols. Live AETHER "
+                                "comparison data (deterministic engine — the single source "
+                                "of truth):\n" + block +
+                                "\n\nUsing ONLY those factors, write a side-by-side read, then "
+                                "the ranking with a single top pick, then a one-line WHY per "
+                                "symbol grounded in its actual factors, and end with the key "
+                                "caveat. Honor the stale_warning if set (treat stop/target/R:R "
+                                "as approximate). Capital preservation comes first. Keep it "
+                                "plaintext (no markdown tables)."
+                            )
+                        elif mentioned:
                             lines = [
                                 f"  {sym}: PGR={r.get('pgr','?')} S10={r.get('s10','?')} "
                                 f"L60={r.get('l60','?')} Combined={r.get('combined','?')} "
