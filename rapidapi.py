@@ -193,27 +193,59 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> d
     """
     results = {"updated": 0, "skipped": 0, "errors": []}
 
-    for i, sym in enumerate(symbols, 1):
-        if sym.upper() in _UNSUPPORTED_SYMBOLS:
-            results["skipped"] += 1
-            continue
-
-        path = os.path.join(OHLCV_DIR, f"{sym}_daily.json")
-        needs, existing = _check_recovery(path, today_str)
-        if not needs and not force:
-            results["skipped"] += 1
-            continue
-
-        outputsize = "full" if existing is None else "compact"
+    # Cross-process file lock to prevent multiple processes from running recovery simultaneously
+    lock_path = os.path.join(os.path.dirname(OHLCV_DIR), "rapidapi.lock")
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    fd = None
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
         try:
-            _fetch_and_merge(sym, path, outputsize=outputsize)
-            results["updated"] += 1
-            _log.console("  [RapidAPI] %s: %s fetch OK (%d/%d, updated=%d)",
-                         sym, outputsize, i, len(symbols), results["updated"])
-            time.sleep(SLEEP_SEC)
-        except Exception as e:
-            results["errors"].append((sym, str(e)))
-            _log.error("  [RapidAPI] %s: ERROR - %s", sym, e)
+            # 2.5 hour TTL to clear stale locks from crashed runs (recovery can take up to 2 hours)
+            if time.time() - os.path.getmtime(lock_path) > 9000:
+                os.unlink(lock_path)
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except OSError:
+            pass
+
+    if fd is None:
+        _log.warning("  [RapidAPI] Another process is actively running a recovery pass. Skipping to prevent rate-limit collisions.")
+        return {"updated": 0, "skipped": len(symbols), "errors": []}
+
+    try:
+        for i, sym in enumerate(symbols, 1):
+            if sym.upper() in _UNSUPPORTED_SYMBOLS:
+                results["skipped"] += 1
+                continue
+
+            path = os.path.join(OHLCV_DIR, f"{sym}_daily.json")
+            needs, existing = _check_recovery(path, today_str)
+            if not needs and not force:
+                results["skipped"] += 1
+                continue
+
+            outputsize = "full" if existing is None else "compact"
+            try:
+                _fetch_and_merge(sym, path, outputsize=outputsize)
+                results["updated"] += 1
+                _log.console("  [RapidAPI] %s: %s fetch OK (%d/%d, updated=%d)",
+                             sym, outputsize, i, len(symbols), results["updated"])
+                time.sleep(SLEEP_SEC)
+            except Exception as e:
+                results["errors"].append((sym, str(e)))
+                _log.error("  [RapidAPI] %s: ERROR - %s", sym, e)
+                # Sleep even on failure to avoid a rapid-fire cascade hammering the API
+                time.sleep(SLEEP_SEC)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
 
     return results
 

@@ -217,5 +217,27 @@ class TestUnsupportedSymbols(unittest.TestCase):
         self.assertEqual(res["updated"], 1)
 
 
+class TestRepairMissingRateLimiting(unittest.TestCase):
+    """Verify that repair_missing sleeps even on failure to avoid rapid-fire cascades."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_dir = rapidapi.OHLCV_DIR
+        rapidapi.OHLCV_DIR = self.dir
+        self.addCleanup(lambda: setattr(rapidapi, "OHLCV_DIR", self._orig_dir))
+
+    def test_sleeps_on_failure_to_prevent_hammering_api(self):
+        with mock.patch.object(rapidapi, "_fetch_and_merge", side_effect=RuntimeError("API Failure")), \
+             mock.patch("rapidapi.time.sleep") as mock_sleep:
+            res = rapidapi.repair_missing(["AAA", "BBB"], TODAY, force=True)
+            
+        self.assertEqual(res["updated"], 0)
+        self.assertEqual(len(res["errors"]), 2)
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_sleep.assert_has_calls([mock.call(rapidapi.SLEEP_SEC), mock.call(rapidapi.SLEEP_SEC)])
+
+
 if __name__ == "__main__":
     unittest.main()
