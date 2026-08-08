@@ -83,7 +83,7 @@ class TestAIClientTransport(unittest.TestCase):
             out = ai_client.evaluate("SYS", "USR", provider="gem")
         self.assertEqual(out, "verdict")
         argv = m_run.call_args.args[0]
-        self.assertEqual(argv[0], "gemini")
+        self.assertIn(argv[0], ["gemini", "gemini.cmd"])
         self.assertEqual(m_run.call_args.kwargs["input"], "SYS\n\nUSR")  # payload on stdin
 
     @mock.patch("aether.ai_client.subprocess.run")

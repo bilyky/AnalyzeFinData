@@ -118,6 +118,20 @@ class TestExtract(unittest.TestCase):
             except Exception as e:
                 self.fail(f"verify_symbols failed on malformed rows element: {e}")
 
+    def test_extract_truncates_huge_body(self):
+        huge_body = "C" * 10000
+        verify_resp = "{}"
+        with mock.patch("ai_client.primary", return_value="gpt"), \
+             mock.patch("ai_client.evaluate", side_effect=[_FAKE_RESPONSE, verify_resp]) as mock_evaluate, \
+             mock.patch("data_api.read_research", return_value={"rows": []}):
+            ex.extract("Test Subject", huge_body, verify=False)
+            
+        # The prompt should contain truncated body text
+        prompt_arg = mock_evaluate.call_args[0][1]
+        self.assertIn("[... content truncated for safety ...]", prompt_arg)
+        self.assertIn("C" * 5000, prompt_arg)
+        self.assertNotIn("C" * 5001, prompt_arg)
+
 
 class TestReport(unittest.TestCase):
     def test_empty_intel(self):

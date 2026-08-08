@@ -33,9 +33,18 @@ class TestLiveEquity(unittest.TestCase):
         self.assertEqual(game._live_equity(750.0, {}, {}), 750.0)
 
 
+import datetime
+
+class MockDate(datetime.date):
+    @classmethod
+    def today(cls):
+        return cls(2026, 8, 5)  # Wednesday (weekday 2)
+
+
 class TestGetLivePricesPartialFill(unittest.TestCase):
     def test_only_missing_symbols_scraped(self):
-        with mock.patch.object(game, "is_market_hours", return_value=True), \
+        with mock.patch("ai_portfolio_game.datetime.date", MockDate), \
+             mock.patch.object(game, "is_market_hours", return_value=True), \
              mock.patch.object(game.etrade, "get_tokens", return_value=["tok"]), \
              mock.patch.object(game.etrade, "fetch_quotes",
                                return_value={"AAA": 10.0}), \
@@ -47,7 +56,8 @@ class TestGetLivePricesPartialFill(unittest.TestCase):
         goog.assert_called_once_with(["BBB"])
 
     def test_no_missing_means_no_scrape(self):
-        with mock.patch.object(game, "is_market_hours", return_value=True), \
+        with mock.patch("ai_portfolio_game.datetime.date", MockDate), \
+             mock.patch.object(game, "is_market_hours", return_value=True), \
              mock.patch.object(game.etrade, "get_tokens", return_value=["tok"]), \
              mock.patch.object(game.etrade, "fetch_quotes",
                                return_value={"AAA": 10.0, "BBB": 20.0}), \

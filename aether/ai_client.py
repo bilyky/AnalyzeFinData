@@ -205,12 +205,15 @@ def _run_gemini(model: str, context: str, instruction: str) -> str:
     env["COLORTERM"] = "truecolor"
     env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
 
+    executable = "gemini.cmd" if sys.platform == "win32" else "gemini"
+    args = [executable, "--skip-trust", "-m", model, "--approval-mode", "plan", "--allowed-mcp-server-names", "none", "--allowed-tools", "none", "-p", instruction]
+
     with _gemini_cli_lock:
         out = subprocess.run(
-            ["gemini", "--skip-trust", "-m", model, "--approval-mode", "yolo", "--allowed-mcp-server-names", "none", "-p", instruction],
+            args,
             input=context,
             capture_output=True, text=True, timeout=_TIMEOUT,
-            shell=(sys.platform == "win32"),
+            shell=False,
             cwd=_get_gemini_sandbox(),
             encoding="utf-8",
             env=env,

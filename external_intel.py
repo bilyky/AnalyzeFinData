@@ -217,7 +217,7 @@ def fetch_idea_emails():
 
                         # Skip automated system alerts, invoices, and personal notices to preserve our AI budget
                         lower_subj = subject.lower()
-                        if any(ph in lower_subj for ph in ["aether alert", "invoice", "receipt", "milestone", "shopper", "transaction"]):
+                        if any(ph in lower_subj for ph in ["aether", "health alert", "validation failed", "portfolio summary", "invoice", "receipt", "milestone", "shopper", "transaction"]):
                             continue
 
                         candidates.append({

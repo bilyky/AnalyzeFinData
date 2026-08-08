@@ -569,11 +569,11 @@ def _load_credentials() -> tuple[str, str]:
     return email, password
 
 
-def _login_via_browser() -> dict:
+def _login_via_browser(headless: bool = False) -> dict:
     if not sync_playwright:
         raise ImportError("Playwright is not installed in the environment.")
 
-    _pg_log.info("Opening browser for login (a window will appear)...")
+    _pg_log.info(f"Opening browser for login (headless={headless})...")
     session_data = [None]
 
     def on_request(request):
@@ -590,7 +590,7 @@ def _login_via_browser() -> dict:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=False,
+            headless=headless,
             channel='chrome',
             args=['--disable-blink-features=AutomationControlled'],
         )
@@ -648,8 +648,12 @@ def login(interactive=True) -> dict:
             return session_data
         print("Saved session has expired — re-authenticating via browser.")
 
+    # Run headless if we are non-interactive or stdin is not a tty to prevent hanging
+    is_tty = sys.stdin and sys.stdin.isatty()
+    headless_run = not interactive or not is_tty
+
     try:
-        return _login_via_browser()
+        return _login_via_browser(headless=headless_run)
     except Exception as e:
         print(f"Browser login failed: {e}")
 

@@ -136,6 +136,7 @@ _HOLD_ACTIONS = {"HOLD", "REVIEW"}
 # These will be dynamically filtered out of the email scorecard and misses lists.
 _ADDRESSED_MISSES = {
     ("FANG", "2026-07-14"),  # Addressed: resolved stale SMA cache bugs on 2026-07-28
+    ("APA", "2026-07-20"),   # Addressed: deployed AI Second-Opinion Exit Override Gate (R&D #14) on 2026-08-06
 }
 
 

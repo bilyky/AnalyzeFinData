@@ -118,7 +118,11 @@ def extract(subject: str, body: str, provider: str | None = None, verify: bool =
     name = provider or ai_client.primary()
     if not name:
         return {}
-    prompt = f"Subject: {subject}\n\nBody:\n{body}"
+    # Enforce a clean 5,000-character body limit for safety and timeout prevention
+    body_display = body[:5000]
+    if len(body) > 5000:
+        body_display += "\n\n[... content truncated for safety ...]"
+    prompt = f"Subject: {subject}\n\nBody:\n{body_display}"
     raw = ai_client.evaluate(rubric, prompt, provider=name, max_tokens=800, temperature=0.1)
     result = _parse(raw)
     if not result:
