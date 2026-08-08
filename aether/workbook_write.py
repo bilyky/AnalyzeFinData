@@ -12,6 +12,10 @@ import zipfile
 import datetime
 from io import BytesIO
 
+from aether.logger import get_logger
+
+_log = get_logger(__name__)
+
 
 # ── Column headers + cell-comment text for Research sheet row 1 ─────────────
 # Keys are 0-based column indices. PRESERVE cols A-D (0-3) and I (8) and Q (16).
@@ -1161,7 +1165,10 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
 def update_replacements_sheet(wb, picks_data: list, run_date=None):
     """Write/overwrite the 'Replacements' sheet with ranked sell→buy pairs.
 
-    Sell side  = current Short_Long holdings sorted by combined S10+L60 ascending.
+    Sell side  = *weak* Short_Long (real-account) holdings only — winners
+                 (STRONG HOLD / HOLD) are excluded per winner-protection — with
+                 the remainder sorted by combined S10+L60 ascending. Held names
+                 absent from picks_data are logged, not silently dropped.
     Buy  side  = Research symbols not currently held, sorted by combined S10+L60 descending.
     Pairs are matched rank-for-rank up to MAX_PAIRS rows.
     """
@@ -1213,45 +1220,60 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
         if g.startswith("Be"): return ORG_FILL, BOLD
         return None, None
 
-    # ── Read Short_Long holdings ─────────────────────────────────────────────
+    # ── Read Short_Long holdings (both real-account tables) ──────────────────
+    # Use the canonical Short_Long column map shared with data_api so this
+    # reader and the accounts API agree on the sheet shape (symbols live in
+    # column B = _SL["sym"]). Walk every table (T1 + T2): a "Symb"/"Symbol"
+    # header opens a table, a fully blank row closes it, and a strict ticker
+    # pattern gates each data cell — so free-text user notes below the tables
+    # can never leak into held_symbols.
+    try:
+        from data_api import _SL as _SL_COLS
+        sym_col = _SL_COLS["sym"]
+    except Exception:
+        sym_col = 1  # column B fallback (matches data_api._SL["sym"])
+
+    _TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,5}$")
     held_symbols = set()
     if "Short_Long" in wb.sheetnames:
         ws_sl = wb["Short_Long"]
-        rows_sl = list(ws_sl.iter_rows(min_row=1, max_row=min(ws_sl.max_row, 20), values_only=True))
-        
-        # Header row search
-        hdr_sl = None
-        sym_col = 1  # Fallback to column B
-        for i, row in enumerate(rows_sl):
-            if not row: continue
-            vals = [str(v or "").strip().upper() for v in row]
-            if "SYMB" in vals or "SYMBOL" in vals:
-                hdr_sl = i
-                sym_col = next(j for j, v in enumerate(row) 
-                             if str(v or "").strip().upper() in ("SYMB", "SYMBOL"))
-                break
-        
-        # Data start row
-        data_start = (hdr_sl + 1) if hdr_sl is not None else 2 # Default to row 3 if row index 2 is data
-        
-        # Read symbols
-        for row in ws_sl.iter_rows(min_row=data_start + 1, values_only=True):
-            if len(row) > sym_col:
-                v = str(row[sym_col] or "").strip().upper()
-                if v and v != "SYMB" and v != "SYMBOL":
-                    held_symbols.add(v)
+        in_table = False
+        for row in ws_sl.iter_rows(values_only=True):
+            if not row or not any(str(v or "").strip() for v in row):
+                in_table = False           # blank row ends the current table
+                continue
+            cell = str(row[sym_col] or "").strip() if len(row) > sym_col else ""
+            if cell.upper() in ("SYMB", "SYMBOL"):
+                in_table = True            # header row → data rows follow
+                continue
+            if in_table and _TICKER_RE.match(cell.upper()):
+                held_symbols.add(cell.upper())
 
     lk = {p["symbol"].upper(): p for p in picks_data if p.get("symbol")}
 
-    # ── Sell list: held symbols sorted by combined S10+L60 ascending ─────────
+    # ── Sell list: BAD held holdings only, worst combined score first ────────
+    # Rotation exists to replace *weak* real-account holdings, so apply a
+    # badness gate: winners (STRONG HOLD / HOLD per winner-protection) are never
+    # proposed for sale. Held names missing from picks_data (e.g. excluded
+    # leveraged/inverse/crypto, or otherwise un-scored) are logged — never
+    # silently dropped — so a bad holding can't vanish from rotation unseen.
     sell_list = []
+    unscored = []
     for sym in held_symbols:
         p = lk.get(sym)
         if p is None:
+            unscored.append(sym)
             continue
         s10  = float(p.get("short10") or 0)
         l60  = float(p.get("long60")  or 0)
-        sell_list.append((sym, s10, l60, s10 + l60, _status(l60), str(p.get("pgr") or "")))
+        status = _status(l60)
+        if status in ("STRONG HOLD", "HOLD"):
+            continue                       # winner-protection: don't rotate out of winners
+        sell_list.append((sym, s10, l60, s10 + l60, status, str(p.get("pgr") or "")))
+    if unscored:
+        _log.console("[rotation] %d held symbol(s) not in picks_data — skipped from "
+                     "rotation (excluded/un-scored): %s",
+                     len(unscored), ", ".join(sorted(unscored)))
     sell_list.sort(key=lambda x: x[3])
 
     # ── Buy list: non-held, sorted by combined S10+L60 descending ────────────

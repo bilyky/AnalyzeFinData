@@ -210,7 +210,10 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> d
 
     if fd is None:
         _log.warning("  [RapidAPI] Another process is actively running a recovery pass. Skipping to prevent rate-limit collisions.")
-        return {"updated": 0, "skipped": len(symbols), "errors": []}
+        # ``locked`` distinguishes "another process owns the lock" from "these symbols were
+        # already current" — both otherwise look like updated=0. Callers (e.g. the on-demand
+        # self-healer) use it to retry later instead of treating the symbol as un-healable.
+        return {"updated": 0, "skipped": len(symbols), "errors": [], "locked": True}
 
     try:
         for i, sym in enumerate(symbols, 1):

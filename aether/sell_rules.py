@@ -13,7 +13,7 @@ backtest-tune it. Winner-protection only ever downgrades the SOFT signal — it
 can never suppress the hard stop.
 """
 
-# ── Status label (L60-based; matches legacy excel_output thresholds) ────────────
+# ── Status label (L60-based; matches legacy workbook_write thresholds) ──────────
 
 _STATUS_CFG = [
     (4,    "STRONG HOLD"),

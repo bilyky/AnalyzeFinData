@@ -134,6 +134,12 @@ def _heal_symbol_cache(symbol) -> bool:
     try:
         today_str = str(datetime.date.today())
         res = rapidapi.repair_missing([symbol], today_str)
+        if res.get("locked"):
+            # Another process holds the RapidAPI lock — this was never a real attempt.
+            # Release the once-per-run guard so a later pass can still heal this symbol.
+            _HEAL_ATTEMPTED.discard(symbol)
+            _log.info(f"[Self-Healer] {symbol} heal deferred — RapidAPI busy in another process.")
+            return False
         if res.get("updated", 0) > 0:
             _log.info(f"[Self-Healer] Healed {symbol} OHLCV cache.")
             return True

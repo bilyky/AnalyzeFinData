@@ -73,6 +73,12 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 *   **Symbology Cross-Referencing (`verify_symbols`):** Validates extracted symbols against your active (~485-symbol) Research universe, automatically attaching the Power Gauge Rating (PGR) and combined technical score to matching symbols, and isolating unlisted plays.
 *   **Rich Structural Layout rendering:** Aggregates and displays catalysts, watchlist omissions (with interactive hover reasons), and bulleted R&D ideas in your Daily Trade Report HTML emails.
 
+### E. Multi-Stock Comparison & Ranking (`aether/stock_compare.py`)
+*   **Deterministic Comparison Engine (`compare_data`):** One pure, LLM-free, network-free function selects the requested symbols straight from the already-computed Research rows (no recompute, no extra workbook reads) and ranks them by combined score — ties broken by confirmed setup, then reward:risk, then symbol — so the ordering is fully stable and reproducible. This is the **single source of truth**; every surface below ranks the identical numbers the identical way.
+*   **Freshness-Aware (Zero-Trust):** Each row carries a `stale` flag when its stop/target fell back to a fixed % off price (old OHLCV cache), and a comparison-wide `stale_warning` fires if any compared symbol is stale, so levels are never shown as exact when they are only approximate.
+*   **Optional AI "WHY" Narrative (`summarize_comparison`, `prompts/compare_stocks.md`):** On demand, layers a ranked WHY read over the quantitative factors only (no web access). Degrades gracefully — when the rubric, a provider, or the provider call is unavailable it returns a plain-language reason (shown to the user) instead of a bare failure.
+*   **Four Surfaces, One Engine:** The **Research page** (row-selection checkboxes + inline compare panel + on-demand Summarize), the **web chat** ("compare/vs" intent → ranked side-by-side), the **console** (`scripts/analysis/compare_stocks.py … --summarize --send`), and the **`/compare-stocks` agent skill** all call the same engine. The agent surface additionally layers live news/events web search on top of the shared rubric.
+
 ---
 
 ## 🧱 3. System Resilience & Headless Safety Gates

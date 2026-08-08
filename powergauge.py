@@ -44,7 +44,7 @@ def is_nyse_market_open() -> bool:
     except Exception:
         return False
 
-from excel_output import (
+from workbook_write import (
     write_research_headers      as _write_research_headers,
     write_picks_sheet           as _write_picks_sheet,
     update_short_long_scores    as _update_short_long_scores,

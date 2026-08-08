@@ -20,8 +20,11 @@ import os
 import openpyxl
 
 import etrade
-from excel_output import update_short_long_scores, fix_comment_shape_ids, backup_xlsx
+from aether.logger import get_logger
+from workbook_write import update_short_long_scores, fix_comment_shape_ids, backup_xlsx
 from powergauge import XLSX_FILE, SRC_XLSX, OHLCV_DIR
+
+_log = get_logger("sync_short_long")
 
 
 def _read_picks_from_research(wb) -> dict:
@@ -60,30 +63,30 @@ def main():
     args = parser.parse_args()
     env = "sandbox" if args.sandbox else "production"
 
-    print(f"[sync_short_long] env={env}")
+    _log.console("[sync_short_long] env=%s", env)
 
     # ── Get tokens ───────────────────────────────────────────────────────────
     tokens = etrade.get_tokens(env)
 
     # ── Fetch positions + quotes ──────────────────────────────────────────────
-    print("Fetching E*TRADE positions...")
+    _log.console("Fetching E*TRADE positions...")
     positions = etrade.fetch_positions(tokens, env)
-    print(f"  {len(positions)} open positions found.")
+    _log.console("  %d open positions found.", len(positions))
 
     syms   = list({p["symbol"] for p in positions})
     quotes = etrade.fetch_quotes(tokens, syms, env)
-    print(f"  {len(quotes)} live quotes fetched.")
+    _log.console("  %d live quotes fetched.", len(quotes))
 
     # ── Load workbook + build picks lookup from Research sheet ───────────────
     try:
         wb = openpyxl.load_workbook(SRC_XLSX)
     except Exception as e:
-        print(f"  [ERROR] Failed to load source {SRC_XLSX}: {e}")
-        print(f"  [INFO] Attempting to load existing output {XLSX_FILE} instead...")
+        _log.error("Failed to load source %s: %s", SRC_XLSX, e)
+        _log.console("  Attempting to load existing output %s instead...", XLSX_FILE)
         wb = openpyxl.load_workbook(XLSX_FILE)
 
     picks_lookup = _read_picks_from_research(wb)
-    print(f"  {len(picks_lookup)} symbols in Research sheet for score lookup.")
+    _log.console("  %d symbols in Research sheet for score lookup.", len(picks_lookup))
 
     # ── Load OHLCV for streak computation ────────────────────────────────────
     ohlcv_cache = {}
@@ -105,7 +108,7 @@ def main():
             fix_comment_shape_ids(XLSX_FILE,
                                   original_xlsx=orig_backup,
                                   touched_sheet_names={"Short_Long"})
-            print(f"Saved -> {XLSX_FILE}")
+            _log.console("Saved -> %s", XLSX_FILE)
             break
         except PermissionError:
             input(f"Close {XLSX_FILE} in Excel, then press Enter to retry...")

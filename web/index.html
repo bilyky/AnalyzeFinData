@@ -50,10 +50,7 @@
             <button data-tab="dashboard" class="tab-btn px-4 py-2 border-b-2 border-transparent">Dashboard</button>
             <button data-tab="research"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Research</button>
             <button data-tab="accounts"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Accounts</button>
-            <button data-tab="rotation"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Rotation</button>
-            <button data-tab="history"   class="tab-btn px-4 py-2 border-b-2 border-transparent">History</button>
             <button data-tab="chat"      class="tab-btn px-4 py-2 border-b-2 border-transparent">Chat</button>
-            <button data-tab="scorecard" class="tab-btn px-4 py-2 border-b-2 border-transparent">Scorecard</button>
             <button data-tab="system"    class="tab-btn px-4 py-2 border-b-2 border-transparent">System</button>
             <button data-tab="about"     class="tab-btn px-4 py-2 border-b-2 border-transparent">About</button>
         </nav>
@@ -125,6 +122,13 @@
                 <div id="research-regime" class="text-sm mut"></div>
             </div>
 
+            <!-- Research sub-tabs -->
+            <div class="flex gap-2 mb-4">
+                <button class="subtab-btn active" data-research-sub="screener">Screener</button>
+                <button class="subtab-btn" data-research-sub="predictions">Predictions</button>
+            </div>
+
+            <div id="research-screener">
             <!-- Stale-OHLCV alert -->
             <div id="research-stale" class="hidden mb-4 rounded border border-amber-500/50 bg-amber-500/10 text-amber-300 text-sm px-3 py-2"></div>
 
@@ -144,7 +148,51 @@
                 <label class="text-sm mut flex items-center gap-2">
                     <input id="research-setups-only" type="checkbox" class="accent-blue-500" /> Setups only
                 </label>
+                <button id="compare-run" class="btn text-xs" disabled title="Select 2+ rows, then compare them side-by-side">Compare selected (0)</button>
+                <button id="compare-clear" class="btn text-xs hidden" title="Clear the comparison selection">Clear</button>
                 <span id="research-count" class="text-xs mut ml-auto"></span>
+            </div>
+
+            <!-- Inline multi-stock comparison panel -->
+            <div id="compare-panel" class="hidden mb-6 rounded border border-slate-700 bg-slate-800/40 p-4">
+                <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+                    <h3 class="section-title mb-0 text-base">Comparison</h3>
+                    <div class="flex items-center gap-3">
+                        <span id="compare-regime" class="text-xs mut"></span>
+                        <button id="compare-close" class="text-xs mut hover:text-slate-200" title="Hide the comparison">× close</button>
+                    </div>
+                </div>
+                <div id="compare-stale" class="hidden mb-3 rounded border border-amber-500/50 bg-amber-500/10 text-amber-300 text-sm px-3 py-2"></div>
+                <div id="compare-ranking" class="text-sm mb-3"></div>
+                <div class="overflow-x-auto">
+                    <table class="data-table text-sm" id="compare-table">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th class="text-right">Price</th>
+                                <th class="text-right">Comb.</th>
+                                <th class="text-right">S10</th>
+                                <th class="text-right">L60</th>
+                                <th>PGR</th>
+                                <th class="text-right">Money Flow</th>
+                                <th class="text-right">LT Trend</th>
+                                <th>Setup</th>
+                                <th class="text-right">Stop</th>
+                                <th class="text-right">Target</th>
+                                <th class="text-right">R:R</th>
+                                <th>Patterns</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="compare-body"></tbody>
+                    </table>
+                </div>
+                <div id="compare-missing" class="text-xs mut mt-2"></div>
+                <div class="mt-3 flex items-center gap-3">
+                    <button id="compare-summarize" class="btn text-xs" disabled title="Ask the AI for a ranked WHY narrative (quantitative factors only)">Summarize with AI</button>
+                    <span class="text-[11px] mut">AI summary is advisory and uses the quantitative factors only.</span>
+                </div>
+                <div id="compare-summary" class="hidden mt-3 rounded border border-slate-700 bg-slate-900/60 p-3 text-sm leading-relaxed"></div>
             </div>
 
             <!-- Level backtest: how well this symbol's support/resistance held historically -->
@@ -160,6 +208,7 @@
                 <table class="data-table text-sm" id="research-table">
                     <thead>
                         <tr>
+                            <th title="Select rows to compare side-by-side" class="text-center">✓</th>
                             <th data-sort="symbol" title="Ticker symbol. Click to open detailed statistics, price charts, and digit-sum analysis.">Symbol</th>
                             <th data-sort="industry" title="Industry group. Sorts by Industry Strength: green Strong (heavy institutional support), red Weak, amber NA. Click A-Z to sort alphabetically.">Industry<button id="sort-industry-az" type="button" title="Sort alphabetically (A–Z)" class="ml-1 text-[10px] font-normal px-1 rounded bg-slate-700/70 hover:bg-slate-600">A–Z</button></th>
                             <th data-sort="pgr" title="Prev > Current PowerGauge rating — green improved, red deteriorated, white unchanged. Measures fundamental company strength.">PGR</th>
@@ -181,72 +230,164 @@
                         </tr>
                     </thead>
                     <tbody id="research-body">
-                        <tr><td colspan="18" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                        <tr><td colspan="19" class="text-center text-slate-500 py-6">Loading…</td></tr>
                     </tbody>
                 </table>
+            </div>
+            </div><!-- /#research-screener -->
+
+            <!-- Predictions sub-tab: A-Reserves (Backup Players) -->
+            <div id="research-predictions" class="hidden">
+                <h2 class="section-title">A-Reserves (Backup Players)</h2>
+                <div class="overflow-x-auto">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Symbol</th><th>Industry</th><th>PGR</th><th>S10</th><th>L60</th><th>Score</th></tr>
+                        </thead>
+                        <tbody id="reserves-body">
+                            <tr><td colspan="6" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </section>
 
         <!-- ======================= ACCOUNTS TAB ======================= -->
         <section id="tab-accounts" class="tab-panel hidden">
+            <div id="accounts-tabs" class="flex flex-wrap gap-2 mb-4 border-b border-slate-800"></div>
+            <div id="accounts-subtabs" class="flex gap-2 mb-4"></div>
+
+            <!-- Holdings sub-view -->
             <div id="accounts-container" class="space-y-8">
                 <div class="text-center text-slate-500 py-6">Loading…</div>
             </div>
-        </section>
 
-        <!-- ======================= ROTATION TAB ======================= -->
-        <section id="tab-rotation" class="tab-panel hidden">
-            <h2 class="section-title">Portfolio Rotation Pairs</h2>
-            <div class="overflow-x-auto mb-8">
-                <table class="data-table">
-                    <thead>
-                        <tr><th>Sell</th><th>Score</th><th>Status</th><th></th><th>Buy</th><th>Score</th><th>PGR</th></tr>
-                    </thead>
-                    <tbody id="rotation-body">
-                        <tr><td colspan="7" class="text-center text-slate-500 py-6">Loading…</td></tr>
-                    </tbody>
-                </table>
+            <!-- Rotation sub-view (real accounts) -->
+            <div id="accounts-rotation" class="hidden">
+                <h2 class="section-title">Portfolio Rotation Pairs</h2>
+                <div class="overflow-x-auto mb-8">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Sell</th><th>Score</th><th>Status</th><th></th><th>Buy</th><th>Score</th><th>PGR</th></tr>
+                        </thead>
+                        <tbody id="rotation-body">
+                            <tr><td colspan="7" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
-            <h2 class="section-title">A-Reserves (Backup Players)</h2>
-            <div class="overflow-x-auto">
-                <table class="data-table">
-                    <thead>
-                        <tr><th>Symbol</th><th>Industry</th><th>PGR</th><th>S10</th><th>L60</th><th>Score</th></tr>
-                    </thead>
-                    <tbody id="reserves-body">
-                        <tr><td colspan="6" class="text-center text-slate-500 py-6">Loading…</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
+            <!-- History sub-view (AI-Game account) -->
+            <div id="accounts-history" class="hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+                    <div class="card"><div class="card-label">Total P&amp;L</div><div id="hist-pnl" class="text-2xl font-bold mt-1">—</div></div>
+                    <div class="card"><div class="card-label">Win Rate</div><div id="hist-winrate" class="text-2xl font-bold mt-1">—</div></div>
+                    <div class="card"><div class="card-label">Transactions</div><div id="hist-count" class="text-2xl font-bold mt-1">—</div></div>
+                </div>
 
-        <!-- ======================= HISTORY TAB ======================= -->
-        <section id="tab-history" class="tab-panel hidden">
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-                <div class="card"><div class="card-label">Total P&amp;L</div><div id="hist-pnl" class="text-2xl font-bold mt-1">—</div></div>
-                <div class="card"><div class="card-label">Win Rate</div><div id="hist-winrate" class="text-2xl font-bold mt-1">—</div></div>
-                <div class="card"><div class="card-label">Transactions</div><div id="hist-count" class="text-2xl font-bold mt-1">—</div></div>
+                <h2 class="section-title">Equity Curve</h2>
+                <div class="card mb-8"><canvas id="equity-chart" height="90"></canvas></div>
+
+                <h2 class="section-title">Transaction Log</h2>
+                <div class="overflow-x-auto">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Date</th><th>Type</th><th>Symbol</th><th>Qty</th><th>Price</th><th>Value</th><th>P&amp;L</th></tr>
+                        </thead>
+                        <tbody id="history-body">
+                            <tr><td colspan="7" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="flex justify-between items-center mt-3 text-sm">
+                    <button id="hist-prev" class="btn">‹ Prev</button>
+                    <span id="hist-page" class="text-slate-400">—</span>
+                    <button id="hist-next" class="btn">Next ›</button>
+                </div>
             </div>
 
-            <h2 class="section-title">Equity Curve</h2>
-            <div class="card mb-8"><canvas id="equity-chart" height="90"></canvas></div>
+            <!-- Scorecard sub-view (AI-Game account) -->
+            <div id="accounts-scorecard" class="hidden">
+                <p class="text-xs mut mb-3">Backtracked exit-selector performance (rules vs each AI provider), scored against
+                    the 10-day forward close. A winner-selling miss is a SELL of a position in profit that then rose — the
+                    "cutting a flower" error. Outcome is not decision quality, but persistent bias shows up here.</p>
+                <div id="scorecard-empty" class="text-slate-500 py-6 hidden">No decisions scored yet — logged rows need
+                    ~10 trading days of forward data.</div>
+                <div class="overflow-x-auto mb-8">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Selector</th><th>Scored</th><th>Hit Rate</th><th>Winner-Sell Misses</th>
+                                <th>Missed Upside</th><th>Avoided Loss</th></tr>
+                        </thead>
+                        <tbody id="scorecard-body">
+                            <tr><td colspan="6" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <h2 class="section-title">Winner-Selling Misses</h2>
+                <div class="overflow-x-auto mb-8">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Symbol</th><th>Date</th><th>Reason</th><th>Forward Return</th><th class="text-center">Status</th></tr>
+                        </thead>
+                        <tbody id="misses-body">
+                            <tr><td colspan="5" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
 
-            <h2 class="section-title">Transaction Log</h2>
-            <div class="overflow-x-auto">
-                <table class="data-table">
-                    <thead>
-                        <tr><th>Date</th><th>Type</th><th>Symbol</th><th>Qty</th><th>Price</th><th>Value</th><th>P&amp;L</th></tr>
-                    </thead>
-                    <tbody id="history-body">
-                        <tr><td colspan="7" class="text-center text-slate-500 py-6">Loading…</td></tr>
-                    </tbody>
-                </table>
-            </div>
-            <div class="flex justify-between items-center mt-3 text-sm">
-                <button id="hist-prev" class="btn">‹ Prev</button>
-                <span id="hist-page" class="text-slate-400">—</span>
-                <button id="hist-next" class="btn">Next ›</button>
+                <div class="flex items-center gap-3 mb-3 mt-8">
+                    <h2 class="section-title mb-0">R&D Missed Winners (Buy-Side)</h2>
+                    <span id="buy-side-date-badge" class="text-[10px] px-2 py-0.5 rounded bg-purple-900/60 text-purple-300 font-semibold border border-purple-500/20"></span>
+                </div>
+                <div class="overflow-x-auto mb-8">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Symbol</th><th>PGR</th><th>Screener Score</th><th>10-Day Forward Return</th><th>Rejection Reason</th><th>Status</th></tr>
+                        </thead>
+                        <tbody id="buy-side-misses-body">
+                            <tr><td colspan="6" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h2 class="section-title mt-8">🔬 Decision-Eval Retrospective & Hardening History</h2>
+                <div class="border border-slate-800 bg-slate-900/30 rounded p-5 space-y-4">
+                    <div class="border-b border-slate-800 pb-3">
+                        <div class="flex flex-col md:flex-row md:items-center gap-3 mb-2 pb-2 border-b border-slate-800/50">
+                            <span class="px-2.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 w-fit">✅ ADDRESSED & VERIFIED</span>
+                            <b class="text-slate-200 text-xs">FANG Winner-Sell Miss (+6.6% Missed Upside on 2026-07-14)</b>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs mt-3 leading-relaxed">
+                            <div class="space-y-3">
+                                <div><span class="text-purple-400"><b>1. Root Cause History:</b></span>
+                                    FANG's combined momentum fell to -2.6 due to a short-term price pullback, triggering a deterministic <code>SELL</code> that missed a subsequent +6.6% rise.
+                                    Although FANG was trading above its 50-DMA (which should have triggered our <b>Winner Protection</b> safeguard), the protection failed because the local OHLCV cache was stale, causing <code>_sma50()</code> to return <code>None</code>.
+                                </div>
+                                <div><span class="text-purple-400"><b>2. Diagnostic Steps:</b></span>
+                                    <ul class="list-disc pl-4 mt-1 space-y-1 text-slate-400">
+                                        <li>Audited <code>Data/decision_log.jsonl</code>—found FANG's <code>sma50</code> field was written as <code>null</code>.</li>
+                                        <li>Discovered a silent <code>NameError: name 'os' is not defined</code> inside <code>get_live_prices()</code>'s try-except block, which was silently swallowing errors and disabling daily cache-freshness checks.</li>
+                                        <li>Discovered a <b>Cache-Skipping Bug</b> in <code>run_history.py</code>: if a file for today exists, it skipped it, locking in the stale 7:00 AM morning/intraday price ($13.50 instead of settled $13.22!).</li>
+                                        <li>Discovered a <b>Cahce-Mismatched Bug</b> between Chaikin rating JSONs and Symbol_full closes.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                            <div class="space-y-3">
+                                <div><span class="text-purple-400"><b>3. What Was the Solution:</b></span>
+                                    <ul class="list-disc pl-4 mt-1 space-y-1 text-slate-400">
+                                        <li><b>No Inline Imports:</b> Imported <code>os</code> and <code>pytz</code> cleanly at top-level inside <code>ai_portfolio_game.py</code> and <code>powergauge.py</code>.</li>
+                                        <li><b>Intraday Cache Safeguard:</b> Overhauled <code>powergauge.py</code> to skip saving today's cache file if NYSE is currently open, preventing morning intraday price pollution.</li>
+                                        <li><b>Cache-Freshness Enforced:</b> Overhauled <code>run_history.py</code> to never treat today's date as cached, forcing fresh EOD fetches.</li>
+                                        <li><b>Pre-Save Price Reconciliation:</b> Patched <code>powergauge.py</code>'s <code>get_symbol_data()</code> to overwrite Chaikin's daily JSON with the official settled close, making Chaikin, Symbol_full, and E*TRADE 100% identical!</li>
+                                        <li><b>JSON-Native Fallback:</b> Overhauled <code>ai_portfolio_game.py</code> to retrieve closes directly from <code>Symbol_full</code> JSON caches rather than Excel (openpyxl).</li>
+                                        <li><b>Unmocked Integration Test:</b> Deployed <code>TestLivePricingIntegration</code> inside <code>tests/test_game_pricing.py</code> to verify database pathing and prevent silent regressions.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -320,7 +461,6 @@
             <div id="log-status" class="text-xs mut mt-1"></div>
         </section>
 
-        <!-- ======================= SCORECARD TAB ======================= -->
         <!-- ======================= CHAT TAB ======================= -->
         <section id="tab-chat" class="tab-panel hidden flex flex-col" style="height:calc(100vh - 160px)">
             <div class="flex items-center justify-between mb-3">
@@ -338,95 +478,13 @@
                 <button class="chat-starter btn text-xs">Summarize today's market regime and top picks.</button>
                 <button class="chat-starter btn text-xs">Explain the stop for INTC.</button>
                 <button class="chat-starter btn text-xs">Is the breadth divergence guard active?</button>
+                <button class="chat-starter btn text-xs">Compare TG CC DAVE IBM</button>
             </div>
             <!-- input row -->
             <div class="flex gap-2">
                 <textarea id="chat-input" rows="2" placeholder="Ask AETHER anything about the portfolio, signals, or strategy…"
                     class="flex-1 bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm resize-none"></textarea>
                 <button id="chat-send-btn" class="btn-primary px-5 self-end">Send</button>
-            </div>
-        </section>
-
-        <section id="tab-scorecard" class="tab-panel hidden">
-            <p class="text-xs mut mb-3">Backtracked exit-selector performance (rules vs each AI provider), scored against
-                the 10-day forward close. A winner-selling miss is a SELL of a position in profit that then rose — the
-                "cutting a flower" error. Outcome is not decision quality, but persistent bias shows up here.</p>
-            <div id="scorecard-empty" class="text-slate-500 py-6 hidden">No decisions scored yet — logged rows need
-                ~10 trading days of forward data.</div>
-            <div class="overflow-x-auto mb-8">
-                <table class="data-table">
-                    <thead>
-                        <tr><th>Selector</th><th>Scored</th><th>Hit Rate</th><th>Winner-Sell Misses</th>
-                            <th>Missed Upside</th><th>Avoided Loss</th></tr>
-                    </thead>
-                    <tbody id="scorecard-body">
-                        <tr><td colspan="6" class="text-center text-slate-500 py-6">Loading…</td></tr>
-                    </tbody>
-                </table>
-            </div>
-            <h2 class="section-title">Winner-Selling Misses</h2>
-            <div class="overflow-x-auto mb-8">
-                <table class="data-table">
-                    <thead>
-                        <tr><th>Symbol</th><th>Date</th><th>Reason</th><th>Forward Return</th><th class="text-center">Status</th></tr>
-                    </thead>
-                    <tbody id="misses-body">
-                        <tr><td colspan="5" class="text-center text-slate-500 py-6">Loading…</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="flex items-center gap-3 mb-3 mt-8">
-                <h2 class="section-title mb-0">R&D Missed Winners (Buy-Side)</h2>
-                <span id="buy-side-date-badge" class="text-[10px] px-2 py-0.5 rounded bg-purple-900/60 text-purple-300 font-semibold border border-purple-500/20"></span>
-            </div>
-            <div class="overflow-x-auto mb-8">
-                <table class="data-table">
-                    <thead>
-                        <tr><th>Symbol</th><th>PGR</th><th>Screener Score</th><th>10-Day Forward Return</th><th>Rejection Reason</th><th>Status</th></tr>
-                    </thead>
-                    <tbody id="buy-side-misses-body">
-                        <tr><td colspan="6" class="text-center text-slate-500 py-6">Loading…</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <h2 class="section-title mt-8">🔬 Decision-Eval Retrospective & Hardening History</h2>
-            <div class="border border-slate-800 bg-slate-900/30 rounded p-5 space-y-4">
-                <div class="border-b border-slate-800 pb-3">
-                    <div class="flex flex-col md:flex-row md:items-center gap-3 mb-2 pb-2 border-b border-slate-800/50">
-                        <span class="px-2.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 w-fit">✅ ADDRESSED & VERIFIED</span>
-                        <b class="text-slate-200 text-xs">FANG Winner-Sell Miss (+6.6% Missed Upside on 2026-07-14)</b>
-                    </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs mt-3 leading-relaxed">
-                        <div class="space-y-3">
-                            <div><span class="text-purple-400"><b>1. Root Cause History:</b></span> 
-                                FANG's combined momentum fell to -2.6 due to a short-term price pullback, triggering a deterministic <code>SELL</code> that missed a subsequent +6.6% rise. 
-                                Although FANG was trading above its 50-DMA (which should have triggered our <b>Winner Protection</b> safeguard), the protection failed because the local OHLCV cache was stale, causing <code>_sma50()</code> to return <code>None</code>.
-                            </div>
-                            <div><span class="text-purple-400"><b>2. Diagnostic Steps:</b></span>
-                                <ul class="list-disc pl-4 mt-1 space-y-1 text-slate-400">
-                                    <li>Audited <code>Data/decision_log.jsonl</code>—found FANG's <code>sma50</code> field was written as <code>null</code>.</li>
-                                    <li>Discovered a silent <code>NameError: name 'os' is not defined</code> inside <code>get_live_prices()</code>'s try-except block, which was silently swallowing errors and disabling daily cache-freshness checks.</li>
-                                    <li>Discovered a <b>Cache-Skipping Bug</b> in <code>run_history.py</code>: if a file for today exists, it skipped it, locking in the stale 7:00 AM morning/intraday price ($13.50 instead of settled $13.22!).</li>
-                                    <li>Discovered a <b>Cahce-Mismatched Bug</b> between Chaikin rating JSONs and Symbol_full closes.</li>
-                                </ul>
-                            </div>
-                        </div>
-                        <div class="space-y-3">
-                            <div><span class="text-purple-400"><b>3. What Was the Solution:</b></span>
-                                <ul class="list-disc pl-4 mt-1 space-y-1 text-slate-400">
-                                    <li><b>No Inline Imports:</b> Imported <code>os</code> and <code>pytz</code> cleanly at top-level inside <code>ai_portfolio_game.py</code> and <code>powergauge.py</code>.</li>
-                                    <li><b>Intraday Cache Safeguard:</b> Overhauled <code>powergauge.py</code> to skip saving today's cache file if NYSE is currently open, preventing morning intraday price pollution.</li>
-                                    <li><b>Cache-Freshness Enforced:</b> Overhauled <code>run_history.py</code> to never treat today's date as cached, forcing fresh EOD fetches.</li>
-                                    <li><b>Pre-Save Price Reconciliation:</b> Patched <code>powergauge.py</code>'s <code>get_symbol_data()</code> to overwrite Chaikin's daily JSON with the official settled close, making Chaikin, Symbol_full, and E*TRADE 100% identical!</li>
-                                    <li><b>JSON-Native Fallback:</b> Overhauled <code>ai_portfolio_game.py</code> to retrieve closes directly from <code>Symbol_full</code> JSON caches rather than Excel (openpyxl).</li>
-                                    <li><b>Unmocked Integration Test:</b> Deployed <code>TestLivePricingIntegration</code> inside <code>tests/test_game_pricing.py</code> to verify database pathing and prevent silent regressions.</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
         </section>
 
@@ -468,6 +526,7 @@
                         <div data-wiki="l60_score" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
                         <div data-wiki="seasonality_engine" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition"></div>
                         <div data-wiki="fibonacci_rsi" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2"></div>
+                        <div data-wiki="stock_compare" class="border border-slate-800 bg-slate-900/30 p-4 rounded hover:border-slate-700 transition col-span-1 md:col-span-2"></div>
                     </div>
                 </div>
 
@@ -777,6 +836,6 @@
         <div id="chart-fs-tooltip" class="hidden"></div>
     </div>
 
-    <script src="/static/app.js?v=1.0.2"></script>
+    <script src="/static/app.js?v=1.0.7"></script>
 </body>
 </html>
