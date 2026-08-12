@@ -24,6 +24,7 @@ from scoring import (
     rel_volume_bucket, short_score, long_score,
     market_regime, clear_regime_cache,
     fibonacci_retracement_score,
+    gann_sq9_score,
     rsi_divergence_score,
 )
 from utils import _to_float
@@ -380,6 +381,66 @@ class TestFibonacciRetracementScore(unittest.TestCase):
         ohlcv = make_ohlcv([100, 110])
         dates = sorted(ohlcv.keys())
         self.assertEqual(fibonacci_retracement_score(ohlcv, dates[-1]), 0.0)
+
+
+# ── gann_sq9_score ───────────────────────────────────────────────────────────
+
+class TestGannSq9Score(unittest.TestCase):
+    """Anchor is a confirmed fractal low at 100.0; its Convention-B upside ladder
+    puts a 180° rung at 110.25 (cardinal → magnitude 1.0). The final bar's close
+    controls proximity/sign. high==low==close so the fractal low is exactly 100.0
+    and no confirmed swing high sits above the final price (high_anchor = None).
+    """
+
+    def _series(self, final_close):
+        # 7 flat warmup + V-dip (min 100.0 at index 9, confirmed) + rising tail + final bar
+        closes = ([108.0] * 7
+                  + [106.0, 103.0, 100.0, 103.0, 106.0, 108.0]
+                  + [108.2, 108.4, 108.6, 108.8, 109.0, 109.2, 109.4, 109.6, 109.8, 110.0]
+                  + [final_close])
+        return make_ohlcv(closes, highs=list(closes), lows=list(closes))
+
+    def test_score_by_proximity(self):
+        # One fixture (fractal-low anchor 100.0 → Convention-B upside ladder), four
+        # placements of the final close relative to a projected rung. Table-driven so
+        # each case is reported independently via subTest. Rungs off anchor 100:
+        #   110.25   = 180° CARDINAL rung → magnitude 1.0
+        #   105.0625 = 90°  ORDINAL  rung → magnitude 0.5 (exercises the `else 0.5` branch)
+        # Sign convention: price above a rung = support (+), below = resistance (−).
+        cases = [
+            (110.30,  1.0, "just ABOVE the 110.25 cardinal rung → support +1.0"),
+            (110.20, -1.0, "just BELOW the 110.25 cardinal rung → resistance -1.0"),
+            (105.09,  0.5, "just above the 105.0625 ordinal rung → support +0.5"),
+            (112.00,  0.0, ">0.5% from every projected rung → 0.0"),
+        ]
+        for final_close, expected, why in cases:
+            with self.subTest(final_close=final_close, why=why):
+                ohlcv = self._series(final_close)
+                dates = sorted(ohlcv.keys())
+                self.assertEqual(gann_sq9_score(ohlcv, dates[-1]), expected)
+
+    def test_insufficient_history(self):
+        ohlcv = make_ohlcv([100, 110])
+        dates = sorted(ohlcv.keys())
+        self.assertEqual(gann_sq9_score(ohlcv, dates[-1]), 0.0)
+
+    def test_empty_ohlcv(self):
+        self.assertEqual(gann_sq9_score({}, "2024-06-01"), 0.0)
+
+    def test_no_look_ahead(self):
+        # Scoring AT the penultimate date must ignore the (future) final bar.
+        # Penultimate close is 110.0 → just below 110.25 → -1.0, regardless of
+        # whether a later +1.0 bar exists in the dict.
+        full = self._series(110.30)
+        dates = sorted(full.keys())
+        self.assertEqual(gann_sq9_score(full, dates[-2]), -1.0)
+        # A series physically truncated before that bar yields the same score.
+        truncated = self._series(110.30)
+        for d in sorted(truncated.keys())[-1:]:
+            del truncated[d]
+        tdates = sorted(truncated.keys())
+        self.assertEqual(gann_sq9_score(truncated, tdates[-1]),
+                         gann_sq9_score(full, dates[-2]))
 
 
 # ── rsi_divergence_score ─────────────────────────────────────────────────────

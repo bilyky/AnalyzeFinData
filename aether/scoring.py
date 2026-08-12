@@ -9,6 +9,8 @@ import logging
 import os
 import threading
 from aether.utils import _to_float
+from aether.risk_utils import detect_support, detect_resistance
+from aether.primal_funcs import gann_sq9_levels
 
 _log = logging.getLogger("aether.scoring")
 
@@ -380,6 +382,64 @@ def fibonacci_retracement_score(ohlcv_ts: dict, date_str: str, lookback: int = 2
             return base_score if prox > 0 else -base_score
             
     return 0.0
+
+
+# ── Gann Square of Nine ──────────────────────────────────────────────────────
+
+def gann_sq9_score(ohlcv_ts: dict, date_str: str, lookback: int = 252,
+                   threshold: float = 0.005) -> float:
+    """Score price proximity to a Gann Square-of-Nine level.
+
+    Emits one of {-1.0, -0.5, 0.0, +0.5, +1.0} (magnitude by rotation strength);
+    the signature stays in the [-2, +2] band shared by the other level factors.
+
+    Anchors are chosen MECHANICALLY (no hand-picking) on the nearest confirmed
+    fractals — `detect_support` (swing low below price) projects an UPSIDE ladder,
+    `detect_resistance` (swing high above price) projects a DOWNSIDE ladder — both
+    look-ahead-safe. The score is the sign of proximity to the nearest projected
+    level (Price > Level = support = +, Price < Level = resistance = −, same
+    convention as `fibonacci_retracement_score`), scaled by rotation strength
+    (cardinal 180°/360° = ±1.0, ordinal 90°/270° = ±0.5), within a 0.5% band.
+    Returns 0.0 when there is no anchor or no level within the band.
+    """
+    if not ohlcv_ts:
+        return 0.0
+    dates = sorted(ohlcv_ts.keys())
+    past = [d for d in dates if d <= date_str]
+    if len(past) < 20:
+        return 0.0
+
+    window = past[-lookback:]
+    lows = [_to_float(ohlcv_ts[d].get('3. low'), 0) for d in window]
+    highs = [_to_float(ohlcv_ts[d].get('2. high'), 0) for d in window]
+    current_price = _to_float(ohlcv_ts[past[-1]].get('4. close'), 0)
+    if current_price <= 0:
+        return 0.0
+
+    low_anchor = detect_support(current_price, lows)       # fractal low  → upside ladder
+    high_anchor = detect_resistance(current_price, highs)  # fractal high → downside ladder
+
+    # A confirmed fractal low projects its Gann UPSIDE ladder (resistance rungs);
+    # a confirmed fractal high projects its DOWNSIDE ladder (support rungs).
+    candidates = []  # (level, deg)
+    for anchor, want_kind in ((low_anchor, 'resistance'), (high_anchor, 'support')):
+        if anchor:
+            _, flat = gann_sq9_levels(anchor)
+            candidates += [(lvl, deg) for (kind, deg, lvl) in flat if kind == want_kind]
+    if not candidates:
+        return 0.0
+
+    best = None  # (abs_prox, signed_score)
+    for lvl, deg in candidates:
+        if lvl <= 0:
+            continue
+        prox = (current_price - lvl) / lvl
+        if abs(prox) < threshold:
+            mag = 1.0 if deg in (180, 360) else 0.5   # cardinal rotations stronger
+            score = mag if prox > 0 else -mag
+            if best is None or abs(prox) < best[0]:
+                best = (abs(prox), score)
+    return best[1] if best else 0.0
 
 
 # ── RSI Divergence ────────────────────────────────────────────────────────────

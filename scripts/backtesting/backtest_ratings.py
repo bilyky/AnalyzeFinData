@@ -20,11 +20,23 @@ import json
 import os
 import sys
 import glob
+import logging
 from collections import defaultdict
+
+# Report output goes through a logger (stdout, bare format) rather than the print
+# builtin, so runs can be captured/redirected via standard logging handlers.
+_log = logging.getLogger("backtest_ratings")
+if not _log.handlers:
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(logging.Formatter("%(message)s"))
+    _log.addHandler(_h)
+    _log.setLevel(logging.INFO)
+    _log.propagate = False
 from scoring import (
     short_score as _short_score_fn,
     long_score as _long_score_fn,
     fibonacci_retracement_score as _fib_score,
+    gann_sq9_score as _gann_score,
     rsi_divergence_score as _rsi_div_score,
     rel_volume_bucket as _rel_vol_fn,
     market_regime as _market_regime,
@@ -211,6 +223,7 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
         'seasonality': seasonality,
         'market_regime': _market_regime(date_str),
         'fibonacci': _fib_score(ohlcv_ts, date_str),
+        'gann_sq9': _gann_score(ohlcv_ts, date_str),
         'rsi_divergence': _rsi_div_score(ohlcv_ts, date_str),
         'candlestick_score': cs_val,
         'chart_score': cps_val,
@@ -233,11 +246,19 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     short_no_div = _short_score_fn(f_no_div)
     long_no_div  = _long_score_fn(f_no_div)
 
-    return br, short, long, short_no_fib, long_no_fib, rsi_div, short_no_div, long_no_div, cs_val, cps_val, ms_val
+    # Gann Sq9 (Aug-15 R&D): raw factor value for the pre-registered spread gate.
+    # No no-gann ablation — the factor is parked/unwired, so short_score/long_score
+    # ignore it and any ablation would equal the WITH tables by construction. Add
+    # the f_no_gann ablation (mirroring f_no_fib) only if/when the factor is wired.
+    gann_val = fields['gann_sq9']
+
+    return (br, short, long, short_no_fib, long_no_fib, rsi_div,
+            short_no_div, long_no_div, cs_val, cps_val, ms_val, gann_val)
 
 
 def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
-    """Returns list of (br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms, fwd_5, fwd_10, fwd_20) tuples."""
+    """Returns list of (br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms,
+    gann_val, fwd_5, fwd_10, fwd_20) tuples."""
     seasonality_map = precompute_seasonality(ohlcv_ts)
     ohlcv_date_set = set(all_dates)
 
@@ -305,7 +326,8 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
             prev_data, prev_date = data, date_str
             continue
 
-        br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms = compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map)
+        (br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms,
+         gann_val) = compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map)
 
         # Forward returns from OHLCV
         fwd = []
@@ -317,14 +339,15 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
             else:
                 fwd.append(None)
 
-        results.append((br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms, fwd[0], fwd[1], fwd[2]))
+        results.append((br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms,
+                        gann_val, fwd[0], fwd[1], fwd[2]))
         prev_data, prev_date = data, date_str
 
     return results
 
 
 def run(min_year=2023, max_symbols=None):
-    print(f"\nBacktesting buying_ratio >= {min_year} ...")
+    _log.info(f"\nBacktesting buying_ratio >= {min_year} ...")
 
     # Find symbols with both Chaikin cache and OHLCV
     ohlcv_files = {os.path.basename(f).replace('_daily.json', '')
@@ -334,7 +357,7 @@ def run(min_year=2023, max_symbols=None):
     symbols = sorted(ohlcv_files & cache_syms)
     if max_symbols:
         symbols = symbols[:max_symbols]
-    print(f"  Symbols with both Chaikin + OHLCV: {len(symbols)}")
+    _log.info(f"  Symbols with both Chaikin + OHLCV: {len(symbols)}")
 
     # Collect all results
     br_buckets = {label: {w: [] for w in FWD_WINDOWS} for label, _ in BUCKETS}
@@ -350,6 +373,10 @@ def run(min_year=2023, max_symbols=None):
     # RSI divergence raw spread (Phase A calibration)
     DIV_VALUES = [-1.0, -0.5, 0.0, 0.5, 1.0]
     div_buckets = {v: {w: [] for w in FWD_WINDOWS} for v in DIV_VALUES}
+
+    # Gann Sq9 raw spread (Phase A — Aug-15 R&D, pre-registered primary signal)
+    GANN_VALUES = [-1.0, -0.5, 0.0, 0.5, 1.0]
+    gann_buckets = {v: {w: [] for w in FWD_WINDOWS} for v in GANN_VALUES}
 
     # WITH/NO DIV comparison (Phase B)
     s_buckets_nd = {label: {w: [] for w in FWD_WINDOWS} for label, _ in SHORT_BUCKETS}
@@ -376,7 +403,8 @@ def run(min_year=2023, max_symbols=None):
             continue
         all_dates = sorted(ohlcv_ts.keys())
         rows = process_symbol(sym, str(min_year), ohlcv_ts, all_dates)
-        for br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms, f5, f10, f20 in rows:
+        for (br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms,
+             gann_val, f5, f10, f20) in rows:
             total_obs += 1
             fwds = {5: f5, 10: f10, 20: f20}
 
@@ -416,6 +444,12 @@ def run(min_year=2023, max_symbols=None):
                     if fwds[w] is not None:
                         div_buckets[rsi_div][w].append(fwds[w])
 
+            # Gann Sq9 raw spread (Phase A)
+            if gann_val in gann_buckets:
+                for w in FWD_WINDOWS:
+                    if fwds[w] is not None:
+                        gann_buckets[gann_val][w].append(fwds[w])
+
             # WITH/NO DIV (short)
             for label, test in SHORT_BUCKETS:
                 if test(s_nd):
@@ -446,16 +480,16 @@ def run(min_year=2023, max_symbols=None):
                             ms_buckets[label][w].append(fwds[w])
 
         if i % 50 == 0:
-            print(f"  ... {i}/{len(symbols)} symbols processed")
+            _log.info(f"  ... {i}/{len(symbols)} symbols processed")
 
-    print(f"\n  Total observations: {total_obs:,}\n")
+    _log.info(f"\n  Total observations: {total_obs:,}\n")
 
     def print_table(title, buckets, bucket_labels):
-        print(f"\n--- {title} ---")
+        _log.info(f"\n--- {title} ---")
         header = f"  {'Bucket':<12}  {'Count':>6}  " + \
                  "  ".join(f"{'Avg '+str(w)+'d':>8}  {'Win%'+str(w)+'d':>8}" for w in FWD_WINDOWS)
-        print(header)
-        print("-" * len(header))
+        _log.info(header)
+        _log.info("-" * len(header))
         for label, _ in bucket_labels:
             data = buckets[label]
             count = len(data[FWD_WINDOWS[1]]) if data[FWD_WINDOWS[1]] else 0
@@ -468,7 +502,7 @@ def run(min_year=2023, max_symbols=None):
                     avg = sum(rets) / len(rets)
                     win = len([r for r in rets if r > 0]) / len(rets) * 100
                     cols.extend([f"{avg:>8.2f}%", f"{win:>8.1f}%"])
-            print(f"  {label:<12}  {count:>6}  " + "  ".join(cols))
+            _log.info(f"  {label:<12}  {count:>6}  " + "  ".join(cols))
 
     print_table("BUYING RATIO (Control)", br_buckets, BUCKETS)
     print_table("SHORT10 (WITH FIB)", s_buckets, SHORT_BUCKETS)
@@ -481,12 +515,12 @@ def run(min_year=2023, max_symbols=None):
     print_table("LONG60 (NO DIV)", l_buckets_nd, SHORT_BUCKETS)
 
     # RSI Divergence raw factor spread (Phase A - calibration)
-    print("\n--- RSI DIVERGENCE - Raw Factor Spread (Phase A) ---")
-    print("  (measure 10d spread = avg at +1.0 minus avg at -1.0; use to calibrate weight)")
+    _log.info("\n--- RSI DIVERGENCE - Raw Factor Spread (Phase A) ---")
+    _log.info("  (measure 10d spread = avg at +1.0 minus avg at -1.0; use to calibrate weight)")
     div_header = f"  {'Bucket':>6}  {'Count':>6}  " + \
                  "  ".join(f"{'Avg '+str(w)+'d':>8}  {'Win%'+str(w)+'d':>8}" for w in FWD_WINDOWS)
-    print(div_header)
-    print("-" * len(div_header))
+    _log.info(div_header)
+    _log.info("-" * len(div_header))
     for v in DIV_VALUES:
         data = div_buckets[v]
         count = len(data[FWD_WINDOWS[1]]) if data[FWD_WINDOWS[1]] else 0
@@ -500,7 +534,7 @@ def run(min_year=2023, max_symbols=None):
                 win = len([r for r in rets if r > 0]) / len(rets) * 100
                 cols.extend([f"{avg:>8.2f}%", f"{win:>8.1f}%"])
         label = f"{v:+.1f}"
-        print(f"  {label:>6}  {count:>6}  " + "  ".join(cols))
+        _log.info(f"  {label:>6}  {count:>6}  " + "  ".join(cols))
 
     avg10_bull = (sum(div_buckets[1.0][10]) / len(div_buckets[1.0][10])
                   if div_buckets[1.0][10] else None)
@@ -508,23 +542,71 @@ def run(min_year=2023, max_symbols=None):
                   if div_buckets[-1.0][10] else None)
     if avg10_bull is not None and avg10_bear is not None:
         spread = avg10_bull - avg10_bear
-        print(f"\n  10d spread (+1.0 vs -1.0): {spread:.2f}%")
+        _log.info(f"\n  10d spread (+1.0 vs -1.0): {spread:.2f}%")
         if spread >= 3.0:
-            print("  -> Suggested weight: +/-1.5 in short_score, +/-0.75 in long_score")
+            _log.info("  -> Suggested weight: +/-1.5 in short_score, +/-0.75 in long_score")
         elif spread >= 2.0:
-            print("  -> Suggested weight: +/-1.0 in short_score, +/-0.5 in long_score")
+            _log.info("  -> Suggested weight: +/-1.0 in short_score, +/-0.5 in long_score")
         elif spread >= 1.0:
-            print("  -> Suggested weight: +/-0.5 in short_score, +/-0.25 in long_score")
+            _log.info("  -> Suggested weight: +/-0.5 in short_score, +/-0.25 in long_score")
         else:
-            print("  -> Spread < 1% - consider dropping this factor")
+            _log.info("  -> Spread < 1% - consider dropping this factor")
+
+    # ── Gann Sq9 raw factor spread + z-test (Aug-15 R&D pre-registered gate) ──
+    _log.info("\n--- GANN SQ9 - Raw Factor Spread (Phase A, PRE-REGISTERED PRIMARY) ---")
+    _log.info("  (10d spread = avg at +1.0 minus avg at -1.0; gate: |z|>=1.96, N adequate, marginal d>0)")
+    gann_header = f"  {'Bucket':>6}  {'Count':>6}  " + \
+                  "  ".join(f"{'Avg '+str(w)+'d':>8}  {'Win%'+str(w)+'d':>8}" for w in FWD_WINDOWS)
+    _log.info(gann_header)
+    _log.info("-" * len(gann_header))
+    for v in GANN_VALUES:
+        data = gann_buckets[v]
+        count = len(data[FWD_WINDOWS[1]]) if data[FWD_WINDOWS[1]] else 0
+        cols = []
+        for w in FWD_WINDOWS:
+            rets = data[w]
+            if not rets:
+                cols.extend(["     N/A", "     N/A"])
+            else:
+                avg = sum(rets) / len(rets)
+                win = len([r for r in rets if r > 0]) / len(rets) * 100
+                cols.extend([f"{avg:>8.2f}%", f"{win:>8.1f}%"])
+        _log.info(f"  {v:>+6.1f}  {count:>6}  " + "  ".join(cols))
+
+    def _welch(a, b):
+        """Two-sample Welch t on lists a,b. Returns (diff, t, n_a, n_b) or None."""
+        na, nb = len(a), len(b)
+        if na < 2 or nb < 2:
+            return None
+        ma, mb = sum(a) / na, sum(b) / nb
+        va = sum((x - ma) ** 2 for x in a) / (na - 1)
+        vb = sum((x - mb) ** 2 for x in b) / (nb - 1)
+        se = (va / na + vb / nb) ** 0.5
+        if se <= 0:
+            return None
+        return (ma - mb, (ma - mb) / se, na, nb)
+
+    pos10, neg10 = gann_buckets[1.0][10], gann_buckets[-1.0][10]
+    w = _welch(pos10, neg10)
+    if w is not None:
+        diff, t, na, nb = w
+        _log.info(f"\n  10d spread (+1.0 vs -1.0): {diff:.2f}%   z~t={t:.2f}   N(+)={na}  N(-)={nb}")
+        verdict = "PASS" if (abs(t) >= 1.96 and min(na, nb) >= 30 and diff > 0) else "FAIL/marginal"
+        _log.info(f"  -> Pre-registered 10d gate: {verdict}")
+        if verdict == "PASS":
+            _log.info("     (proceed to wire scoring.short_score/long_score with optimizer weight)")
+        else:
+            _log.info("     (park: keep field computed-but-unwired; document the null)")
+    else:
+        _log.info("\n  10d spread: insufficient data in +1.0 / -1.0 buckets to test")
 
     def _pat_spread_summary(title, buckets):
-        print(f"\n--- {title} (Phase A) ---")
-        print("  (spread = high bucket avg 10d minus low bucket avg 10d; use to calibrate weight)")
+        _log.info(f"\n--- {title} (Phase A) ---")
+        _log.info("  (spread = high bucket avg 10d minus low bucket avg 10d; use to calibrate weight)")
         hdr = f"  {'Bucket':<14}  {'Count':>6}  " + \
               "  ".join(f"{'Avg '+str(w)+'d':>8}  {'Win%'+str(w)+'d':>8}" for w in FWD_WINDOWS)
-        print(hdr)
-        print("-" * len(hdr))
+        _log.info(hdr)
+        _log.info("-" * len(hdr))
         avgs10 = []
         for label, _ in PAT_BUCKETS:
             data = buckets[label]
@@ -539,18 +621,18 @@ def run(min_year=2023, max_symbols=None):
                     win = len([r for r in rets if r > 0]) / len(rets) * 100
                     avgs10.append(avg)
                     cols.extend([f"{avg:>8.2f}%", f"{win:>8.1f}%"])
-            print(f"  {label:<14}  {count:>6}  " + "  ".join(cols))
+            _log.info(f"  {label:<14}  {count:>6}  " + "  ".join(cols))
         if len(avgs10) >= 2:
             spread10 = max(avgs10) - min(avgs10)
-            print(f"\n  10d spread (high vs low bucket): {spread10:.2f}%")
+            _log.info(f"\n  10d spread (high vs low bucket): {spread10:.2f}%")
             if spread10 >= 3.0:
-                print("  -> Suggested weight: +-1.5 in short_score, +-0.75 in long_score")
+                _log.info("  -> Suggested weight: +-1.5 in short_score, +-0.75 in long_score")
             elif spread10 >= 2.0:
-                print("  -> Suggested weight: +-1.0 in short_score, +-0.5 in long_score")
+                _log.info("  -> Suggested weight: +-1.0 in short_score, +-0.5 in long_score")
             elif spread10 >= 1.0:
-                print("  -> Suggested weight: +-0.5 in short_score, +-0.25 in long_score")
+                _log.info("  -> Suggested weight: +-0.5 in short_score, +-0.25 in long_score")
             else:
-                print("  -> Spread < 1% - consider dropping this factor")
+                _log.info("  -> Spread < 1% - consider dropping this factor")
 
     _pat_spread_summary("CANDLESTICK SCORE - Raw Factor Spread", cs_buckets)
     _pat_spread_summary("CHART PATTERN SCORE - Raw Factor Spread", cps_buckets)

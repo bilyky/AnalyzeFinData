@@ -1,6 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+from aether.logger import get_logger as _get_logger
+
+_log = _get_logger("primal_funcs")
+
 
 def add_column(data, times):
     for i in range(1, times + 1):
@@ -153,10 +157,10 @@ def performance(data,
     # Number of trades
     trades = len(total_net_losses) + len(total_net_profits)
 
-    print('Hit Ratio         = ', hit_ratio)
-    print('Profit factor     = ', profit_factor)
-    print('Realized RR       = ', round(realized_risk_reward, 3))
-    print('Number of trades  = ', trades)
+    _log.info('Hit Ratio         = %s', hit_ratio)
+    _log.info('Profit factor     = %s', profit_factor)
+    _log.info('Realized RR       = %s', round(realized_risk_reward, 3))
+    _log.info('Number of trades  = %s', trades)
     return data
 
 
@@ -284,3 +288,55 @@ def three_candles_signal(data, open_column, close_column, buy_column, sell_colum
 
             pass
     return data
+
+
+# ── W.D. Gann Square of Nine — scale-invariant √-level layer ──────────────────
+# Numbers spiral outward from 1; a full 360° turn around the spiral advances the
+# square root of the price by a fixed increment. Rotating an anchor price by
+# 90/180/270/360° therefore projects natural support/resistance levels many
+# traders watch. This is the scale-*invariant* √-level layer (independent of
+# chart scale / bars-per-point) — distinct from Gann angles/lines (scale-dependent,
+# tracked separately in the roadmap).
+#
+# Two conventions differ only in how much the √ advances per full turn:
+#   Convention B (primary, matches the roadmap `√anchor → ±0.25·n → square`):
+#       0.25 √-increment per 90°  ⇒  sqrt_inc_per_turn = 1.0
+#   Convention A (classic Sq9 table alternate):
+#       0.50 √-increment per 90°  ⇒  sqrt_inc_per_turn = 2.0
+# Exposed as a single constant so the backtest can A/B them without code changes.
+_GANN_SQRT_INC_PER_TURN = 1.0
+
+
+def gann_sq9_levels(anchor_price, rotations=(90, 180, 270, 360),
+                    sqrt_inc_per_turn=_GANN_SQRT_INC_PER_TURN):
+    """Project Gann Square-of-Nine support/resistance levels off an anchor price.
+
+    For each rotation `deg`, the √-increment is  k = sqrt_inc_per_turn * (deg/360):
+        resistance = (√anchor + k)²        (level above the anchor)
+        support    = (max(√anchor - k, 0))²  (level below; root clamped at 0)
+
+    Returns a 2-tuple:
+        levels_by_rotation : {deg: {'support': float, 'resistance': float}}
+        flat_sorted        : [(kind, deg, level), ...] sorted ascending by level,
+                             where kind is 'support' or 'resistance'.
+    Returns ({}, []) when anchor_price is non-positive or unparseable.
+    """
+    try:
+        anchor_price = float(anchor_price)
+    except (TypeError, ValueError):
+        return {}, []
+    if anchor_price <= 0:
+        return {}, []
+
+    root = anchor_price ** 0.5
+    levels_by_rotation = {}
+    flat = []
+    for deg in rotations:
+        k = sqrt_inc_per_turn * (deg / 360.0)
+        resistance = (root + k) ** 2
+        support = (max(root - k, 0.0)) ** 2
+        levels_by_rotation[deg] = {'support': support, 'resistance': resistance}
+        flat.append(('support', deg, support))
+        flat.append(('resistance', deg, resistance))
+    flat.sort(key=lambda t: t[2])
+    return levels_by_rotation, flat

@@ -139,6 +139,11 @@ _ADDRESSED_MISSES = {
     ("APA", "2026-07-20"),   # Addressed: deployed AI Second-Opinion Exit Override Gate (R&D #14) on 2026-08-06
 }
 
+# Known OPEN winner-sale miss, deliberately NOT added above: CTSH (2026-07-30),
+# +9.9% after exit. Tracked as R&D #28 in plans/roadmap.md — it has no deployed fix
+# yet, so it must stay a scored/penalized miss here; adding it to _ADDRESSED_MISSES
+# would falsely suppress the penalty. Promote it only when a fix ships, with a cite.
+
 
 def _rules_correct(action, ret):
     """A SELL is correct if the name fell (ret<0); a HOLD/REVIEW is correct if it
