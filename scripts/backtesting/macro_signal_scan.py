@@ -53,8 +53,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Reuse the carry-unwind study's pure, tested helpers (import is side-effect free —
 # its scan is guarded by __main__), so the two studies stay in lock-step.
 from carry_unwind_study import (
-    _closes_by_date, _trend_score, _pearson, _returns, _fwd, _agg,
-    FWD_WINDOWS, GATE_SPREAD, GATE_T, GATE_N, MIN_HISTORY, RECENT_CUTOFF,
+    _closes_by_date, _trend_score, _pearson, _returns, _fwd, _agg, qualifies,
+    FWD_WINDOWS, GATE_N, MIN_HISTORY, RECENT_CUTOFF,
     SWEEP_CORR, SWEEP_STATE, SWEEP_CWIN, ERAS_EXT,
 )
 from aether_logger import get_logger as _get_logger
@@ -119,11 +119,6 @@ def _build_pair_signals(dates, haven, spy, corr_win, haven_min, spy_max):
     return signals, base_ret, base_up
 
 
-def _qual(r):
-    return (r["spread"] is not None and r["spread"] <= GATE_SPREAD
-            and abs(r["t"]) >= GATE_T)
-
-
 def _scan_haven(label, sym, note, spy_m):
     """Full sweep + gate + dormancy for one haven. Returns a result dict or None."""
     hav_m = _closes_by_date(sym)
@@ -152,8 +147,8 @@ def _scan_haven(label, sym, note, spy_m):
                     continue
                 sweep_rows.append({"corr_max": cmax, "state_min": state,
                                    "corr_win": cwin, **s})
-    sweep_rows.sort(key=lambda r: (_qual(r), -(r["spread"] or 0)), reverse=True)
-    qualified = [s for s in sweep_rows if _qual(s) and s["n"] >= GATE_N]
+    sweep_rows.sort(key=lambda r: (qualifies(r), -(r["spread"] or 0)), reverse=True)
+    qualified = [s for s in sweep_rows if qualifies(s) and s["n"] >= GATE_N]
     best = qualified[0] if qualified else None
 
     # Winning-cohort era slice + dormancy + beats-unguarded check.
@@ -162,14 +157,17 @@ def _scan_haven(label, sym, note, spy_m):
     beats_unguarded = False
     if best:
         bsigs, bret, bup = scan_cache[(best["state_min"], best["corr_win"])]
-        cohort = [r for r in bsigs if r["corr"] <= best["corr_max"]
-                  and r.get("fwd10") is not None]
+        # fires = every guard-passing day (drives dormancy — must include the recent
+        # unsettled tail where a reawakening first shows). cohort = settled subset for
+        # the forward-return stats. Same split as carry_unwind_study.
+        fires = [r for r in bsigs if r["corr"] <= best["corr_max"]]
+        cohort = [r for r in fires if r.get("fwd10") is not None]
         unguarded = _agg(bsigs, bret, bup)[10]
         beats_unguarded = best["win"] < unguarded["win"]
         for elabel, s0, e0 in ERAS_EXT:
             eras[elabel] = _agg([r for r in cohort if s0 <= r["date"] <= e0], bret, bup)[10]
-        if cohort:
-            dts = sorted(r["date"] for r in cohort)
+        if fires:
+            dts = sorted(r["date"] for r in fires)
             dormancy["last_fire"] = dts[-1]
             dormancy["fires_since_cutoff"] = sum(1 for d in dts if d >= RECENT_CUTOFF)
             dormancy["is_dormant"] = dormancy["fires_since_cutoff"] == 0

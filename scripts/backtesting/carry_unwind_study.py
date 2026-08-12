@@ -300,6 +300,16 @@ def _f(x):
     return f"{x:+.2f}" if isinstance(x, (int, float)) else "  -  "
 
 
+def qualifies(r):
+    """A sweep row clears the alpha gate: protective spread AND significant t.
+
+    Single source of truth for the gate predicate — macro_signal_scan imports this
+    so the battery and the carry study apply an identical bar.
+    """
+    return (r["spread"] is not None and r["spread"] <= GATE_SPREAD
+            and abs(r["t"]) >= GATE_T)
+
+
 def run():
     spy_m = _closes_by_date(MKT)
     fxy_m = _closes_by_date(YEN)
@@ -368,11 +378,8 @@ def run():
 
     # Rank: qualifying combos (clear the protective spread floor AND significant t)
     # first, then by most-negative spread.
-    def _qual(r):
-        return (r["spread"] is not None and r["spread"] <= GATE_SPREAD
-                and abs(r["t"]) >= GATE_T)
-    sweep_rows.sort(key=lambda r: (_qual(r), -(r["spread"] or 0)), reverse=True)
-    qualified = [s for s in sweep_rows if _qual(s) and s["n"] >= GATE_N]
+    sweep_rows.sort(key=lambda r: (qualifies(r), -(r["spread"] or 0)), reverse=True)
+    qualified = [s for s in sweep_rows if qualifies(s) and s["n"] >= GATE_N]
     best = qualified[0] if qualified else None
 
     _log.console("\n" + "=" * 90)
@@ -382,7 +389,7 @@ def run():
     _log.console(f"{'corr<=':>7}{'state>=':>8}{'cwin':>6}{'n':>6}{'avg10%':>9}"
                  f"{'win10':>8}{'spread10':>10}{'z10':>7}{'t10':>7}")
     for s in sweep_rows[:12]:
-        mark = "  <-" if _qual(s) else ""
+        mark = "  <-" if qualifies(s) else ""
         _log.console(f"{s['corr_max']:>7.2f}{s['state_min']:>8.2f}{s['corr_win']:>6}"
                      f"{s['n']:>6}{_f(s['avg']):>9}{s['win']:>8.3f}{_f(s['spread']):>10}"
                      f"{s['z']:>7.2f}{s['t']:>7.2f}{mark}")
@@ -394,11 +401,15 @@ def run():
     # not a live 2026 carry gate.
     if best:
         bsigs, bret, bup = scan_cache[(best["state_min"], best["corr_win"])]
-        cohort = [r for r in bsigs if r["corr"] <= best["corr_max"]
-                  and r.get("fwd10") is not None]
+        # fires = every guard-passing day (dormancy is about WHEN it last fired, so it
+        # must include the most recent fires even before their 10d outcome settles —
+        # that unsettled tail is exactly where a monthly re-run first sees a reawakening).
+        # cohort = the settled subset used for the forward-return stats/era slice.
+        fires = [r for r in bsigs if r["corr"] <= best["corr_max"]]
+        cohort = [r for r in fires if r.get("fwd10") is not None]
         unguarded = _agg(bsigs, bret, bup)[10]
     else:
-        cohort, bret, bup, unguarded = [], base_ret, base_up, {"win": 0.0}
+        fires, cohort, bret, bup, unguarded = [], [], base_ret, base_up, {"win": 0.0}
 
     _log.console("\n" + "=" * 78)
     _log.console("TABLE B — WINNING-COHORT forward SPY return by era (+ dormancy check)")
@@ -414,8 +425,8 @@ def run():
 
     dormancy = {"last_fire": None, "fires_since_cutoff": 0,
                 "cutoff": RECENT_CUTOFF, "is_dormant": True}
-    if cohort:
-        dts = sorted(r["date"] for r in cohort)
+    if fires:
+        dts = sorted(r["date"] for r in fires)
         dormancy["last_fire"] = dts[-1]
         dormancy["fires_since_cutoff"] = sum(1 for d in dts if d >= RECENT_CUTOFF)
         dormancy["is_dormant"] = dormancy["fires_since_cutoff"] == 0
