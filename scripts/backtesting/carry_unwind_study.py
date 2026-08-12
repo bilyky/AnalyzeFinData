@@ -104,8 +104,10 @@ SWEEP_STATE = [1.25, 2.5, 5.0]                # trend-score magnitude for the st
 SWEEP_CWIN  = [40, 60, 90]                    # trailing correlation window
 
 # ── Confidence-scaling calibration bands (Table C) -> live downgrade magnitude ──
-# Bands on the rolling FXY<->SPY correlation at signal time. More negative = the
-# relationship is more intact = a bigger, more confident downgrade.
+# Bands on the rolling FXY<->SPY correlation at signal time. NOTE the curve is NOT
+# monotonic: empirically only the deepest band (<=-0.60) is reliably protective while
+# the mid bands can be risk-ON, so the downgrade keys off each band's OWN measured
+# spread (below), never a naive "more negative corr => bigger downgrade" assumption.
 CORR_BANDS = [
     ("<=-0.60", -1.01, -0.60),
     ("-0.60..-0.40", -0.60, -0.40),
@@ -339,8 +341,9 @@ def run():
     table_a = {}
     for label, rows in (("state-only", state_only),
                         (f"state+corr<={default_guard}", guarded)):
-        s = _agg(rows, base_ret, base_up)[10]
-        table_a[label] = _agg(rows, base_ret, base_up)
+        full = _agg(rows, base_ret, base_up)
+        table_a[label] = full
+        s = full[10]
         _log.console(f"{label:<22}{s['n']:>6}{_f(s['avg']):>9}{s['win']:>8.3f}"
                      f"{_f(s['spread']):>10}{s['z']:>7.2f}{s['t']:>7.2f}")
 
