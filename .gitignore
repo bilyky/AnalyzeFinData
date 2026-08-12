@@ -7,6 +7,9 @@ etrade_config.json
 chaikin_config.json
 rapidapi_config.json
 
+# Regenerable backtest stdout dumps (produced by scripts/backtesting/backtest_ratings.py)
+backtest_output*.txt
+
 # Python
 __pycache__/
 *.pyc
