@@ -48,6 +48,14 @@ def calculate_atr(symbol, period=14):
         df = df.rename(columns=mapping)
         df = df.astype(float)
 
+        # Split-adjust (Alpha-Vantage source is UNADJUSTED): a split inside the ATR
+        # window otherwise spikes True Range and corrupts the stop distance. Reuse the
+        # single tested adjuster; positions align (df is sorted chronological).
+        _o, _h, _l, _c = (df["open"].tolist(), df["high"].tolist(),
+                          df["low"].tolist(), df["close"].tolist())
+        _h, _l, _c = _split_adjust_ohlcv(_o, _h, _l, _c)
+        df["high"], df["low"], df["close"] = _h, _l, _c
+
         # True Range components
         df["h-l"] = df["high"] - df["low"]
         df["h-pc"] = (df["high"] - df["close"].shift(1)).abs()
@@ -68,10 +76,59 @@ _PCT_FALLBACK   = 0.08  # last-resort stop = price * (1 - 8%)
 STALE_STOP_DAYS = 10    # OHLCV cache older than this -> don't trust swing-low/ATR
 
 
+# --- split adjustment -------------------------------------------------------
+# Alpha-Vantage daily bars are UNADJUSTED. Across a split, pre-split pivots sit at the
+# wrong price scale and poison detect_support / detect_resistance / ATR (the leveraged
+# cohort splits almost yearly — e.g. SQQQ reverse ~5x, TQQQ forward ~0.5x). We
+# BACK-adjust so the series is continuous on the CURRENT scale (the newest bar keeps its
+# real value), which is exactly the scale of the live `price` callers pass in. A
+# day-over-day close ratio outside [_SPLIT_LO,_SPLIT_HI] is a split candidate, confirmed
+# ONLY when the OPEN moved by ~the same factor (open-agreement guard) — so a real
+# intraday crash (open near the prior close, only the close down) is PRESERVED, not
+# adjusted away. Validated in scripts/backtesting/leveraged_levels_study.py.
+_SPLIT_HI, _SPLIT_LO, _SPLIT_OPEN_AGREE = 1.8, 0.55, 0.35
+
+
+def _split_adjust_ohlcv(opens, highs, lows, closes):
+    """Back-adjust OHLC for detected splits onto one continuous (current) price scale.
+    Returns (highs, lows, closes) — the originals unchanged when no split is found.
+    `opens` are used only for split detection (the crash guard)."""
+    n = len(closes)
+    if n < 2:
+        return highs, lows, closes
+    factor = [1.0] * n
+    cum = 1.0
+    found = False
+    # Walk newest->oldest: factor[i] holds the product of split ratios AFTER bar i, so a
+    # detected split folds into cum and rescales every OLDER bar (newest stays nominal).
+    for i in range(n - 1, 0, -1):
+        factor[i] = cum
+        prev_c = closes[i - 1]
+        if prev_c <= 0:
+            continue
+        r_close = closes[i] / prev_c
+        if r_close >= _SPLIT_HI or r_close <= _SPLIT_LO:
+            op = opens[i] if i < len(opens) else None
+            if not op or op <= 0:
+                continue                       # can't verify open -> don't adjust
+            r_open = op / prev_c
+            if abs(r_open - r_close) <= _SPLIT_OPEN_AGREE * r_close:
+                cum *= r_close
+                found = True
+    if not found:
+        return highs, lows, closes
+    factor[0] = cum
+    return ([highs[i] * factor[i] for i in range(n)],
+            [lows[i] * factor[i] for i in range(n)],
+            [closes[i] * factor[i] for i in range(n)])
+
+
 def _load_ohlcv_series(symbol, as_of=None):
-    """(highs, lows, closes, last_date) chronological from the local OHLCV cache;
-    ([], [], [], None) when missing/unreadable. When as_of ('YYYY-MM-DD') is given,
-    truncate to bars on/before that date (for entry-anchored, as-of-buy-date levels)."""
+    """(highs, lows, closes, last_date) chronological from the local OHLCV cache,
+    SPLIT-ADJUSTED onto the current price scale; ([], [], [], None) when
+    missing/unreadable. When as_of ('YYYY-MM-DD') is given, truncate to bars on/before
+    that date (for entry-anchored, as-of-buy-date levels) BEFORE adjusting, so the
+    series is on the entry date's scale."""
     path = OHLCV_DIR / f"{symbol}_daily.json"
     if not path.exists():
         return [], [], [], None
@@ -83,10 +140,12 @@ def _load_ohlcv_series(symbol, as_of=None):
             dates = [d for d in dates if d <= as_of]
         if not dates:
             return [], [], [], None
-        return ([float(ts[d]["2. high"]) for d in dates],
-                [float(ts[d]["3. low"]) for d in dates],
-                [float(ts[d]["4. close"]) for d in dates],
-                dates[-1])
+        opens = [float(ts[d].get("1. open", 0) or 0) for d in dates]
+        highs = [float(ts[d]["2. high"]) for d in dates]
+        lows = [float(ts[d]["3. low"]) for d in dates]
+        closes = [float(ts[d]["4. close"]) for d in dates]
+        highs, lows, closes = _split_adjust_ohlcv(opens, highs, lows, closes)
+        return highs, lows, closes, dates[-1]
     except Exception:
         return [], [], [], None
 

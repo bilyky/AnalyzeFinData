@@ -173,6 +173,19 @@
       "Shrink-Ray Sizer: Dynamically downsizes the order quantity to fit the remaining bucket room, rather than rejecting the buy."
     ]
   },
+  "split_adjusted_levels": {
+    "title": "Split-Adjusted Level Detection",
+    "summary": "Back-adjusts raw unadjusted OHLCV across stock splits before computing swing-low support, swing-high resistance, and ATR stops — so a split inside the lookback can no longer place a level at the wrong price scale. An open-agreement guard preserves real intraday crashes.",
+    "origin": "Project AETHER Data-Integrity Gate. Surfaced by the Aug-2026 leveraged / inverse / crypto levels study, where unadjusted pre-split pivots were the dominant cause of that cohort's low backtest win-rate.",
+    "body": "<p>The local OHLCV cache is raw Alpha-Vantage, <b>unadjusted</b> — there is no adjusted-close field. When a stock splits inside the 60-bar pivot lookback or 14-bar ATR window, the pre-split bars sit at ¼× or 4× the current price scale, so swing-low support returns an absurd level, swing-high resistance finds none, and ATR is distorted — a capital-preservation failure (a stop can land far below price, i.e. effectively no stop).</p><p class=\"mt-2\">Every unadjusted series is now back-adjusted onto the current scale (cumulative product of detected split ratios) before <code>detect_support</code> / <code>detect_resistance</code> / <code>_atr_from_series</code> and the separate <code>calculate_atr</code> path run. A crash-vs-split guard prevents mistaking a real sell-off for a split: a day-over-day close ratio outside <code>[0.55, 1.8]</code> is only treated as a split when the <b>open</b> moved by ~the same factor. No-split symbols hit a fast path with zero behavior change.</p>",
+    "config": [
+      "Split trigger: day-over-day close ratio ≥ 1.8× or ≤ 0.55×.",
+      "Crash guard: confirmed only if |r_open − r_close| ≤ 0.35×r_close (open moved with the close); missing/zero open → left unadjusted.",
+      "Back-adjustment: newest bar stays nominal; older bars scaled by the cumulative product of split ratios, keeping the series consistent with the live price.",
+      "Applied in: risk_utils._load_ohlcv_series (feeds detect_support/resistance + _atr_from_series) and calculate_atr (live stop distance).",
+      "Scope: corrects level/ATR math for every symbol; independent of the leveraged/inverse/crypto exclusion, which remains until its own backtest clears."
+    ]
+  },
   "flower_protection": {
     "title": "Unified Exit Policy & Flower Protection",
     "summary": "Hard ATR stop-loss floor always overrides soft signals. Based on Peter Lynch's 'Flower Protection' trailing stops concept where soft exits on profitable, above-50-DMA positions are downgraded to REVIEW to let winners run.",

@@ -148,5 +148,67 @@ class TestResolveStop(unittest.TestCase):
         self.assertEqual(atr, 4.0)
 
 
+class TestSplitAdjust(unittest.TestCase):
+    def test_no_split_returns_originals(self):
+        o = [10, 10.1, 10.2, 10.1]
+        h = [11, 11, 11, 11]
+        l = [9, 9, 9, 9]
+        c = [10, 10.1, 10.2, 10.1]
+        H, L, C = risk_utils._split_adjust_ohlcv(o, h, l, c)
+        self.assertEqual(C, c)   # unchanged object semantics: same values
+
+    def test_forward_split_backadjusts_history(self):
+        # 2:1 forward split between idx3 and idx4 (close & open both ~halve).
+        o = [100, 101, 102, 102, 51, 51.5]
+        c = [100, 102, 101, 103, 51.5, 52]
+        H, L, C = risk_utils._split_adjust_ohlcv(o, c[:], c[:], c)
+        self.assertEqual(C, [50.0, 51.0, 50.5, 51.5, 51.5, 52.0])
+
+    def test_reverse_split_backadjusts_history(self):
+        # 1:4 reverse split between idx2 and idx3.
+        o = [10, 10.1, 10.0, 40.0, 41, 40]
+        c = [10, 10.2, 10.1, 40.4, 41, 40]
+        H, L, C = risk_utils._split_adjust_ohlcv(o, c[:], c[:], c)
+        self.assertEqual(C, [40.0, 40.8, 40.4, 40.4, 41.0, 40.0])
+
+    def test_intraday_crash_preserved(self):
+        # Close craters (0.49x) but OPEN sits near the prior close -> NOT a split.
+        o = [100, 101, 100, 50]     # idx3 open 50 ~ prior close 51
+        c = [100, 102, 51, 25]
+        H, L, C = risk_utils._split_adjust_ohlcv(o, c[:], c[:], c)
+        self.assertEqual(C, c)      # untouched — real move, not a split
+
+    def test_missing_open_does_not_adjust(self):
+        # No/zero open -> cannot verify -> conservative: leave the bar alone.
+        o = [100, 101, 102, 0]
+        c = [100, 102, 101, 51]     # 0.5x close jump but open unusable
+        H, L, C = risk_utils._split_adjust_ohlcv(o, c[:], c[:], c)
+        self.assertEqual(C, c)
+
+
+class TestLoaderSplitAdjust(unittest.TestCase):
+    def test_load_ohlcv_series_returns_adjusted(self):
+        # Synthetic cache file with a 2:1 forward split -> loader returns a continuous
+        # series (pre-split closes halved), so detect_support sees the current scale.
+        import json as _json
+        bars = {
+            "2020-01-01": {"1. open": "100", "2. high": "104", "3. low": "99", "4. close": "100"},
+            "2020-01-02": {"1. open": "101", "2. high": "105", "3. low": "100", "4. close": "102"},
+            "2020-01-03": {"1. open": "102", "2. high": "104", "3. low": "100", "4. close": "101"},
+            "2020-01-04": {"1. open": "103", "2. high": "105", "3. low": "101", "4. close": "103"},
+            "2020-01-05": {"1. open": "51", "2. high": "52", "3. low": "50", "4. close": "51.5"},
+            "2020-01-06": {"1. open": "51.5", "2. high": "53", "3. low": "51", "4. close": "52"},
+        }
+        payload = _json.dumps({"Time Series (Daily)": bars})
+        with mock.patch.object(risk_utils.Path, "exists", return_value=True), \
+             mock.patch("builtins.open", mock.mock_open(read_data=payload)):
+            highs, lows, closes, last = risk_utils._load_ohlcv_series("MOCK")
+        self.assertEqual(last, "2020-01-06")
+        # Pre-split closes are halved onto the current scale; post-split bars unchanged.
+        self.assertEqual(closes, [50.0, 51.0, 50.5, 51.5, 51.5, 52.0])
+        # Highs likewise (104 -> 52.0 at the current scale).
+        self.assertEqual(highs[0], 52.0)
+
+
 if __name__ == "__main__":
     unittest.main()
