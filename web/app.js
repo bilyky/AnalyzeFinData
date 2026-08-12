@@ -244,7 +244,18 @@ async function loadDashboard() {
     if (!dashPositions.length) {
         posb.innerHTML = `<tr><td colspan="8" class="text-center text-slate-500 py-6">No open positions.</td></tr>`;
     } else {
-        posb.innerHTML = dashPositions.map((p) => `
+        let totalCost = 0;
+        let totalCurrentVal = 0;
+        let totalPnL = 0;
+
+        const rowsHTML = dashPositions.map((p) => {
+            const costVal = p.qty * p.cost;
+            const currentVal = p.qty * p.current_price;
+            totalCost += costVal;
+            totalCurrentVal += currentVal;
+            totalPnL += p.pnl || 0;
+
+            return `
             <tr data-sym="${p.symbol}">
                 <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${p.symbol}">${p.symbol}${p.fractional ? ' <span class="text-[9px] px-1 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/40 font-bold ml-1 uppercase" title="Fractional Share Order Entry Eligible (E*TRADE Production)">FRAC</span>' : ''}</td>
                 <td>${p.qty}</td>
@@ -254,7 +265,24 @@ async function loadDashboard() {
                 <td class="pnl-pct ${cls(p.pnl_pct)}">${fmtPct(p.pnl_pct)}</td>
                 <td>${fmt$(p.stop_loss)}</td>
                 <td>${p.days_held}</td>
-            </tr>`).join("");
+            </tr>`;
+        }).join("");
+
+        const overallPnLPct = totalCost > 0 ? (totalPnL / totalCost) * 100 : 0.0;
+
+        const totalRowHTML = `
+            <tr id="positions-total-row" class="border-t-2 border-slate-700 bg-slate-900/40 font-bold">
+                <td class="text-slate-200">Total</td>
+                <td>—</td>
+                <td>${fmt$(totalCost)}</td>
+                <td class="total-current-val">${fmt$(totalCurrentVal)}</td>
+                <td class="total-pnl-usd ${cls(totalPnL)}">${fmt$(totalPnL)}</td>
+                <td class="total-pnl-pct ${cls(overallPnLPct)}">${fmtPct(overallPnLPct)}</td>
+                <td>—</td>
+                <td>—</td>
+            </tr>`;
+
+        posb.innerHTML = rowsHTML + totalRowHTML;
     }
 
     refreshPrices();
@@ -277,24 +305,55 @@ async function refreshPrices() {
     });
 
     let liveEquity = cashBalance;
+    let totalCost = 0;
+    let totalCurrentVal = 0;
+    let totalPnL = 0;
 
     // Update position prices + P&L live
     dashPositions.forEach((p) => {
-        const px = prices[p.symbol];
+        const px = prices[p.symbol] || p.current_price;
+        const costVal = p.qty * p.cost;
+        const currentVal = p.qty * px;
+        totalCost += costVal;
+        totalCurrentVal += currentVal;
+
         if (!(px > 0)) {
             liveEquity += p.qty * p.cost;
+            totalPnL += p.pnl || 0;
             return;
         }
         liveEquity += p.qty * px;
+        const pnl = (px - p.cost) * p.qty;
+        totalPnL += pnl;
+
         const tr = document.querySelector(`#positions-body tr[data-sym="${p.symbol}"]`);
         if (!tr) return;
-        const pnl = (px - p.cost) * p.qty;
         const pnlPct = p.cost ? ((px - p.cost) / p.cost) * 100 : 0;
         tr.querySelector(".px-live").textContent = fmt$(px);
         const c$ = tr.querySelector(".pnl-\\$"), cP = tr.querySelector(".pnl-pct");
         c$.textContent = fmt$(pnl); c$.className = "pnl-$ " + cls(pnl);
         cP.textContent = fmtPct(pnlPct); cP.className = "pnl-pct " + cls(pnlPct);
     });
+
+    // Recalculate and update the Total row in the UI in real-time
+    const totalTr = document.getElementById("positions-total-row");
+    if (totalTr) {
+        const overallPnLPct = totalCost > 0 ? (totalPnL / totalCost) * 100 : 0.0;
+        
+        const valEl = totalTr.querySelector(".total-current-val");
+        const pnl$El = totalTr.querySelector(".total-pnl-usd");
+        const pnlPctEl = totalTr.querySelector(".total-pnl-pct");
+        
+        if (valEl) valEl.textContent = fmt$(totalCurrentVal);
+        if (pnl$El) {
+            pnl$El.textContent = fmt$(totalPnL);
+            pnl$El.className = "total-pnl-usd " + cls(totalPnL);
+        }
+        if (pnlPctEl) {
+            pnlPctEl.textContent = fmtPct(overallPnLPct);
+            pnlPctEl.className = "total-pnl-pct " + cls(overallPnLPct);
+        }
+    }
 
     // Dynamically update the header equity and return with live prices!
     $("hdr-equity").textContent = fmt$(liveEquity);
@@ -1592,7 +1651,38 @@ async function loadRoadmap() {
             el.textContent = d.markdown;
         }
     } catch (e) {
-        el.textContent = "Error loading roadmap: " + e.message;
+        console.warn("Roadmap live fetch failed, falling back to static offline backup:", e);
+        
+        const offlineRoadmap = `### 🔬 Project AETHER R&D Roadmap (Offline Backup)
+The live plans/roadmap.md single source of truth is currently unavailable (backend server offline). Showing cached roadmap backlog:
+
+1. **Peter Lynch Categorization Engine (R&D #6):** Tag watchlist stocks into Lynch's 6 categories to dynamically adjust exits, stops, and targets based on category-specific risk.
+2. **PGR Waivers & Breakout Guards (R&D #13):** PGR waivers on Trader Vic bottoms, HighScore PGR bypass, sector breakouts, and overbought breakout filters.
+3. **Production PostgreSQL Migration & Docker (R&D #9):** Containerize our datastore with dual-read/write bridges and automated backups.
+4. **Pre-Flight Connection & Config Validator (R&D #21):** 5-second startup utility to test Gmail IMAP, Gmail SMTP, Chaikin, and E*TRADE endpoints.
+5. **Benner Cycle Macro-Temporal Filter (R&D #4):** Samuel Benner's 1875 long-term cyclical panic/sell/buy years integrated into regime scoring.
+6. **Dynamic Momentum Rotation Engine (R&D #27):** Regime-adaptive slot-swapping inside AGGRESSIVE mode to close mature positions and purchase breakouts.`;
+
+        let parsedHTML = null;
+        try {
+            if (window.marked) {
+                if (typeof window.marked.parse === "function") {
+                    parsedHTML = window.marked.parse(offlineRoadmap);
+                } else if (typeof window.marked === "function") {
+                    parsedHTML = window.marked(offlineRoadmap);
+                }
+            }
+        } catch (parseError) {
+            console.error("Markdown parsing failed:", parseError);
+        }
+
+        if (parsedHTML) {
+            el.className = "text-xs text-slate-300 leading-relaxed space-y-4 max-h-[60vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent mt-2";
+            el.innerHTML = parsedHTML;
+        } else {
+            el.className = "text-[11px] text-slate-300 leading-relaxed font-mono whitespace-pre-wrap max-h-[60vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent mt-2";
+            el.textContent = offlineRoadmap;
+        }
     }
 }
 

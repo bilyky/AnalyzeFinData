@@ -257,6 +257,54 @@ class TestAntiFragileFlexibility(unittest.TestCase):
     @mock.patch("circuit_breaker.enforce_circuit_breaker")
     @mock.patch("ai_portfolio_game.backtrack_verify", return_value=(True, "OK"))
     @mock.patch("ai_portfolio_game._cache_stale", return_value=False)
+    def test_multiple_slot_expansion_with_while_loop(self, mock_stale, mock_verify, mock_breaker, mock_load_wb, mock_hours, mock_get_prices, mock_save_game, mock_load_game, mock_regime):
+        # Setup a portfolio with 6 positions, but base max_positions is 5 (BALANCED profile)
+        # Cash is plentiful: Balance = 3000, Equity = 10000. Cash ratio = 30.0% (> 15%!).
+        # The system must dynamically expand slots using a while loop until max_positions exceeds 6 (it expands 5 -> 6 -> 7).
+        # This yields available_slots = 1, so CDW is successfully bought!
+        mock_regime.return_value = "NEUTRAL"
+        state = {
+            "balance": 3000.0,
+            "equity": 10000.0,
+            "positions": {
+                "P1": {"qty": 1, "cost": 1000.0, "is_scarcity": False},
+                "P2": {"qty": 1, "cost": 1000.0, "is_scarcity": False},
+                "P3": {"qty": 1, "cost": 1000.0, "is_scarcity": False},
+                "P4": {"qty": 1, "cost": 1000.0, "is_scarcity": False},
+                "P5": {"qty": 1, "cost": 1000.0, "is_scarcity": False},
+                "P6": {"qty": 1, "cost": 1000.0, "is_scarcity": False}
+            },
+            "queued_orders": [],
+            "history": []
+        }
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {
+            "P1": 1000.0, "P2": 1000.0, "P3": 1000.0, "P4": 1000.0, "P5": 1000.0, "P6": 1000.0,
+            "CDW": 100.0, "SPY": 500.0
+        }
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Research"
+        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
+        ws.append([1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 100.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1]) # Score = 11.1
+        mock_load_wb.return_value = wb
+
+        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00):
+            game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+
+        # CDW must be purchased successfully because slots expanded 5 -> 6 -> 7!
+        self.assertIn("CDW", state["positions"])
+
+    @mock.patch("ai_portfolio_game.get_market_regime")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=True)
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
+    @mock.patch("circuit_breaker.enforce_circuit_breaker")
+    @mock.patch("ai_portfolio_game.backtrack_verify", return_value=(True, "OK"))
+    @mock.patch("ai_portfolio_game._cache_stale", return_value=False)
     def test_dynamic_pyramiding_scale_in(self, mock_stale, mock_verify, mock_breaker, mock_load_wb, mock_hours, mock_get_prices, mock_save_game, mock_load_game, mock_regime):
         # 1. Setup a portfolio with active green winning positions and plentiful cash (Balance = 10000, Equity = 10000)
         # Active position ULTA cost = 400.0, current price = 410.0 (in profit!), highest_close_since_acq = 412.0 (near peak!)
@@ -289,6 +337,33 @@ class TestAntiFragileFlexibility(unittest.TestCase):
         pos = state["positions"]["ULTA"]
         self.assertGreater(pos["qty"], 2)
         self.assertGreater(pos["cost"], 400.0)
+
+
+class TestDetermineMaxPositions(unittest.TestCase):
+    def test_determine_max_positions_no_expansion_low_cash(self):
+        # Cash is low (10% < 15% threshold), should not expand
+        res = game.determine_max_positions(cash_ratio=0.10, num_positions=5, base_max_positions=5)
+        self.assertEqual(res, 5)
+
+    def test_determine_max_positions_no_expansion_not_full(self):
+        # Cash is high (20% > 15%), but we are not full (4 positions held < 5 max), should not expand
+        res = game.determine_max_positions(cash_ratio=0.20, num_positions=4, base_max_positions=5)
+        self.assertEqual(res, 5)
+
+    def test_determine_max_positions_single_step_expansion(self):
+        # Cash is high (20%), and we are full (5 positions held == 5 max).
+        # Should expand from 5 to 6, then loop terminates because 5 >= 6 is False.
+        res = game.determine_max_positions(cash_ratio=0.20, num_positions=5, base_max_positions=5)
+        self.assertEqual(res, 6)
+
+    def test_determine_max_positions_multiple_step_expansion(self):
+        # Cash is high (20%), and we are over-full (6 positions held > 5 max).
+        # Iteration 1: 6 >= 5 (True) -> max_positions becomes 6.
+        # Iteration 2: 6 >= 6 (True) -> max_positions becomes 7.
+        # Iteration 3: 6 >= 7 (False) -> loop ends.
+        # Should expand from 5 to 7.
+        res = game.determine_max_positions(cash_ratio=0.20, num_positions=6, base_max_positions=5)
+        self.assertEqual(res, 7)
 
 
 if __name__ == "__main__":

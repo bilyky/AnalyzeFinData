@@ -14,6 +14,7 @@ import aether.notify as notify
 import argparse
 from pathlib import Path
 import aether_oracle
+from aether.utils import _to_float
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
 # before the first non-ASCII print. Reduces, not eliminates, cp1252 crashes in
@@ -271,6 +272,75 @@ def _conviction_cap_pct(total, base_pct, ceiling_pct, relax_start, relax_full):
     frac = (total - relax_start) / (relax_full - relax_start)
     return base_pct + frac * (ceiling_pct - base_pct)
 # @doc-sync-end: scarcity_core
+
+
+def determine_max_positions(cash_ratio: float, num_positions: int, base_max_positions: int) -> int:
+    """Determine max positions after applying Dynamic Position-Slot Expansion.
+    Tested deterministically with zero mocks.
+    """
+    max_positions = base_max_positions
+    while cash_ratio > 0.15 and num_positions >= max_positions:
+        max_positions += 1
+    return max_positions
+
+
+def evaluate_momentum_rotation(
+    profile: str,
+    is_market_open_flag: bool,
+    available_slots: int,
+    max_positions: int,
+    positions: dict,
+    prices: dict,
+    top_buys: list,
+    active_position_scores: dict
+) -> tuple[list[str], int, float]:
+    """Evaluate and plan momentum rotations for AGGRESSIVE profiles when slots are full.
+    Returns: (list_of_symbols_to_sell, updated_available_slots, cash_proceeds_to_add)
+    Tested deterministically with zero mocks.
+    """
+    sells = []
+    freed_slots = 0
+    cash_addition = 0.0
+    
+    if available_slots + freed_slots <= 0 and profile == "AGGRESSIVE" and is_market_open_flag:
+        elite_buys = [b for b in top_buys if b["total"] >= 12.0]
+        if elite_buys:
+            # Find mature, low-scoring positions to rotate out of.
+            eligible_rotation_candidates = []
+            for sym, pos in positions.items():
+                if sym in sells:
+                    continue
+                current_px = prices.get(sym, pos["cost"])
+                is_mature = pos.get("stop_loss", 0.0) >= pos["cost"]
+                current_score = active_position_scores.get(sym, 0.0)
+                
+                if is_mature and current_score < 8.0:
+                    eligible_rotation_candidates.append({
+                        "sym": sym,
+                        "pos": pos,
+                        "score": current_score,
+                        "current_px": current_px
+                    })
+            
+            # Sort eligible candidates ascending by score
+            eligible_rotation_candidates.sort(key=lambda x: x["score"])
+            
+            for buy in elite_buys:
+                if available_slots + freed_slots > 0:
+                    break
+                if not eligible_rotation_candidates:
+                    break
+                    
+                target_to_rotate = eligible_rotation_candidates.pop(0)
+                sym_to_sell = target_to_rotate["sym"]
+                pos = target_to_rotate["pos"]
+                price = target_to_rotate["current_px"]
+                
+                sells.append(sym_to_sell)
+                cash_addition += pos["qty"] * price
+                freed_slots += 1
+                
+    return sells, available_slots + freed_slots, cash_addition
 
 
 def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
@@ -1560,89 +1630,128 @@ def run_daily_ai_management(force=False, manual_profile=None):
             log_closed_trade_dna(sym, pos, price, today)
 
         # BUY logic (filtered by profile momentum threshold)
-        max_positions = rules["max_positions"]
+        base_max = rules["max_positions"]
         
         # Dynamic Position-Slot Expansion: If cash is plentiful (>15% of equity) and we are full, dynamically expand slots to deploy cash!
         cash_ratio = state["balance"] / state["equity"] if state["equity"] > 1.0 else 0.0
-        if cash_ratio > 0.15 and len(state["positions"]) >= max_positions:
-            _log.info(f"🛡️ [Slot Expansion] Plentiful cash ({cash_ratio*100:.1f}%) detected. Dynamically expanding slots from {max_positions} to {max_positions+1} to prevent cash drag!")
-            _log.info(f"🛡️ [Slot Expansion] Plentiful cash detected. Expanding max slots from {max_positions} to {max_positions+1}.")
-            max_positions += 1
+        max_positions = determine_max_positions(cash_ratio, len(state["positions"]), base_max)
+        if max_positions > base_max:
+            _log.info(f"🛡️ [Slot Expansion] Plentiful cash ({cash_ratio*100:.1f}%) detected. Dynamically expanding slots from {base_max} to {max_positions} to prevent cash drag!")
+            _log.info(f"🛡️ [Slot Expansion] Plentiful cash detected. Expanding max slots from {base_max} to {max_positions}.")
             
         available_slots = max_positions - len(state["positions"])
         
         # Enforce defensive cash buffer
         min_cash_required = state["equity"] * rules["cash_buffer_pct"]
         
-        if available_slots > 0 and state["balance"] > min_cash_required:
-            top_buys = []
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                sym = row[3]
-                if not sym: continue
-                # TEMPORARY: skip leveraged/inverse/crypto ETFs as new long buys — the
-                # long swing-low framework doesn't fit them (see instruments.py + R&D).
-                # They still get ATR-based stops if already held; this only blocks entry.
-                if instruments.is_excluded(sym):
-                    continue
-                setup = str(row[20] or '')
-                price = prices.get(sym, 0)
-                total_score = (row[24] or 0) + (row[25] or 0)
-                short10 = row[24] or 0.0
-
-                # Strict Short10 Momentum Floor: Reject buy entries if short-term momentum is below 2.5
-                if short10 < 2.5:
-                    if (setup in ('1', 'OK', 1)) and sym not in state["positions"] and price > 0:
-                        _log.warning(f"🛑 AI BUY REJECTED (Momentum Floor): {sym} - Short10 score {short10} is below required 2.5 floor.")
-                    continue
-
-                # Filter by strategy profile threshold OR mathematically confirmed bottom
-                if (setup in ('1', 'OK', 1)) and sym not in state["positions"] and price > 0:
-                    bottom_ok, bottom_msg = is_bottom_confirmed(sym)
-
-                    # Catastrophic Gap Guard (The CNXC Trap):
-                    # Reject gap-downs > 8% unless bottom is independently confirmed — a volume-confirmed
-                    # capitulation gap is exactly the entry signal bottom detection targets.
-                    prev_close = row[10]
-                    if prev_close and prev_close > 0:
-                        gap_pct = (price - prev_close) / prev_close
-                        if gap_pct <= -0.08 and not bottom_ok:
-                            _log.warning(f"🛑 AI BUY REJECTED (CNXC Trap): {sym} - Gap-Down {round(gap_pct*100, 1)}% with no confirmed bottom.")
-                            continue
-
-                    # Reward-to-Risk & Target Upside Filter (Risk-Reward Gate):
-                    # Reject if the projected Reward-to-Risk ratio is < 2:1 (R/R < 2.0)
-                    # OR if the projected target gain percentage is <= 5.0% of the current price.
-                    stop_val = float(row[9] or 0.0)
-                    target_val = float(row[11] or 0.0)
-                    if stop_val > 0 and target_val > 0:
-                        upside = target_val - price
-                        downside = price - stop_val
-                        rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
-                        target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
-                        
-                        if rr_ratio < 2.0:
-                            _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required 2:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
-                            continue
-                            
-                        if target_gain_pct < 5.0:
-                            _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
-                            continue
-
-                    if total_score >= rules["min_score_threshold"] or bottom_ok:
-                        bottom_desc = f" (Bottom Confirmed: {bottom_msg})" if bottom_ok else ""
-                        top_buys.append({
-                            "sym": sym,
-                            "price": price,
-                            "total": total_score,
-                            "pgr": row[6] or "Neutral",
-                            "s10": row[24] or 0.0,
-                            "l60": row[25] or 0.0,
-                            "bottom_desc": bottom_desc,
-                            "industry": row[4]
-                        })
+        # Always build top_buys list and track active position scores
+        top_buys = []
+        active_position_scores = {}
+        
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            sym = row[3]
+            if not sym: continue
+            total_score = (row[24] or 0.0) + (row[25] or 0.0)
             
-            top_buys.sort(key=lambda x: x["total"], reverse=True)
+            # If sym is currently in positions, record its current score
+            if sym in state["positions"]:
+                active_position_scores[sym] = total_score
+                continue
+                
+            # TEMPORARY: skip leveraged/inverse/crypto ETFs as new long buys — the
+            # long swing-low framework doesn't fit them (see instruments.py + R&D).
+            # They still get ATR-based stops if already held; this only blocks entry.
+            if instruments.is_excluded(sym):
+                continue
+            setup = str(row[20] or '')
+            price = prices.get(sym, 0)
+            short10 = row[24] or 0.0
 
+            # Strict Short10 Momentum Floor: Reject buy entries if short-term momentum is below 2.5
+            if short10 < 2.5:
+                if (setup in ('1', 'OK', 1)) and price > 0:
+                    _log.warning(f"🛑 AI BUY REJECTED (Momentum Floor): {sym} - Short10 score {short10} is below required 2.5 floor.")
+                continue
+
+            # Filter by strategy profile threshold OR mathematically confirmed bottom
+            if (setup in ('1', 'OK', 1)) and price > 0:
+                bottom_ok, bottom_msg = is_bottom_confirmed(sym)
+
+                # Catastrophic Gap Guard (The CNXC Trap):
+                # Reject gap-downs > 8% unless bottom is independently confirmed — a volume-confirmed
+                # capitulation gap is exactly the entry signal bottom detection targets.
+                prev_close = row[10]
+                if prev_close and prev_close > 0:
+                    gap_pct = (price - prev_close) / prev_close
+                    if gap_pct <= -0.08 and not bottom_ok:
+                        _log.warning(f"🛑 AI BUY REJECTED (CNXC Trap): {sym} - Gap-Down {round(gap_pct*100, 1)}% with no confirmed bottom.")
+                        continue
+
+                # Reward-to-Risk & Target Upside Filter (Risk-Reward Gate):
+                # Reject if the projected Reward-to-Risk ratio is < 2:1 (R/R < 2.0)
+                # OR if the projected target gain percentage is <= 5.0% of the current price.
+                stop_val = _to_float(row[9], 0.0)
+                target_val = _to_float(row[11], 0.0)
+                if stop_val > 0 and target_val > 0:
+                    upside = target_val - price
+                    downside = price - stop_val
+                    rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
+                    target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
+                    
+                    if rr_ratio < 2.0:
+                        _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required 2:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
+                        continue
+                        
+                    if target_gain_pct < 5.0:
+                        _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
+                        continue
+
+                if total_score >= rules["min_score_threshold"] or bottom_ok:
+                    bottom_desc = f" (Bottom Confirmed: {bottom_msg})" if bottom_ok else ""
+                    top_buys.append({
+                        "sym": sym,
+                        "price": price,
+                        "total": total_score,
+                        "pgr": row[6] or "Neutral",
+                        "s10": row[24] or 0.0,
+                        "l60": row[25] or 0.0,
+                        "bottom_desc": bottom_desc,
+                        "industry": row[4]
+                    })
+        
+        top_buys.sort(key=lambda x: x["total"], reverse=True)
+
+        # ── R&D #27: Dynamic Momentum Rotation Engine ──
+        sells_to_rotate, available_slots, balance_addition = evaluate_momentum_rotation(
+            profile, is_market_hours(), available_slots, max_positions, 
+            state["positions"], prices, top_buys, active_position_scores
+        )
+        
+        for sym_to_sell in sells_to_rotate:
+            pos = state["positions"].pop(sym_to_sell)
+            price = prices.get(sym_to_sell, pos["cost"])
+            
+            # Retrieve score for logging details if available
+            score_val = active_position_scores.get(sym_to_sell, 0.0)
+            
+            tx = {
+                "date": today, 
+                "time": now_time, 
+                "type": "SELL", 
+                "symbol": sym_to_sell, 
+                "price": price, 
+                "qty": pos["qty"], 
+                "pnl": round((price - pos["cost"]) * pos["qty"], 2),
+                "details": f"🔄 [MOMENTUM ROTATION] Sold mature position {sym_to_sell} (Score: {score_val:.1f}) to free slot."
+            }
+            state["history"].append(tx)
+            new_transactions.append(tx)
+            _log.info(f"🔄 [MOMENTUM ROTATION] Sold mature position {sym_to_sell} (Score: {score_val:.1f}) @ ${price} to open slot.")
+            log_closed_trade_dna(sym_to_sell, pos, price, today)
+            
+        state["balance"] += balance_addition
+
+        if available_slots > 0 and state["balance"] > min_cash_required:
             if not is_market_hours():
                 # Queue the buys up to available slots
                 for buy in top_buys[:available_slots]:
