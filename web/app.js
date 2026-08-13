@@ -448,6 +448,7 @@ function renderAccounts() {
         if (tabsBox) tabsBox.innerHTML = "";
         box.innerHTML = `<div class="text-center text-slate-500 py-6">No accounts.</div>`;
         acctHoldings = [];
+        pendingAcctSub = null;   // no account to honor it — drop so it can't fire late
         return;
     }
 
@@ -481,18 +482,19 @@ function renderAccounts() {
         }).join("");
     }
 
-    // Validate the sub-view for the active account type; fall back to Holdings if invalid.
-    // Game account: holdings | history | scorecard.  Real account: holdings | rotation.
+    // Sub-views for the active account type — single source for both the pill
+    // bar and the validity check below (Game: holdings|history|scorecard,
+    // Real: holdings|rotation).
     const isGameActive = active.type === "game";
-    const validSubs = isGameActive ? ["holdings", "history", "scorecard"] : ["holdings", "rotation"];
+    const subs = isGameActive
+        ? [["holdings", "Holdings"], ["history", "History"], ["scorecard", "Scorecard"]]
+        : [["holdings", "Holdings"], ["rotation", "Rotation"]];
+    const validSubs = subs.map(([k]) => k);
     if (!validSubs.includes(acctSubView)) acctSubView = "holdings";
 
-    // Sub-tab pill bar — depends on the active account's type.
+    // Sub-tab pill bar.
     const subBox = $("accounts-subtabs");
     if (subBox) {
-        const subs = isGameActive
-            ? [["holdings", "Holdings"], ["history", "History"], ["scorecard", "Scorecard"]]
-            : [["holdings", "Holdings"], ["rotation", "Rotation"]];
         subBox.innerHTML = subs.map(([k, label]) =>
             `<button class="subtab-btn ${acctSubView === k ? "active" : ""}" data-acct-sub="${k}">${label}</button>`
         ).join("");
@@ -646,8 +648,9 @@ document.addEventListener("click", (e) => {
     if (screener) screener.classList.toggle("hidden", sub !== "screener");
     if (predictions) predictions.classList.toggle("hidden", sub !== "predictions");
     if (sub === "predictions" && !_reservesLoaded) {
-        _reservesLoaded = true;
-        loadReserves();
+        // Set the flag only after the fetch resolves, so a failed load retries
+        // on the next click instead of leaving the table permanently empty.
+        loadReserves().then(() => { _reservesLoaded = true; });
     }
 });
 

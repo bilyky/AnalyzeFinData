@@ -1,8 +1,11 @@
 """
-Excel output helpers for the Research and Picks sheets.
+Workbook writer: builds the Research, Picks, Short_Long, and Replacements sheets.
 
-Functions here depend only on openpyxl — no PowerGauge or API imports.
-Called by check_from_xls() in powergauge.py.
+Most helpers depend only on openpyxl. update_short_long_scores and
+update_replacements_sheet also use sell_rules for status labels; the
+Replacements reader additionally borrows data_api's Short_Long column map so it
+indexes the same column the accounts API reads. Called by check_from_xls() in
+powergauge.py.
 """
 
 import os
@@ -840,7 +843,7 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
     for _rn in sorted(_bad_rows, reverse=True):
         _sym_val = ws.cell(_rn, 2).value
         ws.delete_rows(_rn)
-        print(f"[Short_Long] Removed invalid/priceless row {_rn}: {_sym_val!r}")
+        _log.warning("[Short_Long] Removed invalid/priceless row %d: %r", _rn, _sym_val)
 
     # ── 0. Compact any internal blank rows within T1 ─────────────────────────
     # Identifies T1 rows by matching current E*TRADE T1 symbols; deletes blank
@@ -861,7 +864,7 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         ]
         for _rn in sorted(_internal_blanks, reverse=True):
             ws.delete_rows(_rn)
-            print(f"[Short_Long] Compacted internal blank row {_rn} in T1")
+            _log.info("[Short_Long] Compacted internal blank row %d in T1", _rn)
 
     sheet_t1_rows, sheet_t2_rows = _build_row_maps()
 
@@ -892,7 +895,8 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         if isinstance(kval, datetime.date) and etrade_date > kval:
             to_remove_t1.add(sym)
             to_add_t1.add(sym)
-            print(f"[Short_Long] T1 {sym}: dateAcquired moved {kval} -> {etrade_date}, replacing record")
+            _log.info("[Short_Long] T1 %s: dateAcquired moved %s -> %s, replacing record",
+                      sym, kval, etrade_date)
 
     for sym in set(sheet_t2_rows) & etrade_t2_syms:
         etrade_date = etrade_t2_by_sym[sym].get("date_acquired")
@@ -904,7 +908,8 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         if isinstance(kval, datetime.date) and etrade_date > kval:
             to_remove_t2.add(sym)
             to_add_t2.add(sym)
-            print(f"[Short_Long] T2 {sym}: dateAcquired moved {kval} -> {etrade_date}, replacing record")
+            _log.info("[Short_Long] T2 %s: dateAcquired moved %s -> %s, replacing record",
+                      sym, kval, etrade_date)
 
     # ── 2. Remove closed/replaced positions (reverse row order) ─────────────
     rows_to_delete = (
@@ -983,7 +988,7 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         ]
         for _rn in sorted(_final_blanks, reverse=True):
             ws.delete_rows(_rn)
-            print(f"[Short_Long] Final-compact: removed residual blank row {_rn}")
+            _log.info("[Short_Long] Final-compact: removed residual blank row %d", _rn)
 
     # ── 4. Renumber col A within each table ──────────────────────────────────
     sheet_t1_rows, sheet_t2_rows = _build_row_maps()
@@ -1173,6 +1178,7 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
     Pairs are matched rank-for-rank up to MAX_PAIRS rows.
     """
     import datetime as _dt
+    import sell_rules
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
     MAX_PAIRS = 30
@@ -1209,7 +1215,6 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
     # (e.g. the unreachable "N/A") is safe — renders no fill rather than crashing.
 
     def _status(l60):
-        import sell_rules
         return sell_rules.status_label(l60)
 
     def _pgr_fill(pgr):
@@ -1221,12 +1226,13 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
         return None, None
 
     # ── Read Short_Long holdings (both real-account tables) ──────────────────
-    # Use the canonical Short_Long column map shared with data_api so this
-    # reader and the accounts API agree on the sheet shape (symbols live in
-    # column B = _SL["sym"]). Walk every table (T1 + T2): a "Symb"/"Symbol"
-    # header opens a table, a fully blank row closes it, and a strict ticker
-    # pattern gates each data cell — so free-text user notes below the tables
-    # can never leak into held_symbols.
+    # Symbols live in column B (data_api._SL["sym"]); reuse that map so this
+    # reader and the accounts API index the same column. Collect ticker-shaped
+    # cells after the first "Symb" header, across BOTH real-account tables.
+    # Blank rows are skipped, never treated as terminators: the live sheet puts
+    # a blank row directly under the second table's header, so stopping on a
+    # blank would silently drop the entire second account. The ticker regex
+    # (matched case-sensitively) rejects free-text rows.
     try:
         from data_api import _SL as _SL_COLS
         sym_col = _SL_COLS["sym"]
@@ -1236,27 +1242,23 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
     _TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,5}$")
     held_symbols = set()
     if "Short_Long" in wb.sheetnames:
-        ws_sl = wb["Short_Long"]
-        in_table = False
-        for row in ws_sl.iter_rows(values_only=True):
-            if not row or not any(str(v or "").strip() for v in row):
-                in_table = False           # blank row ends the current table
-                continue
+        seen_header = False
+        for row in wb["Short_Long"].iter_rows(values_only=True):
             cell = str(row[sym_col] or "").strip() if len(row) > sym_col else ""
             if cell.upper() in ("SYMB", "SYMBOL"):
-                in_table = True            # header row → data rows follow
+                seen_header = True
                 continue
-            if in_table and _TICKER_RE.match(cell.upper()):
+            if seen_header and _TICKER_RE.match(cell):
                 held_symbols.add(cell.upper())
 
     lk = {p["symbol"].upper(): p for p in picks_data if p.get("symbol")}
 
-    # ── Sell list: BAD held holdings only, worst combined score first ────────
-    # Rotation exists to replace *weak* real-account holdings, so apply a
-    # badness gate: winners (STRONG HOLD / HOLD per winner-protection) are never
-    # proposed for sale. Held names missing from picks_data (e.g. excluded
-    # leveraged/inverse/crypto, or otherwise un-scored) are logged — never
-    # silently dropped — so a bad holding can't vanish from rotation unseen.
+    # ── Sell list: weak held holdings only, worst combined score first ───────
+    # Winner-protection: never rotate out of STRONG HOLD / HOLD names (status is
+    # L60-based, matching the Status column). Held names absent from picks_data
+    # (excluded leveraged/inverse/crypto, or un-scored) are logged at WARNING so
+    # a bad holding can't vanish from rotation unseen — CONSOLE level would be
+    # suppressed in production and never reach the audit log.
     sell_list = []
     unscored = []
     for sym in held_symbols:
@@ -1268,11 +1270,11 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
         l60  = float(p.get("long60")  or 0)
         status = _status(l60)
         if status in ("STRONG HOLD", "HOLD"):
-            continue                       # winner-protection: don't rotate out of winners
+            continue                       # winner-protection
         sell_list.append((sym, s10, l60, s10 + l60, status, str(p.get("pgr") or "")))
     if unscored:
-        _log.console("[rotation] %d held symbol(s) not in picks_data — skipped from "
-                     "rotation (excluded/un-scored): %s",
+        _log.warning("[rotation] %d held symbol(s) not in picks_data — skipped "
+                     "from rotation (excluded/un-scored): %s",
                      len(unscored), ", ".join(sorted(unscored)))
     sell_list.sort(key=lambda x: x[3])
 
@@ -1369,7 +1371,7 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
             ).font = Font(italic=True, color="595959")
     ws.merge_cells(f"A{footer_row}:M{footer_row}")
 
-    print(f"Replacements sheet written: {n_pairs} pairs.")
+    _log.console("Replacements sheet written: %d pairs.", n_pairs)
 
 
 def backup_xlsx(xlsx_path: str) -> str | None:
@@ -1382,5 +1384,5 @@ def backup_xlsx(xlsx_path: str) -> str | None:
                        str(now.year), f"investment_{ts}.xlsx")
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copy2(xlsx_path, dst)
-    print(f"Backup saved to {dst}")
+    _log.console("Backup saved to %s", dst)
     return dst
