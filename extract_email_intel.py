@@ -15,6 +15,7 @@ import sys
 import html as _html
 import json
 import datetime
+import re
 from pathlib import Path
 
 import ai_client
@@ -136,6 +137,14 @@ def extract(subject: str, body: str, provider: str | None = None, verify: bool =
     return result
 
 
+def is_valid_us_ticker(symbol: str) -> bool:
+    """Return True if the symbol conforms to a standard, valid US stock exchange ticker format."""
+    if not symbol or not isinstance(symbol, str):
+        return False
+    symbol = symbol.strip()
+    # Standard tickers are 1 to 5 characters, containing only uppercase A-Z and occasionally a single hyphen/dot (e.g. BRK-B)
+    return bool(re.match(r"^[A-Z]{1,5}(?:[-.][A-Z])?$", symbol))
+
 def verify_symbols(intel: dict) -> dict:
     """Cross-check extracted symbols against the Research universe and return a
     validation summary. Follows Zero-Trust: never assume a ticker is valid."""
@@ -152,6 +161,7 @@ def verify_symbols(intel: dict) -> dict:
     if not isinstance(missing_symbols, list):
         missing_symbols = []
 
+    valid_missing = []
     for m in missing_symbols:
         if not isinstance(m, dict):
             continue
@@ -159,6 +169,12 @@ def verify_symbols(intel: dict) -> dict:
         if not isinstance(sym, str):
             sym = str(sym) if sym is not None else ""
         sym = sym.strip().upper()
+        
+        # Exclude non-tradeable, private, or foreign suffixes (e.g. SpaceX, Anthropic, 2449.TW)
+        if not is_valid_us_ticker(sym):
+            continue
+            
+        valid_missing.append(m)
         if sym and sym not in known:
             missing_in_universe.append(sym)
         elif sym:
@@ -167,6 +183,8 @@ def verify_symbols(intel: dict) -> dict:
             if isinstance(r, dict):
                 m["pgr"] = r.get("pgr")
                 m["combined"] = r.get("combined")
+
+    intel["missing_symbols"] = valid_missing
 
     tickers_mentioned = intel.get("tickers_mentioned", [])
     if isinstance(tickers_mentioned, dict):
