@@ -75,29 +75,38 @@
                 </div>
             </div>
 
-            <h2 class="section-title">Today's Top 5 Picks</h2>
-            <div class="overflow-x-auto mb-8">
+            <div class="flex items-center gap-3 flex-wrap mb-2">
+                <h2 class="section-title mb-0">Today's Top 5 Picks</h2>
+                <button id="picks-compare-run" class="btn text-xs" disabled title="Select 2+ picks, then compare them side-by-side">Compare selected (0)</button>
+                <button id="picks-compare-clear" class="btn text-xs hidden" title="Clear the comparison selection">Clear</button>
+            </div>
+            <div class="overflow-x-auto mb-3">
                 <table class="data-table">
                     <thead>
                         <tr>
+                            <th title="Select picks to compare side-by-side." class="text-center">✓</th>
                             <th title="Rank. Ordered from highest Combined Score to lowest.">#</th>
                             <th title="Ticker symbol. Click to open detailed statistics, price charts, and digit-sum analysis.">Symbol</th>
                             <th title="Current PowerGauge rating — measures fundamental company strength.">PGR</th>
                             <th title="Current price (or yesterday's close when after-hours/weekends).">Price</th>
                             <th title="Dynamic Support Stop-Loss Floor. Calculated at entry and ratchets upward as price makes new highs to lock in gains.">Stop</th>
                             <th title="Dynamic Overhead Resistance Target. Projected at entry based on key mathematical swing levels.">Target</th>
+                            <th title="Risk/Reward ratio at entry = (Target − Price) / (Price − Stop). The screener rejects any setup below 1.5.">R:R</th>
                             <th title="Short-Term Momentum Score. Combines fast indicators (RSI, digit-sums, Bollinger recoveries, and 15-day streak percentage). Scale: [-5.0, +5.0].">S10</th>
                             <th title="Long-Term Trend Score. Combines slow trend indicators (50/200 SMA crossings, relative volume buckets, and 30-day streak count). Scale: [-5.0, +5.0].">L60</th>
                             <th title="Combined Momentum Score. Calculated as S10 + L60. Must be >= 9.5 to trigger automated buys.">Score</th>
                             <th title="Bullish/Bearish chart patterns found (Double Bottom, Cup & Handle, Golden Cross, Bull Flag, etc.).">Patterns</th>
                             <th title="Dynamic order sizing based on capital limits (80/20 Satellite cap) and stop-loss width.">Sizing (ATR/Stop)</th>
+                            <th title="Ask the AETHER AI why this symbol was picked (live factors + regime + news).">Why</th>
                         </tr>
                     </thead>
                     <tbody id="picks-body">
-                        <tr><td colspan="11" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                        <tr><td colspan="14" class="text-center text-slate-500 py-6">Loading…</td></tr>
                     </tbody>
                 </table>
             </div>
+            <!-- Inline comparison panel (shared skeleton, injected by app.js) -->
+            <div id="compare-mount-dash" class="mb-8"></div>
 
             <h2 class="section-title">Open Positions</h2>
             <div class="overflow-x-auto">
@@ -153,47 +162,8 @@
                 <span id="research-count" class="text-xs mut ml-auto"></span>
             </div>
 
-            <!-- Inline multi-stock comparison panel -->
-            <div id="compare-panel" class="hidden mb-6 rounded border border-slate-700 bg-slate-800/40 p-4">
-                <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
-                    <h3 class="section-title mb-0 text-base">Comparison</h3>
-                    <div class="flex items-center gap-3">
-                        <span id="compare-regime" class="text-xs mut"></span>
-                        <button id="compare-close" class="text-xs mut hover:text-slate-200" title="Hide the comparison">× close</button>
-                    </div>
-                </div>
-                <div id="compare-stale" class="hidden mb-3 rounded border border-amber-500/50 bg-amber-500/10 text-amber-300 text-sm px-3 py-2"></div>
-                <div id="compare-ranking" class="text-sm mb-3"></div>
-                <div class="overflow-x-auto">
-                    <table class="data-table text-sm" id="compare-table">
-                        <thead>
-                            <tr>
-                                <th>Symbol</th>
-                                <th class="text-right">Price</th>
-                                <th class="text-right">Comb.</th>
-                                <th class="text-right">S10</th>
-                                <th class="text-right">L60</th>
-                                <th>PGR</th>
-                                <th class="text-right">Money Flow</th>
-                                <th class="text-right">LT Trend</th>
-                                <th>Setup</th>
-                                <th class="text-right">Stop</th>
-                                <th class="text-right">Target</th>
-                                <th class="text-right">R:R</th>
-                                <th>Patterns</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="compare-body"></tbody>
-                    </table>
-                </div>
-                <div id="compare-missing" class="text-xs mut mt-2"></div>
-                <div class="mt-3 flex items-center gap-3">
-                    <button id="compare-summarize" class="btn text-xs" disabled title="Ask the AI for a ranked WHY narrative (quantitative factors only)">Summarize with AI</button>
-                    <span class="text-[11px] mut">AI summary is advisory and uses the quantitative factors only.</span>
-                </div>
-                <div id="compare-summary" class="hidden mt-3 rounded border border-slate-700 bg-slate-900/60 p-3 text-sm leading-relaxed"></div>
-            </div>
+            <!-- Inline multi-stock comparison panel (shared skeleton, injected by app.js) -->
+            <div id="compare-mount"></div>
 
             <!-- Level backtest: how well this symbol's support/resistance held historically -->
             <div class="flex items-center gap-2 flex-wrap mb-4 text-sm">
@@ -837,6 +807,6 @@
         <div id="chart-fs-tooltip" class="hidden"></div>
     </div>
 
-    <script src="/static/app.js?v=1.0.8"></script>
+    <script src="/static/app.js?v=1.0.10"></script>
 </body>
 </html>
