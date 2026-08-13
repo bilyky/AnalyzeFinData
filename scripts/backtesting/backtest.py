@@ -15,6 +15,9 @@ Usage:
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("backtest")
 
 
 
@@ -25,7 +28,7 @@ import sys
 from collections import defaultdict
 from datetime import date, timedelta
 
-DATA_DIR  = os.path.join(os.path.dirname(__file__), "Data")
+DATA_DIR  = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Data")
 HIST_DIR  = os.path.join(DATA_DIR, "History")
 OHLCV_DIR = os.path.join(DATA_DIR, "Symbol_full")
 
@@ -216,9 +219,9 @@ def analyze(obs: list[dict]):
         baseline_wr    = sum(1 for r in h_obs if r[ret_key] > 0) / baseline_total
         baseline_ret   = sum(r[ret_key] for r in h_obs) / baseline_total
 
-        print(f"\n{'='*70}")
-        print(f"HORIZON: {horizon_label}  n={baseline_total:,}  baseline win={baseline_wr:.1%}  mean={baseline_ret:+.2%}")
-        print(f"{'='*70}")
+        _log.console(f"\n{'='*70}")
+        _log.console(f"HORIZON: {horizon_label}  n={baseline_total:,}  baseline win={baseline_wr:.1%}  mean={baseline_ret:+.2%}")
+        _log.console(f"{'='*70}")
 
         spreads = {}
         for factor_name, key_fn in FACTORS.items():
@@ -241,28 +244,28 @@ def analyze(obs: list[dict]):
             spreads[factor_name] = (spread, results)
 
         # Print factors sorted by spread descending
-        print(f"\n  {'Factor':<15}  {'Spread':>7}  Buckets (best -> worst)")
-        print(f"  {'-'*65}")
+        _log.console(f"\n  {'Factor':<15}  {'Spread':>7}  Buckets (best -> worst)")
+        _log.console(f"  {'-'*65}")
         for factor_name, (spread, results) in sorted(spreads.items(), key=lambda x: -x[1][0]):
             low_flag = "  ***" if spread < 0.03 else ""
             bucket_summary = "  |  ".join(
                 f"{b}: {wr:.1%} ({wr-baseline_wr:+.1%})"
                 for b, n, wr, mean in results[:4]
             )
-            print(f"  {factor_name:<15}  {spread:>6.1%}{low_flag:<5}  {bucket_summary}")
+            _log.console(f"  {factor_name:<15}  {spread:>6.1%}{low_flag:<5}  {bucket_summary}")
 
-        print()
+        _log.console()
 
 
 def main():
     years = [int(y) for y in sys.argv[1:]] if len(sys.argv) > 1 else [2023, 2024, 2025]
-    print(f"Loading history for years: {years}...")
+    _log.console(f"Loading history for years: {years}...")
     rows = load_history(years)
-    print(f"  {len(rows):,} raw observations loaded")
+    _log.console(f"  {len(rows):,} raw observations loaded")
 
     # Load OHLCV and compute forward returns for all horizons
     # Also load PGR sub-categories from Symbol JSONs (every 3rd row for speed)
-    print("Computing forward returns (10d / 30d / 60d) + PGR sub-categories...")
+    _log.console("Computing forward returns (10d / 30d / 60d) + PGR sub-categories...")
     ohlcv_cache = {}
     obs = []
     skipped = 0
@@ -304,9 +307,9 @@ def main():
 
         obs.append(rec)
 
-    print(f"  {len(obs):,} observations loaded ({skipped:,} skipped)")
+    _log.console(f"  {len(obs):,} observations loaded ({skipped:,} skipped)")
     sub_count = sum(1 for r in obs if r.get("pgr_tech") is not None)
-    print(f"  {sub_count:,} with PGR sub-category data\n")
+    _log.console(f"  {sub_count:,} with PGR sub-category data\n")
 
     analyze(obs)
 
