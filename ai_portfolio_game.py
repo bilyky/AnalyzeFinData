@@ -295,7 +295,7 @@ def evaluate_momentum_rotation(
     top_buys: list,
     active_position_scores: dict
 ) -> tuple[list[str], int, float]:
-    """Evaluate and plan momentum rotations for AGGRESSIVE profiles when slots are full.
+    """Evaluate and plan momentum rotations for AGGRESSIVE profiles.
     Returns: (list_of_symbols_to_sell, updated_available_slots, cash_proceeds_to_add)
     Tested deterministically with zero mocks.
     """
@@ -303,10 +303,17 @@ def evaluate_momentum_rotation(
     freed_slots = 0
     cash_addition = 0.0
     
-    if available_slots + freed_slots <= 0 and profile == "AGGRESSIVE" and is_market_open_flag:
-        elite_buys = [b for b in top_buys if b["total"] >= 12.0]
+    if profile == "AGGRESSIVE" and is_market_open_flag:
+        # Dynamic Momentum Rotation (R&D #27):
+        # 1. Standard Case: Slots are FULL, and we have elite buy candidates (score >= 12.0) waiting.
+        # 2. Lazy-Hold Case: Slots are NOT full, but we have a position in severe momentum decay (score < 2.0)
+        #    AND we have qualifying buy candidates (score >= 10.0) waiting to deploy that capital better!
+        is_full_slots = (available_slots + freed_slots) <= 0
+        min_buy_score = 12.0 if is_full_slots else 10.0
+        
+        elite_buys = [b for b in top_buys if b["total"] >= min_buy_score]
         if elite_buys:
-            # Find mature, low-scoring positions to rotate out of.
+            # Find eligible rotation candidates
             eligible_rotation_candidates = []
             for sym, pos in positions.items():
                 if sym in sells:
@@ -315,7 +322,11 @@ def evaluate_momentum_rotation(
                 is_mature = pos.get("stop_loss", 0.0) >= pos["cost"]
                 current_score = active_position_scores.get(sym, 0.0)
                 
-                if is_mature and current_score < 8.0:
+                # If slots are full, we rotate score < 8.0.
+                # If slots are empty, we rotate score < 2.0 (lazy hold prevention!)
+                threshold_score = 8.0 if is_full_slots else 2.0
+                
+                if is_mature and current_score < threshold_score:
                     eligible_rotation_candidates.append({
                         "sym": sym,
                         "pos": pos,
@@ -323,13 +334,15 @@ def evaluate_momentum_rotation(
                         "current_px": current_px
                     })
             
-            # Sort eligible candidates ascending by score
+            # Sort eligible candidates ascending by score (lowest score rotated first)
             eligible_rotation_candidates.sort(key=lambda x: x["score"])
             
-            for buy in elite_buys:
-                if available_slots + freed_slots > 0:
-                    break
-                if not eligible_rotation_candidates:
+            while eligible_rotation_candidates and elite_buys:
+                is_currently_full = (available_slots + freed_slots) <= 0
+                target_to_rotate = eligible_rotation_candidates[0]
+                
+                # If slots are empty, we only rotate if the candidate has decayed below 2.0
+                if not is_currently_full and target_to_rotate["score"] >= 2.0:
                     break
                     
                 target_to_rotate = eligible_rotation_candidates.pop(0)
@@ -340,6 +353,7 @@ def evaluate_momentum_rotation(
                 sells.append(sym_to_sell)
                 cash_addition += pos["qty"] * price
                 freed_slots += 1
+                elite_buys.pop(0)
                 
     return sells, available_slots + freed_slots, cash_addition
 
@@ -1622,6 +1636,14 @@ def run_daily_ai_management(force=False, manual_profile=None):
         for sym in symbols_to_sell:
             pos = state["positions"].pop(sym)
             price = prices.get(sym, pos["cost"])
+            
+            # Slippage-Protected Limit Stop (STP LMT - R&D #8): Execute at exactly the stop price
+            # if the market close price dropped below our stop-loss floor, preventing slippage leaks.
+            stop_loss = pos.get("stop_loss", 0.0)
+            if stop_loss > 0.0 and price <= stop_loss:
+                _log.info(f"🛡️ [STP LMT] Executed {sym} stop-loss at Limit price ${stop_loss:.2f} (protected against market gap ${price:.2f}).")
+                price = stop_loss
+                
             proceeds = pos["qty"] * price
             state["balance"] += proceeds
             tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2)}
@@ -1668,10 +1690,14 @@ def run_daily_ai_management(force=False, manual_profile=None):
             price = prices.get(sym, 0)
             short10 = row[24] or 0.0
 
-            # Strict Short10 Momentum Floor: Reject buy entries if short-term momentum is below 2.5
-            if short10 < 2.5:
+            # Dynamic Adaptive s10 Floor (R&D #15): If cash drag is high (>25%), lower momentum floor to 2.0 to deploy capital safely
+            cash_pct = (state["balance"] / state["equity"]) * 100.0 if state.get("equity", 0) > 0 else 0.0
+            required_floor = 2.0 if cash_pct > 25.0 else 2.5
+
+            # Strict Short10 Momentum Floor: Reject buy entries if short-term momentum is below required floor
+            if short10 < required_floor:
                 if (setup in ('1', 'OK', 1)) and price > 0:
-                    _log.warning(f"🛑 AI BUY REJECTED (Momentum Floor): {sym} - Short10 score {short10} is below required 2.5 floor.")
+                    _log.warning(f"🛑 AI BUY REJECTED (Momentum Floor): {sym} - Short10 score {short10} is below required {required_floor} floor (cash_pct={round(cash_pct, 1)}%).")
                 continue
 
             # Filter by strategy profile threshold OR mathematically confirmed bottom
