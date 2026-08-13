@@ -248,6 +248,66 @@ def check_rd_roadmap_sync() -> bool:
         print(f"Error checking R&D roadmap sync: {e}")
         return True
 
+def check_new_features_tested() -> bool:
+    """Verify that any newly introduced core trading features have corresponding automated unit tests in the tests/ directory."""
+    FEATURE_CHECKS = [
+        {
+            "name": "Adaptive s10 Floor (R&D #15)",
+            "signature": r"required_floor\s*=\s*2\.0\s+if\s+cash_pct\s*>\s*25\.0",
+            "test_keyword": "test_adaptive_s10_floor"
+        },
+        {
+            "name": "Slippage-Protected Limit Stop (STP LMT - R&D #8)",
+            "signature": r"Slippage-Protected\s+Limit\s+Stop|stop_loss\s*=\s*pos\.get\(\"stop_loss\"",
+            "test_keyword": "test_stp_lmt_slippage_protection"
+        },
+        {
+            "name": "Momentum Rotation Empty-Slot Expansion (R&D #27)",
+            "signature": r"is_full_slots|threshold_score\s*=\s*8\.0\s+if\s+is_full_slots",
+            "test_keyword": "test_evaluate_momentum_rotation"
+        }
+    ]
+    
+    staged_files = get_staged_python_files()
+    for check in FEATURE_CHECKS:
+        signature_found = False
+        for fpath in staged_files:
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if re.search(check["signature"], content):
+                    signature_found = True
+                    break
+            except Exception:
+                pass
+                
+        if signature_found:
+            print(f"[GIT PRE-COMMIT] Detected new feature code staged: '{check['name']}'")
+            print(f"   Searching tests/ directory for matching unit test coverage keyword '{check['test_keyword']}'...")
+            
+            test_dir = os.path.join(ROOT_DIR, "tests")
+            test_files = [os.path.join(test_dir, f) for f in os.listdir(test_dir) if f.startswith("test_") and f.endswith(".py")]
+            
+            coverage_found = False
+            for t_file in test_files:
+                try:
+                    with open(t_file, "r", encoding="utf-8") as f:
+                        test_content = f.read()
+                    if check["test_keyword"] in test_content:
+                        coverage_found = True
+                        print(f"   ✅ Found test coverage inside: tests/{os.path.basename(t_file)}")
+                        break
+                except Exception:
+                    pass
+                    
+            if not coverage_found:
+                print(f"🚨 [GIT PRE-COMMIT] BLOCK - Missing Test Coverage!")
+                print(f"   Staged changes introduce '{check['name']}', but no matching unit test was found in the 'tests/' folder.")
+                print(f"   Action required: Add a test method containing '{check['test_keyword']}' to verify the new feature!")
+                return False
+                
+    return True
+
 def get_staged_python_files() -> list:
     """Retrieve list of staged python files currently being committed."""
     try:
@@ -279,6 +339,10 @@ def main():
 
     # Check Feature <-> Documentation Synchronicity (@doc-sync anchors)
     if not check_feature_doc_sync():
+        success = False
+
+    # Check New Features Test Coverage Hook
+    if not check_new_features_tested():
         success = False
 
     # Scan only staged python files currently being committed!

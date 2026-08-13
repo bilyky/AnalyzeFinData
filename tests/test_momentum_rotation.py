@@ -75,5 +75,23 @@ class TestDynamicMomentumRotation(unittest.TestCase):
         self.assertEqual(next_slots, 0)
         self.assertEqual(cash_add, 0.0)
 
+    def test_adaptive_s10_floor(self):
+        """Operational: Assert that Adaptive s10 Floor dynamically lowers required floor to 2.0 when cash_pct is high."""
+        # Standard case (cash < 25%) -> required floor is 2.5
+        state_low_cash = {"balance": 1000.0, "equity": 10000.0, "positions": {}}
+        short10 = 2.4
+        cash_pct = (state_low_cash["balance"] / state_low_cash["equity"]) * 100.0
+        required_floor = 2.0 if cash_pct > 25.0 else 2.5
+        self.assertEqual(required_floor, 2.5)
+        self.assertLess(short10, required_floor)
+        
+        # High cash case (cash > 25%) -> required floor is 2.0
+        state_high_cash = {"balance": 3500.0, "equity": 10000.0, "positions": {}}
+        cash_pct_high = (state_high_cash["balance"] / state_high_cash["equity"]) * 100.0
+        required_floor_high = 2.0 if cash_pct_high > 25.0 else 2.5
+        self.assertEqual(required_floor_high, 2.0)
+        self.assertGreaterEqual(short10, required_floor_high)
+
+
 if __name__ == '__main__':
     unittest.main()

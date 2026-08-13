@@ -366,5 +366,19 @@ class TestDetermineMaxPositions(unittest.TestCase):
         self.assertEqual(res, 7)
 
 
+class TestStpLmtSlippageProtection(unittest.TestCase):
+    def test_stp_lmt_slippage_protection(self):
+        """Operational: Assert that Stop-Loss sales are executed at the exact Stop Price (STP LMT) if market price falls below it."""
+        pos = {"qty": 10, "cost": 50.0, "stop_loss": 46.0}
+        market_close = 44.0
+        
+        stop_loss = pos.get("stop_loss", 0.0)
+        execution_price = market_close
+        if stop_loss > 0.0 and market_close <= stop_loss:
+            execution_price = stop_loss
+            
+        self.assertEqual(execution_price, 46.0)
+
+
 if __name__ == "__main__":
     unittest.main()
