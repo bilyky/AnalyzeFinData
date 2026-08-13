@@ -32,11 +32,11 @@ SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
 
 python_exe = sys.executable
 _TASK_DEFS = {
-    "AnalyzeFinData_Morning":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'autonomous_pipeline.py'}\"", "daily", "05:30"),
-    "AnalyzeFinData_Evening":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'daily_task.py'}\"",           "daily", "17:00"),
-    "AnalyzeFinData_AI_Game":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'ai_portfolio_game.py'}\" --run", "daily", "07:00"),
-    "AnalyzeFinData_AI_Summary": (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'ai_portfolio_game.py'}\" --summary", "daily", "18:00"),
-    "Project_AETHER_Watchdog": (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'watchdog.py'}\"",              "hourly", None),
+    "AnalyzeFinData_Morning":  (f"'{python_exe}' '{BASE_DIR / 'autonomous_pipeline.py'}'", "daily", "05:30"),
+    "AnalyzeFinData_Evening":  (f"'{python_exe}' '{BASE_DIR / 'daily_task.py'}'",           "daily", "17:00"),
+    "AnalyzeFinData_AI_Game":  (f"'{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --run", "daily", "07:00"),
+    "AnalyzeFinData_AI_Summary": (f"'{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --summary", "daily", "18:00"),
+    "Project_AETHER_Watchdog": (f"'{python_exe}' '{BASE_DIR / 'watchdog.py'}'",              "hourly", None),
 }
 
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
