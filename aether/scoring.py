@@ -546,9 +546,9 @@ def short_score(pg_fields: dict) -> float:
       Regime         +-1.0
       Fibonacci      +-1.0
       RSI Divergence 1.85% spread: +/-0.5 (calibrated Phase A backtest)
-      Candlestick    3.49% spread: contrarian, weight -0.75 (high score = bearish signal)
-      Chart Pattern  11.83% spread: contrarian, weight -0.75 (bearish patterns = recovery)
-      Momentum       5.76% spread: contrarian, weight -0.75 (bearish momentum = reversal)
+      Candlestick    3.49% spread: contrarian, weight -1.5 (high score = bearish signal, calibrated post-market Aug-12)
+      Chart Pattern  11.83% spread: contrarian, weight -1.5 (bearish patterns = recovery, calibrated post-market Aug-12)
+      Momentum       5.76% spread: contrarian, weight -1.5 (bearish momentum = reversal, calibrated post-market Aug-12)
       Digit-sum      symbol-specific numerology (z>=2.0 signals only): +-1.0
       RBR (V-recov)  1.26% 10d spread: BULLISH, weight +0.5 (score [0,+2]); confirmed
                      overreaction-recovery bar; validated pocket win 0.552 > knife 0.544
@@ -564,9 +564,9 @@ def short_score(pg_fields: dict) -> float:
     score += {'Bull': 1.0, 'Neutral': 0.0, 'Bear': -1.0}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)
     score += pg_fields.get('fibonacci', 0.0)
     score += pg_fields.get('rsi_divergence', 0.0) * 0.5
-    score += pg_fields.get('candlestick_score', 0.0) * -0.15
-    score += pg_fields.get('chart_score', 0.0)        * -0.15
-    score += pg_fields.get('momentum_score', 0.0)     * -0.15
+    score += pg_fields.get('candlestick_score', 0.0) * -0.30
+    score += pg_fields.get('chart_score', 0.0)        * -0.30
+    score += pg_fields.get('momentum_score', 0.0)     * -0.30
     score += pg_fields.get('digit_sum', 0.0)
     # Rubber-Band Reversal: BULLISH (+), so a POSITIVE weight. Score is [0,+2];
     # 0.5 gives the validated reliable pocket up to +1.0. Defaults 0.0 = off.
@@ -590,9 +590,9 @@ def long_score(pg_fields: dict) -> float:
       Regime         +-1.5
       Fibonacci      +-0.5
       RSI Divergence 1.85% spread: +/-0.25 (calibrated Phase A backtest)
-      Candlestick    3.49% spread: contrarian, weight -0.375
-      Chart Pattern  11.83% spread: contrarian, weight -0.375
-      Momentum       5.76% spread: contrarian, weight -0.375
+      Candlestick    3.49% spread: contrarian, weight -0.75 (calibrated post-market Aug-12)
+      Chart Pattern  11.83% spread: contrarian, weight -0.75 (calibrated post-market Aug-12)
+      Momentum       5.76% spread: contrarian, weight -0.75 (calibrated post-market Aug-12)
       Digit-sum      symbol-specific numerology (z>=2.0 signals only): +-0.5
       RBR (V-recov)  BULLISH, weight +0.25 (half the S10 weight; score [0,+2])
     """
@@ -607,9 +607,9 @@ def long_score(pg_fields: dict) -> float:
     score += {'Bull': 1.5, 'Neutral': 0.0, 'Bear': -1.5}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)
     score += pg_fields.get('fibonacci', 0.0) * 0.5
     score += pg_fields.get('rsi_divergence', 0.0) * 0.25
-    score += pg_fields.get('candlestick_score', 0.0) * -0.075
-    score += pg_fields.get('chart_score', 0.0)        * -0.075
-    score += pg_fields.get('momentum_score', 0.0)     * -0.075
+    score += pg_fields.get('candlestick_score', 0.0) * -0.15
+    score += pg_fields.get('chart_score', 0.0)        * -0.15
+    score += pg_fields.get('momentum_score', 0.0)     * -0.15
     score += pg_fields.get('digit_sum', 0.0) * 0.5
     # Rubber-Band Reversal: BULLISH (+), positive weight (half the S10 weight).
     score += pg_fields.get('vrecovery_score', 0.0) * 0.25

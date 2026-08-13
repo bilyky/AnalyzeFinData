@@ -33,6 +33,7 @@ INITIAL_BALANCE = 10000.0
 import risk_utils
 import sell_rules
 import decision_eval
+import watchdog
 import instruments
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
@@ -1897,7 +1898,15 @@ if __name__ == "__main__":
     if args.run:
         run_daily_ai_management(force=args.force, manual_profile=args.profile)
         send_consolidated_morning_report()
+        try:
+            watchdog.sync_data_folder()
+        except Exception as e:
+            _log.warning(f"Post-run sync failed: {e}")
     elif args.summary:
         send_daily_summary()
+        try:
+            watchdog.sync_data_folder()
+        except Exception as e:
+            _log.warning(f"Post-run sync failed: {e}")
     else:
         show_report()

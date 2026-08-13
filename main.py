@@ -13,6 +13,10 @@ import pyetrade
 import rapidapi
 import signals
 import database
+import watchdog
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("main")
 
 frame_M15 = mt5.TIMEFRAME_M15
 frame_M30 = mt5.TIMEFRAME_M30
@@ -27,7 +31,7 @@ assets = ['EURUSD', 'USDCHF', 'GBPUSD', 'USDCAD', 'SP500m']
 
 def get_quotes(time_frame, year=2022, month=1, day=1, asset='SP500m'):
     if not mt5.initialize():
-        print(f'Filed to initialize: {mt5.last_error()}')
+        _log.error(f'Failed to initialize MetaTrader5: {mt5.last_error()}')
         return
     timezone = pytz.timezone("America/Los_Angeles")
     time_from = datetime.datetime(year, month, day, tzinfo=timezone)
@@ -58,7 +62,7 @@ def start_one():
     # data = rapidapi.get_quotes('D1', 2022, 1, 1, symbol='MSFT')
     # data = rapidapi.get_quotes('D1', 2022, 1, 1, symbol='PYPL')
     data = rapidapi.get_quotes('D1', 2022, 1, 1, symbol='ADBE')
-    print(f'Quotes = {data}')
+    # print(f'Quotes = {data}')
     # pf.ohlc_plot_bars(data, 500)
     # my_data = signals.marubozu_signal(data, 0, 1, 2, 3, 4, 5)
     # my_data = signals.three_candles_signal(data, 0, 3, 4, 5, 5)
@@ -75,11 +79,12 @@ def start_one():
     my_data = pf.performance(my_data, 0, 4, 5, 6, 7, 8)
     for dd in my_data:
         if dd[4]+dd[5] != 0:
-            print(dd)
+            # print(dd)
+            pass
 
 
 if __name__ == '__main__':
-    print(f'START')
+    _log.info('START')
     # database.connect_to_db()
     # database.update_daily_ohlcv_from_file()
     # etrade.get_quote()
@@ -89,12 +94,17 @@ if __name__ == '__main__':
     powergauge.check_from_file(form_cache, dd)
     powergauge.check_from_xls(form_cache, dd)
 
-    print(f'CHARTING support - resistance')
-    print(f'INDICATOR MA RCI')
-    print(f'PATTERNS ...')
+    _log.info('CHARTING support - resistance')
+    _log.info('INDICATOR MA RCI')
+    _log.info('PATTERNS ...')
     # start_one()
     # rapidapi.save_quotas()
     # pd.read_excel('')
+
+    try:
+        watchdog.sync_data_folder()
+    except Exception as e:
+        _log.warning(f"Post-run sync failed: {e}")
 
 
 

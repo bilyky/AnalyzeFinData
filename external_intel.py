@@ -5,6 +5,7 @@ import json
 import imaplib
 import email
 import extract_email_intel
+import watchdog
 import openpyxl
 import ai_client
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -330,3 +331,8 @@ if __name__ == "__main__":
     new_ideas = fetch_idea_emails()
     for idea in new_ideas:
         _log.console(f"Idea from {idea['from']}: {idea['subject']} (Symbol: {idea.get('symbol')}, Sentiment: {idea.get('sentiment')})")
+
+    try:
+        watchdog.sync_data_folder()
+    except Exception as e:
+        _log.warning(f"Post-run sync failed: {e}")

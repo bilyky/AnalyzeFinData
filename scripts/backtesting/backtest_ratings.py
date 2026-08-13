@@ -47,8 +47,8 @@ from patterns import (
     momentum_pattern_score as _mo_score,
 )
 
-SYM_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
-OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
+SYM_DIR   = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Data", "Symbol")
+OHLCV_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Data", "Symbol_full")
 
 STOP_DAYS      = 3
 TARGET_LOOKBACK = 10

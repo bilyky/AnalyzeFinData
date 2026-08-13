@@ -2,6 +2,7 @@ import os
 import sys
 import console_safe
 import datetime
+import pytz
 import subprocess
 import json
 import notify
@@ -232,10 +233,10 @@ def heal_tasks(missing_tasks, force=False):
     python_exe = sys.executable
 
     _TASK_DEFS = {
-        "AnalyzeFinData_Morning":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'autonomous_pipeline.py'}\"", "daily", "05:30"),
-        "AnalyzeFinData_Evening":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'daily_task.py'}\"",           "daily", "17:00"),
-        "AnalyzeFinData_AI_Game":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'ai_portfolio_game.py'}\" --run", "daily", "07:00"),
-        "AnalyzeFinData_AI_Summary": (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'ai_portfolio_game.py'}\" --summary", "daily", "18:00"),
+        "AnalyzeFinData_Morning":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'external_intel.py'}\" && \"{python_exe}\" -c \"import watchdog; watchdog.sync_data_folder()\"", "daily", "05:30"),
+        "AnalyzeFinData_Evening":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'main.py'}\" && \"{python_exe}\" -c \"import watchdog; watchdog.sync_data_folder()\"",           "daily", "06:00"),
+        "AnalyzeFinData_AI_Game":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'ai_portfolio_game.py'}\" --run && \"{python_exe}\" -c \"import watchdog; watchdog.sync_data_folder()\"", "daily", "07:00"),
+        "AnalyzeFinData_AI_Summary": (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'ai_portfolio_game.py'}\" --summary && \"{python_exe}\" -c \"import watchdog; watchdog.sync_data_folder()\"", "daily", "18:00"),
         "Project_AETHER_Watchdog": (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'watchdog.py'}\"",              "hourly", None),
     }
 
@@ -245,7 +246,7 @@ def heal_tasks(missing_tasks, force=False):
             _log.warning(f"⚠️  No registration template for task: {task}")
             continue
         tr, sc, st = _TASK_DEFS[task]
-        args = ["schtasks", "/create", "/tn", task, "/tr", tr, "/sc", sc, "/f", "/it", "/ru", run_as]
+        args = ["schtasks", "/create", "/tn", task, "/tr", tr, "/sc", sc, "/f", "/np", "/ru", run_as]
         if st:
             args += ["/st", st]
         try:
@@ -264,6 +265,62 @@ def kill_ghost_processes():
         subprocess.run(["powershell", "Get-Process | Where-Object { $_.Name -match 'excel|python' -and $_.CommandLine -match 'AnalyzeFinData' } | Stop-Process -Force"], capture_output=True)
     except:
         pass
+
+def is_market_hours() -> bool:
+    """Return True if current time is within active US equity market hours (6:30 AM - 1:15 PM PST, weekdays)."""
+    try:
+        tz_la = pytz.timezone("America/Los_Angeles")
+        now_la = datetime.datetime.now(tz_la)
+    except Exception:
+        now_la = datetime.datetime.now()
+        
+    # Check weekday (Saturday=5, Sunday=6)
+    if now_la.weekday() in (5, 6):
+        return False
+        
+    # Check time: 6:30 AM - 1:15 PM Pacific
+    # 6:30 AM = 390 min; 1:15 PM = 795 min
+    current_minutes = now_la.hour * 60 + now_la.minute
+    if 390 <= current_minutes <= 795:
+        return True
+    return False
+
+def sync_data_folder() -> bool:
+    """Sync the local Data folder to the backup Z: drive if available.
+    Returns True on success (or skipped if drive is offline), False on error.
+    """
+    if is_market_hours():
+        _log.info("⏸️ Active NYSE market hours in progress (6:30 AM - 1:15 PM PST). Skipping Data sync to prevent resource/file locks.")
+        return True # Safe bypass to prevent locking active databases/workbooks during trading
+        
+    src = BASE_DIR / "Data"
+    dst = r"\\10.0.0.156\Storage\Yura\Develop\StockTrading\AnalyzeFinData\Data"
+    
+    if not src.exists():
+        _log.warning(f"⚠️ Source Data folder does not exist: {src}")
+        return False
+        
+    try:
+        dst_path = Path(dst)
+        z_drive = dst_path.anchor
+        if not os.path.exists(z_drive):
+            _log.warning(f"⚠️ Backup drive {z_drive} is not connected or accessible. Skipping Data sync.")
+            return True # Not a failure of sync itself, just offline
+            
+        dst_path.mkdir(parents=True, exist_ok=True)
+        _log.console(f"🔄 Syncing Data folder to: {dst} ...")
+        # Use /E (recursive copy, NO DELETIONS) instead of /MIR to prevent data loss on backup drive
+        cmd = ["robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS"]
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+        if result.returncode < 8:
+            _log.info(f"✅ Data folder successfully synchronized to {dst}.")
+            return True
+        else:
+            _log.error(f"❌ Robocopy sync failed (rc={result.returncode}). Stderr: {result.stderr.strip()}")
+            return False
+    except Exception as e:
+        _log.error(f"❌ Failed to sync Data folder to Z: drive: {e}", exc_info=True)
+        return False
 
 def run_watchdog():
     _log.console(f"[{datetime.datetime.now()}] Project AETHER Healer starting...")
@@ -352,22 +409,26 @@ def run_watchdog():
     # 6. Re-Audit Logs after the fix
     remaining_errors = check_logs()
     
+    # 6.5. Run Backup Sync and Monitor Success/Errors
+    sync_success = sync_data_folder()
+    
     # Check if there are any active issues left
     issues = []
     if remaining_errors and not ai_triggered: # If we self-healed, the old log errors are still there, so we ignore them for the "issues" list
         issues.append("REMAINING LOG ERRORS:\n" + "\n".join(remaining_errors))
     if data_issue: 
         issues.append(data_issue)
+    if not sync_success:
+        issues.append("CRITICAL: Network Backup Data Sync Failed!")
 
     # 7. Construct the Consolidated HTML Recovery Report (The Final Step!)
-    # We only send an email if a healing action occurred, an AI healer triggered, or there are active code errors in the logs.
-    # Stale data alone is a status warning and should not spam your inbox hourly.
-    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered):
+    # We send an email if a healing action occurred, an AI healer triggered, there are active code errors in the logs, or the backup sync failed.
+    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered) or not sync_success:
         _log.console("Healer cycle complete. Constructing consolidated recovery report...")
         
         # Color badges
-        status_color = "#27ae60" if compilation_passed else "#c0392b"
-        status_text = "NOMINAL (HEALED)" if compilation_passed else "MANUAL INTERVENTION REQUIRED"
+        status_color = "#27ae60" if compilation_passed and sync_success else "#c0392b"
+        status_text = "NOMINAL (HEALED)" if compilation_passed and sync_success else "MANUAL INTERVENTION REQUIRED"
         
         # Clean console log for email (last 2000 chars to avoid size limits)
         trimmed_console_log = ai_console_log[-2000:] if ai_console_log else "No AI logs available."
@@ -405,9 +466,16 @@ def run_watchdog():
             <div style="background: #f9f9f9; border-left: 5px solid #95a5a6; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #34495e; font-size: 15px;">✅ 3. POST-HEALING VALIDATION (Execution Check):</h3>
                 <p style="font-size: 13px; font-weight: bold;">Validation Script: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">python ai_portfolio_game.py --report</span></p>
-                <p style="font-size: 13px; font-weight: bold;">Compilation Result: <span style="color: {status_color}; font-size: 14px;">{'SUCCESS / PASSED' if compilation_passed else 'FAILED / COMPILE ERROR'}</span></p>
+                <p style="font-size: 13px; font-weight: bold;">Compilation Result: <span style="color: {'#27ae60' if compilation_passed else '#c0392b'}; font-size: 14px;">{'SUCCESS / PASSED' if compilation_passed else 'FAILED / COMPILE ERROR'}</span></p>
                 <h4 style="margin-bottom: 5px; font-size: 13px; color: #333;">Validation Console Output:</h4>
                 <pre style="background: #f1f2f6; color: #2c3e50; padding: 12px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; overflow-x: auto; font-family: monospace;">{validation_output}</pre>
+            </div>
+
+            <!-- SECTION 3b: DATA BACKUP SYNC STATUS -->
+            <div style="background: {'#f9f9f9' if sync_success else '#fdf2f2'}; border-left: 5px solid {'#34495e' if sync_success else '#ec5b5b'}; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
+                <h3 style="margin-top: 0; color: {'#34495e' if sync_success else '#c0392b'}; font-size: 15px;">📁 3b. DATA BACKUP SYNC STATUS:</h3>
+                <p style="font-size: 13px; font-weight: bold;">Backup Location: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">\\\\10.0.0.156\\Storage\\Yura\\Develop\\StockTrading\\AnalyzeFinData\\Data</span></p>
+                <p style="font-size: 13px; font-weight: bold;">Sync Status: <span style="color: {'#27ae60' if sync_success else '#c0392b'}; font-size: 14px;">{'SUCCESS / NOMINAL' if sync_success else 'FAILED / SYNC ERROR'}</span></p>
             </div>
 
             <!-- SECTION 4: NEXT STEPS -->
@@ -418,6 +486,7 @@ def run_watchdog():
                     {'<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>' if compilation_passed else ''}
                     {'<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>' if ai_triggered else ''}
                     {'<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>' if not compilation_passed else ''}
+                    {f'<li><b>Backup Status:</b> Robocopy sync completed successfully.</li>' if sync_success else '<li><b>Backup Status Alert:</b> robocopy was unable to push updates to \\\\10.0.0.156\\Storage\\ - check server connection.</li>'}
                 </ul>
             </div>
 
