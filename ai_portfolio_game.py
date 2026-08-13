@@ -1189,56 +1189,47 @@ def send_daily_summary(return_html=False):
 
 def send_consolidated_morning_report():
     """
-    Compile both the Virtual AI-Game morning actions and the Real-Account Oracle Advisory,
-    wrapping them in a single consolidated HTML email dispatched immediately at 7:00 AM.
+    Dispatches both the Virtual AI-Game morning actions and the Real-Account Oracle Advisory
+    as two dedicated, separate, high-fidelity emails immediately at 7:00 AM to preserve
+    separation of concerns and distinct microservice outputs.
     """
-    _log.info("📧 COMPILING CONSOLIDATED AETHER MORNING BRIEFING...")
+    _log.info("📧 DISPATCHING DECOUPLED AETHER MORNING BRIEFINGS...")
     today = str(datetime.date.today())
     
-    # 1. Compile the AI-game summary
-    ai_html = send_daily_summary(return_html=True)
-    
-    # Extract only the body contents of the AI HTML to prevent nested <html>/<body> tags
-    body_content = ai_html
-    body_start = ai_html.find('<body')
-    if body_start != -1:
-        body_start = ai_html.find('>', body_start) + 1
-        body_end = ai_html.find('</body>')
-        if body_end != -1:
-            body_content = ai_html[body_start:body_end]
-
-    # 2. Compile the Oracle Advisory HTML
-    oracle_html = aether_oracle.run_oracle_advisory()
-    
-    # 3. Concatenate both into a single cohesive, high-quality, professional layout
-    unified_html = f"""
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <title>AETHER Consolidated Morning Briefing</title>
-    </head>
-    <body style="font-family: sans-serif; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f8f9fa;">
-        <div style="background-color: #ffffff; border: 1px solid #e1e4e8; border-radius: 8px; padding: 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
-            <div style="text-align: center; border-bottom: 3px double #3498db; padding-bottom: 15px; margin-bottom: 25px;">
-                <h1 style="color: #2c3e50; margin: 0; font-size: 24px; font-weight: bold; letter-spacing: 0.5px;">☀️ AETHER DAILY MORNING BRIEFING</h1>
-                <p style="color: #7f8c8d; margin: 5px 0 0 0; font-size: 13px;">Date: {today} | Unified Trading & Market Intelligence Report</p>
+    # 1. Send the AI-Game Virtual Portfolio Summary email
+    try:
+        _log.info("  [Briefing] Compiling and sending AI Portfolio Summary...")
+        send_daily_summary(return_html=False)
+    except Exception as e:
+        _log.error(f"❌ Failed to send AI Portfolio Summary email: {e}", exc_info=True)
+        
+    # 2. Compile and send the Real-Account Oracle Advisory email
+    try:
+        _log.info("  [Briefing] Compiling and sending AETHER Oracle Market Advisory...")
+        oracle_html = aether_oracle.run_oracle_advisory()
+        
+        standalone_oracle_html = f"""
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>AETHER Oracle Market Advisory</title>
+        </head>
+        <body style="font-family: sans-serif; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f8f9fa;">
+            <div style="background-color: #ffffff; border: 1px solid #e1e4e8; border-radius: 8px; padding: 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+                <div style="text-align: center; border-bottom: 3px double #3498db; padding-bottom: 15px; margin-bottom: 25px;">
+                    <h1 style="color: #2c3e50; margin: 0; font-size: 24px; font-weight: bold; letter-spacing: 0.5px;">💎 AETHER ORACLE MARKET ADVISORY</h1>
+                    <p style="color: #7f8c8d; margin: 5px 0 0 0; font-size: 13px;">Date: {today} | Project Oracle Real-Account Advisory</p>
+                </div>
+                {oracle_html}
             </div>
-            
-            <!-- Section 1: AI Virtual Portfolio Summary -->
-            {body_content}
-            
-            <hr style="border: 0; border-top: 2px dashed #e1e4e8; margin: 40px 0;">
-            
-            <!-- Section 2: Real-Account Oracle Advisory -->
-            {oracle_html}
-        </div>
-    </body>
-    </html>
-    """
-    
-    subject = f"☀️ AETHER Morning Briefing: {today} (AI-Game Actions & Oracle Advice)"
-    notify.send_email(subject, unified_html, is_html=True)
-    _log.info(f"Consolidated morning briefing sent successfully for {today}.")
+        </body>
+        </html>
+        """
+        subject = f"💎 AETHER Oracle Market Advisory: {today}"
+        notify.send_email(subject, standalone_oracle_html, is_html=True)
+        _log.info(f"  [Briefing] Standalone Oracle Market Advisory email sent successfully.")
+    except Exception as e:
+        _log.error(f"❌ Failed to send AETHER Oracle Advisory email: {e}", exc_info=True)
 
 def _has_strong_setups_today(min_score=9.5) -> bool:
     """Return True if we have 2 or more strong, verified bottom setups in the workbook today."""
