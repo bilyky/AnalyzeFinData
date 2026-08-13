@@ -5,6 +5,7 @@ import datetime
 import subprocess
 import openpyxl
 import notify
+import watchdog
 import html
 import rapidapi
 from config import CFG
@@ -403,11 +404,11 @@ def main():
                     [sys.executable, script_path, "5"], 
                     check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, 
                     encoding="utf-8", errors="replace",
-                    timeout=300  # Fail fast after 5 minutes!
+                    timeout=600  # Fail fast after 10 minutes!
                 )
                 log("History backfilled.")
             except subprocess.TimeoutExpired:
-                log("Warning: run_history.py timed out after 300s (Playwright hang likely). Bypassing backfill...")
+                log("Warning: run_history.py timed out after 600s (Playwright hang likely). Bypassing backfill...")
             except subprocess.CalledProcessError as e:
                 log(f"Warning: run_history.py failed (will continue): {e.stderr}")
 
@@ -419,13 +420,13 @@ def main():
                 [sys.executable, script_path], 
                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, 
                 encoding="utf-8", errors="replace",
-                timeout=300  # Fail fast after 5 minutes!
+                timeout=600  # Fail fast after 10 minutes!
             )
             log("Workbook regenerated.")
         except subprocess.TimeoutExpired:
             # The workbook is the day's source of truth — do NOT silently continue on
             # stale data (Zero-Trust). Alert and abort so nothing downstream trades on it.
-            error_msg = "main.py execution timed out after 300s (Playwright hang likely)."
+            error_msg = "main.py execution timed out after 600s (Playwright hang likely)."
             log(f"ABORT: {error_msg}")
             if not no_email:
                 notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline aborted: {error_msg}")
@@ -488,6 +489,11 @@ def main():
         log("Drafting HTML report (email disabled via --no-email)...")
 
     log("Pipeline completed successfully.")
+
+    try:
+        watchdog.sync_data_folder()
+    except Exception as e:
+        log(f"Post-pipeline sync failed: {e}")
 
 
 if __name__ == "__main__":

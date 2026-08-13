@@ -3,6 +3,7 @@ import sys
 import datetime
 import subprocess
 import notify
+import watchdog
 import openpyxl
 import traceback
 import json
@@ -309,6 +310,10 @@ def main():
         _log.info("Generating rich HTML report...")
         notify.send_email(f"AETHER Daily Rotation & Momentum Report: {today}", html, is_html=True)
         _log.info("Automation completed successfully.")
+        try:
+            watchdog.sync_data_folder()
+        except Exception as e:
+            _log.warning(f"Post-run sync failed: {e}")
 
     except Exception as e:
         error_msg = f"Automation Failed for {today}\n\nError: {str(e)}\n\nFull Traceback:\n{traceback.format_exc()}"

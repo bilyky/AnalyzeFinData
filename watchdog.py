@@ -1,5 +1,6 @@
 import os
 import sys
+import atexit
 import console_safe
 import datetime
 import pytz
@@ -28,6 +29,16 @@ AETHER_JSONL = BASE_DIR / "Data" / "logs" / "aether.jsonl"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 TASKS = ["AnalyzeFinData_Morning", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_Summary", "AnalyzeFinData_Evening"]
 SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
+
+python_exe = sys.executable
+_TASK_DEFS = {
+    "AnalyzeFinData_Morning":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'autonomous_pipeline.py'}\"", "daily", "05:30"),
+    "AnalyzeFinData_Evening":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'daily_task.py'}\"",           "daily", "17:00"),
+    "AnalyzeFinData_AI_Game":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'ai_portfolio_game.py'}\" --run", "daily", "07:00"),
+    "AnalyzeFinData_AI_Summary": (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'ai_portfolio_game.py'}\" --summary", "daily", "18:00"),
+    "Project_AETHER_Watchdog": (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'watchdog.py'}\"",              "hourly", None),
+}
+
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 
 # --- Agnostic AI Self-Healing Tool Configuration ---
@@ -230,15 +241,6 @@ def heal_tasks(missing_tasks, force=False):
         run_as = os.getlogin()
     except Exception:
         run_as = os.environ.get("USERNAME") or os.environ.get("USER") or "SYSTEM"
-    python_exe = sys.executable
-
-    _TASK_DEFS = {
-        "AnalyzeFinData_Morning":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'external_intel.py'}\" && \"{python_exe}\" -c \"import watchdog; watchdog.sync_data_folder()\"", "daily", "05:30"),
-        "AnalyzeFinData_Evening":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'main.py'}\" && \"{python_exe}\" -c \"import watchdog; watchdog.sync_data_folder()\"",           "daily", "06:00"),
-        "AnalyzeFinData_AI_Game":  (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'ai_portfolio_game.py'}\" --run && \"{python_exe}\" -c \"import watchdog; watchdog.sync_data_folder()\"", "daily", "07:00"),
-        "AnalyzeFinData_AI_Summary": (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'ai_portfolio_game.py'}\" --summary && \"{python_exe}\" -c \"import watchdog; watchdog.sync_data_folder()\"", "daily", "18:00"),
-        "Project_AETHER_Watchdog": (f"cmd.exe /c set PYTHONIOENCODING=utf-8 && \"{python_exe}\" \"{BASE_DIR / 'watchdog.py'}\"",              "hourly", None),
-    }
 
     for task in (TASKS if force else missing_tasks):
         _log.console(f"🔧 Healing/Upgrading scheduled task: {task}")
@@ -322,7 +324,40 @@ def sync_data_folder() -> bool:
         _log.error(f"❌ Failed to sync Data folder to Z: drive: {e}", exc_info=True)
         return False
 
+def is_pid_running(pid: int) -> bool:
+    """Return True if a process with the given PID is actively running on Windows."""
+    if pid <= 0:
+        return False
+    try:
+        res = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, errors="replace")
+        return "No tasks" not in res.stdout and str(pid) in res.stdout
+    except Exception:
+        return False
+
 def run_watchdog():
+    # Enforce a strict cross-process execution singleton to prevent 2 watchdogs from running concurrently
+    lock_file = BASE_DIR / "Data" / "watchdog_run.lock"
+    if lock_file.exists():
+        try:
+            with open(lock_file, "r") as f:
+                old_pid = int(f.read().strip())
+            if is_pid_running(old_pid):
+                _log.warning(f"⚠️ Watchdog execution blocked: another instance is already running (PID={old_pid}). Exiting.")
+                return
+        except Exception as e:
+            _log.warning(f"⚠️ Lock file unreadable or corrupt ({e}). Overriding...")
+
+    # Create or update the lock file with our current PID
+    try:
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_file, "w") as f:
+            f.write(str(os.getpid()))
+        # Register automatic cleanup of the lock file upon process termination
+        atexit.register(lambda: lock_file.unlink() if lock_file.exists() else None)
+    except Exception as e:
+        _log.error(f"❌ Failed to write watchdog lock file: {e}")
+        return
+
     _log.console(f"[{datetime.datetime.now()}] Project AETHER Healer starting...")
     
     # 0. E*TRADE Proactive Session Keeper (Prevents Soft Expiry)
