@@ -265,6 +265,11 @@ def check_new_features_tested() -> bool:
             "name": "Momentum Rotation Empty-Slot Expansion (R&D #27)",
             "signature": r"is_full_slots|threshold_score\s*=\s*8\.0\s+if\s+is_full_slots",
             "test_keyword": "test_evaluate_momentum_rotation"
+        },
+        {
+            "name": "Breakout Risk-Reward Waiver (R&D #32)",
+            "signature": r"Breakout\s+Risk-Reward\s+Waiver|is_elite_breakout\s*=",
+            "test_keyword": "test_breakout_rr_waiver"
         }
     ]
     

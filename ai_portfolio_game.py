@@ -1717,8 +1717,22 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 # Reward-to-Risk & Target Upside Filter (Risk-Reward Gate):
                 # Reject if the projected Reward-to-Risk ratio is < 2:1 (R/R < 2.0)
                 # OR if the projected target gain percentage is <= 5.0% of the current price.
+                # EXEMPTION (Breakout Risk-Reward Waiver - R&D #32):
+                # If a symbol is an elite momentum leader (combined >= 6.0, s10 >= 2.0, PGR is Bullish)
+                # AND we are in a 'Blue-Sky' breakout (target source is 'atr', 'pct', 'stale', or 'none', representing no real overhead resistance),
+                # we WAIVE these conservative target-fallback restrictions to capture breakout-alpha!
                 stop_val = _to_float(row[9], 0.0)
                 target_val = _to_float(row[11], 0.0)
+                pgr_val = str(row[6] or "Neutral")
+                
+                is_blue_sky = False
+                # If Chaikin returned no target, or our resolver fell back to atr/pct/stale, it is a Blue-Sky Breakout
+                if sym:
+                    t_det = risk_utils.resolve_target_detailed(price, symbol=sym)
+                    is_blue_sky = t_det["source"] in ("atr", "pct", "stale", "none")
+                    
+                is_elite_breakout = (total_score >= 6.0) and (short10 >= 2.0) and ("Bullish" in pgr_val) and is_blue_sky
+                
                 if stop_val > 0 and target_val > 0:
                     upside = target_val - price
                     downside = price - stop_val
@@ -1726,12 +1740,18 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
                     
                     if rr_ratio < 2.0:
-                        _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required 2:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
-                        continue
+                        if is_elite_breakout:
+                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 2:1 R:R limit for elite Blue-Sky breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, R:R: {rr_ratio}:1).")
+                        else:
+                            _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required 2:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
+                            continue
                         
                     if target_gain_pct < 5.0:
-                        _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
-                        continue
+                        if is_elite_breakout:
+                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 5.0% target upside limit for elite Blue-Sky breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, Target Gain: {target_gain_pct}%).")
+                        else:
+                            _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
+                            continue
 
                 if total_score >= rules["min_score_threshold"] or bottom_ok:
                     bottom_desc = f" (Bottom Confirmed: {bottom_msg})" if bottom_ok else ""

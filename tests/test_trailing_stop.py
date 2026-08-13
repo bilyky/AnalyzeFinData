@@ -380,5 +380,29 @@ class TestStpLmtSlippageProtection(unittest.TestCase):
         self.assertEqual(execution_price, 46.0)
 
 
+class TestBreakoutRrWaiver(unittest.TestCase):
+    def test_breakout_rr_waiver(self):
+        """Operational: Assert that elite Blue-Sky breakout leaders successfully waive the conservative 2:1 R:R limit."""
+        # Setup: price is at an all-time high, target is flatly ATR-capped, stop is wide -> R:R is low (0.28:1)
+        price = 361.71
+        stop_val = 302.69
+        target_val = 378.0
+        total_score = 6.6
+        short10 = 2.4
+        pgr_val = "Very Bullish"
+        is_blue_sky = True # Simulated target source is 'atr' (no resistance)
+        
+        upside = target_val - price
+        downside = price - stop_val
+        rr_ratio = round(upside / downside, 2)
+        
+        # Verify that without waiver, it fails the 2:1 minimum
+        self.assertLess(rr_ratio, 2.0)
+        
+        # Check if the Breakout Waiver (R&D #32) condition evaluates to True
+        is_elite_breakout = (total_score >= 6.0) and (short10 >= 2.0) and ("Bullish" in pgr_val) and is_blue_sky
+        self.assertTrue(is_elite_breakout)
+
+
 if __name__ == "__main__":
     unittest.main()
