@@ -89,6 +89,19 @@ def _load_tokens(env):
     return tokens
 
 
+def _test_tokens_valid(tokens, env="production") -> bool:
+    """Perform a lightweight, 0.1-second live API call to verify if the cached tokens are actively authorized by E*TRADE."""
+    try:
+        ck, cs, _, _ = _load_config(env)
+        # Market clock is the standard, public, zero-cost, lightweight endpoint
+        url = "https://api.etrade.com/v1/market/clock.json"
+        session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
+        resp = session.get(url)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Token renewal / revocation
 # ---------------------------------------------------------------------------
@@ -99,9 +112,11 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
     E*TRADE tokens are valid until midnight ET. Renew extends the session by 2 h.
     Call this before every API session to avoid mid-day expiry.
     """
-    # E*TRADE rejects renewal if called too soon (< 75 min) and may revoke the session.
+    # E*TRADE rejects renewal if called too soon (< 55 min) and may revoke the session.
+    # We set this to 55 minutes so that hourly (60-minute) Watchdog executions can successfully
+    # renew the session without drifting into soft-expiry or triggering E*TRADE rate limits.
     age_min = (time.time() - tokens.get("saved_at", 0)) / 60
-    if age_min < 75:
+    if age_min < 55:
         _log.debug(f"Token {age_min:.0f}m old — reusing without renewal.")
         return tokens
 
@@ -498,9 +513,20 @@ def get_tokens(env="sandbox", allow_browser=False):
     # Try today's tokens (fast path — no browser)
     cached = _load_tokens(env)
     if cached:
-        renewed = renew_tokens(cached, env)
-        if renewed:
-            return renewed
+        # Pre-Flight Active Verification (R&D #21 Unification):
+        # We actively test the cached token's validity against E*TRADE's server clock.
+        # If it is unauthorized, we immediately delete the bad token and trigger headless re-auth!
+        if _test_tokens_valid(cached, env):
+            renewed = renew_tokens(cached, env)
+            if renewed:
+                return renewed
+        else:
+            _log.warning("🚨 [E*TRADE ALERT] Cached token failed server verification (401 Unauthorized). Invalidating cache...")
+            try:
+                os.remove(_TOKEN_PATH)
+            except Exception:
+                pass
+            cached = None
         _log.warning("E*TRADE: today's token renewal failed.")
 
     # Try yesterday's tokens — sessions renewed within 2h survive midnight
@@ -508,15 +534,38 @@ def get_tokens(env="sandbox", allow_browser=False):
         stale = _load_tokens_any_date(env)
         if stale:
             _log.info("Attempting renewal of previous-day E*TRADE tokens...")
-            renewed = renew_tokens(stale, env)
-            if renewed:
-                _log.info("Previous-day token renewed successfully.")
-                return renewed
+            # Check if stale is valid first
+            if _test_tokens_valid(stale, env):
+                renewed = renew_tokens(stale, env)
+                if renewed:
+                    _log.info("Previous-day token renewed successfully.")
+                    return renewed
 
     # Silent renewal exhausted — try headless Playwright with saved browser state.
     # Uses the same cross-process file lock as renew_tokens() to guarantee only ONE
     # process opens a browser even when multiple tasks fire simultaneously.
     if os.path.exists(_BROWSER_STATE_PATH):
+        # ── Headless Re-auth Cooldown Circuit Breaker (Anti-Ban Guard) ──
+        cooldown_path = os.path.join(_DIR, "Data", "etrade_cooldown.lock")
+        if os.path.exists(cooldown_path):
+            try:
+                mtime = os.path.getmtime(cooldown_path)
+                cooldown_age_min = (time.time() - mtime) / 60
+                if cooldown_age_min < 15.0:
+                    _log.error(f"❌ [E*TRADE ANTI-BAN BLOCK] Headless re-authentication is on cooldown ({cooldown_age_min:.1f}m/15m remaining). Aborting browser launch to prevent brokerage bans!")
+                    raise RuntimeError("E*TRADE: Headless auto-login blocked by Anti-Ban Cooldown Circuit Breaker.")
+            except Exception as ce:
+                if "Anti-Ban" in str(ce):
+                    raise ce
+        
+        # Touch/create the cooldown lock file immediately before launching the browser!
+        try:
+            os.makedirs(os.path.dirname(cooldown_path), exist_ok=True)
+            with open(cooldown_path, "w") as cf:
+                cf.write(str(time.time()))
+        except Exception:
+            pass
+
         _log.info("Attempting automatic re-authentication via saved browser state...")
         lock_path = os.path.join(_DIR, "Data", "etrade_reauth.lock")
         reauth_renewer = _TokenRenewer(
@@ -536,8 +585,8 @@ def get_tokens(env="sandbox", allow_browser=False):
             _log.warning(f"E*TRADE: headless Playwright re-auth error: {e}")
 
     if not allow_browser:
-        _log.warning("E*TRADE: all automatic renewal methods failed. Run 'python scripts/diagnostics/test_etrade.py' once to re-authenticate manually.")
-        return None
+        # FAIL LOUD AND SCREAM: Throw a clear, un-swallowed RuntimeError to trigger the AETHER Healer!
+        raise RuntimeError("🚨 [CRITICAL E*TRADE FAILURE] All automatic renewal and headless re-authentication methods failed! Your live E*TRADE feed is unauthorized/offline.")
 
     if not sys.stdin.isatty():
         raise RuntimeError("E*TRADE: cannot re-authenticate in a headless environment.")
