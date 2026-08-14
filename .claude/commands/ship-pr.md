@@ -1,94 +1,124 @@
-# Ship a Change → PR → CI
+# Ship a Change → PR → CI (auto-PR on push)
 
-The end-to-end workflow for landing a code change in AETHER: branch, validate, commit,
-push, and open a pull request that the CI gate will check. Captures the repo-specific
-gotchas so none of them have to be rediscovered.
+A repo-agnostic workflow for landing a change: branch, validate, commit, push — and let
+**GitHub open the pull request itself**. The key idea: don't open PRs from the agent side
+at all. A GitHub Actions workflow opens (or reuses) the PR on push, using the runner's
+built-in `GITHUB_TOKEN` — no local `gh` auth, no credential handling on your side. Once set
+up, `git push` is the entire "open a PR" step, in any repo.
 
-## 0. Preconditions (do these BEFORE editing)
+Substitute `<owner>/<repo>`, `<branch>`, and the default base branch (`main`/`master`) for
+the current repo. Delegate all project-specific pre-flight to the repo's own docs
+(`CONTRIBUTING`, `CLAUDE.md`/`AGENTS.md`, `README`) — this skill only owns the PR/CI plumbing.
 
-- **On `main`? Branch first.** Never commit feature work straight to `main`:
-  ```bash
-  git switch -c feat/<short-slug>
-  ```
-- **Editing `web/app.js`? Bump the cache-buster.** `web/index.html` loads
-  `<script src="/static/app.js?v=X.Y.Z">`. ANY `app.js` edit REQUIRES bumping `?v=` or
-  browsers serve the stale file. (Currently `1.0.10`.)
-- **Changed a Python module the server imports?** Restart the server to see it. `server.py`
-  calls `uvicorn.run(app, ...)` with the app **object**, so auto-reload is OFF despite the
-  comment near `server.py:1039`. Static/`app.js`/`index.html` edits need only a browser
-  refresh (they're read from disk per request) — no restart.
+## 1. Branch, validate, commit (generic hygiene)
 
-## 1. Verify locally (zero-trust — paste real output)
-
-```bash
-python -m unittest discover tests          # all green, incl. any new red-green test
-python -c "import workbook_read, server"   # imports clean
-```
-New feature ⇒ new test (the pre-commit validator enforces this). Excel/openpyxl fixes:
-re-run the exact reproduction and paste the output before claiming success.
-
-## 2. Commit (the pre-commit hook is law)
-
-- **Never** `--no-verify`; never bypass signing. If the hook fails, fix the cause.
-- **Never** stage `backtest_output_new.txt` (untracked scratch output).
-- The hook runs `scripts/utils/pre_commit_validator.py` on the **staged** diff
-  (`git diff --cached`): bans bare `print()`, inline imports, silent `except: pass`;
-  enforces doc-sync anchors, R&D-roadmap sync, and new-feature test coverage.
-- Commit message ends with:
-  ```
-  Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
-  ```
+- **On the default branch? Branch first.** Never commit feature work straight to `main`:
+  `git switch -c feat/<short-slug>`. Use a conventional prefix (`feat/ fix/ chore/ refactor/
+  ci/ docs/ perf/`) — the Auto-PR workflow below keys off these.
+- **Run the repo's own pre-flight before committing** and paste real output (don't claim
+  green without it): its test suite, linters/formatters, type-checks, and build — whatever
+  the repo defines. If it has a pre-commit hook, let it run; **never** `--no-verify` or
+  bypass signing. If a hook fails, fix the cause.
+- **Stage deliberately** (`git add <paths>`, not `git add -A`) so scratch/generated/secret
+  files stay out. Never commit secrets, tokens, or PII.
+- **Follow the repo's commit-message convention** (Conventional Commits + any required
+  trailer/footer the environment mandates).
 
 ```bash
-git add <specific paths>        # not `git add -A` — keep scratch files out
-git commit -m "<msg>"
+git add <paths>
+git commit -m "<type>: <summary>"
 git push -u origin HEAD
 ```
 
-## 3. Open the PR — it opens itself
+## 2. The Auto-PR pattern (the reusable core)
 
-**Just push.** `.github/workflows/auto-pr.yml` opens (or reuses) a PR to `main` on every
-push to a conventionally-named branch (`feat/** fix/** chore/** refactor/** ci/** docs/**
-perf/**`). GitHub does it with the runner's built-in `GITHUB_TOKEN` — no local `gh` auth,
-no token handling on our side. Name the branch with one of those prefixes and step 2's
-`git push` IS the "open a PR" step. The workflow is idempotent (later pushes update the
-existing PR, never duplicate it) and stamps the `🤖 Generated with Claude Code` footer.
+Drop this workflow into `.github/workflows/auto-pr.yml`. On push to a prefixed branch it
+opens or reuses a PR to the default branch — idempotent (later pushes update the existing
+PR, never duplicate). Set `--base` to the repo's default branch.
 
-> ⚠️ Do NOT scrape the push token out of the `origin` remote URL to hit the GitHub API —
-> the Claude Code security classifier blocks it, correctly. The Auto-PR workflow is the
-> sanctioned path: the token is injected by GitHub into the runner, never into our context.
+```yaml
+name: Auto-PR
+on:
+  push:
+    branches: ['feat/**','fix/**','chore/**','refactor/**','ci/**','docs/**','perf/**']
+permissions:
+  contents: read
+  pull-requests: write
+concurrency:
+  group: auto-pr-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  open-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Open or reuse a PR to the default branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BR="${GITHUB_REF_NAME}"
+          existing="$(gh pr list --head "$BR" --state open --json number --jq '.[0].number')"
+          if [ -n "$existing" ]; then echo "PR #$existing already open"; exit 0; fi
+          title="$(git log -1 --pretty=%s)"
+          commits="$(git log origin/main..HEAD --pretty='- %s')"   # adjust base if not 'main'
+          body="$(printf 'Auto-opened on push to `%s`.\n\n## Commits\n%s\n' "$BR" "$commits")"
+          gh pr create --base main --head "$BR" --title "$title" --body "$body"
+```
 
-Manual fallbacks, only if you need a PR for a non-prefixed branch or the workflow is off:
-- `gh` (once authenticated, see §4): `"C:\Program Files\GitHub CLI\gh.exe" pr create
-  --base main --head <branch> --title "<t>" --body "<b>"` (body ends with the Claude Code footer).
-- No auth at all: the browser link `https://github.com/bilyky/AnalyzeFinData/pull/new/<branch>`.
+**Two things that make or break it:**
 
-## 4. gh CLI on Windows — setup gotchas (only needed for the manual fallback)
+1. **One-time repo setting** — *Settings → Actions → General → Workflow permissions →*
+   check **"Allow GitHub Actions to create and approve pull requests"**. Defaults to **off**
+   in many orgs; without it the `open-pr` step fails with a `403` / "not permitted to create
+   pull requests". (`https://github.com/<owner>/<repo>/settings/actions`.)
 
-- **Install** (winget's default source prompts interactively and fails in the `!` session —
-  pin the source):
-  ```powershell
-  winget install --id GitHub.cli -e --source winget \
-    --accept-source-agreements --accept-package-agreements
-  ```
-- **Not on PATH yet:** after install, the tool-host process won't see `gh` until it
-  restarts — invoke by full path `"C:\Program Files\GitHub CLI\gh.exe"`.
-- **Auth is interactive:** `gh auth login` needs a browser/prompt the `!` session can't
-  drive. Ask the user to run it themselves (suggest they type `! gh auth login`), or use
-  a PAT they provide via `gh auth login --with-token`. Do not hunt for a hidden token.
+2. **Run CI on _push_, not only on the PR.** A PR opened by `GITHUB_TOKEN` does **not**
+   trigger downstream `pull_request` workflow runs (GitHub's recursion guard). So any CI/
+   quality-gate workflow must also trigger on push to the same prefixed branches, or
+   bot-opened PRs land ungated. e.g.:
+   ```yaml
+   on:
+     pull_request: { branches: [ main ] }
+     push:
+       branches: [ main, 'feat/**','fix/**','chore/**','refactor/**','ci/**','docs/**','perf/**' ]
+   concurrency: { group: ci-${{ github.ref }}, cancel-in-progress: true }
+   ```
 
-## 5. CI — what runs on the PR
+## 3. Manual fallbacks (no Auto-PR set up, or a non-prefixed branch)
 
-`.github/workflows/ci.yml` = one dependency-free `quality-gate` job (ubuntu-latest) on
-`pull_request` + `push` to `main`:
-1. Byte-compile all tracked Python (`git ls-files '*.py' | xargs -r python -m py_compile`).
-2. Run the pre-commit validator against the change set, recreating the "staged diff" view
-   in CI with `git reset --soft <base>` (leaves the PR's commits staged) — same checks as
-   the local hook, zero edits to the validator.
+- **`gh` CLI** (once authenticated — see §4): `gh pr create --base <default> --head <branch>
+  --title "<t>" --body "<b>"`.
+- **No auth at all** (works from any proxy-aware browser): open
+  `https://github.com/<owner>/<repo>/pull/new/<branch>` and paste the title/body.
 
-**The full `unittest` suite is intentionally NOT in CI.** Discovery imports every test
-module, and the app top-level-imports `MetaTrader5` (Windows-only, un-pip-installable on
-Linux) plus other unpinned native deps (pyetrade, playwright, sqlalchemy, pandas, numpy;
-`requirements_web.txt` only pins fastapi+uvicorn). Making it CI-runnable needs a curated
-`requirements-ci.txt` + Linux-guarded native imports, or a `windows-latest` runner —
-tracked follow-up.
+> ⚠️ **Security boundary:** do NOT scrape a push token out of the `origin` remote URL (or
+> any credential store) to hit the GitHub API — the Claude Code security classifier blocks
+> this, correctly. Use the Actions `GITHUB_TOKEN` (Auto-PR) or interactive `gh auth login`.
+
+## 4. gh CLI setup notes
+
+- **Install:** varies by OS (`winget`/`brew`/`apt`). On winget, pin the source to avoid an
+  interactive store prompt: `winget install --id GitHub.cli -e --source winget
+  --accept-source-agreements --accept-package-agreements`.
+- **PATH:** a freshly-installed `gh` may not be on the running tool-host's PATH until it
+  restarts — invoke by full path if `gh: command not found` (e.g. Windows:
+  `"C:\Program Files\GitHub CLI\gh.exe"`).
+- **Auth is interactive:** `gh auth login` needs a browser/prompt a non-interactive shell
+  can't drive. Ask the user to run it (`! gh auth login`), or use a PAT they supply via
+  `gh auth login --with-token`. Don't hunt for a hidden token.
+
+## 5. Verifying PR/CI state behind a restrictive network
+
+Some environments block the GitHub REST API and/or the agent's web-fetch egress (corporate
+proxy) even though `git` and the user's browser reach GitHub fine. When the API is
+unreachable, **verify over the git transport**, which uses the same proxy git already has:
+
+- **Open PRs:** `git ls-remote origin 'refs/pull/*/head'` — every open PR advertises a
+  `refs/pull/<n>/head` ref; empty output = no open PR.
+- **Confirm a push landed:** `git ls-remote origin 'refs/heads/<branch>'`.
+- **CI run logs** (if the API/browser is blocked from the agent): only the user can see
+  them — point them at `https://github.com/<owner>/<repo>/actions`.
+
+Don't assume "can't fetch GitHub" = outage/regression; it's usually the tool's egress path
+lacking the proxy, not the network being down. Verify with `git`, which does have it.
