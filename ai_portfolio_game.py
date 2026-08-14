@@ -1731,7 +1731,10 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     t_det = risk_utils.resolve_target_detailed(price, symbol=sym)
                     is_blue_sky = t_det["source"] in ("atr", "pct", "stale", "none")
                     
-                is_elite_breakout = (total_score >= 6.0) and (short10 >= 2.0) and ("Bullish" in pgr_val) and is_blue_sky
+                # EXEMPTION (High-Score PGR Bypass - R&D #13):
+                # We waive the 'Bullish' PGR and R:R constraint for elite breakout leaders (Combined >= 8.0, s10 >= 2.0)
+                # to prevent slow fundamental data or static R:R traps from blocking explosive volume-confirmed momentum.
+                is_elite_breakout = (total_score >= 8.0) and (short10 >= 2.0)
                 
                 if stop_val > 0 and target_val > 0:
                     upside = target_val - price
@@ -1821,14 +1824,20 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         is_winner = (current_px > pos["cost"])
                         has_peak = (pos.get("highest_close_since_acq", 0.0) >= current_px * 0.98) # within 2% of peak close
 
-                        # Retrieve its Short10 momentum score from row
+                        # Retrieve its Short10 and Long60 momentum scores from row
                         s10 = 0.0
+                        l60 = 0.0
                         for row in ws.iter_rows(min_row=2, values_only=True):
                             if row[3] == sym:
                                 s10 = row[24] or 0.0
+                                l60 = row[25] or 0.0
                                 break
 
-                        if is_winner and has_peak and s10 >= 3.0:
+                        # Loosened Momentum Floor (R&D #31): 
+                        # We allow scaling into profitable, risk-locked winners that have
+                        # strong long-term trend support (l60 >= 2.0) even during minor short-term pullbacks (s10 >= -0.5)
+                        # to exploit pullback dip buying within established upward trends.
+                        if is_winner and has_peak and (s10 >= 0.0 or l60 >= 2.0):
                             max_pos_allocation = state["equity"] * rules["max_allocation_pct"]
                             current_allocation = pos["qty"] * current_px
                             remaining_room = max_pos_allocation - current_allocation

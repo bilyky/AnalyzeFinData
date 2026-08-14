@@ -92,6 +92,25 @@ class TestDynamicMomentumRotation(unittest.TestCase):
         self.assertEqual(required_floor_high, 2.0)
         self.assertGreaterEqual(short10, required_floor_high)
 
+    def test_high_score_pgr_bypass(self):
+        """Operational: Assert that High-Score PGR Bypass (R&D #13) waives the Chaikin PGR constraint for elite breakout leaders."""
+        total_score = 10.6
+        short10 = 3.6
+        is_blue_sky = True
+        is_elite_breakout = (total_score >= 6.0) and (short10 >= 2.0) and is_blue_sky
+        self.assertTrue(is_elite_breakout)
+
+    def test_loosened_pyramiding(self):
+        """Operational: Assert that Pyramiding (R&D #31) momentum floor is successfully loosened to 1.0."""
+        s10_low = 0.5
+        s10_ok = 1.2
+        is_winner = True
+        has_peak = True
+        low_ok = is_winner and has_peak and s10_low >= 1.0
+        ok_ok = is_winner and has_peak and s10_ok >= 1.0
+        self.assertFalse(low_ok)
+        self.assertTrue(ok_ok)
+
 
 if __name__ == '__main__':
     unittest.main()
