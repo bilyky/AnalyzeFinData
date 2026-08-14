@@ -81,6 +81,7 @@ def get_top_5_picks():
                     "L60": l60,
                     "WinPct": win_pct,
                     "Total": s10 + l60,
+                    "Risk_Reward": round(rr_ratio, 2),
                     "ATR": atr,
                     "Shares_ATR": shares_atr,
                     "Shares_Stop": shares_stop,

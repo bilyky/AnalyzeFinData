@@ -1,0 +1,71 @@
+name: CI
+
+# First CI gate for AETHER. Deliberately dependency-free so it is fast, green, and
+# portable on a Linux runner.
+#
+# NOTE ON THE TEST SUITE: `python -m unittest discover tests` is intentionally NOT run
+# here yet. Discovery imports every test module, and the app has top-level imports of
+# MetaTrader5 (Windows-only — cannot pip-install on Linux) plus other heavy/native deps
+# (pyetrade, playwright, sqlalchemy, pandas, numpy) that no committed manifest pins
+# (requirements_web.txt is only fastapi+uvicorn). Running the suite in CI first needs a
+# curated requirements-ci.txt + guarded native imports (Linux), or a windows-latest
+# runner. Tracked as a follow-up. Until then, the two gates below run on every PR, and
+# the identical validator still runs locally via the git pre-commit hook.
+
+on:
+  pull_request:
+    branches: [ main ]
+  # Also run on push to feature branches — NOT just on the PR. A PR opened by the Auto-PR
+  # workflow's GITHUB_TOKEN does not trigger `pull_request` runs (GitHub's recursion
+  # guard), so gating on push is what guarantees every bot-opened PR is still checked.
+  push:
+    branches:
+      - main
+      - 'feat/**'
+      - 'fix/**'
+      - 'chore/**'
+      - 'refactor/**'
+      - 'ci/**'
+      - 'docs/**'
+      - 'perf/**'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for diff base)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Byte-compile all tracked Python (syntax gate)
+        run: git ls-files '*.py' | xargs -r python -m py_compile
+
+      - name: AETHER pre-commit validator (against the change set)
+        shell: bash
+        run: |
+          # The validator inspects the STAGED diff (index vs HEAD). Recreate that view
+          # in CI by soft-resetting HEAD to the change base, which leaves this PR's (or
+          # push's) commits staged in the index — so the exact same checks that gate a
+          # local `git commit` run here, with no edits to the validator.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          # Fall back to the parent commit if the base ref is missing (e.g. first push,
+          # or an all-zero SHA for a new branch).
+          if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            BASE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          fi
+          git reset --soft "$BASE"
+          python scripts/utils/pre_commit_validator.py

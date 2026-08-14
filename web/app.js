@@ -220,22 +220,33 @@ async function loadDashboard() {
     dashPicks = picks.picks || [];
     const pb = $("picks-body");
     if (!dashPicks.length) {
-        pb.innerHTML = `<tr><td colspan="11" class="text-center text-slate-500 py-6">No qualifying picks today.</td></tr>`;
+        pb.innerHTML = `<tr><td colspan="14" class="text-center text-slate-500 py-6">No qualifying picks today.</td></tr>`;
     } else {
-        pb.innerHTML = dashPicks.map((p, i) => `
+        pb.innerHTML = dashPicks.map((p, i) => {
+            const rr = p.Risk_Reward;
+            const rrCls = rr == null ? "" : (rr < 2.0 ? "text-slate-500" : (rr > 10.0 ? "text-amber-500 font-bold" : "text-green-400 font-semibold"));
+            const rrTitle = rr == null ? "R:R not available"
+                : (rr > 10.0 ? "⚠️ Tight-stop paper mirage — price sits on the swing-low; the true ATR stop is wider."
+                : (rr < 2.0 ? "Modest risk asymmetry." : "Favorable risk/reward."));
+            return `
             <tr data-sym="${p.Symbol}">
+                <td class="text-center"><input type="checkbox" class="cmp-check accent-blue-500" data-sym="${esc(p.Symbol)}" ${dashComparer.selected.has(String(p.Symbol).toUpperCase()) ? "checked" : ""}></td>
                 <td>${i + 1}</td>
                 <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${p.Symbol}">${p.Symbol}<div class="text-xs mut">${p.Industry || ""}</div></td>
                 <td>${p.PGR || "—"}</td>
                 <td class="px-live">${fmt$(p.Price)}</td>
                 <td>${fmt$(p.Stop)}</td>
                 <td>${fmt$(p.Target)}</td>
+                <td class="text-right ${rrCls}" title="${rrTitle}">${rr == null ? "—" : (rr > 10.0 ? "⚠️ " : "") + rr.toFixed(2)}</td>
                 <td class="${cls(p.S10)}">${p.S10?.toFixed(1)}</td>
                 <td class="${cls(p.L60)}">${p.L60?.toFixed(1)}</td>
                 <td class="font-bold ${cls(p.Total)}">${p.Total?.toFixed(1)}</td>
                 <td class="text-xs">${renderPatternsHTML(p.Patterns)}</td>
                 <td class="text-xs">${p.Shares_ATR ?? "—"} / ${p.Shares_Stop ?? "—"}</td>
-            </tr>`).join("");
+                <td class="text-xs"><button class="rq-btn px-2 py-0.5 rounded bg-slate-700 hover:bg-blue-700 text-slate-200 transition-colors" data-rq-sym="${esc(p.Symbol)}" title="Ask the AETHER AI why this symbol was picked (live factors + regime + news)">⚡ Why</button></td>
+            </tr>
+            <tr class="rq-result-row hidden" data-rq-for="${esc(p.Symbol)}"><td colspan="14"></td></tr>`;
+        }).join("");
     }
 
     // Positions
@@ -1348,11 +1359,6 @@ function researchSortValue(r, key) {
 let heldSymbolsGlobal = new Set();
 let researchRows = [];
 let researchSort = { key: "combined", dir: -1 };
-// Multi-stock comparison: symbols (uppercased) checked on the Research page. Held in a
-// Set so selection survives search/sort re-renders; compareLastRun keeps the last compared
-// set so the "Summarize with AI" button re-POSTs the same symbols.
-let compareSelected = new Set();
-let compareLastRun = [];
 // Columns that sort as text (ascending default). PGR and Industry sort by numeric
 // rank (see researchSortValue), so they default to descending = best/strongest first.
 const RESEARCH_TEXT_COLS = ["symbol", "status", "patterns", "industry_name"];
@@ -1414,7 +1420,7 @@ function renderResearch() {
     const num = (v, d = 2) => (v == null ? "—" : Number(v).toFixed(d));
     $("research-body").innerHTML = rows.length ? rows.map((r) => `
         <tr>
-            <td class="text-center"><input type="checkbox" class="cmp-check accent-blue-500" data-sym="${esc(r.symbol)}" ${compareSelected.has(String(r.symbol).toUpperCase()) ? "checked" : ""}></td>
+            <td class="text-center"><input type="checkbox" class="cmp-check accent-blue-500" data-sym="${esc(r.symbol)}" ${researchComparer.selected.has(String(r.symbol).toUpperCase()) ? "checked" : ""}></td>
             <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${r.symbol}">
                 ${r.symbol}${r.fractional ? ' <span class="text-[9px] px-1 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/40 font-bold ml-1 uppercase" title="Fractional Share Order Entry Eligible (E*TRADE Production)">FRAC</span>' : ''}${heldSymbolsGlobal.has(r.symbol.toUpperCase()) ? ' <span class="text-[9px] px-1.5 py-0.5 rounded bg-green-900/80 text-green-300 font-bold ml-1" title="Currently held in your accounts">HELD</span>' : ''}${instrumentBadge(r.instrument)}
             </td>
@@ -1447,135 +1453,207 @@ function renderResearch() {
     $("research-count").textContent = `${rows.length} of ${researchRows.length} symbols`;
 }
 
-// ── Multi-stock comparison (Research-page selection) ─────────────────────────
-function updateCompareButton() {
-    const n = compareSelected.size;
-    const btn = $("compare-run");
-    btn.textContent = `Compare selected (${n})`;
-    btn.disabled = n < 2;
-    $("compare-clear").classList.toggle("hidden", n === 0);
+// ── Multi-stock comparison (shared across the Research + Top-Picks tables) ─────
+// The compare PANEL is identical for both tables (same /api/compare output); only
+// the source table with the checkboxes differs. mountComparePanel() is the single
+// source of truth for the panel markup; makeComparer() binds one instance to a
+// (mount, buttons, selection-source) triple so both tables reuse all the logic.
+const COMPARE_COLSPAN = 14;
+
+function mountComparePanel(el) {
+    el.innerHTML = `
+        <div class="cmp-panel hidden rounded border border-slate-700 bg-slate-800/40 p-4">
+            <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+                <h3 class="section-title mb-0 text-base">Comparison</h3>
+                <div class="flex items-center gap-3">
+                    <span class="cmp-regime text-xs mut"></span>
+                    <button class="cmp-close text-xs mut hover:text-slate-200" title="Hide the comparison">× close</button>
+                </div>
+            </div>
+            <div class="cmp-stale hidden mb-3 rounded border border-amber-500/50 bg-amber-500/10 text-amber-300 text-sm px-3 py-2"></div>
+            <div class="cmp-ranking text-sm mb-3"></div>
+            <div class="overflow-x-auto">
+                <table class="data-table text-sm">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th class="text-right">Price</th>
+                            <th class="text-right">Comb.</th>
+                            <th class="text-right">S10</th>
+                            <th class="text-right">L60</th>
+                            <th>PGR</th>
+                            <th class="text-right">Money Flow</th>
+                            <th class="text-right">LT Trend</th>
+                            <th>Setup</th>
+                            <th class="text-right">Stop</th>
+                            <th class="text-right">Target</th>
+                            <th class="text-right">R:R</th>
+                            <th>Patterns</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="cmp-body"></tbody>
+                </table>
+            </div>
+            <div class="cmp-missing text-xs mut mt-2"></div>
+            <div class="mt-3 flex items-center gap-3">
+                <button class="cmp-summarize btn text-xs" disabled title="Ask the AI for a ranked WHY narrative (quantitative factors only)">Summarize with AI</button>
+                <span class="text-[11px] mut">AI summary is advisory and uses the quantitative factors only.</span>
+            </div>
+            <div class="cmp-summary hidden mt-3 rounded border border-slate-700 bg-slate-900/60 p-3 text-sm leading-relaxed"></div>
+        </div>`;
 }
 
-// Delegated: a checkbox toggle updates the Set + the action bar (no full re-render).
-$("research-body").addEventListener("change", (e) => {
-    const cb = e.target.closest(".cmp-check");
-    if (!cb) return;
-    const sym = (cb.dataset.sym || "").toUpperCase();
-    if (!sym) return;
-    if (cb.checked) compareSelected.add(sym);
-    else compareSelected.delete(sym);
-    updateCompareButton();
-});
+function makeComparer({ mount, runBtn, clearBtn, selectRoot }) {
+    mountComparePanel(mount);
+    const panel = mount.querySelector(".cmp-panel");
+    const q = (sel) => panel.querySelector(sel);
+    const selected = new Set();   // uppercased symbols; survives table re-renders
+    let lastRun = [];             // last compared set, so Summarize re-POSTs the same symbols
 
-async function runCompare() {
-    const syms = [...compareSelected];
-    if (syms.length < 2) return;
-    const panel = $("compare-panel"), body = $("compare-body");
-    panel.classList.remove("hidden");
-    body.innerHTML = `<tr><td colspan="14" class="text-center text-slate-500 py-4">Comparing…</td></tr>`;
-    $("compare-summary").classList.add("hidden");
-    $("compare-summary").innerHTML = "";
-    $("compare-summarize").disabled = true;
-    try {
-        const data = await api("/api/compare", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ symbols: syms }),
-        });
-        if (data.error) { body.innerHTML = `<tr><td colspan="14" class="text-center neg py-4">${esc(data.error)}</td></tr>`; return; }
-        compareLastRun = syms;
-        renderComparePanel(data);
-        $("compare-summarize").disabled = false;
-    } catch (e) {
-        body.innerHTML = `<tr><td colspan="14" class="text-center neg py-4">Error: ${esc(e.message)}</td></tr>`;
+    function updateButton() {
+        const n = selected.size;
+        runBtn.textContent = `Compare selected (${n})`;
+        runBtn.disabled = n < 2;
+        clearBtn.classList.toggle("hidden", n === 0);
     }
-}
 
-function renderComparePanel(data) {
-    const meta = data.meta || {};
-    $("compare-regime").textContent = meta.market_regime ? "Regime: " + meta.market_regime : "";
-    // Freshness banner
-    const stale = $("compare-stale");
-    if (meta.stale_warning) {
-        stale.textContent = "⚠ " + meta.stale_warning;
-        stale.classList.remove("hidden");
-    } else {
-        stale.classList.add("hidden");
-    }
-    // Ranking line
-    const rank = (data.ranking || [])
-        .map((x) => `${x.rank}. <span class="font-semibold">${esc(x.symbol)}</span> (${x.combined == null ? "—" : Number(x.combined).toFixed(1)})`)
-        .join("  ›  ");
-    $("compare-ranking").innerHTML = rank ? `<span class="mut">Ranking:</span> ${rank}` : "";
-    // Missing symbols
-    const missing = meta.missing || [];
-    $("compare-missing").textContent = missing.length ? `Not covered (not on Research sheet): ${missing.join(", ")}` : "";
-    // Table body — only found rows, in requested order
-    const num = (v, d = 2, signed = false) =>
-        (v == null ? "—" : (signed && v >= 0 ? "+" : "") + Number(v).toFixed(d));
-    const rows = (data.rows || []).filter((r) => r.found);
-    $("compare-body").innerHTML = rows.length ? rows.map((r) => `
-        <tr>
-            <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${esc(r.symbol)}">${esc(r.symbol)}</td>
-            <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
-            <td class="text-right font-semibold ${cls(r.combined)}">${num(r.combined, 1, true)}</td>
-            <td class="text-right ${cls(r.s10)}">${num(r.s10, 1, true)}</td>
-            <td class="text-right ${cls(r.l60)}">${num(r.l60, 1, true)}</td>
-            <td class="text-xs">${esc(r.pgr ?? "—")}</td>
-            <td class="text-right text-xs">${esc(r.money_flow || "—")}</td>
-            <td class="text-right text-xs">${esc(r.lt_trend || "—")}</td>
-            <td>${r.setup ? '<span class="pos font-semibold">OK</span>' : '<span class="mut">—</span>'}</td>
-            <td class="text-right ${r.stale ? "text-amber-400" : ""}" title="stop source: ${esc(r.stop_source || "?")}">${r.stop == null ? "—" : fmt$(r.stop)}</td>
-            <td class="text-right ${r.stale ? "text-amber-400" : ""}" title="target source: ${esc(r.target_source || "?")}">${r.target == null ? "—" : fmt$(r.target)}</td>
-            <td class="text-right">${num(r.risk_ratio, 2)}</td>
-            <td>${renderPatternsHTML(r.patterns)}</td>
-            <td class="text-xs">${esc(r.status || "—")}</td>
-        </tr>`).join("")
-        : `<tr><td colspan="14" class="text-center text-slate-500 py-4">No comparable symbols.</td></tr>`;
-}
-
-async function summarizeCompare() {
-    if (compareLastRun.length < 2) return;
-    const box = $("compare-summary");
-    box.classList.remove("hidden");
-    box.textContent = "Thinking…";
-    $("compare-summarize").disabled = true;
-    try {
-        const data = await api("/api/compare", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ symbols: compareLastRun, summarize: true }),
-        });
-        const summary = data.summary;
-        if (!summary) {
-            const why = data.summary_error ? " — " + data.summary_error : "";
-            box.textContent = "AI summary unavailable" + why + ".";
-            return;
+    async function run() {
+        const syms = [...selected];
+        if (syms.length < 2) return;
+        const body = q(".cmp-body");
+        panel.classList.remove("hidden");
+        body.innerHTML = `<tr><td colspan="${COMPARE_COLSPAN}" class="text-center text-slate-500 py-4">Comparing…</td></tr>`;
+        const summaryBox = q(".cmp-summary");
+        summaryBox.classList.add("hidden");
+        summaryBox.innerHTML = "";
+        q(".cmp-summarize").disabled = true;
+        try {
+            const data = await api("/api/compare", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ symbols: syms }),
+            });
+            if (data.error) { body.innerHTML = `<tr><td colspan="${COMPARE_COLSPAN}" class="text-center neg py-4">${esc(data.error)}</td></tr>`; return; }
+            lastRun = syms;
+            renderPanel(data);
+            q(".cmp-summarize").disabled = false;
+        } catch (e) {
+            body.innerHTML = `<tr><td colspan="${COMPARE_COLSPAN}" class="text-center neg py-4">Error: ${esc(e.message)}</td></tr>`;
         }
-        if (window.marked && typeof window.marked.parse === "function") {
-            box.innerHTML = window.marked.parse(summary);
+    }
+
+    function renderPanel(data) {
+        const meta = data.meta || {};
+        q(".cmp-regime").textContent = meta.market_regime ? "Regime: " + meta.market_regime : "";
+        // Freshness banner
+        const stale = q(".cmp-stale");
+        if (meta.stale_warning) {
+            stale.textContent = "⚠ " + meta.stale_warning;
+            stale.classList.remove("hidden");
         } else {
-            box.innerHTML = esc(summary).replace(/\n/g, "<br>");
+            stale.classList.add("hidden");
         }
-    } catch (e) {
-        box.textContent = "AI summary unavailable — the request failed: " + e.message;
-    } finally {
-        $("compare-summarize").disabled = false;
+        // Ranking line
+        const rank = (data.ranking || [])
+            .map((x) => `${x.rank}. <span class="font-semibold">${esc(x.symbol)}</span> (${x.combined == null ? "—" : Number(x.combined).toFixed(1)})`)
+            .join("  ›  ");
+        q(".cmp-ranking").innerHTML = rank ? `<span class="mut">Ranking:</span> ${rank}` : "";
+        // Missing symbols
+        const missing = meta.missing || [];
+        q(".cmp-missing").textContent = missing.length ? `Not covered (not on Research sheet): ${missing.join(", ")}` : "";
+        // Table body — only found rows, in requested order
+        const num = (v, d = 2, signed = false) =>
+            (v == null ? "—" : (signed && v >= 0 ? "+" : "") + Number(v).toFixed(d));
+        const rows = (data.rows || []).filter((r) => r.found);
+        q(".cmp-body").innerHTML = rows.length ? rows.map((r) => `
+            <tr>
+                <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${esc(r.symbol)}">${esc(r.symbol)}</td>
+                <td class="text-right">${r.price == null ? "—" : fmt$(r.price)}</td>
+                <td class="text-right font-semibold ${cls(r.combined)}">${num(r.combined, 1, true)}</td>
+                <td class="text-right ${cls(r.s10)}">${num(r.s10, 1, true)}</td>
+                <td class="text-right ${cls(r.l60)}">${num(r.l60, 1, true)}</td>
+                <td class="text-xs">${esc(r.pgr ?? "—")}</td>
+                <td class="text-right text-xs">${esc(r.money_flow || "—")}</td>
+                <td class="text-right text-xs">${esc(r.lt_trend || "—")}</td>
+                <td>${r.setup ? '<span class="pos font-semibold">OK</span>' : '<span class="mut">—</span>'}</td>
+                <td class="text-right ${r.stale ? "text-amber-400" : ""}" title="stop source: ${esc(r.stop_source || "?")}">${r.stop == null ? "—" : fmt$(r.stop)}</td>
+                <td class="text-right ${r.stale ? "text-amber-400" : ""}" title="target source: ${esc(r.target_source || "?")}">${r.target == null ? "—" : fmt$(r.target)}</td>
+                <td class="text-right">${num(r.risk_ratio, 2)}</td>
+                <td>${renderPatternsHTML(r.patterns)}</td>
+                <td class="text-xs">${esc(r.status || "—")}</td>
+            </tr>`).join("")
+            : `<tr><td colspan="${COMPARE_COLSPAN}" class="text-center text-slate-500 py-4">No comparable symbols.</td></tr>`;
     }
+
+    async function summarize() {
+        if (lastRun.length < 2) return;
+        const box = q(".cmp-summary");
+        box.classList.remove("hidden");
+        box.textContent = "Thinking…";
+        q(".cmp-summarize").disabled = true;
+        try {
+            const data = await api("/api/compare", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ symbols: lastRun, summarize: true }),
+            });
+            const summary = data.summary;
+            if (!summary) {
+                const why = data.summary_error ? " — " + data.summary_error : "";
+                box.textContent = "AI summary unavailable" + why + ".";
+                return;
+            }
+            if (window.marked && typeof window.marked.parse === "function") {
+                box.innerHTML = window.marked.parse(summary);
+            } else {
+                box.innerHTML = esc(summary).replace(/\n/g, "<br>");
+            }
+        } catch (e) {
+            box.textContent = "AI summary unavailable — the request failed: " + e.message;
+        } finally {
+            q(".cmp-summarize").disabled = false;
+        }
+    }
+
+    function clear() {
+        selected.clear();
+        lastRun = [];
+        selectRoot.querySelectorAll(".cmp-check").forEach((cb) => { cb.checked = false; });
+        panel.classList.add("hidden");
+        updateButton();
+    }
+
+    // Delegated on the source tbody: a checkbox toggle updates the Set + the action bar.
+    selectRoot.addEventListener("change", (e) => {
+        const cb = e.target.closest(".cmp-check");
+        if (!cb) return;
+        const sym = (cb.dataset.sym || "").toUpperCase();
+        if (!sym) return;
+        if (cb.checked) selected.add(sym);
+        else selected.delete(sym);
+        updateButton();
+    });
+    runBtn.addEventListener("click", run);
+    clearBtn.addEventListener("click", clear);
+    q(".cmp-close").addEventListener("click", () => panel.classList.add("hidden"));
+    q(".cmp-summarize").addEventListener("click", summarize);
+
+    return { selected, updateButton, clear };
 }
 
-function clearCompare() {
-    compareSelected.clear();
-    compareLastRun = [];
-    document.querySelectorAll("#research-body .cmp-check").forEach((cb) => { cb.checked = false; });
-    $("compare-panel").classList.add("hidden");
-    updateCompareButton();
-}
-
-$("compare-run").addEventListener("click", runCompare);
-$("compare-clear").addEventListener("click", clearCompare);
-$("compare-close").addEventListener("click", () => $("compare-panel").classList.add("hidden"));
-$("compare-summarize").addEventListener("click", summarizeCompare);
+const researchComparer = makeComparer({
+    mount: $("compare-mount"),
+    runBtn: $("compare-run"),
+    clearBtn: $("compare-clear"),
+    selectRoot: $("research-body"),
+});
+const dashComparer = makeComparer({
+    mount: $("compare-mount-dash"),
+    runBtn: $("picks-compare-run"),
+    clearBtn: $("picks-compare-clear"),
+    selectRoot: $("picks-body"),
+});
 
 function setResearchSort(key) {
     if (researchSort.key === key) researchSort.dir *= -1;
@@ -2226,9 +2304,26 @@ document.addEventListener("click", (e) => {
     const statusLink = e.target.closest("[data-to-scorecard]");
     if (statusLink) { handleAcctDeepLink("scorecard"); return; }
 
-    // Accounts page status inline click: open AETHER AI Requalification modal
+    // "× hide" inside an AI analysis panel collapses it (works for the inline
+    // table rows AND the symbol modal — one handler for every surface).
+    const rqClose = e.target.closest(".rq-close");
+    if (rqClose) {
+        const row = rqClose.closest("tr.rq-result-row");
+        if (row) row.classList.add("hidden");
+        else { const sm = rqClose.closest("#sm-rq-result"); if (sm) sm.classList.add("hidden"); }
+        return;
+    }
+
+    // Why / Requalify button: fetch on first open, then TOGGLE its panel (a second
+    // click hides it, a third re-shows the cached result — no refetch). Shared by the
+    // Top-5 Picks, Accounts, and any other rq-btn surface.
     const rqBtn = e.target.closest(".rq-btn");
-    if (rqBtn) { requalify(rqBtn.dataset.rqSym, parseFloat(rqBtn.dataset.rqBuy) || null, rqBtn); return; }
+    if (rqBtn) {
+        const row = document.querySelector(`tr.rq-result-row[data-rq-for="${CSS.escape(rqBtn.dataset.rqSym)}"]`);
+        if (row && row.dataset.rqLoaded === "1") { row.classList.toggle("hidden"); return; }
+        requalify(rqBtn.dataset.rqSym, parseFloat(rqBtn.dataset.rqBuy) || null, rqBtn);
+        return;
+    }
 
     // Retro card click: smoothly scroll to and highlight our retrospective documentation card
     const retroLink = e.target.closest("[data-to-retro]");
@@ -2307,8 +2402,9 @@ function _rqPanel(d, sym, newsStatus) {
         ? `<ul class="mt-2 text-xs mut list-disc pl-4 space-y-0.5">${d.news.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "";
     const errLine = d.error ? `<div class="text-xs text-amber-400 mt-1">⚠ ${esc(d.error)}</div>` : "";
     return `
-        <div class="px-4 py-3 bg-slate-800/60 border-t border-slate-700 text-sm space-y-1 whitespace-normal break-words">
-            <div class="flex items-start gap-2 flex-wrap">
+        <div class="relative px-4 py-3 bg-slate-800/60 border-t border-slate-700 text-sm space-y-1 whitespace-normal break-words">
+            <button class="rq-close absolute top-2 right-3 text-xs mut hover:text-slate-200" title="Hide this analysis">× hide</button>
+            <div class="flex items-start gap-2 flex-wrap pr-14">
                 ${_rqBadge(d.recommendation)}${confBadge}
                 <span class="text-slate-300 flex-1 break-words">${esc(d.rationale || "")}</span>
             </div>
@@ -2362,7 +2458,7 @@ async function requalify(sym, cost, triggerBtn) {
     const _rqLabel = (rec) => rec ? esc(rec) : "⚡ AI";
     const newsStatus = d.news_pending ? "🔍 Enriching with news…" : "";
     const panel = _rqPanel(d, sym, newsStatus);
-    if (resultRow) resultRow.firstElementChild.innerHTML = panel;
+    if (resultRow) { resultRow.firstElementChild.innerHTML = panel; resultRow.dataset.rqLoaded = "1"; }
     if (smRq && $("sm-symbol") && $("sm-symbol").textContent === sym) {
         smRq.innerHTML = panel;
         const smBtn = $("sm-rq-btn");
