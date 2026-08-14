@@ -116,10 +116,11 @@ class TestAETHEROracle(unittest.TestCase):
              mock.patch("ai_portfolio_game.calculate_bubble_z_score", return_value=1.0):
             buys = oracle.get_oracle_buy_candidates(acct)
             
-            # We expect GOOGL and NVDA (AAPL filtered, MSFT filtered, AMZN momentum floor filtered)
-            self.assertEqual(len(buys), 2)
+            # We expect GOOGL, NVDA, and QYLD (QYLD is waived due to elite Combined >= 8.0 score!)
+            self.assertEqual(len(buys), 3)
             self.assertEqual(buys[0]["symbol"], "GOOGL")
-            self.assertEqual(buys[1]["symbol"], "NVDA")
+            self.assertEqual(buys[1]["symbol"], "QYLD")
+            self.assertEqual(buys[2]["symbol"], "NVDA")
 
     def test_generate_oracle_html(self):
         """generate_oracle_html runs successfully and contains standard Oracle copy."""

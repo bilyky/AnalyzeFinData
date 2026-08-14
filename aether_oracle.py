@@ -195,7 +195,12 @@ def get_oracle_buy_candidates(acct):
                 reward = target - price
                 rr_ratio = (reward / risk) if risk > 0 else 0.0
                 
-                if rr_ratio < min_rr:
+                # EXEMPTION (High-Score PGR Bypass - R&D #13 & R&D #32 Unification):
+                # If a symbol is an elite breakout leader (combined >= 8.0, s10 >= 2.0),
+                # we WAIVE the strict R:R gate to capture explosive breakout momentum.
+                is_elite_breakout = (combined >= 8.0) and (s10 >= 2.0)
+                
+                if rr_ratio < min_rr and not is_elite_breakout:
                     continue  # Fail-safe R:R check: reject unfavorable narrow-upside setups
                     
                 candidates.append({

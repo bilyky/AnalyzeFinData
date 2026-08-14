@@ -158,10 +158,26 @@ def write_picks_sheet(wb, picks_data: list, run_date):
             ws.row_dimensions[dr].height = 14
 
     def top5_filtered(data, key_or_func, reverse):
-        # 1. Filter: Bullish only, Setup OK only
+        # 1. Filter: Bullish only OR High-Score Breakout, Setup OK only
         # Mapping PGR strings to values for filtering
         p_map = {'Bu+': 5, 'Bu': 4, 'N': 3, 'Be': 2, 'Be-': 1}
-        filtered = [r for r in data if p_map.get(r['pgr'], 0) >= 4 and r['setup'] == 1]
+        
+        filtered = []
+        for r in data:
+            if r['setup'] != 1:
+                continue
+            is_bullish = p_map.get(r['pgr'], 0) >= 4
+            s10 = r.get('short10', 0.0) or 0.0
+            l60 = r.get('long60', 0.0) or 0.0
+            combined_val = s10 + l60
+            
+            # EXEMPTION (High-Score PGR Bypass - R&D #13 Unification):
+            # We allow candidates that are either Bullish (Bu/Bu+) OR are elite breakout leaders
+            # with combined score >= 8.0 and short10 >= 2.0 to be selected!
+            is_elite_breakout = (combined_val >= 8.0) and (s10 >= 2.0)
+            
+            if is_bullish or is_elite_breakout:
+                filtered.append(r)
         
         # 2. Fallback: If no symbols pass setup filter, show all bullish
         if not filtered:
