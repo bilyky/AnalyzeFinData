@@ -5,6 +5,8 @@ import console_safe
 import datetime
 import pytz
 import subprocess
+import re
+import ctypes
 import json
 import notify
 import etrade
@@ -217,13 +219,49 @@ def check_task_scheduler():
     """Verify all AETHER tasks are present and active."""
     missing = []
     for task in TASKS:
+        # Use absolute task path starting with backslash to prevent folder-relative lookup failures
+        abs_task = f"\\{task}" if not task.startswith("\\") else task
         try:
-            result = subprocess.run(["schtasks", "/query", "/tn", task], capture_output=True, text=True)
+            result = subprocess.run(["schtasks", "/query", "/tn", abs_task], capture_output=True, text=True, errors="replace")
             if result.returncode != 0:
-                missing.append(task)
+                # Avoid assuming a task is missing on environment failures, access issues,
+                # or DLL initialization crashes (e.g. exit code 3221225794 / 0xC0000142).
+                output = f"{result.stdout or ''} {result.stderr or ''}".lower()
+                if "cannot find" in output or "not find" in output:
+                    missing.append(task)
         except OSError:
             missing.append(task)
     return missing
+
+def purge_stray_tasks():
+    """Scan Task Scheduler and programmatically delete any stray tasks matching our namespace but not in our TASKS list."""
+    try:
+        # Query all scheduled tasks in LIST format
+        result = subprocess.run(["schtasks", "/query", "/fo", "LIST"], capture_output=True, text=True, errors="replace")
+        if result.returncode == 0:
+            # Extract all task names matching the AETHER / AnalyzeFinData prefix
+            # TaskName contains the path (e.g. \AnalyzeFinData_Morning or \AnalyzeFinData_Morning_Test)
+            all_tasks = re.findall(r"TaskName:\s+\\*(AnalyzeFinData_\w+|Project_AETHER_\w+)", result.stdout, re.IGNORECASE)
+            
+            # Filter and deduplicate
+            stray_tasks = []
+            for t in set(all_tasks):
+                # If it carries our namespace but is not in our official white-list (TASKS or Project_AETHER_Watchdog)
+                if t not in TASKS and t != "Project_AETHER_Watchdog":
+                    stray_tasks.append(t)
+            
+            if stray_tasks:
+                _log.warning(f"🧹 [Auto-Purge] Detected {len(stray_tasks)} stray scheduled task(s) outside of the official production white-list: {stray_tasks}")
+                for t in stray_tasks:
+                    _log.console(f"🧹 [Auto-Purge] Programmatically deleting stray task: {t}")
+                    # Attempt to delete the task natively
+                    del_res = subprocess.run(["schtasks", "/delete", "/tn", f"\\{t}", "/f"], capture_output=True, text=True, errors="replace")
+                    if del_res.returncode == 0:
+                        _log.info(f"✅ [Auto-Purge] Stray task '{t}' successfully purged from the system.")
+                    else:
+                        _log.error(f"❌ [Auto-Purge] Failed to purge stray task '{t}' (rc={del_res.returncode}): {del_res.stderr.strip()}")
+    except Exception as e:
+        _log.error(f"Failed to execute stray task purge: {e}")
 
 def check_data_freshness():
     """Ensure the workbook was updated in the last 24h."""
@@ -237,6 +275,19 @@ def check_data_freshness():
 
 def heal_tasks(missing_tasks, force=False):
     """Attempt to re-register tasks that have disappeared, failed, or need environment upgrades."""
+    # Check for administrative privileges first to avoid UAC and privilege failures in background runs
+    is_admin = False
+    try:
+        is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        pass
+
+    if not is_admin:
+        _log.warning("⚠️ Non-elevated context: skipping auto-healing of missing tasks to prevent privilege/UAC errors. "
+                     f"Detected missing tasks: {', '.join(missing_tasks)}. "
+                     "Please run an elevated command prompt as Administrator or run migrate_tasks_headless.py manually to register.")
+        return
+
     try:
         run_as = os.getlogin()
     except Exception:
@@ -248,7 +299,9 @@ def heal_tasks(missing_tasks, force=False):
             _log.warning(f"⚠️  No registration template for task: {task}")
             continue
         tr, sc, st = _TASK_DEFS[task]
-        args = ["schtasks", "/create", "/tn", task, "/tr", tr, "/sc", sc, "/f", "/np", "/ru", run_as]
+        # Use absolute task path starting with backslash to prevent folder-relative registration failures
+        abs_task = f"\\{task}" if not task.startswith("\\") else task
+        args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/np", "/ru", run_as]
         if st:
             args += ["/st", st]
         try:
@@ -399,6 +452,9 @@ def run_watchdog():
     initial_errors = check_logs()
     missing_tasks = check_task_scheduler()
     data_issue = check_data_freshness()
+    
+    # 1b. Clean up any stray/duplicate AETHER tasks (Pillar 1 Self-Sanitation)
+    purge_stray_tasks()
     
     recovery_actions = []
     ai_triggered = False
