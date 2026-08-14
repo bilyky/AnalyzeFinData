@@ -51,3 +51,25 @@ To ensure absolute reliability, data-contract integrity, and prevent "green test
 
 *   **The Mandate:** Mocking frameworks, stubs, or virtual request interceptors are **strictly forbidden** inside active live-connection contract tests (specifically `tests/test_live_api_contract.py`).
 *   **The Rule:** All API contract tests must make real, unmocked, and un-intercepted network requests to the production endpoints of E*TRADE and Chaikin Analytics. Testing is incomplete unless verified against the actual, live broker and database servers.
+
+### 🚨 Strict Ban on Performative "Empty" Testing (The Value-Test Mandate)
+To completely eliminate "vacuum tests" or performative mocks that pass in sterile test environments but let silent corruptions or data gaps persist on disk:
+
+*   **The Mandate:** You are strictly forbidden from writing "empty tests" or mock-based assertions that merely check if functions were called without validating real-world data structures, dirty historical files, or production files on disk.
+*   **The Rules:**
+    1.  **Production-State Verifiers:** All data, pipeline, and healing tests must cover realistic edge-case states, corrupted/partial files, rate limits, and realistic production database conditions on disk.
+    2.  **No "Happy Path Only" Coverage:** Mocking must never be used to mask complex, multi-day historical data gaps or timeline drifts.
+    3.  **Empirical Failure First (Strict Red-Green):** Before applying any bug fix, you MUST write a reproducing test case that fails (RED) on the actual dirty state. If the test cannot fail on the broken code, the test has NO value and must be rewritten. The fix is complete only when the test successfully passes (GREEN) with zero regressions.
+
+---
+
+## 🧹 4. Resource Cleanup & Sanitation Standards
+
+### 🛡️ The Auto-Clean Resource Mandate (AI-Agnostic Resource Cleanup Rule)
+To completely prevent un-cleaned programmatic debris, lingering scheduled tasks, temporary active files, or database locks from leaking on your production system:
+
+*   **The Mandate:** Any AI agent, copilot, or developer script that programmatically registers a scheduled task (using `schtasks` or PowerShell), creates temporary locking files (such as `.lock` or `.tmp`), or spawns transient test-runner environments **MUST** guarantee absolute, 100% cleanup of these physical resources upon completion or failure of their session.
+*   **The Rules:**
+    1.  **Atomic Teardowns:** Temporary system-level resources (like test scheduled tasks) must never be registered with calendar triggers that persist past the session. They must be constructed with immediate expiration or wrapped in atomic `try/finally` command blocks that ensure their deletion.
+    2.  **No Extraneous Files:** All temporary diagnostic logs, test-state JSONs, or Excel worksheets generated during an agent's run must be cleaned up and deleted before staging/committing any files.
+
