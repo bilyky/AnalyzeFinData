@@ -15,8 +15,23 @@ name: CI
 on:
   pull_request:
     branches: [ main ]
+  # Also run on push to feature branches — NOT just on the PR. A PR opened by the Auto-PR
+  # workflow's GITHUB_TOKEN does not trigger `pull_request` runs (GitHub's recursion
+  # guard), so gating on push is what guarantees every bot-opened PR is still checked.
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - 'feat/**'
+      - 'fix/**'
+      - 'chore/**'
+      - 'refactor/**'
+      - 'ci/**'
+      - 'docs/**'
+      - 'perf/**'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality-gate:

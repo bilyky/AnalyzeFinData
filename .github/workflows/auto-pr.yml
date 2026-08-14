@@ -1,0 +1,61 @@
+name: Auto-PR
+
+# Zero-touch PR opener. Push any conventionally-named branch and GitHub itself opens
+# (or reuses) a pull request to main — no local `gh` auth, no token handling on our side.
+# The runner's built-in GITHUB_TOKEN (injected by GitHub for this run, never scraped by
+# us, auto-scoped, auto-expired) does the work. The whole "open a PR" step collapses to
+# `git push`.
+#
+# WHY the CI quality gate runs on push (see ci.yml), not only on the PR: a PR opened by
+# GITHUB_TOKEN does NOT trigger downstream `pull_request` workflow runs (GitHub's
+# recursion guard). So ci.yml is wired to run on push to these same branches — that way
+# the gate always fires, whether or not the PR-open event does. Do not "simplify" ci.yml
+# back to pull_request-only, or bot-opened PRs would land ungated.
+
+on:
+  push:
+    branches:
+      - 'feat/**'
+      - 'fix/**'
+      - 'chore/**'
+      - 'refactor/**'
+      - 'ci/**'
+      - 'docs/**'
+      - 'perf/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: auto-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  open-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for the commit list)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Open or reuse a PR to main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BR="${GITHUB_REF_NAME}"
+
+          # Idempotent: if a PR for this branch is already open, do nothing. Safe to
+          # re-run on every push (later pushes just update the existing PR's diff).
+          existing="$(gh pr list --head "$BR" --state open --json number --jq '.[0].number')"
+          if [ -n "$existing" ]; then
+            echo "PR #$existing already open for $BR — nothing to do."
+            exit 0
+          fi
+
+          title="$(git log -1 --pretty=%s)"
+          commits="$(git log origin/main..HEAD --pretty='- %s')"
+          body="$(printf 'Auto-opened on push to `%s`.\n\n## Commits\n%s\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n' "$BR" "$commits")"
+
+          gh pr create --base main --head "$BR" --title "$title" --body "$body"
