@@ -175,6 +175,24 @@ class _Config:
         # ephemeral one at startup (tokens don't survive a restart).
         self.web_secret = os.environ.get("WEB_SECRET") or web.get("secret", "")
 
+        # ── Quantitative Gating & Propulsion Parameters (R&D #13 & R&D #31 & R&D #32 Unification) ──
+        system = raw.get("system") or {}
+        self.system_min_combined_score = float(os.environ.get("AETHER_MIN_COMBINED_SCORE") or system.get("min_combined_score", 5.0))
+        self.system_default_s10_floor   = float(os.environ.get("AETHER_DEFAULT_S10_FLOOR")   or system.get("default_s10_floor", 2.5))
+        self.system_adaptive_s10_floor  = float(os.environ.get("AETHER_ADAPTIVE_S10_FLOOR")  or system.get("adaptive_s10_floor", 2.0))
+        self.system_cash_drag_threshold = float(os.environ.get("AETHER_CASH_DRAG_THRESHOLD") or system.get("cash_drag_threshold", 25.0))
+        
+        # Breakout Waiver / PGR Bypass parameters
+        self.system_bypass_score_floor  = float(os.environ.get("AETHER_BYPASS_SCORE_FLOOR")  or system.get("bypass_score_floor", 8.0))
+        self.system_bypass_s10_floor    = float(os.environ.get("AETHER_BYPASS_S10_FLOOR")    or system.get("bypass_s10_floor", 2.0))
+        self.system_default_min_rr      = float(os.environ.get("AETHER_DEFAULT_MIN_RR")      or system.get("default_min_rr", 2.0))
+        
+        # Pyramiding parameters
+        self.system_pyramiding_cash_ratio = float(os.environ.get("AETHER_PYRAMIDING_CASH_RATIO") or system.get("pyramiding_cash_ratio", 0.10))
+        self.system_pyramiding_s10_floor  = float(os.environ.get("AETHER_PYRAMIDING_S10_FLOOR")  or system.get("pyramiding_s10_floor", 0.0))
+        self.system_pyramiding_l60_floor  = float(os.environ.get("AETHER_PYRAMIDING_L60_FLOOR")  or system.get("pyramiding_l60_floor", 2.0))
+        self.system_spy_capitulation_threshold = float(os.environ.get("AETHER_SPY_CAPITULATION_THRESHOLD") or system.get("spy_capitulation_threshold", -1.5))
+
         # ── Configuration Health Checks ───────────────────────────────────────
         self.verify_config_health()
 

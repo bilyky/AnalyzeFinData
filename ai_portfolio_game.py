@@ -1731,10 +1731,10 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     t_det = risk_utils.resolve_target_detailed(price, symbol=sym)
                     is_blue_sky = t_det["source"] in ("atr", "pct", "stale", "none")
                     
-                # EXEMPTION (High-Score PGR Bypass - R&D #13):
-                # We waive the 'Bullish' PGR and R:R constraint for elite breakout leaders (Combined >= 8.0, s10 >= 2.0)
-                # to prevent slow fundamental data or static R:R traps from blocking explosive volume-confirmed momentum.
-                is_elite_breakout = (total_score >= 8.0) and (short10 >= 2.0)
+                # EXEMPTION (High-Score PGR Bypass - R&D #13 & R&D #32 Unification):
+                # We delegate to our centralized, AI-agnostic quantitative validation gate to determine
+                # if the asset qualifies as an elite breakout leader, waiving the PGR and R:R constraints.
+                is_elite_breakout = risk_utils.is_elite_breakout_candidate(total_score, short10)
                 
                 if stop_val > 0 and target_val > 0:
                     upside = target_val - price

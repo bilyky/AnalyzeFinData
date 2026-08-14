@@ -16,6 +16,7 @@ import datetime
 from io import BytesIO
 
 from aether.logger import get_logger
+from aether.risk_utils import is_elite_breakout_candidate
 
 _log = get_logger(__name__)
 
@@ -172,9 +173,9 @@ def write_picks_sheet(wb, picks_data: list, run_date):
             combined_val = s10 + l60
             
             # EXEMPTION (High-Score PGR Bypass - R&D #13 Unification):
-            # We allow candidates that are either Bullish (Bu/Bu+) OR are elite breakout leaders
-            # with combined score >= 8.0 and short10 >= 2.0 to be selected!
-            is_elite_breakout = (combined_val >= 8.0) and (s10 >= 2.0)
+            # We delegate to our centralized, AI-agnostic quantitative validation gate to determine
+            # if the asset qualifies as an elite breakout leader, waiving the PGR and R:R constraints.
+            is_elite_breakout = is_elite_breakout_candidate(combined_val, s10)
             
             if is_bullish or is_elite_breakout:
                 filtered.append(r)

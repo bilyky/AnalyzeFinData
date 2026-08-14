@@ -12,6 +12,7 @@ import datetime
 import ai_portfolio_game
 import data_api
 from aether.config import CFG
+from aether.risk_utils import is_elite_breakout_candidate
 from aether_logger import get_logger as _get_logger
 
 _oracle_log = _get_logger("oracle")
@@ -196,9 +197,9 @@ def get_oracle_buy_candidates(acct):
                 rr_ratio = (reward / risk) if risk > 0 else 0.0
                 
                 # EXEMPTION (High-Score PGR Bypass - R&D #13 & R&D #32 Unification):
-                # If a symbol is an elite breakout leader (combined >= 8.0, s10 >= 2.0),
-                # we WAIVE the strict R:R gate to capture explosive breakout momentum.
-                is_elite_breakout = (combined >= 8.0) and (s10 >= 2.0)
+                # We delegate to our centralized, AI-agnostic quantitative validation gate to determine
+                # if the asset qualifies as an elite breakout leader, waiving the PGR and R:R constraints.
+                is_elite_breakout = is_elite_breakout_candidate(combined, s10)
                 
                 if rr_ratio < min_rr and not is_elite_breakout:
                     continue  # Fail-safe R:R check: reject unfavorable narrow-upside setups
