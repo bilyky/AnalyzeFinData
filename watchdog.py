@@ -234,7 +234,7 @@ def check_task_scheduler():
     return missing
 
 def purge_stray_tasks():
-    """Scan Task Scheduler and programmatically delete any stray tasks matching our namespace but not in our TASKS list."""
+    """Scan Task Scheduler, back up, and programmatically delete any stray tasks matching our namespace but not in our TASKS list."""
     try:
         # Query all scheduled tasks in LIST format
         result = subprocess.run(["schtasks", "/query", "/fo", "LIST"], capture_output=True, text=True, errors="replace")
@@ -252,12 +252,57 @@ def purge_stray_tasks():
             
             if stray_tasks:
                 _log.warning(f"🧹 [Auto-Purge] Detected {len(stray_tasks)} stray scheduled task(s) outside of the official production white-list: {stray_tasks}")
+                
+                # Ensure backup directory exists
+                backup_dir = BASE_DIR / "Data" / "task_backups"
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                
                 for t in stray_tasks:
-                    _log.console(f"🧹 [Auto-Purge] Programmatically deleting stray task: {t}")
-                    # Attempt to delete the task natively
+                    _log.console(f"🧹 [Auto-Purge] Processing stray task: {t}")
+                    
+                    # 1. Export the task XML as a backup first
+                    xml_res = subprocess.run(["schtasks", "/query", "/xml", "/tn", f"\\{t}"], capture_output=True, text=True, errors="replace")
+                    
+                    backup_filename = f"{t}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xml"
+                    backup_path = backup_dir / backup_filename
+                    
+                    if xml_res.returncode == 0 and xml_res.stdout.strip():
+                        try:
+                            with open(backup_path, "w", encoding="utf-8") as bf:
+                                bf.write(xml_res.stdout)
+                            _log.info(f"✅ [Auto-Purge] Exported XML backup of '{t}' to: {backup_path}")
+                        except Exception as file_err:
+                            _log.error(f"❌ [Auto-Purge] Failed to write XML backup file: {file_err}")
+                    else:
+                        _log.error(f"❌ [Auto-Purge] Failed to export XML for '{t}' (rc={xml_res.returncode})")
+                        
+                    # 2. Attempt to delete the task natively
                     del_res = subprocess.run(["schtasks", "/delete", "/tn", f"\\{t}", "/f"], capture_output=True, text=True, errors="replace")
                     if del_res.returncode == 0:
                         _log.info(f"✅ [Auto-Purge] Stray task '{t}' successfully purged from the system.")
+                        
+                        # 3. Dispatch an email notification to prevent "oops" moments
+                        try:
+                            email_body = (
+                                f"Attention Yuriy Bilyk,\n\n"
+                                f"The AETHER Watchdog has detected and programmatically purged a stray scheduled task outside of the official production white-list:\n\n"
+                                f"  Task Name : {t}\n"
+                                f"  Purge Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                                f"🛡️ [PREVENTION ACTION - RECOVERY BACKUP]\n"
+                                f"To prevent any 'oops' moment or accidental configuration loss, the task's XML schema has been successfully backed up to your local storage:\n"
+                                f"  Backup File: {backup_path.resolve()}\n\n"
+                                f"If you need to restore or recover this task, you can easily re-import this XML backup via Windows Task Scheduler.\n\n"
+                                f"Best regards,\n"
+                                f"Project AETHER Watchdog Supervisor"
+                            )
+                            notify.send_email(
+                                subject=f"🛡️ AETHER Warning: Stray Task '{t}' Purged & Backed Up!",
+                                body=email_body,
+                                is_html=False
+                            )
+                            _log.info(f"📧 [Auto-Purge] Dispatched stray task purge notification email for '{t}'.")
+                        except Exception as email_err:
+                            _log.error(f"❌ [Auto-Purge] Failed to send notification email: {email_err}")
                     else:
                         _log.error(f"❌ [Auto-Purge] Failed to purge stray task '{t}' (rc={del_res.returncode}): {del_res.stderr.strip()}")
     except Exception as e:
@@ -340,28 +385,32 @@ def is_market_hours() -> bool:
         return True
     return False
 
-def sync_data_folder() -> bool:
+def sync_data_folder() -> str:
     """Sync the local Data folder to the backup Z: drive if available.
-    Returns True on success (or skipped if drive is offline), False on error.
+    Returns a strict four-state string status:
+      - 'SKIPPED_MARKET_HOURS' : Skipped safely during active NYSE hours.
+      - 'SKIPPED_OFFLINE'      : Skipped because the backup drive is unreachable/offline.
+      - 'SUCCESS'              : Sync completed and files copied successfully.
+      - 'FAILED'               : Sync failed due to system, folder, or robocopy errors.
     """
     if is_market_hours():
         _log.info("⏸️ Active NYSE market hours in progress (6:30 AM - 1:15 PM PST). Skipping Data sync to prevent resource/file locks.")
-        return True # Safe bypass to prevent locking active databases/workbooks during trading
-        
+        return "SKIPPED_MARKET_HOURS"
+
     src = BASE_DIR / "Data"
     dst = r"\\10.0.0.156\Storage\Yura\Develop\StockTrading\AnalyzeFinData\Data"
-    
+
     if not src.exists():
         _log.warning(f"⚠️ Source Data folder does not exist: {src}")
-        return False
-        
+        return "FAILED"
+
     try:
         dst_path = Path(dst)
         z_drive = dst_path.anchor
         if not os.path.exists(z_drive):
             _log.warning(f"⚠️ Backup drive {z_drive} is not connected or accessible. Skipping Data sync.")
-            return True # Not a failure of sync itself, just offline
-            
+            return "SKIPPED_OFFLINE"
+
         dst_path.mkdir(parents=True, exist_ok=True)
         _log.console(f"🔄 Syncing Data folder to: {dst} ...")
         # Use /E (recursive copy, NO DELETIONS) instead of /MIR to prevent data loss on backup drive
@@ -369,13 +418,13 @@ def sync_data_folder() -> bool:
         result = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
         if result.returncode < 8:
             _log.info(f"✅ Data folder successfully synchronized to {dst}.")
-            return True
+            return "SUCCESS"
         else:
             _log.error(f"❌ Robocopy sync failed (rc={result.returncode}). Stderr: {result.stderr.strip()}")
-            return False
+            return "FAILED"
     except Exception as e:
         _log.error(f"❌ Failed to sync Data folder to Z: drive: {e}", exc_info=True)
-        return False
+        return "FAILED"
 
 def is_pid_running(pid: int) -> bool:
     """Return True if a process with the given PID is actively running on Windows."""
@@ -423,20 +472,23 @@ def run_watchdog():
         else:
             raise RuntimeError("E*TRADE tokens are missing or could not be loaded.")
     except Exception as e:
-        err_msg = f"E*TRADE Proactive Session Keeper Failed: {e}"
-        _log.error(f"  🛑 [Healer] {err_msg}")
-        _log.error(err_msg, exc_info=True)
-        # Send a critical email alert so you know immediately that the session has failed!
-        try:
-            notify.send_email(
-                subject="🚨 CRITICAL: AETHER Watchdog Session Keeper Failure!",
-                body=f"The Project AETHER Watchdog Keeper failed to validate or renew your E*TRADE session today.\n\nError: {e}\n\nPlease run 'python scripts/diagnostics/test_etrade.py production' manually on your desktop to restore the session.",
-                is_html=False
-            )
-        except Exception as ne:
-            _log.error(f"  ❌ Failed to send critical watchdog alert email: {ne}")
-        # Throw the exception to fail the task scheduler run (rc != 0), preventing silent logical failures!
-        raise
+        if "Anti-Ban Cooldown" in str(e):
+            _log.warning(f"  [Healer] E*TRADE Proactive Session Keeper: Headless login is on cooldown: {e}. Skipping for this hourly run.")
+        else:
+            err_msg = f"E*TRADE Proactive Session Keeper Failed: {e}"
+            _log.error(f"  🛑 [Healer] {err_msg}")
+            _log.error(err_msg, exc_info=True)
+            # Send a critical email alert so you know immediately that the session has failed!
+            try:
+                notify.send_email(
+                    subject="🚨 CRITICAL: AETHER Watchdog Session Keeper Failure!",
+                    body=f"The Project AETHER Watchdog Keeper failed to validate or renew your E*TRADE session today.\n\nError: {e}\n\nPlease run 'python scripts/diagnostics/test_etrade.py production' manually on your desktop to restore the session.",
+                    is_html=False
+                )
+            except Exception as ne:
+                _log.error(f"  ❌ Failed to send critical watchdog alert email: {ne}")
+            # Throw the exception to fail the task scheduler run (rc != 0), preventing silent logical failures!
+            raise
 
     # 0b. Chaikin Proactive Session Keeper — uses cross-process singleton
     try:
@@ -501,7 +553,10 @@ def run_watchdog():
     remaining_errors = check_logs()
     
     # 6.5. Run Backup Sync and Monitor Success/Errors
-    sync_success = sync_data_folder()
+    sync_status = sync_data_folder()
+    sync_success = (sync_status == "SUCCESS")
+    sync_skipped_market = (sync_status == "SKIPPED_MARKET_HOURS")
+    sync_skipped_offline = (sync_status == "SKIPPED_OFFLINE")
     
     # Check if there are any active issues left
     issues = []
@@ -509,11 +564,16 @@ def run_watchdog():
         issues.append("REMAINING LOG ERRORS:\n" + "\n".join(remaining_errors))
     if data_issue: 
         issues.append(data_issue)
-    if not sync_success:
-        issues.append("CRITICAL: Network Backup Data Sync Failed!")
+        
+    # Only report failures if it actually errored out or if the backup drive went offline
+    if not sync_success and not sync_skipped_market:
+        if sync_skipped_offline:
+            issues.append("WARNING: Network Backup Data Sync Skipped (Backup Drive Offline)!")
+        else:
+            issues.append("CRITICAL: Network Backup Data Sync Failed!")
 
     # 7. Construct the Consolidated HTML Recovery Report (The Final Step!)
-    # We send an email if a healing action occurred, an AI healer triggered, there are active code errors in the logs, or the backup sync failed.
+    # We send an email if a healing action occurred, an AI healer triggered, there are active code errors in the logs, or the backup sync failed/skipped offline.
     if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered) or not sync_success:
         _log.console("Healer cycle complete. Constructing consolidated recovery report...")
         
@@ -563,10 +623,15 @@ def run_watchdog():
             </div>
 
             <!-- SECTION 3b: DATA BACKUP SYNC STATUS -->
-            <div style="background: {'#f9f9f9' if sync_success else '#fdf2f2'}; border-left: 5px solid {'#34495e' if sync_success else '#ec5b5b'}; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
-                <h3 style="margin-top: 0; color: {'#34495e' if sync_success else '#c0392b'}; font-size: 15px;">📁 3b. DATA BACKUP SYNC STATUS:</h3>
+            <div style="background: {'#f9f9f9' if sync_status == 'SUCCESS' else '#fff9db' if 'SKIPPED' in sync_status else '#fdf2f2'}; border-left: 5px solid {'#34495e' if sync_status == 'SUCCESS' else '#f59f00' if 'SKIPPED' in sync_status else '#ec5b5b'}; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
+                <h3 style="margin-top: 0; color: {'#34495e' if sync_status == 'SUCCESS' else '#f08c00' if 'SKIPPED' in sync_status else '#c0392b'}; font-size: 15px;">📁 3b. DATA BACKUP SYNC STATUS:</h3>
                 <p style="font-size: 13px; font-weight: bold;">Backup Location: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">\\\\10.0.0.156\\Storage\\Yura\\Develop\\StockTrading\\AnalyzeFinData\\Data</span></p>
-                <p style="font-size: 13px; font-weight: bold;">Sync Status: <span style="color: {'#27ae60' if sync_success else '#c0392b'}; font-size: 14px;">{'SUCCESS / NOMINAL' if sync_success else 'FAILED / SYNC ERROR'}</span></p>
+                <p style="font-size: 13px; font-weight: bold;">Sync Status: <span style="color: {'#27ae60' if sync_status == 'SUCCESS' else '#f08c00' if 'SKIPPED' in sync_status else '#c0392b'}; font-size: 14px;">{
+                    'SUCCESS / NOMINAL' if sync_status == 'SUCCESS' else
+                    'SKIPPED / MARKET HOURS' if sync_status == 'SKIPPED_MARKET_HOURS' else
+                    'SKIPPED / DRIVE OFFLINE' if sync_status == 'SKIPPED_OFFLINE' else
+                    'FAILED / SYNC ERROR'
+                }</span></p>
             </div>
 
             <!-- SECTION 4: NEXT STEPS -->
@@ -577,7 +642,12 @@ def run_watchdog():
                     {'<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>' if compilation_passed else ''}
                     {'<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>' if ai_triggered else ''}
                     {'<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>' if not compilation_passed else ''}
-                    {f'<li><b>Backup Status:</b> Robocopy sync completed successfully.</li>' if sync_success else '<li><b>Backup Status Alert:</b> robocopy was unable to push updates to \\\\10.0.0.156\\Storage\\ - check server connection.</li>'}
+                    {
+                        '<li><b>Backup Status:</b> Robocopy sync completed successfully.</li>' if sync_status == 'SUCCESS' else
+                        '<li><b>Backup Status:</b> Robocopy sync was skipped safely because active US market trading hours are in progress.</li>' if sync_status == 'SKIPPED_MARKET_HOURS' else
+                        '<li><b>Backup Status Alert:</b> Robocopy sync was skipped because the network storage drive at \\\\10.0.0.156\\Storage\\ was offline or unreachable. Please check connection.</li>' if sync_status == 'SKIPPED_OFFLINE' else
+                        '<li><b>Backup Status Alert:</b> Robocopy sync failed due to system, pathing, or locked-file errors.</li>'
+                    }
                 </ul>
             </div>
 
