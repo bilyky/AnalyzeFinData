@@ -408,8 +408,26 @@ def sync_data_folder() -> str:
         dst_path = Path(dst)
         z_drive = dst_path.anchor
         if not os.path.exists(z_drive):
-            _log.warning(f"⚠️ Backup drive {z_drive} is not connected or accessible. Skipping Data sync.")
-            return "SKIPPED_OFFLINE"
+            # Direct Network Diagnostic Truth Hook: run an unspeculated ping to 10.0.0.156
+            # to verify if the server is physically online but blocked by Windows permissions (running as SYSTEM).
+            ping_ok = False
+            try:
+                ping_res = subprocess.run(["ping", "-n", "1", "-w", "500", "10.0.0.156"], capture_output=True)
+                ping_ok = (ping_res.returncode == 0)
+            except Exception:
+                pass
+
+            run_user = os.environ.get("USERNAME") or os.environ.get("USER") or "SYSTEM"
+            if ping_ok:
+                _log.error(
+                    f"❌ [Permission Block] Network storage 10.0.0.156 is ONLINE (ping passed), "
+                    f"but the UNC path '{dst}' is inaccessible! Running as Windows user '{run_user}' "
+                    f"which lacks active network share access credentials. This is a local permission block, NOT a server outage!"
+                )
+                return "FAILED"
+            else:
+                _log.warning(f"⚠️ [Network Outage] Storage server 10.0.0.156 is unreachable (ping failed). Skipping Data sync.")
+                return "SKIPPED_OFFLINE"
 
         dst_path.mkdir(parents=True, exist_ok=True)
         _log.console(f"🔄 Syncing Data folder to: {dst} ...")
