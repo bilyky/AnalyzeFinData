@@ -1,5 +1,7 @@
+import os
 import sys
 import json
+import atexit
 import console_safe
 import datetime
 import subprocess
@@ -21,6 +23,7 @@ _pipeline_log = _get_logger("pipeline")
 console_safe.install()
 
 import external_intel
+from scripts.diagnostics.preflight_validator import run_preflight_diagnostics
 
 # Custom modules
 import performance_tracker
@@ -343,6 +346,58 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
 
 def main():
     cleanup_orphaned_processes()
+    
+    # ── Pillar 3: Single-Instance Pipeline Lock (Cross-Process Overlap Guard) ──
+    lock_path = BASE_DIR / "Data" / "pipeline_run.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if lock_path.exists():
+        try:
+            with open(lock_path, "r", encoding="utf-8") as lf:
+                old_pid = int(lf.read().strip())
+        except Exception:
+            old_pid = 0
+            
+        if old_pid > 0:
+            # Check if the process is actively running
+            res = subprocess.run(["tasklist", "/FI", f"PID eq {old_pid}", "/FO", "CSV"], capture_output=True, text=True, errors="replace")
+            if str(old_pid) in res.stdout:
+                log(f"🛑 [Overlap Guard] Active pipeline process (PID {old_pid}) is already running! Exiting immediately to prevent race conditions or duplicate dispatches.")
+                sys.exit(0)
+                
+    # Write current PID to lock file
+    try:
+        with open(lock_path, "w", encoding="utf-8") as lf:
+            lf.write(str(os.getpid()))
+    except Exception:
+        pass
+        
+    # Register automatic lock cleanup on exit
+    def _cleanup_pipeline_lock():
+        try:
+            if lock_path.exists():
+                os.remove(lock_path)
+        except Exception:
+            pass
+    atexit.register(_cleanup_pipeline_lock)
+
+    # ── Pillar 1: Centralized Pre-Flight Diagnostics (R&D #21) ──
+    # Actively test connections and fail-loud early before doing any write operations
+    preflight_passed = run_preflight_diagnostics()
+    if not preflight_passed:
+        log("❌ [Pre-flight Failure] One or more critical system gateways are offline! Aborting daily pipeline run to prevent corrupt states.")
+        try:
+            notify.send_email(
+                "🚨 [CRITICAL AETHER ERROR] Pre-Flight Connection Diagnostics Failed!",
+                "The 5:30 AM morning pipeline failed its pre-flight diagnostic checklist.\n\n"
+                "One or more external API or email gateways are offline. The pipeline has safely and "
+                "defensively aborted to prevent duplicate run or file-locking leaks.\n\n"
+                "Please run 'python scripts/diagnostics/preflight_validator.py' manually to isolate the offline connection."
+            )
+        except Exception as e:
+            log(f"Warning: Failed to send pre-flight failure alert email: {e}")
+        sys.exit(1)
+
     log("Starting Daily Trading Pipeline...")
     
     # ── Configuration Placeholder Audit ──
