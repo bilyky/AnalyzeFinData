@@ -36,6 +36,7 @@ import sell_rules
 import decision_eval
 import watchdog
 import instruments
+from aether import options
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
@@ -1416,6 +1417,10 @@ def run_daily_ai_management(force=False, manual_profile=None):
         # --- Systemic Crash Circuit Breaker Guard ---
         circuit_breaker.enforce_circuit_breaker(state, prices)
 
+        # --- Options Settlement Pass (R&D #26) ---
+        # Settle any active weekly Covered Calls expiring today!
+        options.resolve_expiring_options(state, today, prices)
+
         # Zero-Trust: surface held positions with no live quote, but do NOT abort the
         # run over them — aborting would skip stop-loss enforcement on every *other*
         # position too, violating the Rule of Loss Minimization. Unpriced names fall
@@ -1887,6 +1892,12 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
                                     _log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f} (Blended Cost: ${blended_cost:.2f})")
                                     _log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f}")
+                # ───────────────────────────────────────────────────────────
+
+                # ── Dynamic Covered Call Writing (R&D #26): Generate weekly premium cash-flow ──
+                if is_market_hours():
+                    _log.info("🚀 [Options Pass] Checking active holdings to write weekly Covered Calls...")
+                    options.execute_weekly_covered_call_pass(state, today, prices, ws)
                 # ───────────────────────────────────────────────────────────
 
     except RuntimeError:
