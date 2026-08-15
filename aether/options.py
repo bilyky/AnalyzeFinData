@@ -150,7 +150,7 @@ def resolve_expiring_options(state: dict, today_str: str, prices: dict):
                 state.setdefault("history", []).append(tx)
 
 
-def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, ws_research) -> list:
+def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, atr_map: dict) -> list:
     """Scan active holdings and programmatically write weekly out-of-the-money Covered Calls
     on all risk-locked winning positions to collect steady cash flow premiums.
     
@@ -173,14 +173,6 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
         next_friday = today_date + datetime.timedelta(days=7)
     next_friday_str = next_friday.strftime("%Y-%m-%d")
 
-    # Map ATRs from Research sheet
-    atr_map = {}
-    for row in ws_research.iter_rows(min_row=2, values_only=True):
-        sym = str(row[3] or "").strip().upper()
-        if sym:
-            # Column 23 (index 23) represents ATR
-            atr_map[sym] = row[23] or 0.0
-
     for sym, pos in state.get("positions", {}).items():
         current_px = prices.get(sym, pos["cost"])
         is_winner = (current_px > pos["cost"])
@@ -189,7 +181,7 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
         
         # We only write Covered Calls on our risk-locked winning positions (0% capital risk!)
         if is_winner and is_risk_locked and not has_active_call:
-            atr = atr_map.get(sym, current_px * 0.04) # fallback to 4% ATR
+            atr = (atr_map or {}).get(sym, current_px * 0.04) # fallback to 4% ATR
             
             # Select optimal OTM Covered Call
             opt = select_covered_call(sym, current_px, atr)

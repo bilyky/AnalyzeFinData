@@ -1884,8 +1884,16 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
                 # ── Dynamic Covered Call Writing (R&D #26): Generate weekly premium cash-flow ──
                 if is_market_hours():
+                    # Map ATRs from openpyxl Research sheet locally inside the portfolio manager (clean separation of concerns)
+                    atr_map = {}
+                    for row in ws.iter_rows(min_row=2, values_only=True):
+                        sym_val = str(row[3] or "").strip().upper()
+                        if sym_val:
+                            # Column 23 (index 23) represents ATR
+                            atr_map[sym_val] = row[23] or 0.0
+
                     _log.info("🚀 [Options Pass] Checking active holdings to write weekly Covered Calls...")
-                    options.execute_weekly_covered_call_pass(state, today, prices, ws)
+                    options.execute_weekly_covered_call_pass(state, today, prices, atr_map)
                 # ───────────────────────────────────────────────────────────
 
     except RuntimeError:
