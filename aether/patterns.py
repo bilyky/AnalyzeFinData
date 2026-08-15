@@ -89,6 +89,26 @@ def _find_peaks_troughs(closes: np.ndarray, n: int = 3):
 
 # ── Candlestick score ─────────────────────────────────────────────────────────
 
+CANDLESTICK_WEIGHTS = {
+    "engulfing":       1.50, # High reliability
+    "harami":          0.75, # Moderate
+    "harami_strict":   1.00, # High strictness
+    "doji":            0.30, # Low reliability (indecision)
+    "piercing":        1.25, # High
+    "star":            1.40, # High (Morning/Evening star)
+    "tasuki":          0.80, # Moderate
+    "bottle":          0.90, # Moderate
+    "neck":            0.50, # Low
+    "h":               0.60, # Low
+    "slingshot":       1.10, # Moderate-High
+    "hikkake":         1.15, # Moderate-High
+    "three_methods":   1.35, # High continuation
+    "stick_sandwich":  1.20, # Moderate-High
+    "tweezers":        0.95, # Moderate
+    "quintuplets":     1.50, # High
+    "double_trouble":  1.60, # Very High (highly explosive breakout!)
+}
+
 def candlestick_score(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> float:
     """Run all signals.py patterns; aggregate bullish/bearish fires over last lookback bars.
 
@@ -101,38 +121,39 @@ def candlestick_score(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> float
     body = float(np.mean(arr[-lookback:, 3])) * 0.01  # 1% of avg close
     atr_vals = _wilder_atr(arr)
 
-    bull = 0
-    bear = 0
+    bull = 0.0
+    bear = 0.0
 
-    def _check(result, b_col, s_col):
+    def _check(result, b_col, s_col, pattern_name):
         nonlocal bull, bear
         window = result[-lookback:]
+        weight = CANDLESTICK_WEIGHTS.get(pattern_name, 1.0)
         if any(window[:, b_col] > 0):
-            bull += 1
+            bull += weight
         if any(window[:, s_col] < 0):
-            bear += 1
+            bear += weight
 
     # Each call needs a fresh copy: signals.py calls pf.add_column() expanding shape
-    _check(sig.engulfing_signal(arr.copy(),       0, 3, 5, 6),       5, 6)
-    _check(sig.harami_signal(arr.copy(),          0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.harami_strict_signal(arr.copy(),   0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.doji_signal(arr.copy(),            0, 3, 5, 6),       5, 6)
-    _check(sig.piersing_signal(arr.copy(),        0, 3, 5, 6),       5, 6)
-    _check(sig.star_signal(arr.copy(),            0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.tasuki_signal(arr.copy(),          0, 3, 5, 6),       5, 6)
-    _check(sig.bottle_signal(arr.copy(),          0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.neck_signal(arr.copy(),            0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.h_signal(arr.copy(),               0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.slingshot_signal(arr.copy(),       0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.hikkake_signal(arr.copy(),         0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.three_methods_signal(arr.copy(),   0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.stick_sandwich_signal(arr.copy(),  0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.tweezers_signal(arr.copy(),        0, 1, 2, 3, 5, 6, body), 5, 6)
-    _check(sig.quintuplets_signal(arr.copy(),     0, 3, 5, 6, body), 5, 6)
+    _check(sig.engulfing_signal(arr.copy(),       0, 3, 5, 6),       5, 6, "engulfing")
+    _check(sig.harami_signal(arr.copy(),          0, 1, 2, 3, 5, 6), 5, 6, "harami")
+    _check(sig.harami_strict_signal(arr.copy(),   0, 1, 2, 3, 5, 6), 5, 6, "harami_strict")
+    _check(sig.doji_signal(arr.copy(),            0, 3, 5, 6),       5, 6, "doji")
+    _check(sig.piersing_signal(arr.copy(),        0, 3, 5, 6),       5, 6, "piercing")
+    _check(sig.star_signal(arr.copy(),            0, 1, 2, 3, 5, 6), 5, 6, "star")
+    _check(sig.tasuki_signal(arr.copy(),          0, 3, 5, 6),       5, 6, "tasuki")
+    _check(sig.bottle_signal(arr.copy(),          0, 1, 2, 3, 5, 6), 5, 6, "bottle")
+    _check(sig.neck_signal(arr.copy(),            0, 1, 2, 3, 5, 6), 5, 6, "neck")
+    _check(sig.h_signal(arr.copy(),               0, 1, 2, 3, 5, 6), 5, 6, "h")
+    _check(sig.slingshot_signal(arr.copy(),       0, 1, 2, 3, 5, 6), 5, 6, "slingshot")
+    _check(sig.hikkake_signal(arr.copy(),         0, 1, 2, 3, 5, 6), 5, 6, "hikkake")
+    _check(sig.three_methods_signal(arr.copy(),   0, 1, 2, 3, 5, 6), 5, 6, "three_methods")
+    _check(sig.stick_sandwich_signal(arr.copy(),  0, 1, 2, 3, 5, 6), 5, 6, "stick_sandwich")
+    _check(sig.tweezers_signal(arr.copy(),        0, 1, 2, 3, 5, 6, body), 5, 6, "tweezers")
+    _check(sig.quintuplets_signal(arr.copy(),     0, 3, 5, 6, body), 5, 6, "quintuplets")
 
     # double_trouble needs ATR pre-computed as column 5
     arr_atr = np.column_stack([arr, atr_vals])
-    _check(sig.double_trouble_signal(arr_atr.copy(), 0, 1, 2, 3, 5, 6, 7), 6, 7)
+    _check(sig.double_trouble_signal(arr_atr.copy(), 0, 1, 2, 3, 5, 6, 7), 6, 7, "double_trouble")
 
     raw = bull - bear
     score = max(-2.0, min(2.0, raw / 5.0 * 2.0))
