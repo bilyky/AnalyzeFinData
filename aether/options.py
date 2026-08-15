@@ -225,3 +225,53 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
             new_options.append(tx)
             
     return new_options
+
+
+def unwind_option_liability_if_held(sym: str, pos: dict, state: dict, current_price: float, today_str: str):
+    """If the position has an active written Covered Call option, we programmatically buy-to-close (BTC) 
+    the option at its current Black-Scholes fair value to prevent dangerous naked call liabilities!
+    """
+    written_call = pos.get("written_call")
+    if not written_call:
+        return
+
+    strike = written_call["strike"]
+    qty = written_call["qty"]
+    premium = written_call["premium"]
+    exp_date = written_call.get("expiration_date", "")
+
+    # Calculate days to expiration
+    try:
+        today_date = datetime.datetime.strptime(today_str, "%Y-%m-%d")
+        exp_date_dt = datetime.datetime.strptime(exp_date, "%Y-%m-%d")
+        days_rem = max(0.1, (exp_date_dt - today_date).days)
+    except Exception:
+        days_rem = 5.0
+
+    T_rem = days_rem / 365.0
+
+    # Calculate buy-to-close option value using Black-Scholes (reuses exact math)
+    btc_price = calculate_black_scholes_call(current_price, strike, T_rem, r=0.04, sigma=0.30)
+    btc_usd = round(btc_price * qty, 2)
+
+    _log.warning(f"🛡️ [Option Buy-To-Close] Stock {sym} hit stop-loss/rotation! Programmatically buying back short Call option @ ${btc_price:.2f} to prevent naked liabilities (Cost: ${btc_usd:.2f}).")
+
+    # Deduct option buy-back cost from cash balance
+    state["balance"] -= btc_usd
+
+    # Record Buy-To-Close transaction
+    tx = {
+        "date": today_str,
+        "time": "07:35:01",
+        "type": "OPTION_BUY_TO_CLOSE",
+        "symbol": sym,
+        "price": btc_price,
+        "qty": qty,
+        "pnl": -btc_usd,
+        "details": f"Buy-To-Close Short Call (Strike: ${strike:.2f}, Paid: ${btc_usd:.2f} to prevent naked liability)"
+    }
+    state.setdefault("history", []).append(tx)
+
+    # Clear the written call liability
+    del pos["written_call"]
+
