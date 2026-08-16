@@ -271,12 +271,13 @@ class TestCoreSatelliteAllocation(unittest.TestCase):
 
 
 class TestAfterHoursOrderQueuing(unittest.TestCase):
+    @mock.patch("ai_portfolio_game.is_market_open", return_value=(True, "Market is open"))
     @mock.patch("ai_portfolio_game.is_market_hours", return_value=False)
     @mock.patch("ai_portfolio_game.get_live_prices")
     @mock.patch("ai_portfolio_game.load_game")
     @mock.patch("ai_portfolio_game.save_game")
     @mock.patch("ai_portfolio_game.openpyxl.load_workbook")  # patch at point-of-use
-    def test_after_hours_orders_are_queued(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
+    def test_after_hours_orders_are_queued(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours, mock_market_open):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Research"
@@ -318,12 +319,13 @@ class TestMarketHolidayChecks(unittest.TestCase):
 
 
 class TestPersistentProfileModes(unittest.TestCase):
+    @mock.patch("ai_portfolio_game.is_market_open", return_value=(True, "Market is open"))
     @mock.patch("ai_portfolio_game.get_market_regime", return_value="DEFENSIVE")
     @mock.patch("ai_portfolio_game.get_live_prices")
     @mock.patch("ai_portfolio_game.load_game")
     @mock.patch("ai_portfolio_game.save_game")
     @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
-    def test_persistent_manual_profile_override(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_regime):
+    def test_persistent_manual_profile_override(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_regime, mock_market_open):
         # 1. First run: Explicit manual override via CLI should lock into MANUAL mode
         state = {
             "balance": 5000.0,
@@ -360,6 +362,7 @@ class TestPersistentProfileModes(unittest.TestCase):
         self.assertEqual(state["profile"], "DEFENSIVE")
         self.assertEqual(state["profile_mode"], "ADAPTIVE")
 
+    @mock.patch("ai_portfolio_game.is_market_open", return_value=(True, "Market is open"))
     @mock.patch("ai_portfolio_game._has_strong_setups_today", return_value=True)
     @mock.patch("ai_portfolio_game.get_market_regime", return_value="DEFENSIVE")
     @mock.patch("ai_portfolio_game.get_live_prices")
@@ -367,7 +370,7 @@ class TestPersistentProfileModes(unittest.TestCase):
     @mock.patch("ai_portfolio_game.save_game")
     @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
     def test_adaptive_upgrade_cash_gate(self, mock_load_wb, mock_save_game, mock_load_game,
-                                        mock_get_prices, mock_regime, mock_strong_setups):
+                                        mock_get_prices, mock_regime, mock_strong_setups, mock_market_open):
         wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Research"
         ws.append(["Rank"] + [None] * 25)
         mock_load_wb.return_value = wb
@@ -671,7 +674,10 @@ class TestRequalifyPromptBuilder(unittest.TestCase):
         self.assertIn("Invalid symbol", result["error"])
         self.assertEqual(result["factors"], {})
 
-    def test_valid_symbol_format_passes_validation(self):
+    @mock.patch("data_api.etrade.get_tokens", return_value=None)
+    @mock.patch("data_api._google_prices", return_value={"AAPL": 150.0})
+    @mock.patch("data_api._pg.get_symbol_data", return_value=None)
+    def test_valid_symbol_format_passes_validation(self, mock_get_symbol_data, mock_google_prices, mock_get_tokens):
         import data_api
         # Should not be rejected at the validation gate (may fail later on network/session)
         result = data_api.requalify_symbol("AAPL")

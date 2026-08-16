@@ -598,22 +598,28 @@ def _login_via_browser(headless: bool = False) -> dict:
         page = context.new_page()
         page.on('request', on_request)
 
-        page.goto('https://members.chaikinanalytics.com/login', wait_until='domcontentloaded', timeout=60000)
+        # Fail fast in headless environments where Cloudflare Turnstile is guaranteed to block automation
+        goto_timeout = 20000 if headless else 60000
+        turnstile_timeout = 10000 if headless else 60000
+        login_timeout = 10000 if headless else 60000
+        app_timeout = 10000 if headless else 30000
+
+        page.goto('https://members.chaikinanalytics.com/login', wait_until='domcontentloaded', timeout=goto_timeout)
 
         email, password = _load_credentials()
         page.fill('input[name="email"]', email)
         page.fill('input[name="password"]', password)
 
         # Wait for Turnstile to enable the submit button (auto-verifies or user clicks widget)
-        print("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
-        page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=60000)
+        print(f"Waiting for Turnstile to complete (up to {turnstile_timeout//1000}s)...")
+        page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=turnstile_timeout)
         page.click('button[type="submit"]')
 
-        print("Waiting for login to complete (up to 60s)...")
+        print(f"Waiting for login to complete (up to {login_timeout//1000}s)...")
         try:
             page.wait_for_function(
                 "window.location.pathname !== '/login'",
-                timeout=60000
+                timeout=login_timeout
             )
         except Exception:
             pass
@@ -621,7 +627,7 @@ def _login_via_browser(headless: bool = False) -> dict:
         # Navigate to app.chaikinanalytics.com to fully activate the session
         print("Navigating to app.chaikinanalytics.com to activate the session...")
         try:
-            page.goto('https://app.chaikinanalytics.com', timeout=30000)
+            page.goto('https://app.chaikinanalytics.com', timeout=app_timeout)
             page.wait_for_timeout(5000)
         except Exception as e:
             print(f"Warning: Navigation to app.chaikinanalytics.com failed or timed out: {e}")
@@ -957,6 +963,13 @@ def _append_ohlcv_entry(symbol: str, date_str: str, power_g: "PowerGauge", ohlcv
     API calls. Called once per symbol inside check_from_xls() after power_g is fully populated.
     ohlcv_full is the complete JSON (with Meta Data + Time Series), not just the Time Series slice.
     """
+    # Technical average precaution: Never append weekend entries (Saturday/Sunday)
+    try:
+        if datetime.date.fromisoformat(date_str).weekday() in (5, 6):
+            return
+    except (TypeError, ValueError):
+        pass
+
     if ohlcv_full is None:
         return  # file missing; rapidapi.repair_missing() will create it
 

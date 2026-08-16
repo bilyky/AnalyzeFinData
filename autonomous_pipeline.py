@@ -381,22 +381,27 @@ def main():
             pass
     atexit.register(_cleanup_pipeline_lock)
 
+    no_email = "--no-email" in sys.argv[1:]
+    no_history = "--no-history" in sys.argv[1:]
+    report_only = "--report-only" in sys.argv[1:] or "--cached" in sys.argv[1:]
+
     # ── Pillar 1: Centralized Pre-Flight Diagnostics (R&D #21) ──
     # Actively test connections and fail-loud early before doing any write operations
-    preflight_passed = run_preflight_diagnostics()
-    if not preflight_passed:
-        log("❌ [Pre-flight Failure] One or more critical system gateways are offline! Aborting daily pipeline run to prevent corrupt states.")
-        try:
-            notify.send_email(
-                "🚨 [CRITICAL AETHER ERROR] Pre-Flight Connection Diagnostics Failed!",
-                "The 5:30 AM morning pipeline failed its pre-flight diagnostic checklist.\n\n"
-                "One or more external API or email gateways are offline. The pipeline has safely and "
-                "defensively aborted to prevent duplicate run or file-locking leaks.\n\n"
-                "Please run 'python scripts/diagnostics/preflight_validator.py' manually to isolate the offline connection."
-            )
-        except Exception as e:
-            log(f"Warning: Failed to send pre-flight failure alert email: {e}")
-        sys.exit(1)
+    if not report_only:
+        preflight_passed = run_preflight_diagnostics()
+        if not preflight_passed:
+            log("❌ [Pre-flight Failure] One or more critical system gateways are offline! Aborting daily pipeline run to prevent corrupt states.")
+            try:
+                notify.send_email(
+                    "🚨 [CRITICAL AETHER ERROR] Pre-Flight Connection Diagnostics Failed!",
+                    "The 5:30 AM morning pipeline failed its pre-flight diagnostic checklist.\n\n"
+                    "One or more external API or email gateways are offline. The pipeline has safely and "
+                    "defensively aborted to prevent duplicate run or file-locking leaks.\n\n"
+                    "Please run 'python scripts/diagnostics/preflight_validator.py' manually to isolate the offline connection."
+                )
+            except Exception as e:
+                log(f"Warning: Failed to send pre-flight failure alert email: {e}")
+            sys.exit(1)
 
     log("Starting Daily Trading Pipeline...")
     
@@ -406,14 +411,11 @@ def main():
         details_str = "\n".join(f"- {ph}" for ph in CFG.placeholder_details)
         msg = f"AETHER Configuration Health Alert!\n\nActive placeholders were detected in your configuration:\n\n{details_str}\n\nPlease update your config.json or environment variables immediately to resolve this."
         try:
-            notify.send_email("ALERT: AETHER Configuration Placeholders Detected", msg)
+            if not no_email:
+                notify.send_email("ALERT: AETHER Configuration Placeholders Detected", msg)
         except Exception as e:
             log(f"ERROR: Failed to send configuration health alert email: {e}")
 
-    no_email = "--no-email" in sys.argv[1:]
-    no_history = "--no-history" in sys.argv[1:]
-    report_only = "--report-only" in sys.argv[1:] or "--cached" in sys.argv[1:]
-    
     intel_ideas = []
     cache_path = BASE_DIR / "Data" / "intel_ideas_cache.json"
 

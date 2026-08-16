@@ -25,7 +25,7 @@ from aether.config import CFG
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-_TIMEOUT = 60   # generous for chat; context build can take ~9s on cold Research cache
+_TIMEOUT = 120   # generous for chat; context build can take ~9s on cold Research cache
 
 _gemini_cli_lock = threading.Lock()
 
@@ -205,15 +205,24 @@ def _run_gemini(model: str, context: str, instruction: str) -> str:
     env["COLORTERM"] = "truecolor"
     env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
 
-    executable = "gemini.cmd" if sys.platform == "win32" else "gemini"
-    args = [executable, "--skip-trust", "-m", model, "--approval-mode", "plan", "--allowed-mcp-server-names", "none", "--allowed-tools", "none", "-p", instruction]
+    # Ensure standard global npm folder is on PATH for Windows Task Scheduler / headless environments
+    if sys.platform == "win32":
+        npm_path = os.path.join(os.environ.get("APPDATA", ""), "npm")
+        if os.path.exists(npm_path):
+            current_path = env.get("PATH", "")
+            if npm_path not in current_path:
+                env["PATH"] = f"{npm_path}{os.pathsep}{current_path}"
 
+    executable = "gemini.cmd" if sys.platform == "win32" else "gemini"
+    args = [executable, "--skip-trust", "-m", model, "--approval-mode", "plan", "-p", instruction]
+
+    is_win = (sys.platform == "win32")
     with _gemini_cli_lock:
         out = subprocess.run(
             args,
             input=context,
             capture_output=True, text=True, timeout=_TIMEOUT,
-            shell=False,
+            shell=is_win,
             cwd=_get_gemini_sandbox(),
             encoding="utf-8",
             env=env,

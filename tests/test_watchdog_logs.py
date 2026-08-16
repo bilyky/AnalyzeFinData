@@ -107,5 +107,42 @@ class TestCheckLogsIntegration(unittest.TestCase):
             self.assertEqual(watchdog.check_logs(), [])
 
 
+class TestWatchdogSessionKeeper(unittest.TestCase):
+    @mock.patch("watchdog.etrade.get_tokens")
+    @mock.patch("watchdog.powergauge.ensure_valid_session")
+    @mock.patch("watchdog.check_logs")
+    @mock.patch("watchdog.check_task_scheduler")
+    @mock.patch("watchdog.check_data_freshness")
+    @mock.patch("watchdog.purge_stray_tasks")
+    @mock.patch("watchdog.sync_data_folder")
+    @mock.patch("watchdog.notify.send_email")
+    def test_watchdog_handles_anti_ban_cooldown_gracefully(
+        self, mock_send_email, mock_sync, mock_purge, mock_freshness,
+        mock_tasks, mock_check_logs, mock_chaikin, mock_get_tokens
+    ):
+        # Set up mocks
+        mock_get_tokens.side_effect = RuntimeError("E*TRADE: Headless auto-login blocked by Anti-Ban Cooldown Circuit Breaker.")
+        mock_chaikin.return_value = {"jsessionid": "fake-session"}
+        mock_check_logs.return_value = []
+        mock_tasks.return_value = []
+        mock_freshness.return_value = None
+        mock_sync.return_value = "SUCCESS"
+
+        # Run watchdog's run_watchdog function, mocking Path.exists for locks
+        with mock.patch("watchdog.Path.exists", return_value=False), \
+             mock.patch("builtins.open", mock.mock_open()):
+            try:
+                watchdog.run_watchdog()
+            except Exception as e:
+                self.fail(f"run_watchdog raised an exception on cooldown: {e}")
+
+        mock_get_tokens.assert_called_once_with("production", allow_browser=False)
+        # Ensure we did NOT send the failure email
+        for call in mock_send_email.mock_calls:
+            args, kwargs = call[1], call[2]
+            subject = args[0] if len(args) > 0 else kwargs.get("subject", "")
+            self.assertNotIn("CRITICAL: AETHER Watchdog Session Keeper Failure", str(subject))
+
+
 if __name__ == "__main__":
     unittest.main()

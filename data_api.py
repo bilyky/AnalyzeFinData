@@ -1111,6 +1111,13 @@ def get_system_health() -> dict:
     # Watchdog — check if watchdog.log or similar file was updated today
     watchdog_ok = True  # default optimistic; future: check watchdog log
 
+    market_regime_val = "Unknown"
+    try:
+        regime, _ = _ap_regime()
+        market_regime_val = regime
+    except Exception:
+        pass
+
     return {
         "data_fresh":           data_fresh,
         "last_refresh":         last_refresh,
@@ -1119,6 +1126,7 @@ def get_system_health() -> dict:
         "watchdog_ok":          watchdog_ok,
         "server_time":          now.isoformat(timespec="seconds"),
         "server_needs_restart": _server_needs_restart(),
+        "market_regime":        market_regime_val,
     }
 
 
@@ -1361,13 +1369,30 @@ def read_symbol(symbol: str) -> dict:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     ts = json.load(f).get("Time Series (Daily)", {})
-                dates = sorted(ts.keys())[-365:]
+                dates = sorted(ts.keys())
+                
+                # Dynamic filter: Filter out weekends and closed market days (volume == 0)
+                # without any hardcoded holiday lists.
+                valid_dates = []
+                for d in dates:
+                    try:
+                        # Skip weekends
+                        if date.fromisoformat(d).weekday() in (5, 6):
+                            continue
+                        # Skip any closed day/holiday (where volume is 0 or less)
+                        if int(float(ts[d].get("5. volume", 0))) <= 0:
+                            continue
+                        valid_dates.append(d)
+                    except (TypeError, ValueError):
+                        pass
+                
+                chart_dates = valid_dates[-365:]
                 chart = [{"date": d,
                           "open":   round(float(ts[d]["1. open"]),  2),
                           "high":   round(float(ts[d]["2. high"]),  2),
                           "low":    round(float(ts[d]["3. low"]),   2),
                           "close":  round(float(ts[d]["4. close"]), 2),
-                          "volume": int(float(ts[d].get("5. volume", 0)))} for d in dates]
+                          "volume": int(float(ts[d].get("5. volume", 0)))} for d in chart_dates]
             except Exception:
                 pass
         out["chart"] = chart

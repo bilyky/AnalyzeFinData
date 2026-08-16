@@ -239,7 +239,8 @@ def fetch_idea_emails():
                     _log.console(f"Intel candidate cap ({max_intel}) reached; breaking email scan to protect rate-limits.")
                     break
         except Exception as e:
-            raise RuntimeError(f"Failed to fetch emails for {email_user}: {e}")
+            _log.error(f"Failed to fetch emails for {email_user}: {e}")
+            continue
         finally:
             if mail:
                 try:

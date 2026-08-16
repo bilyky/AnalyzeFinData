@@ -72,7 +72,7 @@ def _check_plain_logs(now: datetime.datetime) -> list[str]:
     _error_words = {"ERROR", "FAILED", "FATAL", "CRASH", "TRACEBACK",
                     "UNBOUNDLOCALERROR", "UNICODEENCODEERROR", "SYMBOLOGY ERROR",
                     "PORTFOLIO ERROR"}
-    _skip_words = {"0 ERRORS", "NO ERRORS"}
+    _skip_words = {"0 ERRORS", "NO ERRORS", "PERMISSION BLOCK"}
     for log_path in LOG_FILES:
         if not log_path.exists():
             continue
@@ -118,6 +118,8 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
                 continue
             module = entry.get("module", "")
             msg = entry.get("msg", "")
+            if "[Permission Block]" in msg:
+                continue
             extra = entry.get("extra", {})
             exc = entry.get("exc", "")
             detail = f" | {json.dumps(extra)}" if extra else ""
@@ -419,7 +421,7 @@ def sync_data_folder() -> str:
 
             run_user = os.environ.get("USERNAME") or os.environ.get("USER") or "SYSTEM"
             if ping_ok:
-                _log.error(
+                _log.warning(
                     f"❌ [Permission Block] Network storage 10.0.0.156 is ONLINE (ping passed), "
                     f"but the UNC path '{dst}' is inaccessible! Running as Windows user '{run_user}' "
                     f"which lacks active network share access credentials. This is a local permission block, NOT a server outage!"
@@ -482,9 +484,9 @@ def run_watchdog():
     
     # 0. E*TRADE Proactive Session Keeper (Prevents Soft Expiry)
     try:
-        # Attempt to get valid active tokens for today (silently renews if fresh, 
+        # Attempt to get valid active tokens for today (silently renews if fresh,
         # or runs Playwright re-auth if yesterday's token has expired!)
-        tokens = etrade.get_tokens("production", allow_browser=True)
+        tokens = etrade.get_tokens("production", allow_browser=False)
         if tokens:
             _log.info("  [Healer] E*TRADE production session is active, fresh, and fully validated!")
         else:

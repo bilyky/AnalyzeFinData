@@ -8,6 +8,12 @@ mailboxes, and session states, verifying system readiness before any cron runs.
 import sys
 import os
 import time
+import datetime
+import imaplib
+import smtplib
+import urllib.request
+import ssl
+import json
 from pathlib import Path
 
 # Insert project root to import our local modules cleanly
@@ -16,6 +22,8 @@ sys.path.insert(0, str(BASE_DIR))
 
 from aether_logger import get_logger as _get_logger
 from aether.config import CFG
+from aether import etrade
+import powergauge
 
 _log = _get_logger("preflight")
 
@@ -24,7 +32,6 @@ def check_gmail_imap() -> bool:
     """Validate Gmail IMAP connection and credentials."""
     _log.console("  Checking Gmail IMAP Inbox Connection...")
     try:
-        import imaplib
         # Read credentials from config
         mailboxes = getattr(CFG, "mailboxes", [])
         if not mailboxes:
@@ -33,7 +40,8 @@ def check_gmail_imap() -> bool:
             
         mb = mailboxes[0]
         email_addr = mb.get("email")
-        password = mb.get("password")
+        pass_env = mb.get("password_env", "SMTP_PASSWORD")
+        password = os.environ.get(pass_env) or mb.get("password") or getattr(CFG, "smtp_password", "")
         imap_server = mb.get("imap_server", "imap.gmail.com")
         
         if not email_addr or "example.com" in email_addr:
@@ -55,12 +63,10 @@ def check_gmail_smtp() -> bool:
     """Validate Gmail SMTP connection and delivery endpoints."""
     _log.console("  Checking Gmail SMTP Dispatch Connection...")
     try:
-        import smtplib
-        email_cfg = getattr(CFG, "email", {})
-        sender = email_cfg.get("sender")
-        password = email_cfg.get("password")
-        smtp_server = email_cfg.get("smtp_server", "smtp.gmail.com")
-        smtp_port = int(email_cfg.get("smtp_port", 587))
+        sender = getattr(CFG, "email_sender_address", "")
+        password = getattr(CFG, "smtp_password", "")
+        smtp_server = "smtp.gmail.com"
+        smtp_port = 587
         
         if not sender or "example.com" in sender:
             _log.console("  ❌ SMTP: Default placeholder sender detected.")
@@ -82,54 +88,45 @@ def check_chaikin_api() -> bool:
     """Validate Chaikin PowerGauge API session credentials."""
     _log.console("  Checking Chaikin PowerGauge API Authorization...")
     try:
-        import urllib.request
-        import json
-        
-        email = getattr(CFG, "chaikin_email", "")
-        pwd = getattr(CFG, "chaikin_password", "")
-        
-        if not email or "example.com" in email:
-            _log.console("  ❌ Chaikin: Default placeholder email detected.")
-            return False
-            
-        # Test auth endpoint
-        url = "https://members-backend.chaikinanalytics.com/api/v1/auth/login"
-        payload = json.dumps({"email": email, "password": pwd}).encode("utf-8")
-        req = urllib.request.Request(
-            url, data=payload, 
-            headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
-            method="POST"
-        )
-        # Suppress SSL context warning for raw urllib pings
-        import ssl
-        context = ssl._create_unverified_context()
-        
-        with urllib.request.urlopen(req, context=context, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if resp.status == 200 and data.get("token"):
-                _log.console("  ✅ Chaikin: Successfully verified session authorization token.")
+        session = powergauge._load_session_from_file()
+        if session and powergauge._validate_session(session):
+            _log.console("  ✅ Chaikin: Successfully verified session authorization token from cache.")
+            return True
+        else:
+            _log.console("  ⚠️ Chaikin: Cached session expired or invalid. Attempting headless refresh...")
+            session = powergauge.ensure_valid_session()
+            if session and session.get("jsessionid"):
+                _log.console("  ✅ Chaikin: Successfully validated live Chaikin session.")
                 return True
-            else:
-                _log.console(f"  ❌ Chaikin: Unexpected API payload response: {data}")
-                return False
+            _log.console("  ❌ Chaikin: Failed to obtain or validate Chaikin session.")
+            return False
     except Exception as e:
         _log.console(f"  ❌ Chaikin: API handshake failed: {e}")
         return False
 
 
 def check_etrade_api() -> bool:
-    """Validate live E*TRADE API OAuth session token validity."""
+    """Validate live E*TRADE API OAuth session token validity.
+    On weekends (Saturdays and Sundays), since the stock market is closed,
+    verification failures are waived to allow reporting/summaries to run.
+    """
     _log.console("  Checking E*TRADE Brokerage OAuth Session Token...")
+    is_weekend = datetime.datetime.now().weekday() in (5, 6)
     try:
-        from aether import etrade
         tokens = etrade.get_tokens(env="production", allow_browser=False)
         if tokens:
             _log.console("  ✅ E*TRADE: Successfully verified and renewed live OAuth tokens.")
             return True
         else:
+            if is_weekend:
+                _log.console("  ⚠️ E*TRADE: Verification failed, but waiving requirement because today is the weekend (market closed).")
+                return True
             _log.console("  ❌ E*TRADE: No valid cached session or headless Playwright login failed.")
             return False
     except Exception as e:
+        if is_weekend:
+            _log.console(f"  ⚠️ E*TRADE: Active OAuth verification failed ({e}), but waiving requirement because today is the weekend (market closed).")
+            return True
         _log.console(f"  ❌ E*TRADE: Active OAuth verification failed: {e}")
         return False
 
