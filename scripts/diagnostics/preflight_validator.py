@@ -9,6 +9,7 @@ import datetime
 import imaplib
 import os
 import smtplib
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -25,6 +26,21 @@ from aether_logger import get_logger as _get_logger
 
 
 _log = _get_logger("preflight")
+
+
+def purge_browser_zombies():
+    """Autonomically search and terminate any orphaned node.exe or headless_shell.exe
+    zombie processes on Windows to prevent dangerous Playwright launch pipe-hangs!
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        # Force-kill orphaned background NodeJS child processes driving Playwright
+        subprocess.run(["taskkill", "/F", "/IM", "node.exe", "/T"], capture_output=True)
+        subprocess.run(["taskkill", "/F", "/IM", "headless_shell.exe", "/T"], capture_output=True)
+        _log.console("🧹 [Autonomic Healing] Successfully purged all background browser and NodeJS zombie processes!")
+    except Exception as e:
+        _log.console(f"  ⚠️ Warning: Could not purge zombie processes: {e}")
 
 
 def check_gmail_imap() -> bool:
@@ -132,6 +148,9 @@ def check_etrade_api() -> bool:
 
 def run_preflight_diagnostics() -> bool:
     """Execute all pre-flight diagnostic checks and return True on 100% PASS."""
+    # Autonomically purge browser and NodeJS zombie processes first to prevent Playwright pipe hangs!
+    purge_browser_zombies()
+
     _log.console("=" * 70)
     _log.console("AETHER: RUNNING PRE-FLIGHT CONNECTION & ADVISORY DIAGNOSTICS...")
     _log.console("=" * 70)
