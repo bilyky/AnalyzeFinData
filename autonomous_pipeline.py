@@ -1,19 +1,22 @@
-import os
-import sys
-import json
 import atexit
-import console_safe
 import datetime
-import subprocess
-import openpyxl
-import notify
-import watchdog
 import html
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import openpyxl
+
+import console_safe
+import notify
 import rapidapi
+import watchdog
+from aether_logger import get_logger as _get_logger
 from config import CFG
 from run_history import load_symbols
-from pathlib import Path
-from aether_logger import get_logger as _get_logger
+
 
 _pipeline_log = _get_logger("pipeline")
 
@@ -23,16 +26,17 @@ _pipeline_log = _get_logger("pipeline")
 console_safe.install()
 
 import external_intel
-from scripts.diagnostics.preflight_validator import run_preflight_diagnostics
 
 # Custom modules
 import performance_tracker
+from scripts.diagnostics.preflight_validator import run_preflight_diagnostics
 from workbook_read import (
-    get_top_5_picks,
     get_market_regime,
     get_replacement_pairs,
     get_reserves_data,
+    get_top_5_picks,
 )
+
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent

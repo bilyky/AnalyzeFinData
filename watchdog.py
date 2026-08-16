@@ -1,18 +1,21 @@
-import os
-import sys
 import atexit
-import console_safe
-import datetime
-import pytz
-import subprocess
-import re
 import ctypes
+import datetime
 import json
-import notify
-import etrade
-import powergauge
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
+
+import pytz
+
+import console_safe
+import etrade
+import notify
+import powergauge
 from aether_logger import get_logger as _get_logger
+
 
 _log = _get_logger("watchdog")
 
@@ -186,7 +189,7 @@ def trigger_ai_self_healing(traceback):
             prompt=prompt.replace('"', '\\"').replace('\n', ' '),
             prompt_file=str(SELF_HEAL_PROMPT_FILE)
         )
-        _log.console(f"🚀 [AETHER BRAIN] Dispatching self-healing command (prompt written to file)")
+        _log.console("🚀 [AETHER BRAIN] Dispatching self-healing command (prompt written to file)")
         result = subprocess.run(
             cmd,
             shell=True,
@@ -428,7 +431,7 @@ def sync_data_folder() -> str:
                 )
                 return "FAILED"
             else:
-                _log.warning(f"⚠️ [Network Outage] Storage server 10.0.0.156 is unreachable (ping failed). Skipping Data sync.")
+                _log.warning("⚠️ [Network Outage] Storage server 10.0.0.156 is unreachable (ping failed). Skipping Data sync.")
                 return "SKIPPED_OFFLINE"
 
         dst_path.mkdir(parents=True, exist_ok=True)

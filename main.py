@@ -1,20 +1,16 @@
 import datetime
 
-import MetaTrader5
-import pytz
-import pandas as pd
 import MetaTrader5 as mt5
+import pandas as pd
+import pytz
 
-import etrade
-import primal_funcs as pf
 import powergauge
-import numpy as np
-import pyetrade
+import primal_funcs as pf
 import rapidapi
 import signals
-import database
 import watchdog
 from aether_logger import get_logger as _get_logger
+
 
 _log = _get_logger("main")
 
@@ -56,7 +52,6 @@ def mass_import(asset, time_frame):
 
 
 def start_one():
-    sourse = 'md5'
 
     # data = mass_import(4, 'D1')
     # data = rapidapi.get_quotes('D1', 2022, 1, 1, symbol='MSFT')

@@ -1,13 +1,14 @@
 import datetime
+import json
 import os
 import sys
-import json
-import openpyxl
+
 
 # Add current dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
+
 
 def get_top_br_with_setup():
     date = datetime.date(2026, 5, 26)
@@ -16,7 +17,7 @@ def get_top_br_with_setup():
     
     symbol_dir = os.path.join("Data", "Symbol")
     cached_symbols = []
-    for root, dirs, files in os.walk(symbol_dir):
+    for _root, _dirs, files in os.walk(symbol_dir):
         for f in files:
             if f.endswith(f"_{date}.json"):
                 cached_symbols.append(f.rsplit('_', 1)[0])
@@ -37,7 +38,7 @@ def get_top_br_with_setup():
             
             f = powergauge._compute_pgr_fields(pg, ohlcv_ts=ohlcv_ts)
             
-            if f['setup_ok'] == True:
+            if f['setup_ok']:
                 results.append({
                     'symbol': symbol,
                     'br': f['buying_ratio'],
@@ -49,15 +50,13 @@ def get_top_br_with_setup():
 
     # Rank by BR
     top_br = sorted(results, key=lambda x: x['br'], reverse=True)[:5]
-    print("Top 5 by Buying Ratio (Setup OK):")
-    for i, r in enumerate(top_br, 1):
-        print(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})")
+    for _i, _r in enumerate(top_br, 1):
+        pass
 
     # Rank by Short10
     top_s10 = sorted(results, key=lambda x: x['short10'], reverse=True)[:5]
-    print("\nTop 5 by Short10 (Setup OK):")
-    for i, r in enumerate(top_s10, 1):
-        print(f"{i}. {r['symbol']} (S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})")
+    for _i, _r in enumerate(top_s10, 1):
+        pass
 
 if __name__ == "__main__":
     get_top_br_with_setup()

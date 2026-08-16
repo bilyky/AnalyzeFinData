@@ -22,8 +22,8 @@ import logging
 import logging.handlers
 import os
 import sys
-import time
 from pathlib import Path
+
 
 _BASE_DIR = Path(__file__).resolve().parent.parent
 _LOG_DIR = _BASE_DIR / "Data" / "logs"

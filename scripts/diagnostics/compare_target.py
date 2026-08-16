@@ -4,14 +4,16 @@ Chain method is skipped for symbols with > CHAIN_FILE_LIMIT cached files
 (glob scan per recursion level makes it O(N^2) in file count).
 """
 import datetime
+import glob as _glob
 import json
 import os
 import sys
 import time
-import glob as _glob
+
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import powergauge
+
 
 DATE             = datetime.datetime(2026, 2, 26)
 LOOKBACK         = 20       # trading days for OHLCV high
@@ -41,9 +43,6 @@ candidates = candidates[:MAX_SYMS]
 
 sys.setrecursionlimit(500)
 
-print(f"Testing {len(candidates)} symbols  date={DATE.date()}  OHLCV lookback={LOOKBACK}d\n")
-print(f"{'Symbol':<8} {'Price':>8} {'NFiles':>7} {'Chain':>9} {'OHLCV':>9} {'Diff%':>7} {'ChainMs':>8} {'OhlcvMs':>7}")
-print("-" * 72)
 
 total_chain_ms = 0.0
 total_ohlcv_ms = 0.0
@@ -94,8 +93,4 @@ for n_files, sym in candidates:
         chain_str = "  (skipped)" if n_files > CHAIN_FILE_LIMIT else "  RecursErr"
         diff_str  = "     n/a"
 
-    print(f"{sym:<8} {pg.price:>8.2f} {n_files:>7} {chain_str} {ohlcv_target:>9.2f} {diff_str} {chain_ms:>7.1f}ms {ohlcv_ms:>6.1f}ms")
 
-print("-" * 72)
-print(f"Chain vs OHLCV compared for {compared}/{len(candidates)} symbols")
-print(f"Chain total {total_chain_ms:.0f}ms  OHLCV total {total_ohlcv_ms:.0f}ms")

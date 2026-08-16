@@ -4,11 +4,14 @@ Dedicated unit tests for the AI Second-Opinion Exit Override Gate in ai_portfoli
 import os
 import sys
 import unittest
-import openpyxl
 from unittest import mock
+
+import openpyxl
+
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game
+
 
 class TestAIOverrideGate(unittest.TestCase):
     def setUp(self):

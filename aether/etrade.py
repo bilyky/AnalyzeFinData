@@ -5,12 +5,16 @@ import os
 import re as _re
 import sys
 import time
+from zoneinfo import ZoneInfo
+
 import pyetrade
 import pytz
-from zoneinfo import ZoneInfo
+from playwright.sync_api import TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright
 from requests_oauthlib import OAuth1Session
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+
 from aether.config import CFG
+
 
 _log = logging.getLogger("aether.etrade")
 
@@ -18,6 +22,7 @@ _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _TOKEN_PATH = os.path.join(_DIR, "Data", "etrade_tokens.json")
 
 from aether.token_renewer import TokenRenewer as _TokenRenewer
+
 
 _ET = ZoneInfo("America/New_York")
 _RENEW_URL = {
@@ -477,7 +482,7 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
                 "Failing immediately to prevent background process hang."
             )
 
-        print(f"\nCould not auto-capture verifier. Open this URL in your browser if it isn't open:")
+        print("\nCould not auto-capture verifier. Open this URL in your browser if it isn't open:")
         print(f"  {auth_url}")
         print("Log in, click Accept, then paste the code shown on screen.")
         try:

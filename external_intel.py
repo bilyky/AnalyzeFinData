@@ -1,17 +1,20 @@
-import os
 import datetime
-import re
-import json
-import imaplib
 import email
-import extract_email_intel
-import watchdog
-import openpyxl
-import ai_client
+import imaplib
+import json
+import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from config import CFG
+
+import openpyxl
+
+import ai_client
+import extract_email_intel
+import watchdog
 from aether_logger import get_logger as _get_logger
+from config import CFG
+
 
 _log = _get_logger("external_intel")
 

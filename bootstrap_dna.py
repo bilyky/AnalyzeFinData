@@ -6,11 +6,14 @@ cross-references historical Excel backups to extract buy-state DNA (PGR, scores,
 and pre-populates 'Data/trade_history_dna.json' with your past month of trades.
 """
 
-import json
 import datetime
+import json
 from pathlib import Path
+
 import openpyxl
+
 from aether_logger import get_logger as _get_logger
+
 
 _log = _get_logger("bootstrap_dna")
 

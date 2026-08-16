@@ -35,6 +35,7 @@ from bar_provenance import is_provisional
 from config import CFG
 from run_history import load_symbols
 
+
 _log = _get_logger("rapidapi")
 
 _DIR      = os.path.dirname(os.path.abspath(__file__))

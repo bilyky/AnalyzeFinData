@@ -3,7 +3,10 @@
 Copies files that are missing or newer in the source.
 Never deletes files from the destination.
 """
-import sys, os
+import os
+import sys
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
@@ -11,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import os
 import shutil
 from pathlib import Path
+
 
 SRC = Path(r"D:\Develop\AnalyzeFinData_1\Data")
 DST = Path(r"D:\Develop\AnalyzeFinData\Data")
@@ -34,20 +38,16 @@ def sync():
             if src_mtime <= dst_mtime:
                 skipped += 1
                 continue
-            reason = "newer"
         else:
-            reason = "new"
+            pass
 
         dst_file.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.copy2(src_file, dst_file)
-            print(f"[{reason:6}] {rel}")
             copied += 1
-        except Exception as e:
-            print(f"[ERROR ] {rel}: {e}")
+        except Exception:
             errors += 1
 
-    print(f"\nDone: {copied} copied, {skipped} skipped (up-to-date), {errors} errors")
 
 
 if __name__ == "__main__":

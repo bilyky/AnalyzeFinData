@@ -1,17 +1,19 @@
-import unittest
 import os
-import sys
 import re
+import sys
+import unittest
 from pathlib import Path
+
 
 # Ensure project root is in the path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import watchdog
 
+
 class TestOperationalIntegrity(unittest.TestCase):
     def test_task_command_lengths_under_windows_limit(self):
         """Operational: Assert that no Task Scheduler command string exceeds the legacy Windows 261-character limit."""
-        for task, (tr_cmd, sc, st) in watchdog._TASK_DEFS.items():
+        for task, (tr_cmd, _sc, _st) in watchdog._TASK_DEFS.items():
             cmd_len = len(tr_cmd)
             self.assertLessEqual(
                 cmd_len, 
@@ -22,7 +24,7 @@ class TestOperationalIntegrity(unittest.TestCase):
             
     def test_scheduled_task_files_exist(self):
         """Operational: Assert that all python script files targeted in scheduled tasks physically exist on disk."""
-        for task, (tr_cmd, sc, st) in watchdog._TASK_DEFS.items():
+        for task, (tr_cmd, _sc, _st) in watchdog._TASK_DEFS.items():
             # Extract the script paths (handling absolute and relative paths)
             py_matches = re.findall(r"['\"]([^'\"]+\.py)['\"]", tr_cmd)
             for py_path_str in py_matches:

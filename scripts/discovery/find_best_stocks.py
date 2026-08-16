@@ -1,8 +1,13 @@
-import sys, os
+import os
+import sys
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-import openpyxl
 import os
+
+import openpyxl
+
 
 xlsx_file = 'Data/state_of_the_day.xlsx'
 wb = openpyxl.load_workbook(xlsx_file, data_only=True)
@@ -56,6 +61,5 @@ def score(d):
 
 best_stocks.sort(key=score, reverse=True)
 
-print("Potential Best 5 Stocks based on PGR and signals:")
-for i, d in enumerate(best_stocks[:10], 1):
-    print(f"{i}. {d['symbol']} (PGR: {d['pgr']}, Money Flow: {d['money_flow']}, Ind: {d['ind_str']}, OB/OS: {d['ob_os']})")
+for _i, _d in enumerate(best_stocks[:10], 1):
+    pass

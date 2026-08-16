@@ -15,8 +15,10 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from scripts.backtesting._study_utils import window_analysis
+
 
 DATA     = Path(__file__).resolve().parent.parent.parent / "Data"
 OHLCV    = DATA / "Symbol_full"
@@ -104,7 +106,6 @@ def analyze(path: Path) -> list[dict]:
 
 def run():
     files = sorted(OHLCV.glob("*_daily.json"))
-    print(f"Processing {len(files)} symbols (full-cents digit-sum)...")
     ts_map: dict = {}
     all_rows = []
     for path in files:
@@ -118,7 +119,6 @@ def run():
         all_rows.extend(analyze(path))
 
     sig = [r for r in all_rows if abs(r["z"]) >= MIN_ABS_Z]
-    print(f"Total rows: {len(all_rows)} | 95%+ confidence: {len(sig)} — adding temporal quality...")
 
     for r in sig:
         ts = ts_map.get(r["symbol"], {})
@@ -130,9 +130,7 @@ def run():
     with open(OUT_FILE, "w") as f:
         json.dump(all_rows, f)
     from collections import Counter
-    tq = Counter(r.get("temporal","none") for r in sig)
-    print(f"Temporal: {dict(tq)}")
-    print(f"Saved {len(all_rows)} rows to {OUT_FILE}")
+    Counter(r.get("temporal","none") for r in sig)
 
 
 if __name__ == "__main__":

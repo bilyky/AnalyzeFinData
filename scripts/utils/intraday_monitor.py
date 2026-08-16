@@ -3,21 +3,24 @@ Project AETHER Intraday Stop-Breach Monitor.
 Performs 30-minute interval audits of held E*TRADE positions against their ATR-based stop-loss levels.
 Includes state-persistence (cures 30-min duplicate email spam) and dynamic, AI-powered qualitative analyses.
 """
-import sys
-import os
-import json
 import datetime
+import json
+import os
+import sys
 from pathlib import Path
+
 import openpyxl
+
 
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_BASE_DIR))
 
-import notify
 import ai_client
+import notify
 from aether_logger import get_logger
-from data_api import _SL  # canonical Short_Long column map (single source of truth)
 from ai_portfolio_game import get_live_prices
+from data_api import _SL  # canonical Short_Long column map (single source of truth)
+
 
 _log = get_logger("monitor")
 
@@ -75,7 +78,7 @@ def get_monitored_positions() -> list:
 def generate_ai_analysis(sym: str, price: float, stop: float) -> str:
     """Generate a highly specific, professional quantitative analysis for the stop breach."""
     if not ai_client.primary():
-        return f"ATR Stop-Loss Floor Breached. Technical momentum is currently negative, representing an immediate capital preservation exit risk."
+        return "ATR Stop-Loss Floor Breached. Technical momentum is currently negative, representing an immediate capital preservation exit risk."
         
     system_prompt = (
         "You are AETHER, an expert hedge-fund quantitative analyst.\n"
@@ -152,7 +155,7 @@ def monitor():
         if modified_breaches:
             diff_msgs.append(f"🔄 EXISTING BREACH PRICES UPDATED: {', '.join(modified_breaches)}")
 
-        _log.warning(f"Stop breach state changed! Dispatching rich, AI-analyzed alert email...")
+        _log.warning("Stop breach state changed! Dispatching rich, AI-analyzed alert email...")
         
         subject = f"AETHER ALERT: Stop Breach Detected ({len(current_breaches)} Position{'s' if len(current_breaches) > 1 else ''})"
         

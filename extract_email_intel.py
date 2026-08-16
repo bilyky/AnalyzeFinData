@@ -11,16 +11,17 @@ The rubric lives in prompts/email_intel_extraction.md and is versioned
 alongside the code.
 """
 
-import sys
+import datetime
 import html as _html
 import json
-import datetime
 import re
+import sys
 from pathlib import Path
 
 import ai_client
 import data_api
 from aether_logger import get_logger as _get_logger
+
 
 _log = _get_logger("extract_email_intel")
 

@@ -1,12 +1,14 @@
 import datetime
+import json
 import os
 import sys
-import json
+
 
 # Add current dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
+
 
 def get_sheet1_br():
     date = datetime.date(2026, 5, 26)
@@ -38,9 +40,8 @@ def get_sheet1_br():
         except Exception:
             continue
 
-    print("Sheet1 Symbols Stats:")
-    for r in sorted(results, key=lambda x: x['br'], reverse=True):
-        print(f"{r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})")
+    for _r in sorted(results, key=lambda x: x['br'], reverse=True):
+        pass
 
 if __name__ == "__main__":
     get_sheet1_br()

@@ -8,15 +8,16 @@ indexes the same column the accounts API reads. Called by check_from_xls() in
 powergauge.py.
 """
 
+import datetime
 import os
 import re
 import shutil
 import zipfile
-import datetime
 from io import BytesIO
 
 from aether.logger import get_logger
 from aether.risk_utils import is_elite_breakout_candidate
+
 
 _log = get_logger(__name__)
 
@@ -59,7 +60,7 @@ def write_research_headers(ws):
 
 def write_picks_sheet(wb, picks_data: list, run_date):
     """Create/refresh the Picks sheet with four Top-5 tables (Short10 + Long60, buy + sell)."""
-    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
     DARK_HDR  = PatternFill("solid", fgColor="2E4057")
@@ -628,7 +629,7 @@ def fix_comment_shape_ids(xlsx_path: str, original_xlsx: str = None,
             pass  # fall back to existing shapeId patch + _fix_comment_xml/_fix_vml_ns
 
         # ── 1. shapeId patch (only for comment XMLs not restored from original) ──
-        for cf, vf in zip(comment_files, vml_files):
+        for cf, vf in zip(comment_files, vml_files, strict=False):
             if cf in restore_from_orig or cf in modified:
                 continue    # restored from original or already regenerated
             vml   = zin.read(vf).decode('utf-8')
@@ -740,8 +741,11 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
     """
     import bisect
     import datetime
-    from openpyxl.styles import PatternFill, Font, Alignment
-    from scoring import predicted_win_pct as _pwp, ohlcv_streak_count as _streak_count
+
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    from scoring import ohlcv_streak_count as _streak_count
+    from scoring import predicted_win_pct as _pwp
 
     if "Short_Long" not in wb.sheetnames:
         return
@@ -1033,7 +1037,7 @@ def update_short_long_scores(wb, picks_lookup: dict, quotes: dict, positions: li
         [(sym, rn, etrade_t1_by_sym) for sym, rn in sheet_t1_rows.items()] +
         [(sym, rn, etrade_t2_by_sym) for sym, rn in sheet_t2_rows.items()]
     )
-    for sym, rn, pos_lookup in all_rows:
+    for sym, rn, _pos_lookup in all_rows:
         # Load RapidAPI settled close price and dates array for 3-Factor Cross-Validation
         last_close = None
         all_dates = []
@@ -1195,8 +1199,10 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
     Pairs are matched rank-for-rank up to MAX_PAIRS rows.
     """
     import datetime as _dt
+
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
     import sell_rules
-    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
     MAX_PAIRS = 30
 

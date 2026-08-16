@@ -1,17 +1,20 @@
 import datetime
+import json
 import os
 import sys
-import unittest
 import tempfile
-import json
-import openpyxl
+import unittest
 from pathlib import Path
+
+import openpyxl
+
 
 # Add current and parent dir to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import ai_portfolio_game
+
 
 def create_mock_ohlcv(path, base_price, trend_slope):
     """Create a mock 250-day daily OHLCV dataset with a valid calendar-based date series."""

@@ -1,4 +1,6 @@
 from aether_logger import get_logger
+
+
 _log = get_logger("backtest")
 """
 AETHER Backtracking Verification Engine.
@@ -8,6 +10,7 @@ Calculates the exact performance and P&L impact of implementing our strict momen
 import json
 import os
 import sys
+
 
 # Anchor paths
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -60,7 +63,7 @@ def run_backtrack_study():
     orig_avg_pnl = total_original_pnl / orig_count if orig_count > 0 else 0.0
 
     _log.info("-" * 80)
-    _log.console(f"📊 BASE PERFORMANCE (Old Rules):")
+    _log.console("📊 BASE PERFORMANCE (Old Rules):")
     _log.info(f"  - Completed Trades: {orig_count}")
     _log.info(f"  - Win Rate:         {orig_win_rate:.1f}%")
     _log.info(f"  - Total Net Return: {total_original_pnl:>+6.2f}%")
@@ -118,7 +121,7 @@ def run_backtrack_study():
     s30_avg_pnl = s10_30_pnl / s30_count if s30_count > 0 else 0.0
     s30_improvement = s10_30_pnl - total_original_pnl
 
-    _log.info(f"\n🛡️ SCENARIO A: Strict Momentum Floor (Short10 >= 2.5)")
+    _log.info("\n🛡️ SCENARIO A: Strict Momentum Floor (Short10 >= 2.5)")
     _log.info(f"  - Completed Trades: {s25_count} (Blocked {len(s10_25_rejections)} weak trades)")
     _log.info(f"  - Win Rate:         {s25_win_rate:.1f}% (Change: {s25_win_rate - orig_win_rate:>+5.1f}%)")
     _log.info(f"  - Total Net Return: {s10_25_pnl:>+6.2f}% (Improvement: {s25_improvement:>+6.2f}% net profit!)")
@@ -128,7 +131,7 @@ def run_backtrack_study():
         _log.info(f"    * Blocked {r[0]} (s10={r[1]}, avoided loss of {r[2]:>+.2f}%)")
 
     _log.info("-" * 80)
-    _log.info(f"\n🛡️ SCENARIO B: Strict Momentum Floor (Short10 >= 3.0)")
+    _log.info("\n🛡️ SCENARIO B: Strict Momentum Floor (Short10 >= 3.0)")
     _log.info(f"  - Completed Trades: {s30_count} (Blocked {len(s10_30_rejections)} weak trades)")
     _log.info(f"  - Win Rate:         {s30_win_rate:.1f}% (Change: {s30_win_rate - orig_win_rate:>+5.1f}%)")
     _log.info(f"  - Total Net Return: {s10_30_pnl:>+6.2f}% (Improvement: {s30_improvement:>+6.2f}% net profit!)")

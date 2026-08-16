@@ -7,8 +7,9 @@ import json
 import os
 import sys
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
+
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import watchdog
@@ -93,7 +94,7 @@ class TestCheckStructuredLog(unittest.TestCase):
 class TestCheckLogsIntegration(unittest.TestCase):
     def test_combines_plain_and_structured(self):
         plain_err = [f"[aether.log] [{RECENT}] ERROR plain"]
-        struct_err = [f"[aether.server] structured error"]
+        struct_err = ["[aether.server] structured error"]
         with mock.patch.object(watchdog, "_check_plain_logs", return_value=plain_err), \
              mock.patch.object(watchdog, "_check_structured_log", return_value=struct_err):
             errs = watchdog.check_logs()

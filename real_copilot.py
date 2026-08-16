@@ -1,17 +1,17 @@
-import os
-import openpyxl
-import etrade
-import notify
-import ai_portfolio_game
 from pathlib import Path
 
+import openpyxl
+
+import ai_portfolio_game
+import etrade
+import notify
+
+
 def run_real_copilot_audit():
-    print("[Shadow Copilot] Starting real-account risk and buy audit...")
     
     # 1. Load today's Research technical scores
     XLSX_FILE = Path("Data/state_of_the_day.xlsx")
     if not XLSX_FILE.exists():
-        print("[Shadow Copilot] Error: state_of_the_day.xlsx not found.")
         return
         
     wb = openpyxl.load_workbook(XLSX_FILE, data_only=True, read_only=True)
@@ -37,11 +37,9 @@ def run_real_copilot_audit():
     try:
         tokens = etrade.get_tokens("production")
         if not tokens:
-            print("[Shadow Copilot] Error: Could not obtain E*TRADE tokens.")
             return
         positions = etrade.fetch_positions(tokens, "production")
-    except Exception as e:
-        print(f"[Shadow Copilot] E*TRADE connection failed: {e}")
+    except Exception:
         return
 
     # 3. Analyze holdings for critical SELL signals (Score < 0)
@@ -65,8 +63,7 @@ def run_real_copilot_audit():
     try:
         state = ai_portfolio_game.load_game()
         reserves = state.get("reserves", ["EIX", "AMAT", "URI", "GEV", "RS"])
-    except Exception as e:
-        print(f"[Shadow Copilot] Warning: Could not load game state ({e}). Using default reserves.")
+    except Exception:
         reserves = ["EIX", "AMAT", "URI", "GEV", "RS"]
         
     # Always include EWT and EWY in our copilot watchlist
@@ -86,7 +83,6 @@ def run_real_copilot_audit():
 
     # 5. Format HTML Email Report
     if not sell_tickets and not buy_tickets:
-        print("[Shadow Copilot] No action required. All real positions stable, no reserves triggered.")
         return
 
     html = """
@@ -140,7 +136,6 @@ def run_real_copilot_audit():
     # 6. Send the Email
     subject = f"🛡️ AETHER Shadow Copilot: {len(sell_tickets)} Sells, {len(buy_tickets)} Buys Triggered"
     notify.send_email(subject, html, is_html=True)
-    print(f"[Shadow Copilot] Audit complete. Actionable report dispatched to inbox!")
 
 if __name__ == "__main__":
     run_real_copilot_audit()

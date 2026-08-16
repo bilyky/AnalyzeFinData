@@ -18,6 +18,7 @@ import os
 import re
 import unittest
 
+
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _INDEX_HTML = os.path.join(_ROOT, "web", "index.html")
 _WIKI_JSON = os.path.join(_ROOT, "Data", "wiki.json")

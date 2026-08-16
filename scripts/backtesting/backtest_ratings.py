@@ -11,17 +11,21 @@ Usage:
     python backtest_ratings.py          # default: 2023 onwards
     python backtest_ratings.py 2024     # 2024+ only
 """
-import sys, os
+import os
+import sys
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
 
+import glob
 import json
+import logging
 import os
 import sys
-import glob
-import logging
 from collections import defaultdict
+
 
 # Report output goes through a logger (stdout, bare format) rather than the print
 # builtin, so runs can be captured/redirected via standard logging handlers.
@@ -32,20 +36,37 @@ if not _log.handlers:
     _log.addHandler(_h)
     _log.setLevel(logging.INFO)
     _log.propagate = False
-from scoring import (
-    short_score as _short_score_fn,
-    long_score as _long_score_fn,
-    fibonacci_retracement_score as _fib_score,
-    gann_sq9_score as _gann_score,
-    rsi_divergence_score as _rsi_div_score,
-    rel_volume_bucket as _rel_vol_fn,
-    market_regime as _market_regime,
-)
 from patterns import (
     candlestick_score as _cs_score,
+)
+from patterns import (
     chart_pattern_score as _cp_score,
+)
+from patterns import (
     momentum_pattern_score as _mo_score,
 )
+from scoring import (
+    fibonacci_retracement_score as _fib_score,
+)
+from scoring import (
+    gann_sq9_score as _gann_score,
+)
+from scoring import (
+    long_score as _long_score_fn,
+)
+from scoring import (
+    market_regime as _market_regime,
+)
+from scoring import (
+    rel_volume_bucket as _rel_vol_fn,
+)
+from scoring import (
+    rsi_divergence_score as _rsi_div_score,
+)
+from scoring import (
+    short_score as _short_score_fn,
+)
+
 
 SYM_DIR   = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Data", "Symbol")
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Data", "Symbol_full")
@@ -106,7 +127,6 @@ def precompute_seasonality(ohlcv_ts):
         w = _week_of_month(day)
         wk_last[(y, m, w)] = d
 
-    from collections import defaultdict
     raw = defaultdict(list)
     for (y, m, w), start_date in wk_last.items():
         idx = date_idx[start_date]
@@ -164,16 +184,13 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     # setup_ok: price > SMA20 AND price > close[3d ago]
     sma_w = all_dates[max(0, idx - SMA_DAYS): idx]
     if len(sma_w) >= SMA_DAYS // 2:
-        sma20 = sum(float(ohlcv_ts[d].get('4. close', 0)) for d in sma_w) / len(sma_w)
-        trend_ok = price > sma20 > 0
+        sum(float(ohlcv_ts[d].get('4. close', 0)) for d in sma_w) / len(sma_w)
     else:
-        trend_ok = False
+        pass
     if idx >= 3:
-        price_3d = float(ohlcv_ts[all_dates[idx - 3]].get('4. close', 0))
-        dir_ok = price > price_3d > 0
+        float(ohlcv_ts[all_dates[idx - 3]].get('4. close', 0))
     else:
-        dir_ok = False
-    setup_ok = trend_ok and dir_ok
+        pass
 
     # risk/reward from OHLCV
     stop_w = all_dates[max(0, idx - STOP_DAYS): idx]
@@ -284,18 +301,17 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
     results = []
 
     prev_data = None
-    prev_date = None
 
     for date_str in sorted_cache_dates:
         try:
             with open(date_data[date_str]) as f:
                 data = json.load(f)
         except Exception:
-            prev_data, prev_date = None, date_str
+            prev_data, _prev_date = None, date_str
             continue
 
         if data.get('status') == 'invalid symbol':
-            prev_data, prev_date = data, date_str
+            prev_data, _prev_date = data, date_str
             continue
 
         # Price from JSON
@@ -306,24 +322,24 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
         except (TypeError, ValueError):
             price = 0
         if price <= 0:
-            prev_data, prev_date = data, date_str
+            prev_data, _prev_date = data, date_str
             continue
 
         # Verify price against OHLCV (sanity check, skip large mismatches)
         if date_str in ohlcv_ts:
             ohlcv_close = float(ohlcv_ts[date_str].get('4. close', 0))
             if ohlcv_close > 0 and abs(price - ohlcv_close) / ohlcv_close > 0.1:
-                prev_data, prev_date = data, date_str
+                prev_data, _prev_date = data, date_str
                 continue
 
         try:
             idx = all_dates.index(date_str)
         except ValueError:
-            prev_data, prev_date = data, date_str
+            prev_data, _prev_date = data, date_str
             continue
 
         if idx < max(SMA_DAYS, TARGET_LOOKBACK, 3):
-            prev_data, prev_date = data, date_str
+            prev_data, _prev_date = data, date_str
             continue
 
         (br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms,
@@ -341,7 +357,7 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
 
         results.append((br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms,
                         gann_val, fwd[0], fwd[1], fwd[2]))
-        prev_data, prev_date = data, date_str
+        prev_data, _prev_date = data, date_str
 
     return results
 

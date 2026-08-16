@@ -5,11 +5,12 @@ Implements a self-contained Black-Scholes-Merton pricing model, automated weekly
 out-of-the-money (OTM) Covered Call selection, and position-assignment lifecycles.
 """
 
-import math
 import datetime
+import math
 from pathlib import Path
+
 from aether_logger import get_logger as _get_logger
-from aether.config import CFG
+
 
 _log = _get_logger("options")
 
@@ -229,7 +230,7 @@ def unwind_option_liability_if_held(sym: str, pos: dict, state: dict, current_pr
 
     strike = written_call["strike"]
     qty = written_call["qty"]
-    premium = written_call["premium"]
+    written_call["premium"]
     exp_date = written_call.get("expiration_date", "")
 
     # Calculate days to expiration

@@ -1,7 +1,8 @@
+import py_compile
 import sys
 import unittest
-import py_compile
 from pathlib import Path
+
 
 class TestExecutables(unittest.TestCase):
     def test_compilation(self):
@@ -63,7 +64,7 @@ class TestExecutables(unittest.TestCase):
             
             with mock.patch("server._PID", temp_pid_path), \
                  mock.patch("server._is_running", return_value=False), \
-                 mock.patch("server._log.info") as mock_info:
+                 mock.patch("server._log.info"):
                 
                 # Import server inside the safe isolated context
                 import server

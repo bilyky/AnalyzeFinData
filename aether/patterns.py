@@ -491,7 +491,7 @@ def momentum_pattern_score(ohlcv_ts: dict, date_str: str):
     if len(closes) >= 40:
         ema12 = _ema(closes, 12)
         ema26 = _ema(closes, 26)
-        macd  = [e12 - e26 for e12, e26 in zip(ema12, ema26)]
+        macd  = [e12 - e26 for e12, e26 in zip(ema12, ema26, strict=False)]
         # Skip warmup (first 25 values of macd are unreliable)
         valid_macd = macd[25:]
         if len(valid_macd) >= 10:

@@ -20,8 +20,10 @@ import tempfile
 import threading
 
 import requests
-from aether_logger import get_logger as _get_logger
+
 from aether.config import CFG
+from aether_logger import get_logger as _get_logger
+
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"

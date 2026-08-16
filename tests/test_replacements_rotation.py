@@ -12,14 +12,16 @@ three correctness guarantees added in the badness-gate fix:
 
 No E*TRADE / API calls; uses in-memory openpyxl workbooks.
 """
-import sys
-import os
 import logging
+import os
+import sys
 import unittest
+
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import openpyxl
+
 from workbook_write import update_replacements_sheet
 
 

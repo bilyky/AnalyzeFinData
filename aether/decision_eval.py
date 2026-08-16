@@ -19,6 +19,7 @@ from pathlib import Path
 from aether import ai_client, sell_eval, sell_rules
 from aether.logger import get_logger as _get_logger
 
+
 _log = _get_logger("decision_eval")
 
 _DIR = Path(__file__).resolve().parent.parent

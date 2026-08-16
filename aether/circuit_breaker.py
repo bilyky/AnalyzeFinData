@@ -9,12 +9,15 @@ restore stop-losses to their original wide levels once market panic stabilizes,
 and backfeeds systemic trigger events to the Failure DNA Ledger for weekly retrospectives.
 """
 
-import json
 import datetime
-import pytz
+import json
 from pathlib import Path
+
+import pytz
+
 from aether import risk_utils
 from aether.logger import get_logger as _get_logger
+
 
 _log = _get_logger("circuit_breaker")
 
@@ -199,7 +202,7 @@ def log_circuit_breaker_trigger_dna(reason: str, state: dict, prices=None, _spy_
     try:
         with open(DNA_FILE, "w", encoding="utf-8") as f:
             json.dump(records, f, indent=4)
-        _log.warning(f"  [Breaker Backfeed] Logged systemic trigger DNA to unified ledger (trade_history_dna.json)!")
+        _log.warning("  [Breaker Backfeed] Logged systemic trigger DNA to unified ledger (trade_history_dna.json)!")
     except Exception as e:
         _log.error(f"Failed to log circuit breaker trigger DNA: {e}")
 

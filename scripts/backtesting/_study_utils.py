@@ -1,6 +1,7 @@
 """Shared utilities for digit-sum study scripts."""
 import math
 
+
 MIN_WIN_N = 30
 
 WINDOWS = [

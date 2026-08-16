@@ -104,14 +104,17 @@ import statistics
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import instruments
-import risk_utils
 # Canonical outcome metric — single source of truth, do NOT re-implement.
 from backtest_levels import _evaluate, aggregate
+
+import instruments
+import risk_utils
 from aether_logger import get_logger as _get_logger
+
 
 _log = _get_logger("leveraged_levels")
 
@@ -461,7 +464,7 @@ def _universe_reference(normal_syms):
     adjusted / guarded / non-overlapping way — the ~65% parity target."""
     sym_data, _, _ = _load_symbols(normal_syms)
     wins = []
-    for sym, d in sym_data.items():
+    for _sym, d in sym_data.items():
         recs = _walk(d["feats"], d["h"], d["l"], d["c"], "B1", 0.0, 0)
         wr = _metrics(recs)["win_rate"]
         if wr is not None:
@@ -537,7 +540,7 @@ def run():
         mth = g["best_method"]
         m, n = g["best_combo"]["m"], g["best_combo"]["n"]
         pooled = []
-        for sym, d in data.items():
+        for _sym, d in data.items():
             pooled.extend(_walk(d["feats"], d["h"], d["l"], d["c"], mth, m, n, horizon=10))
         sens[sn] = _metrics(pooled)
 

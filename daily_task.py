@@ -1,17 +1,20 @@
-import os
-import sys
-import datetime
-import subprocess
-import notify
-import watchdog
-import openpyxl
-import traceback
-import json
-import powergauge
-import logging
 import argparse
-from config import CFG
+import datetime
+import json
+import logging
+import os
+import subprocess
+import sys
+import traceback
 from pathlib import Path
+
+import openpyxl
+
+import notify
+import powergauge
+import watchdog
+from config import CFG
+
 
 # --- LOGGING CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -74,7 +77,7 @@ def get_all_data(date):
         symbol_dir = BASE_DIR / "Data" / "Symbol"
         cached_symbols = []
         if symbol_dir.exists():
-            for root, dirs, files in os.walk(symbol_dir):
+            for _root, _dirs, files in os.walk(symbol_dir):
                 for f in files:
                     if f.endswith(f"_{date}.json"):
                         cached_symbols.append(f.rsplit('_', 1)[0])
@@ -314,7 +317,7 @@ def main():
         try:
             # We execute the data sync BEFORE the email is sent so we can append any failures transparently!
             sync_ok = watchdog.sync_data_folder()
-            if not sync_ok:
+            if sync_ok in ("FAILED", "SKIPPED_OFFLINE"):
                 sync_warning_html = (
                     "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
                     "<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Post-Run Data Synchronization Failed!</h4>"

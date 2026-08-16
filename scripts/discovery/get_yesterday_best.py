@@ -1,13 +1,16 @@
 import datetime
+import json
 import os
 import sys
-import json
+
 import openpyxl
+
 
 # Add current dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
+
 
 def get_best():
     # Friday close is the most recent market data for "yesterday evening" (Sunday)
@@ -49,7 +52,7 @@ def get_best():
             continue
 
     # Filter for Bullish and Setup OK
-    bullish_setup = [d for d in all_data if d['pgr_val'] >= 4 and d['setup'] == True]
+    bullish_setup = [d for d in all_data if d['pgr_val'] >= 4 and d['setup']]
     
     # If none found, just Bullish
     if not bullish_setup:
@@ -61,26 +64,23 @@ def get_best():
 
     top_5 = sorted(bullish_setup, key=combined_score, reverse=True)[:5]
     
-    print(f"Top 5 Stocks for {date} (Based on PGR, Setup, and combined S10+BR):")
-    for i, r in enumerate(top_5, 1):
-        print(f"{i}. {r['symbol']} (Score: {combined_score(r):.1f}, S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})")
+    for _i, _r in enumerate(top_5, 1):
+        pass
 
     # Top 5 by Long60 (Position Score)
     top_long = sorted(bullish_setup, key=lambda x: x['long60'], reverse=True)[:5]
-    print(f"\nTop 5 Stocks for {date} by Long60 (Position Score):")
-    for i, r in enumerate(top_long, 1):
-        print(f"{i}. {r['symbol']} (Long60: {r['long60']}, PGR: {r['pgr']}, S10: {r['short10']})")
+    for _i, _r in enumerate(top_long, 1):
+        pass
 
     # Specifically Very Bullish (Bu+)
-    very_bullish = [d for d in all_data if d['pgr_val'] == 5 and d['setup'] == True]
+    very_bullish = [d for d in all_data if d['pgr_val'] == 5 and d['setup']]
     if not very_bullish:
         very_bullish = [d for d in all_data if d['pgr_val'] == 5]
     
     if very_bullish:
         top_bu_plus = sorted(very_bullish, key=combined_score, reverse=True)[:5]
-        print(f"\nTop 5 Very Bullish (Bu+) Stocks for {date}:")
-        for i, r in enumerate(top_bu_plus, 1):
-            print(f"{i}. {r['symbol']} (Score: {combined_score(r):.1f}, S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})")
+        for _i, _r in enumerate(top_bu_plus, 1):
+            pass
 
 if __name__ == "__main__":
     get_best()

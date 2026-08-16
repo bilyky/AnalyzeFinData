@@ -21,6 +21,7 @@ import data_api
 from aether import ai_client
 from aether.logger import get_logger
 
+
 _log = get_logger("stock_compare")
 
 # Shared rubric for the optional AI "WHY" narrative (single source of truth for the

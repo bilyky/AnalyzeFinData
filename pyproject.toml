@@ -39,18 +39,39 @@ select = [
 ignore = [
     "E501",   # Line too long (already mitigated via line-length but ignored completely for comments/HTML)
     "E701",   # Multiple statements on one line (colon) — permits standard short-hand statements (e.g. 'if not x: continue')
+    "E702",   # Multiple statements on one line (semicolon) — permits standard shorthand assignments (e.g. 'a = 1; b = 2')
+    "B008",   # Do not perform function call in argument defaults — required for FastAPI's Body(...) and Header(...) dependency injection
+    "B904",   # Raise exceptions with raise ... from — utility exception chaining recommendation
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Decouple and exempt legacy, utility, and test files cleanly in pyproject.toml
-"aether/etrade.py" = ["T201", "E402"]          # Print statements allowed for E*TRADE verifier console prompts; inline import for reauth lock
-"etrade.py" = ["T201", "E402"]                 # Roots wrapper file inherits exemptions
-"powergauge.py" = ["T201", "E402"]             # Playwright manual logins require prints/inline imports
-"run_history.py" = ["T201", "E402"]            # Parallel history backfill script
-"verify_data_contiguity.py" = ["T201"]         # Terminal auditing script is built on console prints
+# Decouple and exempt legacy, utility, and test files cleanly using cross-platform forward-slashes
+"aether/ai_client.py" = ["S110"]              # Optional AI provider fallback passes
+"aether/etrade.py" = ["T201", "E402", "S110"]  # Print statements, inline imports, and exception passes allowed for headless Playwright login
+"aether/notify.py" = ["S110"]                  # Email dispatch retry passes
+"aether/patterns.py" = ["E741"]                # Ambiguous variable name 'l' (low price) is standard in OHLCV notation
+"aether/scoring.py" = ["S110", "B007"]          # Optional cache read passes; unused monthly loops
+"aether/workbook_write.py" = ["S110", "B007", "B023"] # Lazy VML XML hacks, XML loop mappings, and cell cell-write function variable bindings
+"etrade.py" = ["T201", "E402", "S110"]         # Root wrapper file inherits E*TRADE exemptions
+"powergauge.py" = ["T201", "E402", "S110"]     # Playwright manual login utility requires prints/inline imports
+"run_history.py" = ["T201", "E402", "S110"]    # Parallelized history backfill launcher script
+"patterns.py" = ["E741"]                       # Wrapper file inherits patterns exemptions
+"scoring.py" = ["S110", "B007"]                 # Wrapper file inherits scoring exemptions
+"workbook_write.py" = ["S110", "B007", "B023"]  # Wrapper file inherits workbook exemptions
+"verify_data_contiguity.py" = ["T201", "E722"] # Terminal auditing script is built on console prints
 "scripts/utils/repair_pg_history.py" = ["T201"] # Repair terminal script
-"tests/*" = ["T201", "E402", "S110", "F401"]   # Test files require print/inline imports, exception-pass, and optional unused imports
-"daily_task.py" = ["T201"]                      # Command-line diagnostics uses standard print
+"tests/*" = ["T201", "E402", "S110", "F401", "B007", "E741", "B905", "I"] # Tests require prints, inline imports, exception-pass, isort exemptions, and optional unused/ambiguous variables
+"daily_task.py" = ["T201", "S110"]             # Command-line diagnostics uses standard print; sync exception passes
+"watchdog.py" = ["T201", "S110", "E722"]       # Watchdog terminal prompts, administration CTypes checks, and shell subprocess passes
+"server.py" = ["T201", "S110"]                 # Local FastAPI server logging and news fallback passes
+"scripts/*" = ["T201", "E402", "S110", "E722", "B007", "E741"] # Exempt legacy research study and terminal utilities from prints/inline-imports/try-pass blocks
+"ai_portfolio_game.py" = ["E402", "S110", "B015"] # Exclude inline shutil imports, Excel date checking try-passes, and target diagnostic evaluations
+"autonomous_pipeline.py" = ["E402", "E722", "S110"] # Exclude setup-prompt wrappers, Windows Task kill subprocess passes, and system lock cleanups
+"data_api.py" = ["S110", "B023", "E741"]       # Exclude live E*TRADE token fallback passes, digit sum loops, and terminal log reader lambdas
+"database.py" = ["S110"]                       # Exclude database connection close passes
+"external_intel.py" = ["S110"]                 # Exclude IMAP logout passes
+"performance_tracker.py" = ["E722"]           # Exclude JSON load passes
+"extract_email_intel.py" = ["S110"]            # Exclude email extraction try-passes
 
 [tool.ruff.lint.isort]
 # Organize imports cleanly at top-of-file

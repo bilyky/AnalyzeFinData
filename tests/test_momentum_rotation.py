@@ -1,5 +1,7 @@
 import unittest
+
 import ai_portfolio_game as game
+
 
 class TestDynamicMomentumRotation(unittest.TestCase):
 

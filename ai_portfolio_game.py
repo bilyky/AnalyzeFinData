@@ -1,20 +1,22 @@
-import json
+import argparse
 import datetime
-import openpyxl
+import json
 import os
-import pytz
 import re
+from pathlib import Path
+
+import openpyxl
+import pytz
 import requests
+
+import aether.notify as notify
+import aether_oracle
+import circuit_breaker
+import console_safe
 import etrade
 import rapidapi
-import sys
-import console_safe
-import circuit_breaker
-import aether.notify as notify
-import argparse
-from pathlib import Path
-import aether_oracle
 from aether.utils import _to_float
+
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
 # before the first non-ASCII print. Reduces, not eliminates, cp1252 crashes in
@@ -30,14 +32,16 @@ SYMBOL_FULL_DIR = BASE_DIR / "Data" / "Symbol_full"   # OHLCV cache — one sour
 INITIAL_BALANCE = 10000.0
 
 # Import risk utils safely
+import decision_eval
+import instruments
 import risk_utils
 import sell_rules
-import decision_eval
 import watchdog
-import instruments
 from aether import options
-from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
+from aether_logger import get_logger as _get_logger
+
+
 _log = _get_logger("ai_game")
 
 
@@ -765,6 +769,7 @@ def load_game():
 
 import shutil
 
+
 def save_game(state):
     # --- Mandatory Backup before Write ---
     if AI_GAME_FILE.exists():
@@ -838,7 +843,7 @@ def is_bottom_confirmed(symbol):
         # prices[0]: today, prices[1]: yesterday, prices[2]: 2 days ago, prices[3]: 3 days ago
         change1 = (prices[0] - prices[1]) / prices[1]  # Today vs Yesterday
         change2 = (prices[1] - prices[2]) / prices[2]  # Yesterday vs 2 Days Ago
-        change3 = (prices[2] - prices[3]) / prices[3]  # 2 Days Ago vs 3 Days Ago
+        (prices[2] - prices[3]) / prices[3]  # 2 Days Ago vs 3 Days Ago
         
         # Bottoming signature: Selling pressure is exhausting and slope is turning positive
         # Condition 1: Today's slope is positive (change1 > 0)
@@ -1734,11 +1739,10 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 target_val = _to_float(row[11], 0.0)
                 pgr_val = str(row[6] or "Neutral")
                 
-                is_blue_sky = False
                 # If Chaikin returned no target, or our resolver fell back to atr/pct/stale, it is a Blue-Sky Breakout
                 if sym:
                     t_det = risk_utils.resolve_target_detailed(price, symbol=sym)
-                    is_blue_sky = t_det["source"] in ("atr", "pct", "stale", "none")
+                    t_det["source"] in ("atr", "pct", "stale", "none")
                     
                 # EXEMPTION (High-Score PGR Bypass - R&D #13 & R&D #32 Unification):
                 # We delegate to our centralized, AI-agnostic quantitative validation gate to determine

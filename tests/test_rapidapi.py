@@ -18,11 +18,13 @@ import types
 import unittest
 from unittest import mock
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import bar_provenance
-import rapidapi
 import powergauge
+import rapidapi
+
 
 TODAY = "2026-08-05"          # gap == 0 vs. a latest bar dated the same day
 STALE = "2026-01-01"          # > MAX_GAP_DAYS behind TODAY

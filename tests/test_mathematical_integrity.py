@@ -6,8 +6,10 @@ import os
 import sys
 import unittest
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game
+
 
 class TestMathematicalIntegrity(unittest.TestCase):
     def test_fractional_share_qty_division(self):

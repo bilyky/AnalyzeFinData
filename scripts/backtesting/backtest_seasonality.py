@@ -13,16 +13,20 @@ Outputs:
 
 Usage: python backtest_seasonality.py [min_year]
 """
-import sys, os
+import os
+import sys
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
 
+import glob
 import json
 import os
 import sys
-import glob
 from collections import defaultdict
+
 
 SYM_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
@@ -268,47 +272,35 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
 
 
 def report_component(label, groups):
-    print(f"\n  {label}")
-    print(f"  {'Value':<10} {'Count':>7} {'Avg10d':>8} {'Win%':>7}")
-    print(f"  {'-'*38}")
     keys = sorted(groups.keys(), key=lambda x: (isinstance(x, str), x))
     for key in keys:
         vals = groups[key]
         if not vals:
             continue
-        avg = sum(vals) / len(vals)
-        win = 100 * sum(1 for v in vals if v > 0) / len(vals)
-        print(f"  {str(key):<10} {len(vals):>7,} {avg:>+7.2f}% {win:>6.1f}%")
+        sum(vals) / len(vals)
+        100 * sum(1 for v in vals if v > 0) / len(vals)
 
 
 def report_buckets(label, bucket_vals):
-    print(f"\n  {label}")
-    print(f"  {'Bucket':<12} {'Count':>7} {'Avg10d':>8} {'Med10d':>7} {'Win%':>7}")
-    print(f"  {'-'*48}")
     for lbl, _ in BUCKETS:
         vals = bucket_vals[lbl]
         if not vals:
-            print(f"  {lbl:<12} {'N/A':>7}")
             continue
-        avg = sum(vals) / len(vals)
-        med = sorted(vals)[len(vals) // 2]
-        win = 100 * sum(1 for v in vals if v > 0) / len(vals)
-        print(f"  {lbl:<12} {len(vals):>7,} {avg:>+7.2f}% {med:>+6.2f}% {win:>6.1f}%")
+        sum(vals) / len(vals)
+        sorted(vals)[len(vals) // 2]
+        100 * sum(1 for v in vals if v > 0) / len(vals)
     wins = [100 * sum(1 for v in bucket_vals[lbl] if v > 0) / len(bucket_vals[lbl])
             for lbl, _ in BUCKETS if bucket_vals[lbl]]
-    mono = all(wins[i] <= wins[i+1] for i in range(len(wins)-1))
-    print(f"  Win% monotonic: {'PASS' if mono else 'FAIL'}  {' < '.join(f'{w:.1f}' for w in wins)}")
+    all(wins[i] <= wins[i+1] for i in range(len(wins)-1))
 
 
 def run(min_year=2023):
-    print(f"\nSeasonality comparison >= {min_year} ...")
 
     ohlcv_files = {os.path.basename(f).replace('_daily.json', '')
                    for f in glob.glob(os.path.join(OHLCV_DIR, '*_daily.json'))}
     cache_syms  = {os.path.basename(f).rsplit('_', 1)[0]
                    for f in glob.glob(os.path.join(SYM_DIR, '*.json'))}
     symbols = sorted(ohlcv_files & cache_syms)
-    print(f"  Symbols: {len(symbols)}")
 
     # Accumulators
     mo_score_g  = defaultdict(list)   # monthly score value -> fwd10
@@ -344,10 +336,8 @@ def run(min_year=2023):
                     break
             total += 1
         if i % 50 == 0:
-            print(f"  ... {i}/{len(symbols)}")
+            pass
 
-    print(f"\n  Total: {total:,} observations\n")
-    print("=" * 60)
 
     # 1. Score-level comparison (same ±1/0.5/0 scoring, different period)
     report_component("Monthly seasonality SCORE -> 10d win%", mo_score_g)
@@ -357,28 +347,21 @@ def run(min_year=2023):
     report_component("Week-of-month (1-4, all months pooled) -> 10d win%", wk_raw_g)
 
     # 3. Month × Week heatmap (win%)
-    print(f"\n  Month × Week win% heatmap (10d forward return)")
-    print(f"  {'':>5}", end="")
     for w in range(1, 5):
-        print(f"  Wk{w:>1}", end="")
-    print(f"  {'Month':>6}")
-    print(f"  {'-'*35}")
+        pass
     for m in range(1, 13):
-        print(f"  {MONTH_NAMES[m]:<5}", end="")
         month_vals = mo_raw_g[m]
         for w in range(1, 5):
             vals = mw_raw_g.get((m, w), [])
             if vals:
-                win = 100 * sum(1 for v in vals if v > 0) / len(vals)
-                print(f"  {win:>4.1f}", end="")
+                100 * sum(1 for v in vals if v > 0) / len(vals)
             else:
-                print(f"  {'N/A':>4}", end="")
+                pass
         # Month total
         if month_vals:
-            mwin = 100 * sum(1 for v in month_vals if v > 0) / len(month_vals)
-            print(f"  {mwin:>5.1f}%")
+            100 * sum(1 for v in month_vals if v > 0) / len(month_vals)
         else:
-            print()
+            pass
 
     # 4. Overall BR bucket comparison
     report_buckets("BR buckets using MONTHLY seasonality (current)", bkt_monthly)

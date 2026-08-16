@@ -14,8 +14,10 @@ import sys
 import unittest
 from unittest import mock
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import aether.ai_client as ai_client
+
 
 _GPT    = {"type": "openai_compatible", "enabled": True,
            "endpoint": "https://example/api", "model": "gpt-x", "api_key_source": "env:FAKE"}

@@ -5,25 +5,24 @@ This utility performs a rapid, 5-second diagnostic sweep of all external API gat
 mailboxes, and session states, verifying system readiness before any cron runs.
 """
 
-import sys
-import os
-import time
 import datetime
 import imaplib
+import os
 import smtplib
-import urllib.request
-import ssl
-import json
+import sys
+import time
 from pathlib import Path
+
 
 # Insert project root to import our local modules cleanly
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from aether_logger import get_logger as _get_logger
-from aether.config import CFG
-from aether import etrade
 import powergauge
+from aether import etrade
+from aether.config import CFG
+from aether_logger import get_logger as _get_logger
+
 
 _log = _get_logger("preflight")
 
@@ -77,7 +76,7 @@ def check_gmail_smtp() -> bool:
         server.starttls()
         server.login(sender, password)
         server.quit()
-        _log.console(f"  ✅ SMTP: Successfully authenticated SMTP dispatch server.")
+        _log.console("  ✅ SMTP: Successfully authenticated SMTP dispatch server.")
         return True
     except Exception as e:
         _log.console(f"  ❌ SMTP: Connection failed: {e}")

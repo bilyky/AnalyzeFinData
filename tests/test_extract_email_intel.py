@@ -8,8 +8,10 @@ import sys
 import unittest
 from unittest import mock
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import extract_email_intel as ex
+
 
 _FAKE_RESPONSE = json.dumps({
     "summary": "Nuclear power for AI data centers has a uranium supply deficit.",

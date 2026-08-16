@@ -1,21 +1,28 @@
 import datetime
-import sys
-import re
-import requests
 import json
 import os
+import re
+import sys
 import time
-import urllib3
+
 import pytz
+import requests
+import urllib3
+
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from utils import _to_float
-from aether_logger import get_logger as _get_logger
-import risk_utils
+
 import instruments
+import risk_utils
+from aether_logger import get_logger as _get_logger
 from config import CFG
+from utils import _to_float
+
+
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:
@@ -44,36 +51,73 @@ def is_nyse_market_open() -> bool:
     except Exception:
         return False
 
-from workbook_write import (
-    write_research_headers      as _write_research_headers,
-    write_picks_sheet           as _write_picks_sheet,
-    update_short_long_scores    as _update_short_long_scores,
-    update_replacements_sheet   as _update_replacements_sheet,
-    fix_comment_shape_ids       as _fix_comment_shape_ids,
-    backup_xlsx                 as _backup_xlsx,
-)
-from scoring import (
-    REGIME_SYMBOL,
-    ohlcv_streak_perc    as _ohlcv_streak_perc,
-    ohlcv_streak_count   as _ohlcv_streak_count,
-    week_of_month        as _week_of_month,
-    compute_seasonality  as _compute_seasonality,
-    predicted_win_pct    as _predicted_win_pct,
-    market_regime        as _market_regime,
-    rel_volume_bucket    as _rel_volume_bucket,
-    fibonacci_retracement_score as _fib_score,
-    rsi_divergence_score        as _rsi_div_score,
-    digit_sum_score             as _digit_sum_score,   # close→next-day only
-    short_score          as _short_score_fn,
-    long_score           as _long_score_fn,
+from patterns import (
+    candlestick_score as _cs_score,
 )
 from patterns import (
-    candlestick_score    as _cs_score,
-    chart_pattern_score  as _cp_score,
+    chart_pattern_score as _cp_score,
+)
+from patterns import (
     momentum_pattern_score as _mo_score,
-    pattern_summary      as _pattern_summary,
+)
+from patterns import (
+    pattern_summary as _pattern_summary,
+)
+from patterns import (
     rubber_band_reversal_score as _rbr_score,
 )
+from scoring import (
+    compute_seasonality as _compute_seasonality,
+)
+from scoring import (
+    digit_sum_score as _digit_sum_score,  # close→next-day only
+)
+from scoring import (
+    fibonacci_retracement_score as _fib_score,
+)
+from scoring import (
+    long_score as _long_score_fn,
+)
+from scoring import (
+    market_regime as _market_regime,
+)
+from scoring import (
+    ohlcv_streak_count as _ohlcv_streak_count,
+)
+from scoring import (
+    ohlcv_streak_perc as _ohlcv_streak_perc,
+)
+from scoring import (
+    predicted_win_pct as _predicted_win_pct,
+)
+from scoring import (
+    rel_volume_bucket as _rel_volume_bucket,
+)
+from scoring import (
+    rsi_divergence_score as _rsi_div_score,
+)
+from scoring import (
+    short_score as _short_score_fn,
+)
+from workbook_write import (
+    backup_xlsx as _backup_xlsx,
+)
+from workbook_write import (
+    fix_comment_shape_ids as _fix_comment_shape_ids,
+)
+from workbook_write import (
+    update_replacements_sheet as _update_replacements_sheet,
+)
+from workbook_write import (
+    update_short_long_scores as _update_short_long_scores,
+)
+from workbook_write import (
+    write_picks_sheet as _write_picks_sheet,
+)
+from workbook_write import (
+    write_research_headers as _write_research_headers,
+)
+
 
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
 
@@ -100,6 +144,7 @@ def _chaikin_uuid() -> str:
         return ""
 
 from aether.token_renewer import TokenRenewer as _TokenRenewer
+
 
 _SESSION_VALID_TTL   = 300   # seconds to trust a validated session without re-checking
 _session_valid_until = 0.0   # monotonic timestamp; avoids HTTP validation on every call
@@ -1160,7 +1205,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         try:
             wb = openpyxl.load_workbook(alt)
         except Exception:
-            print(f"  [FATAL] Both source and output files missing or corrupt.")
+            print("  [FATAL] Both source and output files missing or corrupt.")
             return
     
     ws = wb['Research']
@@ -1364,4 +1409,4 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
                                touched_sheet_names=_touched_sheets)
         print(f"ERROR: {XLSX_FILE} is open in another application.")
         print(f"Changes saved to: {alt}")
-        print(f"Close Excel and rename/copy that file to state_of_the_day.xlsx")
+        print("Close Excel and rename/copy that file to state_of_the_day.xlsx")

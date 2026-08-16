@@ -2,11 +2,11 @@
 Tests for config.py — priority logic, null-safety, malformed JSON, missing file.
 No filesystem mutation: all tests use temp files or monkeypatching.
 """
-import json
 import os
 import sys
 import tempfile
 import unittest
+
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config as config_module

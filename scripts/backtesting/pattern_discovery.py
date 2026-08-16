@@ -36,13 +36,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from pathlib import Path
 
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-import notify
-from aether_logger import get_logger as _get_logger
-import powergauge
 import instruments
-from aether.scoring import short_score as _short_score, long_score as _long_score
+import notify
+import powergauge
+from aether_logger import get_logger as _get_logger
+
 
 _log = _get_logger("pattern_discovery")
 

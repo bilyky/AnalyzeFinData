@@ -19,6 +19,7 @@ import openpyxl
 import risk_utils
 from aether_logger import get_logger as _get_logger
 
+
 _log = _get_logger("workbook_read")
 
 BASE_DIR = Path(__file__).resolve().parent

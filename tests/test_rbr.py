@@ -16,6 +16,7 @@ import os
 import sys
 import unittest
 
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import patterns
@@ -133,7 +134,7 @@ class RBRDetectorTest(unittest.TestCase):
         # The score on the confirmation bar must NOT change when future bars exist.
         # Append 5 wild future bars; querying the confirmation date must still be +2.0.
         future = dict(_POCKET)
-        for j, cl in zip(range(40, 45), (50, 40, 30, 20, 10)):   # a post-signal crash
+        for j, cl in zip(range(40, 45), (50, 40, 30, 20, 10), strict=False):   # a post-signal crash
             future[j] = {"o": cl, "h": cl + 1, "l": cl - 1, "c": cl}
         score, _ = patterns.rubber_band_reversal_score(_series(future, n=45), _LAST)
         self.assertEqual(score, 2.0)
