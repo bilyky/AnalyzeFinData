@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 
+
 # Define root directory
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -123,83 +124,36 @@ def check_feature_doc_sync() -> bool:
             ok = False
             print(f"[GIT PRE-COMMIT] BLOCK - Feature-doc-sync: '{key}' logic changed "
                   f"({', '.join(sorted(srcs))}),")
-            print(f"   but these documentation surfaces are NOT staged in this commit:")
+            print("   but these documentation surfaces are NOT staged in this commit:")
             for (p, desc) in missing:
                 print(f"     - {p}  ({desc})")
-            print(f"   Action: update the surface(s) above and `git add` them, OR - if no doc")
-            print(f"   change is truly needed - acknowledge it explicitly:")
+            print("   Action: update the surface(s) above and `git add` them, OR - if no doc")
+            print("   change is truly needed - acknowledge it explicitly:")
             print(f"       AETHER_DOCSYNC_ACK={key} git commit ...")
     return ok
 
 
-def check_no_inline_imports(file_path: str) -> bool:
-    """Use ast to detect any import statement not at module scope (col_offset > 0)."""
+def check_ruff_standards(file_path: str) -> bool:
+    """Use Ruff to statically and instantaneously verify all quality, import, print, and exception standards."""
+    rel = os.path.relpath(file_path, ROOT_DIR)
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            source = f.read()
-        try:
-            tree = ast.parse(source, filename=file_path)
-        except SyntaxError:
-            return True  # py_compile will catch syntax errors separately
-        rel = os.path.relpath(file_path, ROOT_DIR)
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.Import, ast.ImportFrom)):
-                if node.col_offset > 0:
-                    print(f"[GIT PRE-COMMIT] Inline import in {rel} at line {node.lineno}")
-                    print("   Action required: Move all imports to the top of the file.")
-                    return False
-        return True
-    except Exception as e:
-        print(f"Error checking {file_path}: {e}")
-        return True
-
-def check_no_silent_exceptions(file_path: str) -> bool:
-    """Scan python file and fail if any silent except: pass or except Exception: pass are found."""
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+        # Determine the correct ruff executable
+        # If in a virtual environment on Windows, use local ruff.exe first
+        ruff_executable = "ruff"
+        local_ruff = os.path.join(ROOT_DIR, "venv_new", "Scripts", "ruff.exe")
+        if os.path.exists(local_ruff):
+            ruff_executable = local_ruff
             
-        silent_except_re = re.compile(r"^[ \t]*except\s*(Exception)?\s*:\s*(pass\s*|#\s*pass\s*)$")
-        
-        for idx, line in enumerate(lines, 1):
-            stripped = line.strip()
-            if silent_except_re.match(line) or stripped == "except: pass" or stripped == "except Exception: pass":
-                print(f"[GIT PRE-COMMIT] BLOCK - Silent exception swallowing detected in {os.path.relpath(file_path, ROOT_DIR)} at line {idx}:")
-                print(f"   Line {idx}: {stripped}")
-                print("   Action required: Add proper logging or raise/traceback! No silent 'except: pass'.")
-                return False
-        return True
-    except Exception as e:
-        print(f"Error checking {file_path}: {e}")
-        return True
-
-def check_no_print_statements(file_path: str) -> bool:
-    """Detect bare print() calls using ast. No print statements are allowed."""
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            source = f.read()
-        lines = source.splitlines()
-        try:
-            tree = ast.parse(source, filename=file_path)
-        except SyntaxError:
-            return True  # py_compile handles syntax errors
-        rel = os.path.relpath(file_path, ROOT_DIR)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            # Match bare print(...) — not obj.print(...)
-            if not isinstance(func, ast.Name) or func.id != "print":
-                continue
-            lineno = node.lineno
-            raw_line = lines[lineno - 1] if lineno <= len(lines) else ""
-            print(f"[GIT PRE-COMMIT] bare print() in {rel} at line {lineno}: {raw_line.strip()[:80]}")
-            print("   Use _log.console() for progress, _log.info/warning/error() for events.")
-            print("   Print statements are strictly banned with ZERO shortcuts or exemptions.")
+        res = subprocess.run([ruff_executable, "check", file_path], capture_output=True, text=True, errors="replace")
+        if res.returncode != 0:
+            print(f"🚨 [GIT PRE-COMMIT] BLOCK - Ruff Quality Gate Failed in {rel}!")
+            print(res.stdout.strip())
+            print("-" * 70)
+            print("Action required: Correct the style/logic issues shown above before committing.")
             return False
         return True
     except Exception as e:
-        print(f"Error checking {file_path}: {e}")
+        print(f"Error executing Ruff on {rel}: {e}")
         return True
 
 
@@ -321,7 +275,7 @@ def check_new_features_tested() -> bool:
                     pass
                     
             if not coverage_found:
-                print(f"🚨 [GIT PRE-COMMIT] BLOCK - Missing Test Coverage!")
+                print("🚨 [GIT PRE-COMMIT] BLOCK - Missing Test Coverage!")
                 print(f"   Staged changes introduce '{check['name']}', but no matching unit test was found in the 'tests/' folder.")
                 print(f"   Action required: Add a test method containing '{check['test_keyword']}' to verify the new feature!")
                 return False
@@ -378,26 +332,9 @@ def main():
             if any(x in fpath for x in _skip_all):
                 continue
 
-            # Files exempt from inline-import check:
-            # - workbook_write.py: pre-existing lazy-load inside openpyxl callbacks
-            # - test_*.py: inline imports inside test methods are legitimate (isolate failures)
-            # - powergauge.py: optional try/except imports for Playwright automation
-            # - run_history.py: historical backfill parallelized launcher script
-            _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py")
-            if not any(x in fpath for x in _skip_imports):
-                if not check_no_inline_imports(fpath):
-                    success = False
-
-            if not check_no_silent_exceptions(fpath):
+            if not check_ruff_standards(fpath):
                 success = False
 
-            # Files exempt from print() check (Playwright interactive browser prompts
-            # that intentionally write to the user's terminal, not to the log system)
-            _skip_print = ("etrade.py", "powergauge.py", "run_history.py")
-            if not any(x in fpath for x in _skip_print):
-                if not check_no_print_statements(fpath):
-                    success = False
-                
     if not success:
         print("[GIT PRE-COMMIT] FAILED. Resolve the issues above before committing.")
         sys.exit(1)
