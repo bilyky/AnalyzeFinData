@@ -89,6 +89,13 @@ def _find_peaks_troughs(closes: np.ndarray, n: int = 3):
 
 # ── Candlestick score ─────────────────────────────────────────────────────────
 
+# Per-pattern *magnitude* weights — how strongly each pattern's fire moves the raw
+# bull/bear tally. These are hand-set reliability priors (NOT per-pattern backtested)
+# and remain PROVISIONAL pending per-pattern calibration; only the aggregate
+# candlestick factor weight is backtested (3.49% spread) and consumed CONTRARIAN
+# (negative) in scoring.short_score/long_score — so a larger fire on a "strong"
+# bullish pattern lowers the buy score. The reliability labels below describe the
+# pattern's classical strength, not a directional/bullish contribution.
 CANDLESTICK_WEIGHTS = {
     "engulfing":       1.50, # High reliability
     "harami":          0.75, # Moderate
@@ -156,6 +163,10 @@ def candlestick_score(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> float
     _check(sig.double_trouble_signal(arr_atr.copy(), 0, 1, 2, 3, 5, 6, 7), 6, 7, "double_trouble")
 
     raw = bull - bear
+    # Normalize to [-2, +2]. The /5.0 saturation point (raw >= 5 -> full scale) is a
+    # provisional hand-set constant, NOT backtest-derived — it caps a few concurrent
+    # fires at the rail so no single bar dominates. Calibrate alongside the per-pattern
+    # CANDLESTICK_WEIGHTS when the per-pattern backtest lands.
     score = max(-2.0, min(2.0, raw / 5.0 * 2.0))
     return round(score, 2)
 

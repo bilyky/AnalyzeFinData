@@ -546,9 +546,9 @@ def short_score(pg_fields: dict) -> float:
       Regime         +-1.0
       Fibonacci      +-1.0
       RSI Divergence 1.85% spread: +/-0.5 (calibrated Phase A backtest)
-      Candlestick    3.49% spread: contrarian, weight -1.5 (high score = bearish signal, calibrated post-market Aug-12)
-      Chart Pattern  11.83% spread: contrarian, weight -1.5 (bearish patterns = recovery, calibrated post-market Aug-12)
-      Momentum       5.76% spread: contrarian, weight -1.5 (bearish momentum = reversal, calibrated post-market Aug-12)
+      Candlestick    3.49% spread: contrarian, weight -0.30 (high score = bearish signal, calibrated post-market Aug-12)
+      Chart Pattern  11.83% spread: contrarian, weight -0.30 (bearish patterns = recovery, calibrated post-market Aug-12)
+      Momentum       5.76% spread: contrarian, weight -0.30 (bearish momentum = reversal, calibrated post-market Aug-12)
       Digit-sum      symbol-specific numerology (z>=2.0 signals only): +-1.0
       RBR (V-recov)  1.26% 10d spread: BULLISH, weight +0.5 (score [0,+2]); confirmed
                      overreaction-recovery bar; validated pocket win 0.552 > knife 0.544
@@ -590,9 +590,9 @@ def long_score(pg_fields: dict) -> float:
       Regime         +-1.5
       Fibonacci      +-0.5
       RSI Divergence 1.85% spread: +/-0.25 (calibrated Phase A backtest)
-      Candlestick    3.49% spread: contrarian, weight -0.75 (calibrated post-market Aug-12)
-      Chart Pattern  11.83% spread: contrarian, weight -0.75 (calibrated post-market Aug-12)
-      Momentum       5.76% spread: contrarian, weight -0.75 (calibrated post-market Aug-12)
+      Candlestick    3.49% spread: contrarian, weight -0.15 (calibrated post-market Aug-12)
+      Chart Pattern  11.83% spread: contrarian, weight -0.15 (calibrated post-market Aug-12)
+      Momentum       5.76% spread: contrarian, weight -0.15 (calibrated post-market Aug-12)
       Digit-sum      symbol-specific numerology (z>=2.0 signals only): +-0.5
       RBR (V-recov)  BULLISH, weight +0.25 (half the S10 weight; score [0,+2])
     """
