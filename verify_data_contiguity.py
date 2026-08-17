@@ -14,8 +14,13 @@ from pathlib import Path
 # Add workspace root to import path
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT_DIR)
+
+# Non-tradeable placeholder that E*TRADE reports as a holding (a rights/CVR stub with
+# no price cache); skip it from the pricing/contiguity audit rather than flag a false gap.
+NON_TRADEABLE_STUBS = {"931CVR013"}
 import data_api
 import instruments
+from aether import etrade
 
 
 def get_expected_weekdays(days_count: int = 15) -> list[str]:
@@ -40,16 +45,19 @@ def audit_database() -> bool:
     print(" 🛡️  PROJECT AETHER: ZERO-TRUST DATABASE CONTIGUITY & PRICING AUDIT")
     print("="*80)
 
-    # Check passively if we have a valid E*TRADE session file on disk today.
-    # If not, we are running on stale, frozen Excel fallback portfolio data (frozen on 8/12).
-    # We must cleanly bypass E*TRADE vs Cache pricing checks to prevent false price mismatches
-    # and block active, interactive Playwright browser launches during local audits!
-    token_path = os.path.join(ROOT_DIR, "Data", "etrade_tokens.json")
-    is_etrade_online = os.path.exists(token_path)
-    
+    # Probe for a genuinely usable E*TRADE session (valid tokens), not merely a token
+    # file on disk — an expired/rejected token file exists but yields no live prices, so
+    # a file-existence check would falsely enable the E*TRADE-vs-cache pricing audit and
+    # emit spurious mismatches. allow_browser=False keeps this non-interactive (no
+    # Playwright launch) during local/pre-commit audits.
+    try:
+        is_etrade_online = bool(etrade.get_tokens("production", allow_browser=False))
+    except Exception:
+        is_etrade_online = False
+
     if not is_etrade_online:
-        print("  ⚠️  [Pre-Commit Warning] E*TRADE live connection is unauthenticated. Running on frozen Excel fallbacks (stale on 8/12).")
-        print("  ⚠️  Bypassing E*TRADE vs Cache pricing audits to prevent false-alarm mismatches. Local caches are fresh!")
+        print("  ⚠️  E*TRADE live session is unauthenticated; running on cached/fallback portfolio data.")
+        print("  ⚠️  Skipping E*TRADE-vs-cache pricing audits (no live quotes) to avoid false-alarm mismatches.")
         print("-"*80)
 
     # 1. Fetch active symbols from E*TRADE accounts
@@ -65,7 +73,7 @@ def audit_database() -> bool:
     for a in accounts:
         for h in a.get("holdings", []):
             sym = h.get("symbol", "").strip().upper()
-            if sym and sym != "931CVR013" and not instruments.is_excluded(sym):
+            if sym and sym not in NON_TRADEABLE_STUBS and not instruments.is_excluded(sym):
                 unique_symbols.add(sym)
                 positions_map[sym] = h
 
@@ -160,7 +168,7 @@ def audit_database() -> bool:
     print(f"  * 3-Way Pricing Discrepancies:    {discrepancy_count}")
     
     if all_passed:
-        print("\n🏆  [STATUS] PASS: Your active database is 100% continuous, contiguous, and pricing is fully synchronized!")
+        print("\n✅  [STATUS] PASS: All audited holdings have contiguous timelines and synchronized pricing.")
     else:
         print("\n⚠️  [STATUS] FAIL: Discrepancies or database gaps were detected. Please run 'rapidapi.py' to heal the gaps.")
     print("="*80 + "\n")

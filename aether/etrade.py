@@ -20,6 +20,7 @@ _log = logging.getLogger("aether.etrade")
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _TOKEN_PATH = os.path.join(_DIR, "Data", "etrade_tokens.json")
+_FAIL_STATE_PATH = os.path.join(_DIR, "Data", "etrade_fail_state.json")
 
 from aether.token_renewer import TokenRenewer as _TokenRenewer
 
@@ -516,7 +517,7 @@ def _load_tokens_any_date(env) -> dict | None:
 
 
 def _get_failure_state():
-    fail_path = os.path.join(_DIR, "Data", "etrade_fail_state.json")
+    fail_path = _FAIL_STATE_PATH
     if os.path.exists(fail_path):
         try:
             with open(fail_path, "r") as f:
@@ -527,7 +528,7 @@ def _get_failure_state():
 
 
 def _reset_failure_count():
-    fail_path = os.path.join(_DIR, "Data", "etrade_fail_state.json")
+    fail_path = _FAIL_STATE_PATH
     try:
         state = _get_failure_state()
         if state["consecutive_failures"] > 0:
@@ -540,7 +541,7 @@ def _reset_failure_count():
 
 
 def _increment_failure_count():
-    fail_path = os.path.join(_DIR, "Data", "etrade_fail_state.json")
+    fail_path = _FAIL_STATE_PATH
     state = _get_failure_state()
     state["consecutive_failures"] += 1
     state["last_failure_time"] = time.time()
@@ -571,7 +572,7 @@ def check_etrade_cookie_freshness():
                     return
                 
                 state["last_warning_sent_date"] = today_str
-                fail_path = os.path.join(_DIR, "Data", "etrade_fail_state.json")
+                fail_path = _FAIL_STATE_PATH
                 try:
                     os.makedirs(os.path.dirname(fail_path), exist_ok=True)
                     with open(fail_path, "w") as f:

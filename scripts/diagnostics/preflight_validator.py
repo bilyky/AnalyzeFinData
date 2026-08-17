@@ -30,13 +30,14 @@ _log = _get_logger("preflight")
 
 
 def purge_browser_zombies():
-    """Autonomically search and terminate any orphaned node.exe, headless_shell.exe,
-    or automated chrome.exe zombie processes on Windows to prevent dangerous Playwright launch pipe-hangs!
+    """Terminate orphaned node.exe, headless_shell.exe, or automated chrome.exe processes
+    on Windows so a stale Playwright child can't hang the next browser launch on a pipe.
+    Skips developer/Gemini CLI processes so only automation zombies are killed.
     """
     if sys.platform != "win32":
         return
     try:
-        # Force-kill only orphaned background Playwright NodeJS child processes, protecting Gemini CLI!
+        # Kill only orphaned Playwright headless-shell children; leave the CLI host alone.
         subprocess.run(["taskkill", "/F", "/IM", "headless_shell.exe", "/T"], capture_output=True)
 
         # Fine-grained Node.exe cleanup protecting active Gemini sessions
@@ -64,9 +65,9 @@ def purge_browser_zombies():
                         subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
                         killed_count += 1
                 if killed_count > 0:
-                    _log.console(f"🧹 [Autonomic Healing] Purged {killed_count} background Playwright node.exe processes!")
-        except Exception:
-            pass
+                    _log.console(f"🧹 Purged {killed_count} orphaned Playwright node.exe process(es).")
+        except Exception as e:
+            _log.warning(f"node.exe zombie sweep skipped (non-fatal): {e}")
 
         # Fine-grained automated Chrome process cleanup (to protect user's active Chrome)
         try:
@@ -87,11 +88,11 @@ def purge_browser_zombies():
                         subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
                         killed_count += 1
                 if killed_count > 0:
-                    _log.console(f"🧹 [Autonomic Healing] Purged {killed_count} automated background chrome.exe processes!")
-        except Exception:
-            pass
+                    _log.console(f"🧹 Purged {killed_count} automated background chrome.exe process(es).")
+        except Exception as e:
+            _log.warning(f"chrome.exe zombie sweep skipped (non-fatal): {e}")
 
-        _log.console("🧹 [Autonomic Healing] Successfully purged all background browser and NodeJS zombie processes!")
+        _log.console("🧹 Browser/NodeJS zombie sweep complete.")
     except Exception as e:
         _log.console(f"  ⚠️ Warning: Could not purge zombie processes: {e}")
 
@@ -200,8 +201,8 @@ def check_etrade_api() -> bool:
 
 
 def run_preflight_diagnostics() -> bool:
-    """Execute all pre-flight diagnostic checks and return True on 100% PASS."""
-    # Autonomically purge browser and NodeJS zombie processes first to prevent Playwright pipe hangs!
+    """Execute all pre-flight diagnostic checks and return True only if every check passes."""
+    # Purge browser/NodeJS zombies first so a stale process can't hang a later Playwright launch.
     purge_browser_zombies()
 
     _log.console("=" * 70)
@@ -229,7 +230,7 @@ def run_preflight_diagnostics() -> bool:
     
     all_ok = imap_ok and smtp_ok and chaikin_ok and etrade_ok
     if all_ok:
-        _log.console("☀️ [PRE-FLIGHT SUCCESS] All external API and email gateways are 100% ONLINE.")
+        _log.console("☀️ [PRE-FLIGHT SUCCESS] All external API and email gateways are online.")
         _log.console("=" * 70)
         return True
     else:

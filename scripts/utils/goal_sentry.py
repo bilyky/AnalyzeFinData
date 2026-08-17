@@ -1,13 +1,12 @@
 """
-Project AETHER: Goal & Trajectory Sentry Hook
+Project AETHER: Goal & Trajectory Sentry
 
-Autonomically calculates and saves the exact, fact-checked targets, goals,
-remaining days, and required compounding returns for both:
+Computes the targets, goals, remaining days, and required compounding returns for:
 1. Project 1 (The AI Portfolio Game)
 2. Project 2 (The Oracle Project)
 
-Saves results to Data/active_targets.json to guarantee 100% trustable,
-verifiable, and unspeculated progress reporting.
+Reads authoritative fields from state (no speculation) and writes the result to
+Data/active_targets.json for downstream progress reporting.
 """
 
 import datetime
@@ -47,11 +46,12 @@ def run_sentry():
             target_equity = 20000.0
             total_days = 90
             
-            # Extract start date or calculate days active
-            txs = game_state.get("transactions", [])
-            start_date_str = txs[-1].get("date") if txs else "2026-06-17"
+            # Use the authoritative top-level start_date field (the state has no
+            # "transactions" key — the trade log is "history"; and history[-1] would be the
+            # NEWEST entry, not the start). Only fall back if start_date is genuinely absent.
+            start_date_str = game_state.get("start_date") or "2026-06-17"
             try:
-                start_date = datetime.date.fromisoformat(start_date_str)
+                start_date = datetime.date.fromisoformat(str(start_date_str))
                 days_active = (today - start_date).days
             except Exception:
                 days_active = 61  # Fallback
@@ -138,7 +138,7 @@ def run_sentry():
     os.makedirs(os.path.dirname(TARGET_PATH), exist_ok=True)
     with open(TARGET_PATH, "w") as f:
         json.dump(results, f, indent=4)
-    print(f"✅ Sentry Update Success: Fact-checked active targets saved to {TARGET_PATH}")
+    print(f"Sentry update complete: active targets saved to {TARGET_PATH}")
 
 
 if __name__ == "__main__":

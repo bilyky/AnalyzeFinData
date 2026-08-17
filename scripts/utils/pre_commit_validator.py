@@ -13,6 +13,7 @@ Enforces:
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -113,41 +114,78 @@ def check_feature_doc_sync() -> bool:
                     break
 
     ok = True
-    for key, _srcs in sorted(touched.items()):
+    for key, srcs in sorted(touched.items()):
         if key in ack:
             continue
         missing = [(p, desc) for (p, desc) in DOC_SYNC_SURFACES.get(key, []) if p not in staged]
         if missing:
             ok = False
-            for (_p, _desc) in missing:
-                pass
+            print(f"🚨 [GIT PRE-COMMIT] BLOCK - doc-sync: code under @doc-sync '{key}' changed "
+                  f"({', '.join(sorted(srcs))}) but these documentation surfaces are not staged:")
+            for (p, desc) in missing:
+                print(f"     - {p}  ({desc})")
+            print(f"   Stage the docs above, or acknowledge as doc-neutral: "
+                  f"AETHER_DOCSYNC_ACK={key} git commit ...")
     return ok
 
 
-def check_ruff_standards(file_path: str) -> bool:
-    """Use Ruff to statically and instantaneously verify all quality, import, print, and exception standards."""
-    rel = os.path.relpath(file_path, ROOT_DIR).replace("\\", "/")
-    try:
-        # Determine the correct ruff executable
-        # If in a virtual environment on Windows, use local ruff.exe first
-        ruff_executable = "ruff"
-        local_ruff = os.path.join(ROOT_DIR, "venv_new", "Scripts", "ruff.exe")
-        if os.path.exists(local_ruff):
-            ruff_executable = local_ruff
+def _resolve_ruff_cmd():
+    """Return the argv prefix that invokes Ruff, or None if Ruff cannot be found.
 
-        # Direct Network/Context Hook: Pass the normalized relative path 'rel' and run from 'ROOT_DIR'
-        # so that Ruff can perfectly match all 'per-file-ignores' patterns in pyproject.toml!
-        res = subprocess.run([ruff_executable, "check", rel], capture_output=True, text=True, errors="replace", cwd=ROOT_DIR)
-        if res.returncode != 0:
-            print(f"🚨 [GIT PRE-COMMIT] BLOCK - Ruff Quality Gate Failed in {rel}!")
-            print(res.stdout.strip())
-            print("-" * 70)
-            print("Action required: Correct the style/logic issues shown above before committing.")
-            return False
-        return True
+    Resolution order (robust across environments — no single hardcoded machine path):
+      1. a project-local venv ruff executable, if present;
+      2. `ruff` on PATH;
+      3. `<python> -m ruff` (Ruff installed as a module of the running interpreter).
+    Returning None lets the caller fail *closed* rather than silently skip the gate.
+    """
+    for venv in ("venv_new", "venv", ".venv"):
+        exe = "ruff.exe" if os.name == "nt" else "ruff"
+        local = os.path.join(ROOT_DIR, venv, "Scripts" if os.name == "nt" else "bin", exe)
+        if os.path.exists(local):
+            return [local]
+    on_path = shutil.which("ruff")
+    if on_path:
+        return [on_path]
+    # Final fallback: the interpreter's own ruff module (installed via pip in this env).
+    try:
+        probe = subprocess.run([sys.executable, "-m", "ruff", "--version"],
+                               capture_output=True, text=True, errors="replace")
+        if probe.returncode == 0:
+            return [sys.executable, "-m", "ruff"]
+    except Exception:
+        pass
+    return None
+
+
+def check_ruff_standards(file_path: str) -> bool:
+    """Run Ruff to verify import/print/exception/style standards for one staged file.
+
+    FAILS CLOSED: if Ruff cannot be located or errors out, the commit is BLOCKED (returns
+    False) rather than silently allowed — the standing 'never bypass the gate' rule means a
+    missing linter must stop the commit, not disable the check without anyone noticing.
+    """
+    rel = os.path.relpath(file_path, ROOT_DIR).replace("\\", "/")
+    ruff_cmd = _resolve_ruff_cmd()
+    if ruff_cmd is None:
+        print("🚨 [GIT PRE-COMMIT] BLOCK - Ruff is not installed / not resolvable.")
+        print("   Install it (pip install ruff) or expose it on PATH; the quality gate "
+              "will not pass silently without it.")
+        return False
+    try:
+        # Pass the normalized relative path 'rel' and run from ROOT_DIR so Ruff matches the
+        # 'per-file-ignores' patterns in pyproject.toml.
+        res = subprocess.run([*ruff_cmd, "check", rel], capture_output=True, text=True,
+                             errors="replace", cwd=ROOT_DIR)
     except Exception as e:
-        print(f"Error executing Ruff on {rel}: {e}")
-        return True
+        print(f"🚨 [GIT PRE-COMMIT] BLOCK - could not execute Ruff on {rel}: {e}")
+        return False
+    if res.returncode != 0:
+        print(f"🚨 [GIT PRE-COMMIT] BLOCK - Ruff Quality Gate Failed in {rel}!")
+        print(res.stdout.strip())
+        print("-" * 70)
+        print("Action required: Correct the style/logic issues shown above before committing.")
+        return False
+    return True
 
 
 def check_rd_roadmap_sync() -> bool:
@@ -184,10 +222,16 @@ def check_rd_roadmap_sync() -> bool:
         max_road_item = max(int(x) for x in road_items) if road_items else 0
         
         if max_mem_item != max_road_item:
+            print(f"🚨 [GIT PRE-COMMIT] BLOCK - R&D roadmap out of sync: highest item in "
+                  f"MEMORY.md is #{max_mem_item} but plans/roadmap.md is #{max_road_item}. "
+                  f"Reconcile the two ledgers before committing.")
             return False
-            
+
         return True
-    except Exception:
+    except Exception as e:
+        # Soft check across heterogeneous environments — don't block on a parse/read error,
+        # but say so rather than skipping silently.
+        print(f"[GIT PRE-COMMIT] R&D roadmap sync check skipped (non-fatal): {e}")
         return True
 
 def check_new_features_tested() -> bool:
@@ -240,14 +284,14 @@ def check_new_features_tested() -> bool:
                 if re.search(check["signature"], content):
                     signature_found = True
                     break
-            except Exception:
-                pass
-                
+            except OSError as e:
+                print(f"[GIT PRE-COMMIT] warning: could not read staged file {fpath}: {e}")
+
         if signature_found:
-            
+
             test_dir = os.path.join(ROOT_DIR, "tests")
             test_files = [os.path.join(test_dir, f) for f in os.listdir(test_dir) if f.startswith("test_") and f.endswith(".py")]
-            
+
             coverage_found = False
             for t_file in test_files:
                 try:
@@ -256,12 +300,14 @@ def check_new_features_tested() -> bool:
                     if check["test_keyword"] in test_content:
                         coverage_found = True
                         break
-                except Exception:
-                    pass
-                    
+                except OSError as e:
+                    print(f"[GIT PRE-COMMIT] warning: could not read test file {t_file}: {e}")
+
             if not coverage_found:
+                print(f"🚨 [GIT PRE-COMMIT] BLOCK - feature '{check['name']}' is staged but no "
+                      f"test contains '{check['test_keyword']}'. Add a matching unit test in tests/.")
                 return False
-                
+
     return True
 
 def get_staged_python_files() -> list:
