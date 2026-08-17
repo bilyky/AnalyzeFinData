@@ -15,6 +15,7 @@ import argparse
 from pathlib import Path
 import aether_oracle
 from aether.utils import _to_float
+from aether.config import CFG
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
 # before the first non-ASCII print. Reduces, not eliminates, cp1252 crashes in
@@ -709,6 +710,33 @@ def calculate_share_qty(symbol: str, cash_to_use: float, price: float) -> float:
         return round(cash_to_use / price, 3)
     else:
         return int(cash_to_use // price)
+
+def adaptive_s10_floor(cash_pct: float) -> float:
+    """Dynamic short-term momentum floor for new buys (R&D #15).
+
+    When idle cash drags above CFG.system_cash_drag_threshold, relax the required
+    Short10 floor from system_default_s10_floor down to system_adaptive_s10_floor so
+    capital can be deployed; otherwise hold the stricter default. Single-sourced from
+    CFG.system_{cash_drag_threshold,adaptive_s10_floor,default_s10_floor}.
+    """
+    if cash_pct > CFG.system_cash_drag_threshold:
+        return CFG.system_adaptive_s10_floor
+    return CFG.system_default_s10_floor
+
+def should_pyramid_into_winner(is_winner: bool, has_peak: bool, s10: float, l60: float) -> bool:
+    """Pyramiding momentum gate (R&D #31).
+
+    Scale into a profitable, risk-locked winner trading near its peak when EITHER
+    short-term momentum holds (s10 >= system_pyramiding_s10_floor) OR long-term
+    trend support is strong (l60 >= system_pyramiding_l60_floor) — the latter lets
+    us add on minor short-term pullbacks within an established uptrend. Thresholds
+    are single-sourced from CFG.system_pyramiding_*.
+    """
+    return (
+        is_winner
+        and has_peak
+        and (s10 >= CFG.system_pyramiding_s10_floor or l60 >= CFG.system_pyramiding_l60_floor)
+    )
 
 def load_game():
     if not AI_GAME_FILE.exists() or AI_GAME_FILE.stat().st_size == 0:
@@ -1690,9 +1718,9 @@ def run_daily_ai_management(force=False, manual_profile=None):
             price = prices.get(sym, 0)
             short10 = row[24] or 0.0
 
-            # Dynamic Adaptive s10 Floor (R&D #15): If cash drag is high (>25%), lower momentum floor to 2.0 to deploy capital safely
+            # Dynamic Adaptive s10 Floor (R&D #15) — thresholds single-sourced via helper.
             cash_pct = (state["balance"] / state["equity"]) * 100.0 if state.get("equity", 0) > 0 else 0.0
-            required_floor = 2.0 if cash_pct > 25.0 else 2.5
+            required_floor = adaptive_s10_floor(cash_pct)
 
             # Strict Short10 Momentum Floor: Reject buy entries if short-term momentum is below required floor
             if short10 < required_floor:
@@ -1715,25 +1743,17 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         continue
 
                 # Reward-to-Risk & Target Upside Filter (Risk-Reward Gate):
-                # Reject if the projected Reward-to-Risk ratio is < 2:1 (R/R < 2.0)
-                # OR if the projected target gain percentage is <= 5.0% of the current price.
-                # EXEMPTION (Breakout Risk-Reward Waiver - R&D #32):
-                # If a symbol is an elite momentum leader (combined >= 6.0, s10 >= 2.0, PGR is Bullish)
-                # AND we are in a 'Blue-Sky' breakout (target source is 'atr', 'pct', 'stale', or 'none', representing no real overhead resistance),
-                # we WAIVE these conservative target-fallback restrictions to capture breakout-alpha!
+                # Reject if the projected Reward-to-Risk ratio is below CFG.system_default_min_rr,
+                # OR if the projected target gain percentage is below 5.0% of the current price.
+                # EXEMPTION (Breakout Risk-Reward Waiver - R&D #13 & #32):
+                # An elite momentum leader (see is_elite_breakout_candidate: combined + s10 both
+                # above the CFG.system_bypass_* floors) waives the conservative R:R and target-gain
+                # fallback restrictions below, to capture breakout alpha on names with no real
+                # overhead resistance. Gate is delegated so the thresholds live in one place.
                 stop_val = _to_float(row[9], 0.0)
                 target_val = _to_float(row[11], 0.0)
                 pgr_val = str(row[6] or "Neutral")
-                
-                is_blue_sky = False
-                # If Chaikin returned no target, or our resolver fell back to atr/pct/stale, it is a Blue-Sky Breakout
-                if sym:
-                    t_det = risk_utils.resolve_target_detailed(price, symbol=sym)
-                    is_blue_sky = t_det["source"] in ("atr", "pct", "stale", "none")
-                    
-                # EXEMPTION (High-Score PGR Bypass - R&D #13 & R&D #32 Unification):
-                # We delegate to our centralized, AI-agnostic quantitative validation gate to determine
-                # if the asset qualifies as an elite breakout leader, waiving the PGR and R:R constraints.
+
                 is_elite_breakout = risk_utils.is_elite_breakout_candidate(total_score, short10)
                 
                 if stop_val > 0 and target_val > 0:
@@ -1742,16 +1762,17 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
                     target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
                     
-                    if rr_ratio < 2.0:
+                    min_rr = CFG.system_default_min_rr
+                    if rr_ratio < min_rr:
                         if is_elite_breakout:
-                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 2:1 R:R limit for elite Blue-Sky breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, R:R: {rr_ratio}:1).")
+                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived {min_rr}:1 R:R limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, R:R: {rr_ratio}:1).")
                         else:
-                            _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required 2:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
+                            _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required {min_rr}:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
                             continue
                         
                     if target_gain_pct < 5.0:
                         if is_elite_breakout:
-                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 5.0% target upside limit for elite Blue-Sky breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, Target Gain: {target_gain_pct}%).")
+                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 5.0% target upside limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, Target Gain: {target_gain_pct}%).")
                         else:
                             _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
                             continue
@@ -1816,7 +1837,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
                 # ── Dynamic Pyramiding: Scale into winning trends with idle cash ──
                 cash_ratio = state["balance"] / state["equity"] if state["equity"] > 1.0 else 0.0
-                if cash_ratio > 0.10:  # If cash ratio exceeds 10.0% of total equity
+                if cash_ratio > CFG.system_pyramiding_cash_ratio:  # idle-cash trigger for scaling in
                     _log.info(f"🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash ({cash_ratio*100:.1f}%)...")
                     for sym, pos in list(state["positions"].items()):
                         current_px = prices.get(sym, pos["cost"])
@@ -1833,11 +1854,8 @@ def run_daily_ai_management(force=False, manual_profile=None):
                                 l60 = row[25] or 0.0
                                 break
 
-                        # Loosened Momentum Floor (R&D #31): 
-                        # We allow scaling into profitable, risk-locked winners that have
-                        # strong long-term trend support (l60 >= 2.0) even during minor short-term pullbacks (s10 >= -0.5)
-                        # to exploit pullback dip buying within established upward trends.
-                        if is_winner and has_peak and (s10 >= 0.0 or l60 >= 2.0):
+                        # Pyramiding momentum gate (R&D #31) — delegated to a single-sourced helper.
+                        if should_pyramid_into_winner(is_winner, has_peak, s10, l60):
                             max_pos_allocation = state["equity"] * rules["max_allocation_pct"]
                             current_allocation = pos["qty"] * current_px
                             remaining_room = max_pos_allocation - current_allocation

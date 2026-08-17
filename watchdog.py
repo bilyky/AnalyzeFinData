@@ -234,7 +234,13 @@ def check_task_scheduler():
     return missing
 
 def purge_stray_tasks():
-    """Scan Task Scheduler and programmatically delete any stray tasks matching our namespace but not in our TASKS list."""
+    """Detect Task Scheduler entries in our namespace that are not in the TASKS white-list.
+
+    Log-only by default: deletion is DESTRUCTIVE and can catch legitimate ad-hoc tasks
+    (e.g. a *_Test entry), so a stray is only auto-deleted when AETHER_PURGE_STRAY_TASKS=1
+    is explicitly set. Otherwise it is reported and left in place.
+    """
+    do_delete = os.environ.get("AETHER_PURGE_STRAY_TASKS", "").strip() == "1"
     try:
         # Query all scheduled tasks in LIST format
         result = subprocess.run(["schtasks", "/query", "/fo", "LIST"], capture_output=True, text=True, errors="replace")
@@ -251,15 +257,17 @@ def purge_stray_tasks():
                     stray_tasks.append(t)
             
             if stray_tasks:
-                _log.warning(f"🧹 [Auto-Purge] Detected {len(stray_tasks)} stray scheduled task(s) outside of the official production white-list: {stray_tasks}")
-                for t in stray_tasks:
-                    _log.console(f"🧹 [Auto-Purge] Programmatically deleting stray task: {t}")
-                    # Attempt to delete the task natively
-                    del_res = subprocess.run(["schtasks", "/delete", "/tn", f"\\{t}", "/f"], capture_output=True, text=True, errors="replace")
-                    if del_res.returncode == 0:
-                        _log.info(f"✅ [Auto-Purge] Stray task '{t}' successfully purged from the system.")
-                    else:
-                        _log.error(f"❌ [Auto-Purge] Failed to purge stray task '{t}' (rc={del_res.returncode}): {del_res.stderr.strip()}")
+                if not do_delete:
+                    _log.warning(f"[Stray-Task] Detected {len(stray_tasks)} task(s) outside the production white-list "
+                                 f"(log-only; set AETHER_PURGE_STRAY_TASKS=1 to delete): {stray_tasks}")
+                else:
+                    _log.warning(f"[Stray-Task] Purging {len(stray_tasks)} stray task(s) (AETHER_PURGE_STRAY_TASKS=1): {stray_tasks}")
+                    for t in stray_tasks:
+                        del_res = subprocess.run(["schtasks", "/delete", "/tn", f"\\{t}", "/f"], capture_output=True, text=True, errors="replace")
+                        if del_res.returncode == 0:
+                            _log.info(f"[Stray-Task] Deleted stray task '{t}'.")
+                        else:
+                            _log.error(f"[Stray-Task] Failed to delete '{t}' (rc={del_res.returncode}): {del_res.stderr.strip()}")
     except Exception as e:
         _log.error(f"Failed to execute stray task purge: {e}")
 
