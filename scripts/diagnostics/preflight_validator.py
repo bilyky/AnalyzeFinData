@@ -7,6 +7,7 @@ mailboxes, and session states, verifying system readiness before any cron runs.
 
 import datetime
 import imaplib
+import json
 import os
 import smtplib
 import subprocess
@@ -46,7 +47,6 @@ def purge_browser_zombies():
             ]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if res.returncode == 0 and res.stdout.strip():
-                import json
                 data = json.loads(res.stdout)
                 if not isinstance(data, list):
                     data = [data]
@@ -76,7 +76,6 @@ def purge_browser_zombies():
             ]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if res.returncode == 0 and res.stdout.strip():
-                import json
                 data = json.loads(res.stdout)
                 if not isinstance(data, list):
                     data = [data]
