@@ -313,12 +313,15 @@ def main():
         
         try:
             # We execute the data sync BEFORE the email is sent so we can append any failures transparently!
-            sync_ok = watchdog.sync_data_folder()
-            if not sync_ok:
+            # sync_data_folder() returns a status STRING (SUCCESS / SKIPPED_MARKET_HOURS /
+            # SKIPPED_OFFLINE / FAILED). Warn only when Data was actually NOT mirrored — i.e. FAILED
+            # or SKIPPED_OFFLINE. A market-hours skip is a safe, intentional no-op (no warning).
+            sync_status = watchdog.sync_data_folder()
+            if sync_status in ("FAILED", "SKIPPED_OFFLINE"):
                 sync_warning_html = (
                     "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
                     "<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Post-Run Data Synchronization Failed!</h4>"
-                    "<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The backup drive or UNC storage path \\\\10.0.0.156\\Storage\\ was unreachable or disconnected during this run. "
+                    "<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The configured network backup location (DATA_SYNC_DEST) was unreachable, disconnected, or not configured during this run. "
                     "All local trade entries completed nominal, but Data caches were not mirrored to the network storage drive. "
                     "Please check your backup drive connectivity.</p>"
                 )

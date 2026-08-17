@@ -41,6 +41,13 @@ _DIR      = os.path.dirname(os.path.abspath(__file__))
 OHLCV_DIR = os.path.join(_DIR, "Data", "Symbol_full")
 MAX_GAP_DAYS = 30   # trigger compact/full fetch if latest entry is this many calendar days behind
 SLEEP_SEC    = 14   # 14 s between requests → 4.3 req/min (safe under 5/min limit)
+RETRY_BASE_SEC = 30  # first 429 backoff; grows linearly per attempt but is capped below
+RETRY_MAX_SEC  = 60  # per-retry ceiling so a single symbol can never stall the run unboundedly
+
+
+def _retry_backoff(attempt: int) -> int:
+    """Linear 429 backoff (30, 60, 90…) clamped to RETRY_MAX_SEC so no single symbol stalls."""
+    return min((attempt + 1) * RETRY_BASE_SEC, RETRY_MAX_SEC)
 
 _BASE_URL = "https://alpha-vantage.p.rapidapi.com/query"
 _HEADERS  = {
@@ -133,7 +140,7 @@ def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
             
             # Catch HTTP 429 Too Many Requests status
             if resp.status_code == 429 and attempt < max_attempts - 1:
-                sleep_sec = (attempt + 1) * 30
+                sleep_sec = _retry_backoff(attempt)
                 _log.warning("  [RapidAPI] %s: HTTP 429 Too Many Requests. Retrying in %d seconds (attempt %d/%d)...",
                              symbol, sleep_sec, attempt + 1, max_attempts - 1)
                 time.sleep(sleep_sec)
@@ -149,7 +156,7 @@ def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
                     for word in ["rate limit", "burst pattern", "too many requests", "concurrency"]
                 )
                 if is_rate_limit and attempt < max_attempts - 1:
-                    sleep_sec = (attempt + 1) * 30
+                    sleep_sec = _retry_backoff(attempt)
                     _log.warning("  [RapidAPI] %s: Alpha Vantage rate limit or empty response detected (%s). Retrying in %d seconds (attempt %d/%d)...",
                                  symbol, note, sleep_sec, attempt + 1, max_attempts - 1)
                     time.sleep(sleep_sec)
@@ -161,7 +168,7 @@ def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
         except requests.exceptions.HTTPError as e:
             # Fallback check in case raise_for_status got hit on a 429 (not caught above)
             if e.response is not None and e.response.status_code == 429 and attempt < max_attempts - 1:
-                sleep_sec = (attempt + 1) * 30
+                sleep_sec = _retry_backoff(attempt)
                 _log.warning("  [RapidAPI] %s: HTTP 429 exception. Retrying in %d seconds (attempt %d/%d)...",
                              symbol, sleep_sec, attempt + 1, max_attempts - 1)
                 time.sleep(sleep_sec)

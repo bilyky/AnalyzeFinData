@@ -76,18 +76,52 @@ class TestAIClientTransport(unittest.TestCase):
         self.assertEqual(body["messages"], [{"role": "user", "content": "USR"}])
         self.assertEqual(m_post.call_args.kwargs["headers"]["x-api-key"], "KEY")
 
+    @mock.patch("aether.ai_client.shutil.which", return_value="/opt/bin/gemini")
     @mock.patch("aether.ai_client.subprocess.run")
-    def test_gemini_feeds_stdin_payload_and_p_directive(self, m_run):
+    def test_gemini_feeds_stdin_payload_and_p_directive(self, m_run, _which):
         m_run.return_value = mock.MagicMock(returncode=0, stdout="  verdict  ", stderr="")
         with self._providers({"gem": _GEMINI}):
             out = ai_client.evaluate("SYS", "USR", provider="gem")
         self.assertEqual(out, "verdict")
         argv = m_run.call_args.args[0]
-        self.assertIn(argv[0], ["gemini", "gemini.cmd"])
+        self.assertEqual(argv[0], "/opt/bin/gemini")  # absolute path, no shell PATH lookup
+        self.assertIn("-p", argv)
         self.assertEqual(m_run.call_args.kwargs["input"], "SYS\n\nUSR")  # payload on stdin
 
+    @mock.patch("aether.ai_client.shutil.which", return_value="/opt/bin/gemini")
     @mock.patch("aether.ai_client.subprocess.run")
-    def test_gemini_nonzero_exit_raises(self, m_run):
+    def test_gemini_runs_locked_down_without_shell(self, m_run, _which):
+        """Security contract: the CLI is pinned to no-tools/no-MCP and never runs via a shell."""
+        m_run.return_value = mock.MagicMock(returncode=0, stdout="ok", stderr="")
+        with self._providers({"gem": _GEMINI}):
+            ai_client.evaluate("SYS", "USR", provider="gem")
+        argv = m_run.call_args.args[0]
+        kwargs = m_run.call_args.kwargs
+        self.assertFalse(kwargs.get("shell", False))  # no cmd.exe string parsing of the directive
+        self.assertIn("--allowed-tools", argv)
+        self.assertEqual(argv[argv.index("--allowed-tools") + 1], "none")
+        self.assertIn("--allowed-mcp-server-names", argv)
+        self.assertEqual(argv[argv.index("--allowed-mcp-server-names") + 1], "none")
+
+    @mock.patch("aether.ai_client.sys.platform", "win32")
+    @mock.patch("aether.ai_client.shutil.which",
+                return_value=r"C:\Users\x\AppData\Roaming\npm\gemini.cmd")
+    @mock.patch("aether.ai_client.subprocess.run")
+    def test_gemini_win32_cmd_wrapped_via_comspec_not_shell(self, m_run, _which):
+        """On Windows a .cmd wrapper is routed through COMSPEC as a list, keeping shell=False."""
+        m_run.return_value = mock.MagicMock(returncode=0, stdout="ok", stderr="")
+        with self._providers({"gem": _GEMINI}), \
+             mock.patch.dict("os.environ", {"COMSPEC": r"C:\Windows\System32\cmd.exe"}):
+            ai_client.evaluate("SYS", "USR", provider="gem")
+        argv = m_run.call_args.args[0]
+        self.assertFalse(m_run.call_args.kwargs.get("shell", False))
+        self.assertEqual(argv[0].lower(), r"c:\windows\system32\cmd.exe")
+        self.assertEqual(argv[1], "/c")
+        self.assertIn("--allowed-tools", argv)  # lockdown flags survive the wrapping
+
+    @mock.patch("aether.ai_client.shutil.which", return_value="/opt/bin/gemini")
+    @mock.patch("aether.ai_client.subprocess.run")
+    def test_gemini_nonzero_exit_raises(self, m_run, _which):
         m_run.return_value = mock.MagicMock(returncode=2, stdout="", stderr="boom")
         with self._providers({"gem": _GEMINI}):
             with self.assertRaises(RuntimeError):

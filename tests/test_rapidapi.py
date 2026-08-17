@@ -346,5 +346,18 @@ class TestRepairMissingConsecutive429(unittest.TestCase):
         self.assertEqual(mock_sleep.call_count, 3)
 
 
+class TestRetryBackoffCap(unittest.TestCase):
+    """The 429 retry backoff grows linearly but must be clamped so no single symbol stalls."""
+
+    def test_backoff_grows_then_caps_at_ceiling(self):
+        # attempt 0 -> 30, attempt 1 -> 60 (== ceiling), attempt 2+ -> clamped to 60.
+        self.assertEqual(rapidapi._retry_backoff(0), rapidapi.RETRY_BASE_SEC)
+        self.assertEqual(rapidapi._retry_backoff(1), rapidapi.RETRY_MAX_SEC)
+        # Without the cap this would be 90/120/…; the guard is that it never exceeds the ceiling.
+        self.assertEqual(rapidapi._retry_backoff(2), rapidapi.RETRY_MAX_SEC)
+        self.assertEqual(rapidapi._retry_backoff(10), rapidapi.RETRY_MAX_SEC)
+        self.assertLessEqual(rapidapi._retry_backoff(99), rapidapi.RETRY_MAX_SEC)
+
+
 if __name__ == "__main__":
     unittest.main()

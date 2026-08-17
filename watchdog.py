@@ -400,7 +400,12 @@ def sync_data_folder() -> str:
         return "SKIPPED_MARKET_HOURS"
 
     src = BASE_DIR / "Data"
-    dst = r"\\10.0.0.156\Storage\Yura\Develop\StockTrading\AnalyzeFinData\Data"
+    # Offsite backup destination is environment-provided (no hardcoded host/UNC/user in source).
+    # Set DATA_SYNC_DEST to a UNC path or drive, e.g. \\<host>\<share>\...\Data
+    dst = (os.environ.get("DATA_SYNC_DEST") or "").strip()
+    if not dst:
+        _log.info("ℹ️ [Data Sync] DATA_SYNC_DEST is not configured; skipping offsite Data backup sync.")
+        return "SKIPPED_OFFLINE"
 
     if not src.exists():
         _log.warning(f"⚠️ Source Data folder does not exist: {src}")
@@ -409,26 +414,30 @@ def sync_data_folder() -> str:
     try:
         dst_path = Path(dst)
         z_drive = dst_path.anchor
+        # Derive the UNC host from the configured path for the diagnostic ping (\\host\share -> host).
+        _m = re.match(r"\\\\([^\\]+)\\", dst)
+        unc_host = _m.group(1) if _m else ""
         if not os.path.exists(z_drive):
-            # Direct Network Diagnostic Truth Hook: run an unspeculated ping to 10.0.0.156
-            # to verify if the server is physically online but blocked by Windows permissions (running as SYSTEM).
+            # Network diagnostic: if a UNC host is present, ping it to distinguish a permission
+            # block (host online but share inaccessible) from a genuine outage (host unreachable).
             ping_ok = False
-            try:
-                ping_res = subprocess.run(["ping", "-n", "1", "-w", "500", "10.0.0.156"], capture_output=True)
-                ping_ok = (ping_res.returncode == 0)
-            except Exception:
-                pass
+            if unc_host:
+                try:
+                    ping_res = subprocess.run(["ping", "-n", "1", "-w", "500", unc_host], capture_output=True)
+                    ping_ok = (ping_res.returncode == 0)
+                except Exception:
+                    pass
 
             run_user = os.environ.get("USERNAME") or os.environ.get("USER") or "SYSTEM"
             if ping_ok:
-                _log.warning(
-                    f"❌ [Permission Block] Network storage 10.0.0.156 is ONLINE (ping passed), "
-                    f"but the UNC path '{dst}' is inaccessible! Running as Windows user '{run_user}' "
+                _log.error(
+                    f"❌ [Permission Block] Backup host '{unc_host}' is ONLINE (ping passed), "
+                    f"but the configured UNC path is inaccessible! Running as Windows user '{run_user}' "
                     f"which lacks active network share access credentials. This is a local permission block, NOT a server outage!"
                 )
                 return "FAILED"
             else:
-                _log.warning(f"⚠️ [Network Outage] Storage server 10.0.0.156 is unreachable (ping failed). Skipping Data sync.")
+                _log.warning(f"⚠️ [Network Outage] Backup host '{unc_host or dst}' is unreachable (ping failed). Skipping Data sync.")
                 return "SKIPPED_OFFLINE"
 
         dst_path.mkdir(parents=True, exist_ok=True)
@@ -645,7 +654,7 @@ def run_watchdog():
             <!-- SECTION 3b: DATA BACKUP SYNC STATUS -->
             <div style="background: {'#f9f9f9' if sync_status == 'SUCCESS' else '#fff9db' if 'SKIPPED' in sync_status else '#fdf2f2'}; border-left: 5px solid {'#34495e' if sync_status == 'SUCCESS' else '#f59f00' if 'SKIPPED' in sync_status else '#ec5b5b'}; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: {'#34495e' if sync_status == 'SUCCESS' else '#f08c00' if 'SKIPPED' in sync_status else '#c0392b'}; font-size: 15px;">📁 3b. DATA BACKUP SYNC STATUS:</h3>
-                <p style="font-size: 13px; font-weight: bold;">Backup Location: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">\\\\10.0.0.156\\Storage\\Yura\\Develop\\StockTrading\\AnalyzeFinData\\Data</span></p>
+                <p style="font-size: 13px; font-weight: bold;">Backup Location: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">the configured network backup location (DATA_SYNC_DEST)</span></p>
                 <p style="font-size: 13px; font-weight: bold;">Sync Status: <span style="color: {'#27ae60' if sync_status == 'SUCCESS' else '#f08c00' if 'SKIPPED' in sync_status else '#c0392b'}; font-size: 14px;">{
                     'SUCCESS / NOMINAL' if sync_status == 'SUCCESS' else
                     'SKIPPED / MARKET HOURS' if sync_status == 'SKIPPED_MARKET_HOURS' else
@@ -665,7 +674,7 @@ def run_watchdog():
                     {
                         '<li><b>Backup Status:</b> Robocopy sync completed successfully.</li>' if sync_status == 'SUCCESS' else
                         '<li><b>Backup Status:</b> Robocopy sync was skipped safely because active US market trading hours are in progress.</li>' if sync_status == 'SKIPPED_MARKET_HOURS' else
-                        '<li><b>Backup Status Alert:</b> Robocopy sync was skipped because the network storage drive at \\\\10.0.0.156\\Storage\\ was offline or unreachable. Please check connection.</li>' if sync_status == 'SKIPPED_OFFLINE' else
+                        '<li><b>Backup Status Alert:</b> Robocopy sync was skipped because the configured network backup location was offline, unreachable, or not configured. Please check connection.</li>' if sync_status == 'SKIPPED_OFFLINE' else
                         '<li><b>Backup Status Alert:</b> Robocopy sync failed due to system, pathing, or locked-file errors.</li>'
                     }
                 </ul>
