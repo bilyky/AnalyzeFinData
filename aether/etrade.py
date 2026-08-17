@@ -480,7 +480,13 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
         print(f"\nCould not auto-capture verifier. Open this URL in your browser if it isn't open:")
         print(f"  {auth_url}")
         print("Log in, click Accept, then paste the code shown on screen.")
-        verifier = input("Verification code: ").strip()
+        try:
+            verifier = input("Verification code: ").strip()
+        except EOFError:
+            raise RuntimeError(
+                "E*TRADE: Cannot prompt for verification code in a headless or non-interactive environment (EOFError). "
+                "Failing immediately to prevent background process hang."
+            )
 
     return verifier
 
@@ -545,32 +551,37 @@ def get_tokens(env="sandbox", allow_browser=False):
     # Uses the same cross-process file lock as renew_tokens() to guarantee only ONE
     # process opens a browser even when multiple tasks fire simultaneously.
     if os.path.exists(_BROWSER_STATE_PATH):
-        # ── Headless Re-auth Cooldown Circuit Breaker (Anti-Ban Guard) ──
-        cooldown_path = os.path.join(_DIR, "Data", "etrade_cooldown.lock")
-        if os.path.exists(cooldown_path):
-            try:
-                mtime = os.path.getmtime(cooldown_path)
-                cooldown_age_min = (time.time() - mtime) / 60
-                if cooldown_age_min < 15.0:
-                    _log.error(f"❌ [E*TRADE ANTI-BAN BLOCK] Headless re-authentication is on cooldown ({cooldown_age_min:.1f}m/15m remaining). Aborting browser launch to prevent brokerage bans!")
-                    raise RuntimeError("E*TRADE: Headless auto-login blocked by Anti-Ban Cooldown Circuit Breaker.")
-            except Exception as ce:
-                if "Anti-Ban" in str(ce):
-                    raise ce
-        
-        # Touch/create the cooldown lock file immediately before launching the browser!
-        try:
-            os.makedirs(os.path.dirname(cooldown_path), exist_ok=True)
-            with open(cooldown_path, "w") as cf:
-                cf.write(str(time.time()))
-        except Exception:
-            pass
-
         _log.info("Attempting automatic re-authentication via saved browser state...")
+
+        def _do_headless_login_with_cooldown():
+            # ── Headless Re-auth Cooldown Circuit Breaker (Anti-Ban Guard) ──
+            # Run the cooldown check and touch INSIDE the cross-process lock to prevent race conditions
+            cooldown_path = os.path.join(_DIR, "Data", "etrade_cooldown.lock")
+            if os.path.exists(cooldown_path):
+                try:
+                    mtime = os.path.getmtime(cooldown_path)
+                    cooldown_age_min = (time.time() - mtime) / 60
+                    if cooldown_age_min < 15.0:
+                        _log.error(f"❌ [E*TRADE ANTI-BAN BLOCK] Headless re-authentication is on cooldown ({cooldown_age_min:.1f}m/15m remaining). Aborting browser launch to prevent brokerage bans!")
+                        raise RuntimeError("E*TRADE: Headless auto-login blocked by Anti-Ban Cooldown Circuit Breaker.")
+                except Exception as ce:
+                    if "Anti-Ban" in str(ce):
+                        raise ce
+
+            # Touch/create the cooldown lock file immediately before launching the browser!
+            try:
+                os.makedirs(os.path.dirname(cooldown_path), exist_ok=True)
+                with open(cooldown_path, "w") as cf:
+                    cf.write(str(time.time()))
+            except Exception:
+                pass
+
+            return _login_headless(ck, cs, username, password, env)
+
         lock_path = os.path.join(_DIR, "Data", "etrade_reauth.lock")
         reauth_renewer = _TokenRenewer(
             lock_path,
-            renew_fn=lambda: _login_headless(ck, cs, username, password, env),
+            renew_fn=_do_headless_login_with_cooldown,
             load_fn=lambda: _load_tokens(env),   # date-checked: only returns today's tokens
             lock_ttl=120,   # browser login can take up to 2 min
             wait_timeout=150,
@@ -582,6 +593,8 @@ def get_tokens(env="sandbox", allow_browser=False):
                 return tokens
             _log.warning("E*TRADE: automatic re-authentication failed (browser state may be stale).")
         except Exception as e:
+            if "Anti-Ban" in str(e) or "cooldown" in str(e).lower():
+                raise e
             _log.warning(f"E*TRADE: headless Playwright re-auth error: {e}")
 
     if not allow_browser:

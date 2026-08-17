@@ -131,6 +131,31 @@ class TestFetchAndMerge(unittest.TestCase):
         needs, _ = rapidapi._check_recovery(path, TODAY)
         self.assertFalse(needs)
 
+    def test_overwrites_older_provisional_bars_with_real_bars(self):
+        # Existing cache: older history containing an old provisional bar (older than 3 days).
+        OLD_DATE = "2026-07-20"
+        ts = {OLD_DATE: {"1. open": "11", "2. high": "11", "3. low": "11",
+                         "4. close": "11", "5. volume": "0", "provisional": True},
+              "2026-08-04": _real_bar(10, 12, 10, 11, 350000),
+              TODAY: _real_bar(10.5, 12.3, 10.2, 11.8, 1250000)}
+        path = _write(self.dir, "FFF_OLD", _cache(ts, TODAY))
+
+        # RapidAPI returns historical data including that old date with real volume/range.
+        raw = {"Meta Data": {"3. Last Refreshed": TODAY},
+               "Time Series (Daily)": {OLD_DATE: _real_bar(11.1, 11.9, 10.9, 11.5, 900000),
+                                       "2026-08-04": _real_bar(10, 12, 10, 11, 350000),
+                                       TODAY: _real_bar(10.5, 12.3, 10.2, 11.8, 1250000)}}
+
+        with mock.patch.object(rapidapi, "_fetch_raw", return_value=raw):
+            rapidapi._fetch_and_merge("FFF_OLD", path, outputsize="compact")
+
+        with open(path) as f:
+            merged = json.load(f)["Time Series (Daily)"]
+        bar = merged[OLD_DATE]
+        self.assertEqual(float(bar["5. volume"]), 900000)   # real volume in
+        self.assertNotIn("provisional", bar)                 # placeholder gone
+        self.assertFalse(bar_provenance.is_provisional(bar))  # recognized as a real bar
+
     def test_full_fetch_writes_real_nonprovisional_bar(self):
         raw = {"Meta Data": {"3. Last Refreshed": TODAY},
                "Time Series (Daily)": {
@@ -290,6 +315,48 @@ class TestCrossProcessLock(unittest.TestCase):
         self.assertEqual(res["updated"], 1)
         self.assertFalse(res.get("locked"))
         self.assertFalse(os.path.exists(self.lock_path))   # reclaimed then released
+
+
+class TestRepairMissingConsecutive429(unittest.TestCase):
+    """Verify that repair_missing aborts early after meeting 3 consecutive 429 errors."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_dir = rapidapi.OHLCV_DIR
+        rapidapi.OHLCV_DIR = self.dir
+        self.addCleanup(lambda: setattr(rapidapi, "OHLCV_DIR", self._orig_dir))
+
+    def test_aborts_on_consecutive_429_errors(self):
+        # We mock _fetch_and_merge to simulate 429 Too Many Requests errors.
+        # It should try to fetch AAA, BBB, CCC, get 429, and then abort.
+        # DDD and EEE should not be attempted at all.
+        with mock.patch.object(rapidapi, "_fetch_and_merge", side_effect=RuntimeError("HTTP 429 Client Error: Too Many Requests")), \
+             mock.patch("rapidapi.time.sleep") as mock_sleep:
+            res = rapidapi.repair_missing(["AAA", "BBB", "CCC", "DDD", "EEE"], TODAY, force=True)
+            
+        self.assertEqual(res["updated"], 0)
+        # It should abort after the 3rd consecutive 429 error.
+        self.assertEqual(len(res["errors"]), 3)
+        self.assertEqual(res["errors"][0][0], "AAA")
+        self.assertEqual(res["errors"][1][0], "BBB")
+        self.assertEqual(res["errors"][2][0], "CCC")
+        # Ensure sleep was called 3 times (since it sleeps SLEEP_SEC on failure)
+        self.assertEqual(mock_sleep.call_count, 3)
+
+
+class TestRetryBackoffCap(unittest.TestCase):
+    """The 429 retry backoff grows linearly but must be clamped so no single symbol stalls."""
+
+    def test_backoff_grows_then_caps_at_ceiling(self):
+        # attempt 0 -> 30, attempt 1 -> 60 (== ceiling), attempt 2+ -> clamped to 60.
+        self.assertEqual(rapidapi._retry_backoff(0), rapidapi.RETRY_BASE_SEC)
+        self.assertEqual(rapidapi._retry_backoff(1), rapidapi.RETRY_MAX_SEC)
+        # Without the cap this would be 90/120/…; the guard is that it never exceeds the ceiling.
+        self.assertEqual(rapidapi._retry_backoff(2), rapidapi.RETRY_MAX_SEC)
+        self.assertEqual(rapidapi._retry_backoff(10), rapidapi.RETRY_MAX_SEC)
+        self.assertLessEqual(rapidapi._retry_backoff(99), rapidapi.RETRY_MAX_SEC)
 
 
 if __name__ == "__main__":

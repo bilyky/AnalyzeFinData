@@ -73,3 +73,17 @@ To completely prevent un-cleaned programmatic debris, lingering scheduled tasks,
     1.  **Atomic Teardowns:** Temporary system-level resources (like test scheduled tasks) must never be registered with calendar triggers that persist past the session. They must be constructed with immediate expiration or wrapped in atomic `try/finally` command blocks that ensure their deletion.
     2.  **No Extraneous Files:** All temporary diagnostic logs, test-state JSONs, or Excel worksheets generated during an agent's run must be cleaned up and deleted before staging/committing any files.
 
+---
+
+## 🛡️ 5. Autonomous Context & Logical-Reporting Safety Standards
+
+### 🚀 The Transparent Factual Reporting & Context Safety Mandate (The Truth Standard)
+To completely prevent silent logical bypasses, "lying" or misleading system-health emails, and context-based privilege failures (such as Task Scheduler runs failing silently over Windows credential/SYSTEM boundaries):
+
+*   **The Rule:** All autonomous reporting, backup synchronization, and background pipeline execution layers must report their real state — no speculation, and surface privilege/permission failures explicitly rather than silently.
+*   **The Rules:**
+    1.  **Strict Three-State Logical Tracking:** Bypasses, safe-skips, and warnings (such as market-hours skips, offline drives, or incomplete API loads) **MUST NEVER** be collapsed or reported as boolean `True` (SUCCESS). They must be returned and modeled as explicit, descriptive string statuses or Enums. High-level email and dashboard reporters must render yellow/orange warning badges for skips and red badges for failures, reserving green badges **only** for actual, successful execution.
+    2.  **Explicit Context Privilege Verification:** Before assuming or logging that an infrastructure resource (like a NAS, server, or UNC share) is offline/disconnected because a path-existence check failed, the script **MUST** execute a direct, low-level network diagnostic check (e.g., pinging the IP address directly). If the IP is pingable, the script is strictly prohibited from claiming a "drive outage" and must explicitly report a **Local Windows User Permission/SYSTEM Context Block**.
+    3.  **Headless User Context Locking:** All registered Task Scheduler tasks or cron daemons **MUST** be explicitly configured to run under the interactive user's credentialed active account context (not the local machine `SYSTEM` account) to ensure they possess the necessary network share and SMB access privileges.
+    4.  **Notification as the Absolute Final Step:** In any pipeline or task execution script, drafting and dispatching success notifications (emails/SMS/slack) **MUST** take place as the absolute final step of the program, after all database updates, network syncs, and backups have fully completed. Any late-stage sync or writing failure must be dynamically appended to the report and reflected loudly in the email's subject line.
+

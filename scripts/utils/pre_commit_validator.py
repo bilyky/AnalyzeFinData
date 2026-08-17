@@ -273,13 +273,18 @@ def check_new_features_tested() -> bool:
         },
         {
             "name": "High-Score PGR Bypass (R&D #13)",
-            "signature": r"High-Score\s+PGR\s+Bypass|is_elite_breakout\s*=\s*\(total_score\s*>= \s*6\.0\)\s+and\s+\(short10\s*>= \s*2\.0\)\s+and\s+is_blue_sky",
+            "signature": r"is_elite_breakout_candidate",
             "test_keyword": "test_high_score_pgr_bypass"
         },
         {
             "name": "Loosened Pyramiding s10 Floor (R&D #31)",
-            "signature": r"Loosened\s+Momentum\s+Floor|if\s+is_winner\s+and\s+has_peak\s+and\s+s10\s*>= \s*1\.0",
+            "signature": r"s10\s*>= \s*0\.0\s+or\s+l60\s*>= \s*2\.0",
             "test_keyword": "test_loosened_pyramiding"
+        },
+        {
+            "name": "Covered Call Option Writing (R&D #26)",
+            "signature": r"execute_weekly_covered_call_pass|resolve_expiring_options",
+            "test_keyword": "test_black_scholes_call_pricing"
         }
     ]
     

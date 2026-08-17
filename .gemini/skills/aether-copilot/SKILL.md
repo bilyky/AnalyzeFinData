@@ -67,3 +67,5 @@ To completely eliminate cognitive drift, silent syntax failures, and "AI halluci
     Never write `import` statements inside functions, `try-except` blocks, or conditional scopes. All Python imports must be cleanly declared as standard, absolute imports at the very top of the file.
 4.  **No Silent Exception Swallowing:**
     Never use silent `except: pass` blocks. All exceptions must be caught specifically, logged clearly with tracebacks, or raised. Any structural failure must fail loudly and instantly.
+5.  **Strict Provisional-Data Merging Mandate:**
+    When merging raw daily price data (from Alpha Vantage/RapidAPI) into our local historical cache (Symbol_full), we must always overwrite any pre-existing provisional/placeholder bars (close-only volume-0 entries written by Chaikin) with real settled bars. This prevents stale placeholder bars from polluting history and stalling volume/range indicators like MFI or RBR.

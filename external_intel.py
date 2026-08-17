@@ -141,6 +141,11 @@ def fetch_idea_emails():
     max_intel = _max_intel_emails()
     candidates = []
 
+    # Track attempted vs. failed mailboxes so a result that is empty *because every
+    # mailbox errored* is distinguishable from a genuine "no ideas today" (see below).
+    mailboxes_attempted = 0
+    mailboxes_failed = 0
+
     for mb in CFG.mailboxes:
         if not isinstance(mb, dict):
             _log.warning(f"Unexpected mailbox config format (not a dict): {mb}")
@@ -153,9 +158,14 @@ def fetch_idea_emails():
         imap_server = mb.get("imap_server", "imap.gmail.com")
         email_pass = os.environ.get(pass_env) or CFG.smtp_password
 
+        mailboxes_attempted += 1
         if not email_pass:
-            raise ValueError(f"No password for mailbox '{email_user}' "
-                             f"(checked env var '{pass_env}' and CFG.smtp_password)")
+            # A misconfigured mailbox must not abort the scan of the others; count it
+            # as a failure and move on. If ALL mailboxes fail we raise after the loop.
+            mailboxes_failed += 1
+            _log.error(f"No password for mailbox '{email_user}' "
+                       f"(checked env var '{pass_env}' and CFG.smtp_password)")
+            continue
 
         _log.console(f"Scanning mailbox: {email_user} on {imap_server}...")
         mail = None
@@ -239,13 +249,30 @@ def fetch_idea_emails():
                     _log.console(f"Intel candidate cap ({max_intel}) reached; breaking email scan to protect rate-limits.")
                     break
         except Exception as e:
-            raise RuntimeError(f"Failed to fetch emails for {email_user}: {e}")
+            mailboxes_failed += 1
+            _log.error(f"Failed to fetch emails for {email_user}: {e}")
+            continue
         finally:
             if mail:
                 try:
                     mail.logout()
                 except Exception:
                     pass
+
+    # Degraded-state signal: if every mailbox we tried failed, an empty/short result is a
+    # FETCH FAILURE, not "no ideas today". Raise so the caller's error handler surfaces it
+    # visibly (the pipeline logs it and the daily report reflects the gap) instead of a
+    # silent []. Partial success (some mailboxes worked) still returns normally.
+    if mailboxes_attempted > 0 and mailboxes_failed == mailboxes_attempted:
+        raise RuntimeError(
+            f"External intel fetch failed for ALL {mailboxes_attempted} configured "
+            f"mailbox(es); results are unavailable (not empty). Check IMAP auth/connectivity."
+        )
+    if mailboxes_failed:
+        _log.warning(
+            f"External intel: {mailboxes_failed} of {mailboxes_attempted} mailbox(es) failed; "
+            f"results below are PARTIAL."
+        )
 
     # Now, execute AI extractions on these candidates in parallel!
     if candidates:

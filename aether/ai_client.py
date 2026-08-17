@@ -14,6 +14,7 @@ raises to its callers and never gates a trade.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -25,7 +26,7 @@ from aether.config import CFG
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-_TIMEOUT = 60   # generous for chat; context build can take ~9s on cold Research cache
+_TIMEOUT = 120   # generous for chat; context build can take ~9s on cold Research cache
 
 _gemini_cli_lock = threading.Lock()
 
@@ -205,8 +206,31 @@ def _run_gemini(model: str, context: str, instruction: str) -> str:
     env["COLORTERM"] = "truecolor"
     env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
 
-    executable = "gemini.cmd" if sys.platform == "win32" else "gemini"
-    args = [executable, "--skip-trust", "-m", model, "--approval-mode", "plan", "--allowed-mcp-server-names", "none", "--allowed-tools", "none", "-p", instruction]
+    # Ensure standard global npm folder is on PATH for Windows Task Scheduler / headless environments
+    if sys.platform == "win32":
+        npm_path = os.path.join(os.environ.get("APPDATA", ""), "npm")
+        if os.path.exists(npm_path):
+            current_path = env.get("PATH", "")
+            if npm_path not in current_path:
+                env["PATH"] = f"{npm_path}{os.pathsep}{current_path}"
+
+    # Resolve the CLI to an absolute path so we never rely on shell PATH resolution.
+    default_exe = "gemini.cmd" if sys.platform == "win32" else "gemini"
+    executable = shutil.which("gemini", path=env.get("PATH")) or default_exe
+
+    # Pin the CLI to no-tools / no-MCP as defense-in-depth; --approval-mode plan alone is not enough.
+    # `instruction` is an app-generated constant and all dynamic data is fed on stdin (`context`),
+    # so nothing user/model-derived reaches argv.
+    args = [executable, "--skip-trust", "-m", model, "--approval-mode", "plan",
+            "--allowed-mcp-server-names", "none", "--allowed-tools", "none",
+            "-p", instruction]
+
+    # A .cmd/.bat wrapper (npm's gemini.cmd on Windows) cannot be executed directly by
+    # CreateProcess, so route it through the command interpreter EXPLICITLY as a list — this keeps
+    # shell=False, so `instruction` is never re-parsed as a shell command line (no shell=True).
+    if sys.platform == "win32" and executable.lower().endswith((".cmd", ".bat")):
+        comspec = os.environ.get("COMSPEC", "cmd.exe")
+        args = [comspec, "/c"] + args
 
     with _gemini_cli_lock:
         out = subprocess.run(

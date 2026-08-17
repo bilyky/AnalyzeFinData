@@ -1105,11 +1105,19 @@ def get_system_health() -> dict:
                 if "Pipeline failed" in line or "ALERT" in line:
                     pipeline_status = "ERROR"
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug("get_system_health: could not parse pipeline log: %s", e)
 
     # Watchdog — check if watchdog.log or similar file was updated today
     watchdog_ok = True  # default optimistic; future: check watchdog log
+
+    market_regime_val = "Unknown"
+    try:
+        regime, _ = _ap_regime()
+        market_regime_val = regime
+    except Exception as e:
+        # Falls back to "Unknown" (visible in the payload); log so the cause is diagnosable.
+        _log.warning("get_system_health: market regime lookup failed, reporting 'Unknown': %s", e)
 
     return {
         "data_fresh":           data_fresh,
@@ -1119,6 +1127,7 @@ def get_system_health() -> dict:
         "watchdog_ok":          watchdog_ok,
         "server_time":          now.isoformat(timespec="seconds"),
         "server_needs_restart": _server_needs_restart(),
+        "market_regime":        market_regime_val,
     }
 
 
@@ -1355,22 +1364,56 @@ def read_symbol(symbol: str) -> dict:
         out["research"] = row
 
         # ── 365-day OHLCV series for the candlestick chart ──────────────────
+        # chart_status lets the consumer distinguish an empty chart's CAUSE (a bare [] is
+        # otherwise ambiguous): "ok" | "no_data" (file absent/empty) | "all_bars_filtered"
+        # (bars existed but every one was a weekend/synthetic vol=0 bar → staleness signal)
+        # | "error" (build failed).
         path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
         chart = []
+        chart_status = "no_data"
         if path.exists():
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     ts = json.load(f).get("Time Series (Daily)", {})
-                dates = sorted(ts.keys())[-365:]
+                dates = sorted(ts.keys())
+
+                # Dynamic filter: Filter out weekends and closed market days (volume == 0)
+                # without any hardcoded holiday lists.
+                valid_dates = []
+                for d in dates:
+                    try:
+                        # Skip weekends
+                        if date.fromisoformat(d).weekday() in (5, 6):
+                            continue
+                        # Skip any closed day/holiday (where volume is 0 or less)
+                        if int(float(ts[d].get("5. volume", 0))) <= 0:
+                            continue
+                        valid_dates.append(d)
+                    except (TypeError, ValueError) as e:
+                        # A single malformed date/volume is skippable, but not silently.
+                        _log.debug("read_symbol(%s): skipping malformed bar %r: %s", sym, d, e)
+
+                chart_dates = valid_dates[-365:]
                 chart = [{"date": d,
                           "open":   round(float(ts[d]["1. open"]),  2),
                           "high":   round(float(ts[d]["2. high"]),  2),
                           "low":    round(float(ts[d]["3. low"]),   2),
                           "close":  round(float(ts[d]["4. close"]), 2),
-                          "volume": int(float(ts[d].get("5. volume", 0)))} for d in dates]
-            except Exception:
-                pass
+                          "volume": int(float(ts[d].get("5. volume", 0)))} for d in chart_dates]
+                if chart:
+                    chart_status = "ok"
+                elif dates:
+                    # File had raw bars but the filter removed every one — not "no data" but a
+                    # degraded/stale cache (e.g. all synthetic vol=0 appends). Flag it loudly.
+                    chart_status = "all_bars_filtered"
+                    _log.warning("read_symbol(%s): all %d raw bars filtered out (weekend/vol<=0); "
+                                 "chart empty — cache likely stale/synthetic.", sym, len(dates))
+            except Exception as e:
+                # Don't swallow a failed chart build silently — an empty chart must be explainable.
+                chart_status = "error"
+                _log.warning("read_symbol(%s): chart build failed, returning empty chart: %s", sym, e)
         out["chart"] = chart
+        out["chart_status"] = chart_status
 
         # ── Backtest accuracy ─────────────────────────────────────────────────
         out["backtest"] = backtest_levels.backtest_symbol(sym)

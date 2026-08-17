@@ -307,13 +307,40 @@ def main():
         </html>
         """
 
-        _log.info("Generating rich HTML report...")
-        notify.send_email(f"AETHER Daily Rotation & Momentum Report: {today}", html, is_html=True)
-        _log.info("Automation completed successfully.")
+        _log.info("Running post-run Data synchronization...")
+        sync_warning_html = ""
+        subject_line = f"AETHER Daily Rotation & Momentum Report: {today}"
+        
         try:
-            watchdog.sync_data_folder()
-        except Exception as e:
-            _log.warning(f"Post-run sync failed: {e}")
+            # We execute the data sync BEFORE the email is sent so we can append any failures transparently!
+            # sync_data_folder() returns a status STRING (SUCCESS / SKIPPED_MARKET_HOURS /
+            # SKIPPED_OFFLINE / FAILED). Warn only when Data was actually NOT mirrored — i.e. FAILED
+            # or SKIPPED_OFFLINE. A market-hours skip is a safe, intentional no-op (no warning).
+            sync_status = watchdog.sync_data_folder()
+            if sync_status in ("FAILED", "SKIPPED_OFFLINE"):
+                sync_warning_html = (
+                    "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
+                    "<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Post-Run Data Synchronization Failed!</h4>"
+                    "<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The configured network backup location (DATA_SYNC_DEST) was unreachable, disconnected, or not configured during this run. "
+                    "All local trade entries completed nominal, but Data caches were not mirrored to the network storage drive. "
+                    "Please check your backup drive connectivity.</p>"
+                )
+                subject_line = f"⚠️ AETHER Daily Rotation & Momentum Report: {today} (Sync Failed)"
+        except Exception as sync_err:
+            _log.warning(f"Post-run sync failed: {sync_err}")
+            sync_warning_html = (
+                "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
+                f"<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Post-Run Data Synchronization Error!</h4>"
+                f"<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The data synchronization engine threw an exception: {sync_err}</p>"
+            )
+            subject_line = f"⚠️ AETHER Daily Rotation & Momentum Report: {today} (Sync Failed)"
+
+        if sync_warning_html:
+            html = html.replace("</body>", f"{sync_warning_html}</body>")
+
+        _log.info("Generating rich HTML report...")
+        notify.send_email(subject_line, html, is_html=True)
+        _log.info("Automation completed successfully.")
 
     except Exception as e:
         error_msg = f"Automation Failed for {today}\n\nError: {str(e)}\n\nFull Traceback:\n{traceback.format_exc()}"

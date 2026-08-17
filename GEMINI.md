@@ -57,6 +57,7 @@ To maximize data accuracy while eliminating API rate-limits, suspended sessions,
 *   **Active Trading Hours:** During active market hours (weekdays 6:30 AM - 1:15 PM PST), bypass the static local workbook and execute the **regular live process**:
     1.  **Primary:** Query the live E*TRADE Production API for real-time streaming quotes.
     2.  **Agnostic Fallback:** If E*TRADE fails or is missing specific ticker quotes, immediately fallback to scrape Google Finance.
+*   **The Provisional-Data Merging Mandate:** When merging raw historical price data (fetched from Alpha Vantage/RapidAPI) into our local historical cache (`Symbol_full`), the system MUST always overwrite any older, pre-existing `provisional` placeholder entries (flat close-only volume-0 entries written by Chaikin) with real, settled daily bars (with correct OHLC and volume). This ensures that volume/range consumers (MFI, RBR) can always access real historical volume data and prevents corrupt placeholders from persisting silently.
 
 ### 🛡️ State-Aware Persistent Profile Modes (MANUAL vs. ADAPTIVE)
 To guarantee predictability across automated daily executions:
