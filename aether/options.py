@@ -17,7 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 def norm_cdf(x: float) -> float:
-    """High-accuracy rational approximation for the cumulative standard normal distribution (N(x))."""
+    """Exact cumulative standard normal distribution N(x) via math.erf (not an approximation)."""
     return (1.0 + math.erf(x / math.sqrt(2.0))) / 2.0
 
 
@@ -97,18 +97,29 @@ def resolve_expiring_options(state: dict, today_str: str, prices: dict):
         exp_date = written_call.get("expiration_date", "")
         # If the option has reached or passed its expiration date
         if exp_date and exp_date <= today_str:
-            current_px = prices.get(sym, pos["cost"])
-            strike = written_call["strike"]
-            qty = written_call["qty"]
-            premium = written_call["premium"]
+            # Do NOT default a missing quote to cost basis: cost is always below the OTM strike,
+            # which would silently force the "expires worthless" (favorable) branch. Defer
+            # settlement to a later pass when a live quote is available.
+            if sym not in prices:
+                _log.warning(f"[Option Expiry] No live quote for {sym} on its settlement day; deferring Covered Call settlement (no cost-basis fallback).")
+                continue
+            current_px = prices[sym]
+            strike = written_call.get("strike")
+            qty = written_call.get("qty")
+            premium = written_call.get("premium")
+            if strike is None or qty is None or premium is None:
+                _log.warning(f"[Option Expiry] Malformed written_call on {sym} (missing strike/qty/premium); skipping settlement.")
+                continue
             premium_usd = round(premium * qty, 2)
-            
+
             if current_px < strike:
-                # Scenario A: Option expires worthless!
-                _log.info(f"💎 [Option Expiry] Covered Call on {sym} expired worthless! Kept 100% premium of ${premium_usd:.2f} (Strike: ${strike:.2f}, Price: ${current_px:.2f}).")
+                # Scenario A: Option expires worthless; we keep the stock. The premium cash was
+                # already booked (balance + pnl) at OPTION_WRITE, so this event realizes no new
+                # cash flow -> pnl = 0.0 to avoid double-counting the premium in the ledger.
+                _log.info(f"[Option Expiry] Covered Call on {sym} expired worthless; kept ${premium_usd:.2f} premium (Strike: ${strike:.2f}, Price: ${current_px:.2f}).")
                 # Remove option liability, keep stock!
                 del pos["written_call"]
-                
+
                 # Record in history ledger
                 tx = {
                     "date": today_str,
@@ -117,25 +128,25 @@ def resolve_expiring_options(state: dict, today_str: str, prices: dict):
                     "symbol": sym,
                     "price": premium,
                     "qty": qty,
-                    "pnl": premium_usd,
-                    "details": f"Covered Call Expired Worthless (Strike: ${strike:.2f}, kept ${premium_usd:.2f} premium)"
+                    "pnl": 0.0,
+                    "details": f"Covered Call Expired Worthless (Strike: ${strike:.2f}, ${premium_usd:.2f} premium booked at write)"
                 }
                 state.setdefault("history", []).append(tx)
             else:
-                # Scenario B: Stock is called away at the Strike!
+                # Scenario B: Stock is called away at the Strike. The premium was already booked at
+                # OPTION_WRITE, so this event's pnl is the realized stock capital gain ONLY.
                 pnl_stock_usd = round((strike - pos["cost"]) * qty, 2)
-                pnl_total_usd = round(pnl_stock_usd + premium_usd, 2)
                 revenue_usd = round(strike * qty, 2)
-                
-                _log.info(f"💰 [Option Assignment] Stock {sym} called away at Strike ${strike:.2f} (Price: ${current_px:.2f})!")
-                _log.info(f"   Realized stock capital gain: ${pnl_stock_usd:+.2f} | Premium kept: ${premium_usd:+.2f} | Total P&L: ${pnl_total_usd:+.2f}")
-                
+
+                _log.info(f"[Option Assignment] Stock {sym} called away at Strike ${strike:.2f} (Price: ${current_px:.2f}).")
+                _log.info(f"   Realized stock capital gain: ${pnl_stock_usd:+.2f} | Premium (booked at write): ${premium_usd:+.2f}")
+
                 # Add stock sale revenue to your cash balance
                 state["balance"] += revenue_usd
-                
+
                 # Delete the underlying position from holdings
                 del state["positions"][sym]
-                
+
                 # Record assignment sale in history ledger
                 tx = {
                     "date": today_str,
@@ -144,19 +155,19 @@ def resolve_expiring_options(state: dict, today_str: str, prices: dict):
                     "symbol": sym,
                     "price": strike,
                     "qty": qty,
-                    "pnl": pnl_total_usd,
-                    "details": f"Stock called away at Strike ${strike:.2f} (Realized: ${pnl_stock_usd:+.2f} stock + ${premium_usd:.2f} premium)"
+                    "pnl": pnl_stock_usd,
+                    "details": f"Stock called away at Strike ${strike:.2f} (Realized stock gain ${pnl_stock_usd:+.2f}; ${premium_usd:.2f} premium booked at write)"
                 }
                 state.setdefault("history", []).append(tx)
 
 
 def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, ws_research) -> list:
-    """Scan active holdings and programmatically write weekly out-of-the-money Covered Calls
-    on all risk-locked winning positions to collect steady cash flow premiums.
-    
+    """Scan active holdings and write weekly out-of-the-money Covered Calls on risk-locked
+    winning positions to collect option premium.
+
     A position qualifies if:
     1. It is a 'winner' (current_price > purchase_cost).
-    2. Its stop-loss is raised to or above cost basis (guaranteeing a risk-free 'free ride').
+    2. Its stop-loss is raised to or above cost basis (downside is capped at breakeven).
     3. It does not already have an active written call option.
     """
     new_options = []
@@ -173,13 +184,23 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
         next_friday = today_date + datetime.timedelta(days=7)
     next_friday_str = next_friday.strftime("%Y-%m-%d")
 
-    # Map ATRs from Research sheet
+    # Map ATRs from the Research sheet. Resolve the ATR/Symbol columns by header name so a
+    # column re-order upstream can't silently point us at the wrong field.
+    header = next(ws_research.iter_rows(min_row=1, max_row=1, values_only=True), ()) or ()
+    header_norm = [str(h or "").strip().lower() for h in header]
+    try:
+        sym_idx = header_norm.index("symbol")
+    except ValueError:
+        sym_idx = 3
+    atr_idx = next((i for i, h in enumerate(header_norm) if h == "atr"), None)
+    if atr_idx is None:
+        atr_idx = next((i for i, h in enumerate(header_norm) if "atr" in h), 23)
+
     atr_map = {}
     for row in ws_research.iter_rows(min_row=2, values_only=True):
-        sym = str(row[3] or "").strip().upper()
+        sym = str(row[sym_idx] or "").strip().upper() if sym_idx < len(row) else ""
         if sym:
-            # Column 23 (index 23) represents ATR
-            atr_map[sym] = row[23] or 0.0
+            atr_map[sym] = (row[atr_idx] if atr_idx < len(row) else None) or 0.0
 
     for sym, pos in state.get("positions", {}).items():
         current_px = prices.get(sym, pos["cost"])
@@ -187,17 +208,17 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
         is_risk_locked = (pos.get("stop_loss", 0.0) >= pos["cost"])
         has_active_call = "written_call" in pos
         
-        # We only write Covered Calls on our risk-locked winning positions (0% capital risk!)
+        # Only write Covered Calls on risk-locked winners (downside already capped at breakeven).
         if is_winner and is_risk_locked and not has_active_call:
             atr = atr_map.get(sym, current_px * 0.04) # fallback to 4% ATR
-            
+
             # Select optimal OTM Covered Call
             opt = select_covered_call(sym, current_px, atr)
             strike = opt["strike"]
             premium_price = opt["premium_price"]
             premium_usd = round(premium_price * pos["qty"], 2)
-            
-            _log.info(f"🚀 [Option Write] Writing weekly Covered Call on {sym} @ Strike ${strike:.2f} (Collected: ${premium_usd:.2f} Premium!)")
+
+            _log.info(f"[Option Write] Writing weekly Covered Call on {sym} @ Strike ${strike:.2f} (collected ${premium_usd:.2f} premium).")
             
             # 1. Collect cash premium immediately!
             state["balance"] += premium_usd
@@ -228,17 +249,20 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
 
 
 def unwind_option_liability_if_held(sym: str, pos: dict, state: dict, current_price: float, today_str: str):
-    """If the position has an active written Covered Call option, we programmatically buy-to-close (BTC) 
-    the option at its current Black-Scholes fair value to prevent dangerous naked call liabilities!
+    """If the position has an active written Covered Call, buy-to-close (BTC) the short call at its
+    current Black-Scholes fair value before the underlying is sold, so no naked call is left behind.
     """
     written_call = pos.get("written_call")
     if not written_call:
         return
 
-    strike = written_call["strike"]
-    qty = written_call["qty"]
-    premium = written_call["premium"]
+    strike = written_call.get("strike")
+    qty = written_call.get("qty")
     exp_date = written_call.get("expiration_date", "")
+    if strike is None or qty is None:
+        _log.warning(f"[Option Buy-To-Close] Malformed written_call on {sym} (missing strike/qty); clearing liability without BTC.")
+        pos.pop("written_call", None)
+        return
 
     # Calculate days to expiration
     try:
@@ -250,11 +274,13 @@ def unwind_option_liability_if_held(sym: str, pos: dict, state: dict, current_pr
 
     T_rem = days_rem / 365.0
 
-    # Calculate buy-to-close option value using Black-Scholes (reuses exact math)
+    # NOTE: sigma=0.30 / r=0.04 are flat placeholders (not per-symbol IV / live rate). This BTC
+    # cost debits the live balance, so the constants should be replaced with a backtested
+    # realized-vol proxy + current risk-free rate before this path is relied on. See PR review #3.
     btc_price = calculate_black_scholes_call(current_price, strike, T_rem, r=0.04, sigma=0.30)
     btc_usd = round(btc_price * qty, 2)
 
-    _log.warning(f"🛡️ [Option Buy-To-Close] Stock {sym} hit stop-loss/rotation! Programmatically buying back short Call option @ ${btc_price:.2f} to prevent naked liabilities (Cost: ${btc_usd:.2f}).")
+    _log.warning(f"[Option Buy-To-Close] {sym} hit stop-loss/rotation; buying back short Call @ ${btc_price:.2f} before sale to avoid a naked call (cost ${btc_usd:.2f}).")
 
     # Deduct option buy-back cost from cash balance
     state["balance"] -= btc_usd
