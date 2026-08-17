@@ -98,8 +98,8 @@ def _test_tokens_valid(tokens, env="production") -> bool:
     """Perform a lightweight, 0.1-second live API call to verify if the cached tokens are actively authorized by E*TRADE."""
     try:
         ck, cs, _, _ = _load_config(env)
-        # Market clock is the standard, public, zero-cost, lightweight endpoint
-        url = "https://api.etrade.com/v1/market/clock.json"
+        # AAPL quote is the standard, 100% active, zero-cost endpoint to verify live token validity
+        url = "https://api.etrade.com/v1/market/quote/AAPL.json"
         session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
         resp = session.get(url)
         return resp.status_code == 200
@@ -274,23 +274,30 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
             pass_ok = _try_fill(page, _PASS_SELECTORS, password, "password")
             _snap("02_filled")
             if user_ok and pass_ok:
-                # Press Enter and wait for navigation
+                # Press Enter exactly once on the first matching password field to prevent duplicate submission loops
                 submitted = False
                 for sel in _PASS_SELECTORS:
                     try:
                         page.wait_for_selector(sel, timeout=3000)
-                        with page.expect_navigation(timeout=15000):
-                            page.press(sel, "Enter")
-                        print("  [Auth] Submitted via Enter key.")
+                        page.press(sel, "Enter")
+                        print("  [Auth] Enter pressed on password field.")
                         submitted = True
                         break
-                    except (PWTimeout, Exception):
+                    except Exception:
                         continue
-                if not submitted:
+                
+                if submitted:
+                    # Wait for navigation/load state with grace, without re-submitting and spamming E*TRADE
                     try:
-                        with page.expect_navigation(timeout=15000):
-                            page.evaluate("document.querySelector('button').click()")
+                        page.wait_for_load_state("domcontentloaded", timeout=15000)
+                        print("  [Auth] Submitted login form via Enter.")
+                    except Exception:
+                        print("  [Auth] Submission page load completed silently or timed out.")
+                else:
+                    try:
+                        page.evaluate("document.querySelector('button').click()")
                         print("  [Auth] Submitted via JS click.")
+                        page.wait_for_load_state("domcontentloaded", timeout=15000)
                     except Exception as e:
                         print(f"  [Auth] Submit failed ({e}) — click Log on manually.")
             _snap("03_after_submit")
@@ -508,6 +515,89 @@ def _load_tokens_any_date(env) -> dict | None:
         return None
 
 
+def _get_failure_state():
+    fail_path = os.path.join(_DIR, "Data", "etrade_fail_state.json")
+    if os.path.exists(fail_path):
+        try:
+            with open(fail_path, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"consecutive_failures": 0, "last_failure_time": 0}
+
+
+def _reset_failure_count():
+    fail_path = os.path.join(_DIR, "Data", "etrade_fail_state.json")
+    try:
+        state = _get_failure_state()
+        if state["consecutive_failures"] > 0:
+            state["consecutive_failures"] = 0
+            os.makedirs(os.path.dirname(fail_path), exist_ok=True)
+            with open(fail_path, "w") as f:
+                json.dump(state, f)
+    except Exception:
+        pass
+
+
+def _increment_failure_count():
+    fail_path = os.path.join(_DIR, "Data", "etrade_fail_state.json")
+    state = _get_failure_state()
+    state["consecutive_failures"] += 1
+    state["last_failure_time"] = time.time()
+    try:
+        os.makedirs(os.path.dirname(fail_path), exist_ok=True)
+        with open(fail_path, "w") as f:
+            json.dump(state, f)
+    except Exception:
+        pass
+
+
+def check_etrade_cookie_freshness():
+    """Verify that our saved Playwright browser state (cookies) is fresh.
+    If it is older than 25 days, send a proactive email warning to re-auth.
+    """
+    state_path = os.path.join(_DIR, "Data", "etrade_browser_state.json")
+    if os.path.exists(state_path):
+        try:
+            mtime = os.path.getmtime(state_path)
+            age_days = (time.time() - mtime) / (24 * 3600)
+            if age_days > 25.0:
+                _log.warning(f"🕒 [E*TRADE ALERT] Your E*TRADE Trusted Device cookies are {age_days:.1f} days old and expiring soon!")
+                
+                # Deduplicate email alerts: send at most once per calendar day
+                state = _get_failure_state()
+                today_str = _et_today()
+                if state.get("last_warning_sent_date") == today_str:
+                    return
+                
+                state["last_warning_sent_date"] = today_str
+                fail_path = os.path.join(_DIR, "Data", "etrade_fail_state.json")
+                try:
+                    os.makedirs(os.path.dirname(fail_path), exist_ok=True)
+                    with open(fail_path, "w") as f:
+                        json.dump(state, f)
+                except Exception:
+                    pass
+
+                try:
+                    from aether import notify
+                    msg = (
+                        f"🕒 [PROACTIVE MAINTENANCE NOTICE]\n\n"
+                        f"Your saved E*TRADE Trusted Device cookies are {age_days:.1f} days old (expiration threshold is 30-45 days).\n"
+                        f"To prevent an automatic daily run blockage or offline lockout during active trading hours, "
+                        f"please execute a manual re-authentication sync to refresh your trusted-device session state:\n\n"
+                        f"  powershell command:\n"
+                        f"  python -c \"import aether.etrade as e; e.get_tokens('production', allow_browser=True)\"\n\n"
+                        f"Please complete this sync during after-hours."
+                    )
+                    notify.send_email("🕒 ALERT: E*TRADE Trusted Session Expiring Soon", msg)
+                    _log.info("📧 Proactive E*TRADE session expiration warning dispatched via email.")
+                except Exception as ne:
+                    _log.error(f"Failed to dispatch proactive session warning email: {ne}")
+        except Exception as e:
+            _log.error(f"Error checking E*TRADE cookie freshness: {e}")
+
+
 def get_tokens(env="sandbox", allow_browser=False):
     """Return valid OAuth tokens, minimising browser interaction.
 
@@ -530,6 +620,7 @@ def get_tokens(env="sandbox", allow_browser=False):
         if _test_tokens_valid(cached, env):
             renewed = renew_tokens(cached, env)
             if renewed:
+                check_etrade_cookie_freshness()
                 return renewed
         else:
             _log.warning("🚨 [E*TRADE ALERT] Cached token failed server verification (401 Unauthorized). Invalidating cache...")
@@ -550,6 +641,7 @@ def get_tokens(env="sandbox", allow_browser=False):
                 renewed = renew_tokens(stale, env)
                 if renewed:
                     _log.info("Previous-day token renewed successfully.")
+                    check_etrade_cookie_freshness()
                     return renewed
 
     # Silent renewal exhausted — try headless Playwright with saved browser state.
@@ -566,8 +658,23 @@ def get_tokens(env="sandbox", allow_browser=False):
                 try:
                     mtime = os.path.getmtime(cooldown_path)
                     cooldown_age_min = (time.time() - mtime) / 60
-                    if cooldown_age_min < 15.0:
-                        _log.error(f"❌ [E*TRADE ANTI-BAN BLOCK] Headless re-authentication is on cooldown ({cooldown_age_min:.1f}m/15m remaining). Aborting browser launch to prevent brokerage bans!")
+                    
+                    # Calculate dynamic cooldown duration based on consecutive failure count
+                    fail_state = _get_failure_state()
+                    fails = fail_state.get("consecutive_failures", 0)
+                    if fails >= 3:
+                        cooldown_duration_min = 1440.0  # 24 hours backoff (1 day)
+                        msg_str = f"Critical consecutive failure lockout (24h backoff active, {fails} failures)."
+                    elif fails >= 2:
+                        cooldown_duration_min = 120.0   # 2 hours backoff
+                        msg_str = f"Moderate failure backoff (2h backoff active, {fails} failures)."
+                    else:
+                        cooldown_duration_min = 15.0    # 15 minutes default
+                        msg_str = "Headless re-authentication is on cooldown."
+
+                    if cooldown_age_min < cooldown_duration_min:
+                        remaining_min = cooldown_duration_min - cooldown_age_min
+                        _log.warning(f"❌ [E*TRADE ANTI-BAN BLOCK] {msg_str} ({remaining_min:.1f}m/{cooldown_duration_min:.0f}m remaining). Aborting browser launch to prevent brokerage bans!")
                         raise RuntimeError("E*TRADE: Headless auto-login blocked by Anti-Ban Cooldown Circuit Breaker.")
                 except Exception as ce:
                     if "Anti-Ban" in str(ce):
@@ -595,12 +702,15 @@ def get_tokens(env="sandbox", allow_browser=False):
             tokens = reauth_renewer.ensure(current_token=cached)
             if tokens and tokens.get("issued_date_et") == _et_today():
                 _log.info("E*TRADE: automatic re-authentication succeeded.")
+                _reset_failure_count()
                 return tokens
             _log.warning("E*TRADE: automatic re-authentication failed (browser state may be stale).")
+            _increment_failure_count()
         except Exception as e:
             if "Anti-Ban" in str(e) or "cooldown" in str(e).lower():
                 raise e
             _log.warning(f"E*TRADE: headless Playwright re-auth error: {e}")
+            _increment_failure_count()
 
     if not allow_browser:
         # FAIL LOUD AND SCREAM: Throw a clear, un-swallowed RuntimeError to trigger the AETHER Healer!

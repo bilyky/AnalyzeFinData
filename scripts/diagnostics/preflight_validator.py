@@ -29,15 +29,69 @@ _log = _get_logger("preflight")
 
 
 def purge_browser_zombies():
-    """Autonomically search and terminate any orphaned node.exe or headless_shell.exe
-    zombie processes on Windows to prevent dangerous Playwright launch pipe-hangs!
+    """Autonomically search and terminate any orphaned node.exe, headless_shell.exe,
+    or automated chrome.exe zombie processes on Windows to prevent dangerous Playwright launch pipe-hangs!
     """
     if sys.platform != "win32":
         return
     try:
-        # Force-kill orphaned background NodeJS child processes driving Playwright
-        subprocess.run(["taskkill", "/F", "/IM", "node.exe", "/T"], capture_output=True)
+        # Force-kill only orphaned background Playwright NodeJS child processes, protecting Gemini CLI!
         subprocess.run(["taskkill", "/F", "/IM", "headless_shell.exe", "/T"], capture_output=True)
+
+        # Fine-grained Node.exe cleanup protecting active Gemini sessions
+        try:
+            cmd = [
+                "powershell.exe", "-NoProfile", "-Command",
+                "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Select-Object ProcessId, CommandLine | ConvertTo-Json"
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if res.returncode == 0 and res.stdout.strip():
+                import json
+                data = json.loads(res.stdout)
+                if not isinstance(data, list):
+                    data = [data]
+                killed_count = 0
+                for proc in data:
+                    pid = proc.get("ProcessId")
+                    cmdline = proc.get("CommandLine") or ""
+                    
+                    # Strictly skip and protect Gemini CLI or standard developer shells
+                    if any(x in cmdline for x in ["gemini-cli", "gemini.js", "claude-dev", "cline"]):
+                        continue
+                        
+                    # Target only Playwright/driver-related Node.exe processes
+                    if pid and any(x in cmdline for x in ["playwright", "run-driver", "playwright-core"]):
+                        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+                        killed_count += 1
+                if killed_count > 0:
+                    _log.console(f"🧹 [Autonomic Healing] Purged {killed_count} background Playwright node.exe processes!")
+        except Exception:
+            pass
+
+        # Fine-grained automated Chrome process cleanup (to protect user's active Chrome)
+        try:
+            cmd = [
+                "powershell.exe", "-NoProfile", "-Command",
+                "Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe'\" | Select-Object ProcessId, CommandLine | ConvertTo-Json"
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if res.returncode == 0 and res.stdout.strip():
+                import json
+                data = json.loads(res.stdout)
+                if not isinstance(data, list):
+                    data = [data]
+                killed_count = 0
+                for proc in data:
+                    pid = proc.get("ProcessId")
+                    cmdline = proc.get("CommandLine") or ""
+                    if pid and any(x in cmdline for x in ["AutomationControlled", "remote-debugging-port", "remote-debugging-pipe"]):
+                        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+                        killed_count += 1
+                if killed_count > 0:
+                    _log.console(f"🧹 [Autonomic Healing] Purged {killed_count} automated background chrome.exe processes!")
+        except Exception:
+            pass
+
         _log.console("🧹 [Autonomic Healing] Successfully purged all background browser and NodeJS zombie processes!")
     except Exception as e:
         _log.console(f"  ⚠️ Warning: Could not purge zombie processes: {e}")

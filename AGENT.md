@@ -87,3 +87,23 @@ To completely prevent silent logical bypasses, "lying" or misleading system-heal
     3.  **Headless User Context Locking:** All registered Task Scheduler tasks or cron daemons **MUST** be explicitly configured to run under your credentialed active user account context (`Yura`) rather than the local machine `SYSTEM` account to ensure they possess the necessary network share and SMB access privileges.
     4.  **Notification as the Absolute Final Step:** In any pipeline or task execution script, drafting and dispatching success notifications (emails/SMS/slack) **MUST** take place as the absolute final step of the program, after all database updates, network syncs, and backups have fully completed. Any late-stage sync or writing failure must be dynamically appended to the report and reflected loudly in the email's subject line.
 
+---
+
+## 📁 6. Directory Filtering & Workspace Navigation Standards
+
+### 🛡️ The Generic Directory Filtering and Search Standard (The Skip-Folders Rule)
+To completely eliminate filesystem indexing hangs, regex timeout errors, and runaway API token depletion (such as 429 Resource Exhausted rate-limits):
+
+*   **The Mandate:** **Any** AI agent, developer copilot, or automated search utility operating in this workspace **MUST** strictly ignore, filter out, and skip heavy virtual environments, caches, local logs, and binary data directories during all file searches, recursive globbing, indexing, and regex scanning.
+*   **The Excluded Directories:** The following directories are strictly designated as non-source, search-exempt zones and **MUST** always be excluded:
+    *   `venv/`
+    *   `venv_new/`
+    *   `.git/`
+    *   `.idea/`
+    *   `.ruff_cache/`
+    *   `Data/`
+    *   `__pycache__/`
+*   **The Rules:**
+    1.  **Scoped Searches:** Never perform wide, unrestricted global searches or generic `grep_search` across the entire workspace directory without setting narrow include filters (e.g., specifying `dir_path` or using narrow file globbing patterns like `aether/**/*.py` or `scripts/**/*.py`).
+    2.  **Active Exclusion:** Always respect both `.gitignore` and `.geminiignore` (or other agent-specific ignore files) and actively pass exclusion parameters (like `exclude_pattern`) in search/grep tool calls to prevent scanning venv/log paths.
+

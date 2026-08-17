@@ -1017,9 +1017,7 @@ def get_live_prices(symbols):
         # This ensures we always actively attempt to re-authenticate when tokens expire.
         tokens = etrade.get_tokens("production")
         if not tokens:
-            _log.warning("  [AETHER] E*TRADE authentication failed. Attempting Google Finance live fallback.")
-            return get_google_prices_fallback(symbols)
-            
+            raise RuntimeError("🚨 [CRITICAL E*TRADE FAILURE] E*TRADE authentication failed. We cannot operate without E*TRADE!")
         quotes = etrade.fetch_quotes(tokens, symbols, env="production")
 
         # Fill only the gaps from Google — keep the E*TRADE quotes we already have.
@@ -1035,8 +1033,9 @@ def get_live_prices(symbols):
 
         return quotes
     except Exception as e:
-        _log.warning(f"  [AETHER] E*TRADE connection failed: {e}. Attempting Google Finance live fallback.")
-        return get_google_prices_fallback(symbols)
+        if "CRITICAL E*TRADE FAILURE" in str(e):
+            raise e
+        raise RuntimeError(f"🚨 [CRITICAL E*TRADE FAILURE] E*TRADE connection failed: {e}. We cannot operate without E*TRADE!")
 
 def get_google_prices_fallback(symbols):
     """Scrape Google Finance for multiple symbols in parallel/sequence as a robust fallback."""

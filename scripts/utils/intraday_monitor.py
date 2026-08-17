@@ -104,7 +104,12 @@ def monitor():
     _log.console(f"Monitoring {len(monitored)} positions.")
 
     symbols = [p["symbol"] for p in monitored]
-    quotes = get_live_prices(symbols)
+    try:
+        quotes = get_live_prices(symbols)
+    except Exception as e:
+        _log.warning(f"Failed to fetch live prices via E*TRADE: {e}. Falling back entirely to Google Finance...")
+        from ai_portfolio_game import get_google_prices_fallback
+        quotes = get_google_prices_fallback(symbols)
 
     current_breaches = {}
     for p in monitored:

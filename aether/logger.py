@@ -95,9 +95,17 @@ def _init():
     level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
     stdout_level = getattr(logging, level_name, logging.INFO)
 
+    # Decouple the webserver logs from transient background tasks to prevent Windows permission locks on rollover
+    txt_file = "aether.log"
+    jsonl_file = "aether.jsonl"
+    main_script = Path(sys.argv[0]).name if sys.argv else ""
+    if "server.py" in main_script or "uvicorn" in main_script or "serve" in sys.argv:
+        txt_file = "aether_server.log"
+        jsonl_file = "aether_server.jsonl"
+
     # ── 1. Rotating plain text — INFO+ only (no CONSOLE noise) ─────────────
     txt_handler = logging.handlers.RotatingFileHandler(
-        _LOG_DIR / "aether.log",
+        _LOG_DIR / txt_file,
         maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8",
     )
     txt_handler.setLevel(logging.INFO)   # CONSOLE(15) is below INFO(20) — excluded
@@ -106,7 +114,7 @@ def _init():
 
     # ── 2. Rotating JSON Lines — INFO+ only ─────────────────────────────────
     jsonl_handler = logging.handlers.RotatingFileHandler(
-        _LOG_DIR / "aether.jsonl",
+        _LOG_DIR / jsonl_file,
         maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8",
     )
     jsonl_handler.setLevel(logging.INFO)  # CONSOLE(15) excluded from structured log

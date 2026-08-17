@@ -68,6 +68,16 @@ class TestGetLivePricesPartialFill(unittest.TestCase):
         self.assertEqual(out, {"AAA": 10.0, "BBB": 20.0})
         goog.assert_not_called()
 
+    def test_etrade_failure_raises_critical_error(self):
+        with mock.patch("ai_portfolio_game.datetime.date", MockDate), \
+             mock.patch.object(game, "is_market_hours", return_value=True), \
+             mock.patch.object(game.etrade, "get_tokens", side_effect=RuntimeError("E*TRADE authentication failed")), \
+             mock.patch.object(game, "get_google_prices_fallback") as goog:
+            with self.assertRaises(RuntimeError) as context:
+                game.get_live_prices(["AAA", "BBB"])
+            self.assertIn("CRITICAL E*TRADE FAILURE", str(context.exception))
+            goog.assert_not_called()
+
 
 class TestSummaryEquityPersistence(unittest.TestCase):
     """send_daily_summary must refresh stored equity only when fully priced —
