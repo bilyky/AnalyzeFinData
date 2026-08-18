@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import ai_portfolio_game as game
 import watchdog
+from tests._helpers import research_workbook
 
 
 def _defensive_state():
@@ -277,11 +278,9 @@ class TestAfterHoursOrderQueuing(unittest.TestCase):
     @mock.patch("ai_portfolio_game.save_game")
     @mock.patch("ai_portfolio_game.openpyxl.load_workbook")  # patch at point-of-use
     def test_after_hours_orders_are_queued(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Research"
-        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
-        ws.append([1, None, None, "TSLA", "Technology", None, "Bu", None, None, None, 400.0, None, None, None, None, None, None, None, None, None, "1", None, None, 0.65, 5.0, 5.0])
+        wb = research_workbook(
+            [1, None, None, "TSLA", "Technology", None, "Bu", None, None, None, 400.0, None, None, None, None, None, None, None, None, None, "1", None, None, 0.65, 5.0, 5.0]
+        )
         mock_load_wb.return_value = wb
         
         state = {
@@ -336,10 +335,7 @@ class TestPersistentProfileModes(unittest.TestCase):
         mock_load_game.return_value = state
         mock_get_prices.return_value = {"SPY": 500.0}
 
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Research"
-        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
+        wb = research_workbook()
         mock_load_wb.return_value = wb
 
         game.run_daily_ai_management(force=True, manual_profile="BALANCED")
