@@ -44,96 +44,68 @@ DOC_SYNC_SURFACES = {
     ],
 }
 
-def get_docsync_ack_env() -> set:
-    """Read AETHER_DOCSYNC_ACK env var as a set of comma-separated doc-neutral keys."""
-    val = os.environ.get("AETHER_DOCSYNC_ACK", "")
-    return {x.strip() for x in val.split(",") if x.strip()}
+_ANCHOR_START_RE = re.compile(r"@doc-sync-start:\s*([A-Za-z0-9_]+)")
+_ANCHOR_END_RE = re.compile(r"@doc-sync-end:\s*([A-Za-z0-9_]+)")
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
-def get_git_diff_hunks_and_regions(file_path: str, doc_keys: list) -> tuple:
-    """Parse git diff for a staged file to find:
-      1. a list of (start_line, end_line) tuples representing modified hunks;
-      2. a dict mapping doc-sync keys to their active line spans (start, end) in the current file.
-    """
-    hunks = []
-    regions = {}
-    rel_path = os.path.relpath(file_path, ROOT_DIR).replace("\\", "/")
-
-    # 1. Parse active doc-sync regions in the current on-disk code
+def _git_stdout(args: list):
+    """Run a git command from the repo root; return stdout (str) or None on failure."""
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        
-        # Match pattern: # @doc-sync <key> (start) ... # @doc-sync <key> (end)
-        open_spans = {}
-        for idx, line in enumerate(lines, 1):
-            match = re.search(r"@doc-sync\s+([a-zA-Z0-9_-]+)\s*\((start|end)\)", line)
-            if match:
-                key, marker = match.group(1), match.group(2)
-                if key in doc_keys:
-                    if marker == "start":
-                        open_spans[key] = idx
-                    elif marker == "end" and key in open_spans:
-                        regions.setdefault(key, []).append((open_spans[key], idx))
-                        del open_spans[key]
-    except Exception as e:
-        print(f"Warning: Failed to parse doc-sync regions in {rel_path}: {e}")
+        r = subprocess.run(["git", *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", cwd=ROOT_DIR)
+        return r.stdout if r.returncode == 0 else None
+    except Exception:
+        return None
 
-    # 2. Parse modified hunks from git diff cached
-    try:
-        # Run git diff for this file specifically
-        res = subprocess.run(
-            ["git", "diff", "--cached", "-U0", "--", rel_path],
-            capture_output=True, text=True, check=True, cwd=ROOT_DIR
-        )
-        for line in res.stdout.splitlines():
-            # Line format: @@ -10,4 +12,5 @@ or @@ -10 +12 @@
-            if line.startswith("@@"):
-                parts = line.split(" ")
-                if len(parts) >= 3 and parts[2].startswith("+"):
-                    hunk_info = parts[2][1:] # strip '+'
-                    if "," in hunk_info:
-                        start_str, len_str = hunk_info.split(",")
-                        start = int(start_str)
-                        length = int(len_str)
-                    else:
-                        start = int(hunk_info)
-                        length = 1
-                    # A zero-length hunk represents a pure deletion (no lines in the new file),
-                    # which we span as a 1-line range at 'start' to catch touching boundaries.
-                    hunks.append((start, start + max(1, length) - 1))
-    except Exception as e:
-        print(f"Warning: Failed to parse git diff hunks for {rel_path}: {e}")
+def _staged_paths() -> set:
+    """Repo-relative paths staged for this commit (added/copied/modified/renamed)."""
+    out = _git_stdout(["diff", "--cached", "--name-only", "--diff-filter=ACMR"])
+    return {ln.strip() for ln in (out or "").splitlines() if ln.strip()}
 
-    return hunks, regions
+def _staged_hunk_ranges(path: str) -> list:
+    """New-file line ranges changed in the staged diff of `path` (via -U0 hunk headers)."""
+    out = _git_stdout(["diff", "--cached", "-U0", "--", path])
+    ranges = []
+    for line in (out or "").splitlines():
+        m = _HUNK_RE.match(line)
+        if m:
+            start = int(m.group(1))
+            length = int(m.group(2)) if m.group(2) else 1
+            ranges.append((start, start if length == 0 else start + length - 1))
+    return ranges
+
+def _anchor_regions(content: str) -> dict:
+    """Parse `@doc-sync-start/-end: key` markers -> {key: [(start_line, end_line), ...]}."""
+    regions, open_starts = {}, {}
+    for i, line in enumerate(content.splitlines(), 1):
+        ms = _ANCHOR_START_RE.search(line)
+        if ms:
+            open_starts[ms.group(1)] = i
+            continue
+        me = _ANCHOR_END_RE.search(line)
+        if me and me.group(1) in open_starts:
+            regions.setdefault(me.group(1), []).append((open_starts.pop(me.group(1)), i))
+    return regions
 
 def check_feature_doc_sync() -> bool:
-    """Enforce feature-documentation synchronicity.
-    If a staged file has modified hunks that overlap an active @doc-sync <key> region,
-    the matching documentation files MUST also be staged in the same commit.
-    """
-    staged = set()
-    try:
-        # Fetch all currently staged files (including additions, modifications, renames)
-        res = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
-            capture_output=True, text=True, check=True, cwd=ROOT_DIR
-        )
-        staged = {line.strip().replace("\\", "/") for line in res.stdout.splitlines() if line.strip()}
-    except Exception as e:
-        print(f"Warning: Failed to fetch staged files: {e}. Skipping doc-sync checks.")
+    """Block the commit if code under a `@doc-sync: <key>` anchor changed but the mapped
+    documentation surfaces are not staged."""
+    staged = _staged_paths()
+    if not staged:
         return True
+    ack = {x.strip() for x in os.environ.get("AETHER_DOCSYNC_ACK", "").split(",") if x.strip()}
 
-    # Scan python files in diff
-    py_files = [os.path.join(ROOT_DIR, p) for p in staged if p.endswith(".py") and os.path.exists(os.path.join(ROOT_DIR, p))]
-    if not py_files:
-        return True
-
-    ack = get_docsync_ack_env()
-    touched = {} # key -> set(source_paths)
-
-    for path in py_files:
-        hunks, regions = get_git_diff_hunks_and_regions(path, list(DOC_SYNC_SURFACES.keys()))
-        # Check overlaps
+    touched = {}  # key -> set(source files that triggered it)
+    for path in staged:
+        if not path.endswith((".py", ".js", ".html", ".md")):
+            continue
+        content = _git_stdout(["show", f":{path}"])
+        if not content or "@doc-sync-start" not in content:
+            continue
+        regions = _anchor_regions(content)
+        if not regions:
+            continue
+        hunks = _staged_hunk_ranges(path)
         for key, spans in regions.items():
             for (s, e) in spans:
                 if any(hs <= e and he >= s for (hs, he) in hunks):
@@ -149,12 +121,14 @@ def check_feature_doc_sync() -> bool:
         missing = [(p, desc) for (p, desc) in DOC_SYNC_SURFACES.get(key, []) if p not in staged]
         if missing:
             ok = False
-            print(f"🚨 [GIT PRE-COMMIT] BLOCK - doc-sync: code under @doc-sync '{key}' changed "
-                  f"({', '.join(sorted(srcs))}) but these documentation surfaces are not staged:")
+            print(f"🚨 [GIT PRE-COMMIT] BLOCK - Feature-doc-sync: '{key}' logic changed "
+                  f"({', '.join(sorted(srcs))}),")
+            print(f"   but these documentation surfaces are NOT staged in this commit:")
             for (p, desc) in missing:
                 print(f"     - {p}  ({desc})")
-            print(f"   Stage the docs above, or acknowledge as doc-neutral: "
-                  f"AETHER_DOCSYNC_ACK={key} git commit ...")
+            print(f"   Action: update the surface(s) above and `git add` them, OR - if no doc")
+            print(f"   change is truly needed - acknowledge it explicitly:")
+            print(f"       AETHER_DOCSYNC_ACK={key} git commit ...")
     return ok
 
 
