@@ -4,11 +4,11 @@ Unit tests for the profit-lock trailing stop ratchet in ai_portfolio_game.py.
 import os
 import sys
 import unittest
-import openpyxl
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game
+from tests._helpers import research_workbook
 
 
 def _make_state(price, cost=100.0, stop=90.0):
@@ -24,17 +24,10 @@ def _make_state(price, cost=100.0, stop=90.0):
 
 
 def _make_wb(sym, price, s10=5.0, l60=5.0):
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Research"
-    ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR",
-               "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other",
-               "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other",
-               "Win%", "Short10", "Long60"])
-    ws.append([1, None, None, sym, "Retail", None, "Bu", None, None, None, price,
-               None, None, None, None, None, None, None, None, None, "OK", None, None,
-               0.65, s10, l60])
-    return wb
+    return research_workbook(
+        [1, None, None, sym, "Retail", None, "Bu", None, None, None, price,
+         None, None, None, None, None, None, None, None, None, "OK", None, None,
+         0.65, s10, l60])
 
 
 _COMMON_PATCHES = [
@@ -187,11 +180,8 @@ class TestAntiFragileFlexibility(unittest.TestCase):
         mock_get_prices.return_value = {"AAPL": 144.0, "P1": 1800.0, "P2": 1800.0, "P3": 1800.0, "P4": 1800.0, "SPY": 500.0}
 
         # Mock workbook sheet with ultra-conviction candidate AAPL
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Research"
-        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
-        ws.append([1, None, None, "AAPL", "Technology", None, "Bu", None, None, None, 144.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1]) # Score = 11.1
+        wb = research_workbook(
+            [1, None, None, "AAPL", "Technology", None, "Bu", None, None, None, 144.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1])  # Score = 11.1
         mock_load_wb.return_value = wb
 
         # Mock ATR calculation
@@ -235,14 +225,12 @@ class TestAntiFragileFlexibility(unittest.TestCase):
         mock_load_game.return_value = state
         mock_get_prices.return_value = {"P1": 1000.0, "P2": 1000.0, "P3": 1000.0, "P4": 1000.0, "P5": 1000.0, "CDW": 100.0, "SPY": 500.0}
 
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Research"
-        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
-        ws.append([1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 100.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1]) # Score = 11.1
+        wb = research_workbook(
+            [1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 100.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1])  # Score = 11.1
         mock_load_wb.return_value = wb
 
-        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00):
+        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00), \
+             mock.patch("instruments.is_scarcity_asset", return_value=False):
             game.run_daily_ai_management(force=True, manual_profile="BALANCED")
 
         # CDW must be purchased successfully, showing that the 5-position limit was dynamically expanded!
@@ -283,14 +271,12 @@ class TestAntiFragileFlexibility(unittest.TestCase):
             "CDW": 100.0, "SPY": 500.0
         }
 
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Research"
-        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
-        ws.append([1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 100.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1]) # Score = 11.1
+        wb = research_workbook(
+            [1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 100.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1])  # Score = 11.1
         mock_load_wb.return_value = wb
 
-        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00):
+        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00), \
+             mock.patch("instruments.is_scarcity_asset", return_value=False):
             game.run_daily_ai_management(force=True, manual_profile="BALANCED")
 
         # CDW must be purchased successfully because slots expanded 5 -> 6 -> 7!
@@ -323,11 +309,8 @@ class TestAntiFragileFlexibility(unittest.TestCase):
         mock_load_game.return_value = state
         mock_get_prices.return_value = {"ULTA": 410.0, "SPY": 500.0}
 
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Research"
-        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
-        ws.append([1, None, None, "ULTA", "Retail", None, "Bu", None, None, None, 410.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 5.0, 5.1]) # Short10 = 5.0
+        wb = research_workbook(
+            [1, None, None, "ULTA", "Retail", None, "Bu", None, None, None, 410.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 5.0, 5.1])  # Short10 = 5.0
         mock_load_wb.return_value = wb
 
         with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00):
