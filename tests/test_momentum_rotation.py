@@ -1,6 +1,8 @@
 import unittest
 
 import ai_portfolio_game as game
+from aether import risk_utils
+from aether.config import CFG
 
 
 class TestDynamicMomentumRotation(unittest.TestCase):
@@ -78,40 +80,47 @@ class TestDynamicMomentumRotation(unittest.TestCase):
         self.assertEqual(cash_add, 0.0)
 
     def test_adaptive_s10_floor(self):
-        """Operational: Assert that Adaptive s10 Floor dynamically lowers required floor to 2.0 when cash_pct is high."""
-        # Standard case (cash < 25%) -> required floor is 2.5
-        state_low_cash = {"balance": 1000.0, "equity": 10000.0, "positions": {}}
-        short10 = 2.4
-        cash_pct = (state_low_cash["balance"] / state_low_cash["equity"]) * 100.0
-        required_floor = 2.0 if cash_pct > 25.0 else 2.5
-        self.assertEqual(required_floor, 2.5)
-        self.assertLess(short10, required_floor)
-        
-        # High cash case (cash > 25%) -> required floor is 2.0
-        state_high_cash = {"balance": 3500.0, "equity": 10000.0, "positions": {}}
-        cash_pct_high = (state_high_cash["balance"] / state_high_cash["equity"]) * 100.0
-        required_floor_high = 2.0 if cash_pct_high > 25.0 else 2.5
-        self.assertEqual(required_floor_high, 2.0)
-        self.assertGreaterEqual(short10, required_floor_high)
+        """Adaptive s10 Floor (R&D #15): the production helper returns the stricter default
+        floor under low cash drag and the relaxed floor once cash drag clears the threshold."""
+        thr = CFG.system_cash_drag_threshold      # 25.0 default
+        strict = CFG.system_default_s10_floor      # 2.5 default
+        relaxed = CFG.system_adaptive_s10_floor    # 2.0 default
+        # Below the drag threshold -> strict default floor
+        self.assertEqual(game.adaptive_s10_floor(thr - 5.0), strict)
+        # Exactly at the threshold is NOT above it -> still strict (boundary is exclusive)
+        self.assertEqual(game.adaptive_s10_floor(thr), strict)
+        # Above the drag threshold -> relaxed floor to deploy idle capital
+        self.assertEqual(game.adaptive_s10_floor(thr + 5.0), relaxed)
 
     def test_high_score_pgr_bypass(self):
-        """Operational: Assert that High-Score PGR Bypass (R&D #13) waives the Chaikin PGR constraint for elite breakout leaders."""
-        total_score = 10.6
-        short10 = 3.6
-        is_blue_sky = True
-        is_elite_breakout = (total_score >= 6.0) and (short10 >= 2.0) and is_blue_sky
-        self.assertTrue(is_elite_breakout)
+        """High-Score PGR Bypass (R&D #13/#32): the production gate qualifies an elite
+        leader only when BOTH score and s10 clear their CFG floors, and rejects otherwise."""
+        sf = CFG.system_bypass_score_floor  # 8.0 default
+        s10f = CFG.system_bypass_s10_floor  # 2.0 default
+        # Both above floor -> elite (waiver granted)
+        self.assertTrue(risk_utils.is_elite_breakout_candidate(sf + 2.6, s10f + 1.6))
+        # Exactly on both floors -> elite (>= boundary is inclusive)
+        self.assertTrue(risk_utils.is_elite_breakout_candidate(sf, s10f))
+        # Strong score but weak s10 -> NOT elite (both conditions required)
+        self.assertFalse(risk_utils.is_elite_breakout_candidate(sf + 3.0, s10f - 0.1))
+        # Strong s10 but weak score -> NOT elite
+        self.assertFalse(risk_utils.is_elite_breakout_candidate(sf - 0.1, s10f + 3.0))
 
     def test_loosened_pyramiding(self):
-        """Operational: Assert that Pyramiding (R&D #31) momentum floor is successfully loosened to 1.0."""
-        s10_low = 0.5
-        s10_ok = 1.2
-        is_winner = True
-        has_peak = True
-        low_ok = is_winner and has_peak and s10_low >= 1.0
-        ok_ok = is_winner and has_peak and s10_ok >= 1.0
-        self.assertFalse(low_ok)
-        self.assertTrue(ok_ok)
+        """Pyramiding momentum gate (R&D #31): the production helper scales into a winner
+        when EITHER s10 holds its floor OR l60 shows strong trend support, but never when
+        the position is not a peak-hugging winner."""
+        s10f = CFG.system_pyramiding_s10_floor  # 0.0 default
+        l60f = CFG.system_pyramiding_l60_floor  # 2.0 default
+        # s10 holds -> pyramid
+        self.assertTrue(game.should_pyramid_into_winner(True, True, s10f, l60f - 1.0))
+        # s10 fails but strong long-term trend rescues it (pullback dip-buy)
+        self.assertTrue(game.should_pyramid_into_winner(True, True, s10f - 0.5, l60f))
+        # both momentum reads fail -> no add
+        self.assertFalse(game.should_pyramid_into_winner(True, True, s10f - 0.5, l60f - 0.5))
+        # not a winner, or not near peak -> never add regardless of momentum
+        self.assertFalse(game.should_pyramid_into_winner(False, True, s10f + 5.0, l60f + 5.0))
+        self.assertFalse(game.should_pyramid_into_winner(True, False, s10f + 5.0, l60f + 5.0))
 
 
 if __name__ == '__main__':

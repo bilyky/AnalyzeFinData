@@ -1,22 +1,21 @@
-import argparse
-import datetime
 import json
-import os
-import re
-from pathlib import Path
-
+import datetime
 import openpyxl
+import os
 import pytz
+import re
 import requests
-
-import aether.notify as notify
-import aether_oracle
-import circuit_breaker
-import console_safe
 import etrade
 import rapidapi
+import sys
+import console_safe
+import circuit_breaker
+import aether.notify as notify
+import argparse
+from pathlib import Path
+import aether_oracle
 from aether.utils import _to_float
-
+from aether.config import CFG
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
 # before the first non-ASCII print. Reduces, not eliminates, cp1252 crashes in
@@ -32,16 +31,13 @@ SYMBOL_FULL_DIR = BASE_DIR / "Data" / "Symbol_full"   # OHLCV cache — one sour
 INITIAL_BALANCE = 10000.0
 
 # Import risk utils safely
-import decision_eval
-import instruments
 import risk_utils
 import sell_rules
+import decision_eval
 import watchdog
-from aether import options
-from aether.scoring import digit_sum_open_score as _digit_open_score
+import instruments
 from aether_logger import get_logger as _get_logger
-
-
+from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
 
 
@@ -715,6 +711,33 @@ def calculate_share_qty(symbol: str, cash_to_use: float, price: float) -> float:
     else:
         return int(cash_to_use // price)
 
+def adaptive_s10_floor(cash_pct: float) -> float:
+    """Dynamic short-term momentum floor for new buys (R&D #15).
+
+    When idle cash drags above CFG.system_cash_drag_threshold, relax the required
+    Short10 floor from system_default_s10_floor down to system_adaptive_s10_floor so
+    capital can be deployed; otherwise hold the stricter default. Single-sourced from
+    CFG.system_{cash_drag_threshold,adaptive_s10_floor,default_s10_floor}.
+    """
+    if cash_pct > CFG.system_cash_drag_threshold:
+        return CFG.system_adaptive_s10_floor
+    return CFG.system_default_s10_floor
+
+def should_pyramid_into_winner(is_winner: bool, has_peak: bool, s10: float, l60: float) -> bool:
+    """Pyramiding momentum gate (R&D #31).
+
+    Scale into a profitable, risk-locked winner trading near its peak when EITHER
+    short-term momentum holds (s10 >= system_pyramiding_s10_floor) OR long-term
+    trend support is strong (l60 >= system_pyramiding_l60_floor) — the latter lets
+    us add on minor short-term pullbacks within an established uptrend. Thresholds
+    are single-sourced from CFG.system_pyramiding_*.
+    """
+    return (
+        is_winner
+        and has_peak
+        and (s10 >= CFG.system_pyramiding_s10_floor or l60 >= CFG.system_pyramiding_l60_floor)
+    )
+
 def load_game():
     if not AI_GAME_FILE.exists() or AI_GAME_FILE.stat().st_size == 0:
         # Try to find a backup to restore from
@@ -768,7 +791,6 @@ def load_game():
             }
 
 import shutil
-
 
 def save_game(state):
     # --- Mandatory Backup before Write ---
@@ -843,7 +865,7 @@ def is_bottom_confirmed(symbol):
         # prices[0]: today, prices[1]: yesterday, prices[2]: 2 days ago, prices[3]: 3 days ago
         change1 = (prices[0] - prices[1]) / prices[1]  # Today vs Yesterday
         change2 = (prices[1] - prices[2]) / prices[2]  # Yesterday vs 2 Days Ago
-        (prices[2] - prices[3]) / prices[3]  # 2 Days Ago vs 3 Days Ago
+        change3 = (prices[2] - prices[3]) / prices[3]  # 2 Days Ago vs 3 Days Ago
         
         # Bottoming signature: Selling pressure is exhausting and slope is turning positive
         # Condition 1: Today's slope is positive (change1 > 0)
@@ -906,11 +928,23 @@ def is_market_hours():
         if not (start_time <= now_la <= end_time):
             return False
             
-        # 2. Weekend check (Saturday=5, Sunday=6)
+        # 2. Dynamic Live Verification (Clock API + SPY Ticker)
+        try:
+            tokens = etrade.get_tokens("production")
+            if tokens:
+                is_open = etrade.is_market_open_now(tokens, "production")
+                if is_open is not None:
+                    if not is_open:
+                        _log.console("  [AETHER] Dynamic Market Checks confirm market is CLOSED (Holiday/Weekend).")
+                    return is_open
+        except Exception as e:
+            _log.warning(f"  [AETHER] Dynamic market clock failed: {e}. Falling back to static datetime checks.")
+            
+        # 3. Fallback: Weekend check (Saturday=5, Sunday=6)
         if now_la.weekday() in (5, 6):
             return False
             
-        # 3. Static US Stock Market Holiday (NYSE)
+        # 4. Fallback: Static US Stock Market Holiday (NYSE)
         holidays_2026 = {
             "2026-01-01",  # New Year's Day
             "2026-01-19",  # Martin Luther King Jr. Day
@@ -931,18 +965,6 @@ def is_market_hours():
         today_str = now_la.strftime("%Y-%m-%d")
         if today_str in holidays_2026:
             return False
-            
-        # 4. Dynamic Live Verification (Clock API + SPY Ticker)
-        try:
-            tokens = etrade.get_tokens("production")
-            if tokens:
-                is_open = etrade.is_market_open_now(tokens, "production")
-                if is_open is not None:
-                    if not is_open:
-                        _log.console("  [AETHER] Dynamic Market Checks confirm market is CLOSED (Holiday/Weekend).")
-                    return is_open
-        except Exception as e:
-            _log.warning(f"  [AETHER] Dynamic market clock failed: {e}. Falling back to static datetime checks completed successfully.")
             
         return True
     except Exception:
@@ -1017,7 +1039,9 @@ def get_live_prices(symbols):
         # This ensures we always actively attempt to re-authenticate when tokens expire.
         tokens = etrade.get_tokens("production")
         if not tokens:
-            raise RuntimeError("🚨 [CRITICAL E*TRADE FAILURE] E*TRADE authentication failed. We cannot operate without E*TRADE!")
+            _log.warning("  [AETHER] E*TRADE authentication failed. Attempting Google Finance live fallback.")
+            return get_google_prices_fallback(symbols)
+            
         quotes = etrade.fetch_quotes(tokens, symbols, env="production")
 
         # Fill only the gaps from Google — keep the E*TRADE quotes we already have.
@@ -1033,9 +1057,8 @@ def get_live_prices(symbols):
 
         return quotes
     except Exception as e:
-        if "CRITICAL E*TRADE FAILURE" in str(e):
-            raise e
-        raise RuntimeError(f"🚨 [CRITICAL E*TRADE FAILURE] E*TRADE connection failed: {e}. We cannot operate without E*TRADE!")
+        _log.warning(f"  [AETHER] E*TRADE connection failed: {e}. Attempting Google Finance live fallback.")
+        return get_google_prices_fallback(symbols)
 
 def get_google_prices_fallback(symbols):
     """Scrape Google Finance for multiple symbols in parallel/sequence as a robust fallback."""
@@ -1393,10 +1416,6 @@ def run_daily_ai_management(force=False, manual_profile=None):
         # --- Systemic Crash Circuit Breaker Guard ---
         circuit_breaker.enforce_circuit_breaker(state, prices)
 
-        # --- Options Settlement Pass (R&D #26) ---
-        # Settle any active weekly Covered Calls expiring today!
-        options.resolve_expiring_options(state, today, prices)
-
         # Zero-Trust: surface held positions with no live quote, but do NOT abort the
         # run over them — aborting would skip stop-loss enforcement on every *other*
         # position too, violating the Rule of Loss Minimization. Unpriced names fall
@@ -1417,9 +1436,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 if price <= 0: continue
                 
                 if order["type"] == "SELL" and sym in state["positions"]:
-                    pos = state["positions"][sym]
-                    options.unwind_option_liability_if_held(sym, pos, state, price, today)
-                    state["positions"].pop(sym)
+                    pos = state["positions"].pop(sym)
                     proceeds = pos["qty"] * price
                     state["balance"] += proceeds
                     tx = {
@@ -1645,10 +1662,8 @@ def run_daily_ai_management(force=False, manual_profile=None):
             decision_eval.log_decisions(decision_entries)
 
         for sym in symbols_to_sell:
-            pos = state["positions"][sym]
+            pos = state["positions"].pop(sym)
             price = prices.get(sym, pos["cost"])
-            options.unwind_option_liability_if_held(sym, pos, state, price, today)
-            state["positions"].pop(sym)
             
             # Slippage-Protected Limit Stop (STP LMT - R&D #8): Execute at exactly the stop price
             # if the market close price dropped below our stop-loss floor, preventing slippage leaks.
@@ -1703,9 +1718,9 @@ def run_daily_ai_management(force=False, manual_profile=None):
             price = prices.get(sym, 0)
             short10 = row[24] or 0.0
 
-            # Dynamic Adaptive s10 Floor (R&D #15): If cash drag is high (>25%), lower momentum floor to 2.0 to deploy capital safely
+            # Dynamic Adaptive s10 Floor (R&D #15) — thresholds single-sourced via helper.
             cash_pct = (state["balance"] / state["equity"]) * 100.0 if state.get("equity", 0) > 0 else 0.0
-            required_floor = 2.0 if cash_pct > 25.0 else 2.5
+            required_floor = adaptive_s10_floor(cash_pct)
 
             # Strict Short10 Momentum Floor: Reject buy entries if short-term momentum is below required floor
             if short10 < required_floor:
@@ -1728,24 +1743,17 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         continue
 
                 # Reward-to-Risk & Target Upside Filter (Risk-Reward Gate):
-                # Reject if the projected Reward-to-Risk ratio is < 2:1 (R/R < 2.0)
-                # OR if the projected target gain percentage is <= 5.0% of the current price.
-                # EXEMPTION (Breakout Risk-Reward Waiver - R&D #32):
-                # If a symbol is an elite momentum leader (combined >= 6.0, s10 >= 2.0, PGR is Bullish)
-                # AND we are in a 'Blue-Sky' breakout (target source is 'atr', 'pct', 'stale', or 'none', representing no real overhead resistance),
-                # we WAIVE these conservative target-fallback restrictions to capture breakout-alpha!
+                # Reject if the projected Reward-to-Risk ratio is below CFG.system_default_min_rr,
+                # OR if the projected target gain percentage is below 5.0% of the current price.
+                # EXEMPTION (Breakout Risk-Reward Waiver - R&D #13 & #32):
+                # An elite momentum leader (see is_elite_breakout_candidate: combined + s10 both
+                # above the CFG.system_bypass_* floors) waives the conservative R:R and target-gain
+                # fallback restrictions below, to capture breakout alpha on names with no real
+                # overhead resistance. Gate is delegated so the thresholds live in one place.
                 stop_val = _to_float(row[9], 0.0)
                 target_val = _to_float(row[11], 0.0)
                 pgr_val = str(row[6] or "Neutral")
-                
-                # If Chaikin returned no target, or our resolver fell back to atr/pct/stale, it is a Blue-Sky Breakout
-                if sym:
-                    t_det = risk_utils.resolve_target_detailed(price, symbol=sym)
-                    t_det["source"] in ("atr", "pct", "stale", "none")
-                    
-                # EXEMPTION (High-Score PGR Bypass - R&D #13 & R&D #32 Unification):
-                # We delegate to our centralized, AI-agnostic quantitative validation gate to determine
-                # if the asset qualifies as an elite breakout leader, waiving the PGR and R:R constraints.
+
                 is_elite_breakout = risk_utils.is_elite_breakout_candidate(total_score, short10)
                 
                 if stop_val > 0 and target_val > 0:
@@ -1754,16 +1762,17 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
                     target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
                     
-                    if rr_ratio < 2.0:
+                    min_rr = CFG.system_default_min_rr
+                    if rr_ratio < min_rr:
                         if is_elite_breakout:
-                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 2:1 R:R limit for elite Blue-Sky breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, R:R: {rr_ratio}:1).")
+                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived {min_rr}:1 R:R limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, R:R: {rr_ratio}:1).")
                         else:
-                            _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required 2:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
+                            _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required {min_rr}:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
                             continue
                         
                     if target_gain_pct < 5.0:
                         if is_elite_breakout:
-                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 5.0% target upside limit for elite Blue-Sky breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, Target Gain: {target_gain_pct}%).")
+                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 5.0% target upside limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, Target Gain: {target_gain_pct}%).")
                         else:
                             _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
                             continue
@@ -1790,10 +1799,8 @@ def run_daily_ai_management(force=False, manual_profile=None):
         )
         
         for sym_to_sell in sells_to_rotate:
-            pos = state["positions"][sym_to_sell]
+            pos = state["positions"].pop(sym_to_sell)
             price = prices.get(sym_to_sell, pos["cost"])
-            options.unwind_option_liability_if_held(sym_to_sell, pos, state, price, today)
-            state["positions"].pop(sym_to_sell)
             
             # Retrieve score for logging details if available
             score_val = active_position_scores.get(sym_to_sell, 0.0)
@@ -1830,7 +1837,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
                 # ── Dynamic Pyramiding: Scale into winning trends with idle cash ──
                 cash_ratio = state["balance"] / state["equity"] if state["equity"] > 1.0 else 0.0
-                if cash_ratio > 0.10:  # If cash ratio exceeds 10.0% of total equity
+                if cash_ratio > CFG.system_pyramiding_cash_ratio:  # idle-cash trigger for scaling in
                     _log.info(f"🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash ({cash_ratio*100:.1f}%)...")
                     for sym, pos in list(state["positions"].items()):
                         current_px = prices.get(sym, pos["cost"])
@@ -1847,11 +1854,8 @@ def run_daily_ai_management(force=False, manual_profile=None):
                                 l60 = row[25] or 0.0
                                 break
 
-                        # Loosened Momentum Floor (R&D #31): 
-                        # We allow scaling into profitable, risk-locked winners that have
-                        # strong long-term trend support (l60 >= 2.0) even during minor short-term pullbacks (s10 >= -0.5)
-                        # to exploit pullback dip buying within established upward trends.
-                        if is_winner and has_peak and (s10 >= 0.0 or l60 >= 2.0):
+                        # Pyramiding momentum gate (R&D #31) — delegated to a single-sourced helper.
+                        if should_pyramid_into_winner(is_winner, has_peak, s10, l60):
                             max_pos_allocation = state["equity"] * rules["max_allocation_pct"]
                             current_allocation = pos["qty"] * current_px
                             remaining_room = max_pos_allocation - current_allocation
@@ -1883,20 +1887,6 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
                                     _log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f} (Blended Cost: ${blended_cost:.2f})")
                                     _log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f}")
-                # ───────────────────────────────────────────────────────────
-
-                # ── Dynamic Covered Call Writing (R&D #26): Generate weekly premium cash-flow ──
-                if is_market_hours():
-                    # Map ATRs from openpyxl Research sheet locally inside the portfolio manager (clean separation of concerns)
-                    atr_map = {}
-                    for row in ws.iter_rows(min_row=2, values_only=True):
-                        sym_val = str(row[3] or "").strip().upper()
-                        if sym_val:
-                            # Column 23 (index 23) represents ATR
-                            atr_map[sym_val] = row[23] or 0.0
-
-                    _log.info("🚀 [Options Pass] Checking active holdings to write weekly Covered Calls...")
-                    options.execute_weekly_covered_call_pass(state, today, prices, atr_map)
                 # ───────────────────────────────────────────────────────────
 
     except RuntimeError:
