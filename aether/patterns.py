@@ -369,7 +369,7 @@ RBR_RANGE_MIN     = 0.50   # reversal close must sit in the upper half of its ra
 RBR_WARMUP        = RBR_VOL_WIN + RBR_LOOKBACK + 2   # 32 bars
 
 
-def rbr_leg1(o, h, l, c, i):
+def rbr_leg1(o, h, low, c, i):
     """Leg-1 overreaction-drawdown geometry at bar ``i``, using only bars <= i.
 
     Returns a dict(h_idx, pre_high, t_idx, trough_low, drop_pct, speed, had_gap), or
@@ -384,8 +384,8 @@ def rbr_leg1(o, h, l, c, i):
     pre_high = c[h_idx]
     if pre_high <= 0 or h_idx == i:
         return None
-    t_idx = min(range(h_idx, i + 1), key=lambda j: l[j])
-    trough_low = l[t_idx]
+    t_idx = min(range(h_idx, i + 1), key=lambda j: low[j])
+    trough_low = low[t_idx]
     drop_pct = (trough_low - pre_high) / pre_high
     speed = t_idx - h_idx
     if drop_pct > RBR_DEPTH_MIN or speed < 1 or speed > RBR_SPEED_MAX:
@@ -419,21 +419,21 @@ def rubber_band_reversal_score(ohlcv_ts: dict, date_str: str):
         return 0.0, []
     # volume is intentionally unused: the validated pocket (vol>=0.0 in the sweep)
     # carried no marginal edge, so the detector stays price-only.
-    o, h, l, c = (arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3])
+    o, h, low, c = (arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3])
     i = len(arr) - 1
 
     # ── Leg 1: overreaction drawdown (shared geometry) ──
-    leg1 = rbr_leg1(o, h, l, c, i)
+    leg1 = rbr_leg1(o, h, low, c, i)
     if leg1 is None or leg1["t_idx"] >= i:   # need the trough already in — today is the recovery bar
         return 0.0, []
     trough_low, drop_pct, speed, had_gap = (
         leg1["trough_low"], leg1["drop_pct"], leg1["speed"], leg1["had_gap"])
 
     # ── Leg 2: recovery confirmation on today's bar ──
-    if not (l[i] > trough_low and c[i] > c[i - 1]):   # higher low + green close
+    if not (low[i] > trough_low and c[i] > c[i - 1]):   # higher low + green close
         return 0.0, []
-    rng = h[i] - l[i]
-    range_pos = (c[i] - l[i]) / rng if rng > 0 else 0.0
+    rng = h[i] - low[i]
+    range_pos = (c[i] - low[i]) / rng if rng > 0 else 0.0
     if range_pos < RBR_RANGE_MIN:                     # weak close = not a real reversal
         return 0.0, []
 
@@ -502,7 +502,7 @@ def momentum_pattern_score(ohlcv_ts: dict, date_str: str):
     if len(closes) >= 40:
         ema12 = _ema(closes, 12)
         ema26 = _ema(closes, 26)
-        macd  = [e12 - e26 for e12, e26 in zip(ema12, ema26)]
+        macd  = [e12 - e26 for e12, e26 in zip(ema12, ema26, strict=False)]
         # Skip warmup (first 25 values of macd are unreliable)
         valid_macd = macd[25:]
         if len(valid_macd) >= 10:
