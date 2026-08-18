@@ -732,11 +732,12 @@ def get_tokens(env="sandbox", allow_browser=False):
             _increment_failure_count()
 
     if not allow_browser:
-        # FAIL LOUD AND SCREAM: Throw a clear, un-swallowed RuntimeError to trigger the AETHER Healer!
-        raise RuntimeError("🚨 [CRITICAL E*TRADE FAILURE] All automatic renewal and headless re-authentication methods failed! Your live E*TRADE feed is unauthorized/offline.")
-
-    if not sys.stdin.isatty():
-        raise RuntimeError("E*TRADE: cannot re-authenticate in a headless environment.")
+        # Honor the documented contract (-> dict | None): every caller guards on a falsy
+        # return and falls back (e.g. Google Finance pricing). Returning None keeps that
+        # fail-soft path intact; raising here would break unguarded callers.
+        _log.warning("E*TRADE: all automatic renewal and headless re-auth methods failed; "
+                     "returning None. Run scripts/diagnostics/test_etrade.py once to re-authenticate.")
+        return None
 
     print("Re-authenticating with browser...")
 

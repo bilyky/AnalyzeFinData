@@ -63,6 +63,15 @@ class TestGetTokensDeletionScoping(unittest.TestCase):
     """get_tokens may delete the cache ONLY on an explicit 401/403 — never on a transient blip."""
 
     def setUp(self):
+        # Sandbox paths to prevent tests from modifying or deleting actual production credentials!
+        p_token = mock.patch.object(etrade, "_TOKEN_PATH", "tests/fake_etrade_tokens.json")
+        p_token.start()
+        self.addCleanup(p_token.stop)
+        
+        p_browser = mock.patch.object(etrade, "_BROWSER_STATE_PATH", "tests/fake_etrade_browser_state.json")
+        p_browser.start()
+        self.addCleanup(p_browser.stop)
+
         for name, kw in (
             ("_load_config", {"return_value": ("ck", "cs", "u", "pw")}),
             ("_load_tokens", {"return_value": dict(_DUMMY_TOKENS)}),
@@ -76,9 +85,9 @@ class TestGetTokensDeletionScoping(unittest.TestCase):
              mock.patch.object(etrade, "_load_tokens_any_date", return_value=None), \
              mock.patch.object(etrade.os.path, "exists", return_value=False), \
              mock.patch.object(etrade.os, "remove") as rm:
-            with self.assertRaises(RuntimeError):
-                etrade.get_tokens(env="production", allow_browser=False)
+            result = etrade.get_tokens(env="production", allow_browser=False)
         rm.assert_called_once_with(etrade._TOKEN_PATH)
+        self.assertIsNone(result)  # all fallbacks disabled -> None
 
     def test_transient_probe_does_not_delete_token(self):
         # None (transient) must skip deletion AND still attempt renewal.
