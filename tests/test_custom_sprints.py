@@ -673,8 +673,18 @@ class TestRequalifyPromptBuilder(unittest.TestCase):
 
     def test_valid_symbol_format_passes_validation(self):
         import data_api
-        # Should not be rejected at the validation gate (may fail later on network/session)
-        result = data_api.requalify_symbol("AAPL")
+        # This test only asserts the SYMBOL-VALIDATION gate — it must never reach the
+        # live pipeline. requalify_symbol() otherwise calls etrade.get_tokens("production")
+        # + live Chaikin/Google fetches; leaving those unmocked once drove a real E*TRADE
+        # re-auth during the suite (2026-08-18 ban incident). Mock every network boundary
+        # so the function runs fully offline and we assert only that a well-formed symbol
+        # is NOT rejected at the gate.
+        with mock.patch.object(data_api.etrade, "get_tokens", return_value=None), \
+             mock.patch.object(data_api, "_google_prices", return_value={}), \
+             mock.patch.object(data_api._pg, "_load_session_from_file", return_value=None), \
+             mock.patch.object(data_api, "read_research", return_value={"rows": []}), \
+             mock.patch.object(data_api, "get_system_health", return_value={}):
+            result = data_api.requalify_symbol("AAPL")
         self.assertNotIn("Invalid symbol", result.get("error") or "")
 
 

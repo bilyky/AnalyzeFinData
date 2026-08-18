@@ -242,7 +242,8 @@ class TestAntiFragileFlexibility(unittest.TestCase):
         ws.append([1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 100.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1]) # Score = 11.1
         mock_load_wb.return_value = wb
 
-        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00):
+        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00), \
+             mock.patch("instruments.is_scarcity_asset", return_value=False):
             game.run_daily_ai_management(force=True, manual_profile="BALANCED")
 
         # CDW must be purchased successfully, showing that the 5-position limit was dynamically expanded!
@@ -290,7 +291,8 @@ class TestAntiFragileFlexibility(unittest.TestCase):
         ws.append([1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 100.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1]) # Score = 11.1
         mock_load_wb.return_value = wb
 
-        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00):
+        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00), \
+             mock.patch("instruments.is_scarcity_asset", return_value=False):
             game.run_daily_ai_management(force=True, manual_profile="BALANCED")
 
         # CDW must be purchased successfully because slots expanded 5 -> 6 -> 7!
