@@ -928,23 +928,11 @@ def is_market_hours():
         if not (start_time <= now_la <= end_time):
             return False
             
-        # 2. Dynamic Live Verification (Clock API + SPY Ticker)
-        try:
-            tokens = etrade.get_tokens("production")
-            if tokens:
-                is_open = etrade.is_market_open_now(tokens, "production")
-                if is_open is not None:
-                    if not is_open:
-                        _log.console("  [AETHER] Dynamic Market Checks confirm market is CLOSED (Holiday/Weekend).")
-                    return is_open
-        except Exception as e:
-            _log.warning(f"  [AETHER] Dynamic market clock failed: {e}. Falling back to static datetime checks.")
-            
-        # 3. Fallback: Weekend check (Saturday=5, Sunday=6)
+        # 2. Weekend check (Saturday=5, Sunday=6)
         if now_la.weekday() in (5, 6):
             return False
             
-        # 4. Fallback: Static US Stock Market Holiday (NYSE)
+        # 3. Static US Stock Market Holiday (NYSE)
         holidays_2026 = {
             "2026-01-01",  # New Year's Day
             "2026-01-19",  # Martin Luther King Jr. Day
@@ -965,6 +953,18 @@ def is_market_hours():
         today_str = now_la.strftime("%Y-%m-%d")
         if today_str in holidays_2026:
             return False
+            
+        # 4. Dynamic Live Verification (Clock API + SPY Ticker)
+        try:
+            tokens = etrade.get_tokens("production")
+            if tokens:
+                is_open = etrade.is_market_open_now(tokens, "production")
+                if is_open is not None:
+                    if not is_open:
+                        _log.console("  [AETHER] Dynamic Market Checks confirm market is CLOSED (Holiday/Weekend).")
+                    return is_open
+        except Exception as e:
+            _log.warning(f"  [AETHER] Dynamic market clock failed: {e}. Falling back to static datetime checks.")
             
         return True
     except Exception:

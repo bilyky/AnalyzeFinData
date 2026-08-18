@@ -76,9 +76,9 @@ class TestGetTokensDeletionScoping(unittest.TestCase):
              mock.patch.object(etrade, "_load_tokens_any_date", return_value=None), \
              mock.patch.object(etrade.os.path, "exists", return_value=False), \
              mock.patch.object(etrade.os, "remove") as rm:
-            result = etrade.get_tokens(env="production", allow_browser=False)
+            with self.assertRaises(RuntimeError):
+                etrade.get_tokens(env="production", allow_browser=False)
         rm.assert_called_once_with(etrade._TOKEN_PATH)
-        self.assertIsNone(result)  # all fallbacks disabled -> None
 
     def test_transient_probe_does_not_delete_token(self):
         # None (transient) must skip deletion AND still attempt renewal.
