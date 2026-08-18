@@ -8,9 +8,11 @@ import json
 import logging
 import os
 import threading
-from aether.utils import _to_float
-from aether.risk_utils import detect_support, detect_resistance
+
 from aether.primal_funcs import gann_sq9_levels
+from aether.risk_utils import detect_resistance, detect_support
+from aether.utils import _to_float
+
 
 _log = logging.getLogger("aether.scoring")
 
@@ -564,7 +566,7 @@ def short_score(pg_fields: dict) -> float:
     score += {'Bull': 1.0, 'Neutral': 0.0, 'Bear': -1.0}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)
     score += pg_fields.get('fibonacci', 0.0)
     score += pg_fields.get('rsi_divergence', 0.0) * 0.5
-    score += pg_fields.get('candlestick_score', 0.0) * -0.30
+    score += pg_fields.get('candlestick_score', 0.0) * 0.30
     score += pg_fields.get('chart_score', 0.0)        * -0.30
     score += pg_fields.get('momentum_score', 0.0)     * -0.30
     score += pg_fields.get('digit_sum', 0.0)
@@ -607,7 +609,7 @@ def long_score(pg_fields: dict) -> float:
     score += {'Bull': 1.5, 'Neutral': 0.0, 'Bear': -1.5}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)
     score += pg_fields.get('fibonacci', 0.0) * 0.5
     score += pg_fields.get('rsi_divergence', 0.0) * 0.25
-    score += pg_fields.get('candlestick_score', 0.0) * -0.15
+    score += pg_fields.get('candlestick_score', 0.0) * 0.15
     score += pg_fields.get('chart_score', 0.0)        * -0.15
     score += pg_fields.get('momentum_score', 0.0)     * -0.15
     score += pg_fields.get('digit_sum', 0.0) * 0.5
