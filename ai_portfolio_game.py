@@ -36,6 +36,7 @@ import sell_rules
 import decision_eval
 import watchdog
 import instruments
+from aether import options
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
@@ -1416,6 +1417,10 @@ def run_daily_ai_management(force=False, manual_profile=None):
         # --- Systemic Crash Circuit Breaker Guard ---
         circuit_breaker.enforce_circuit_breaker(state, prices)
 
+        # --- Options Settlement Pass (R&D #26) ---
+        # Settle any active weekly Covered Calls expiring today!
+        options.resolve_expiring_options(state, today, prices)
+
         # Zero-Trust: surface held positions with no live quote, but do NOT abort the
         # run over them — aborting would skip stop-loss enforcement on every *other*
         # position too, violating the Rule of Loss Minimization. Unpriced names fall
@@ -1436,7 +1441,9 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 if price <= 0: continue
                 
                 if order["type"] == "SELL" and sym in state["positions"]:
-                    pos = state["positions"].pop(sym)
+                    pos = state["positions"][sym]
+                    options.unwind_option_liability_if_held(sym, pos, state, price, today)
+                    state["positions"].pop(sym)
                     proceeds = pos["qty"] * price
                     state["balance"] += proceeds
                     tx = {
@@ -1662,8 +1669,10 @@ def run_daily_ai_management(force=False, manual_profile=None):
             decision_eval.log_decisions(decision_entries)
 
         for sym in symbols_to_sell:
-            pos = state["positions"].pop(sym)
+            pos = state["positions"][sym]
             price = prices.get(sym, pos["cost"])
+            options.unwind_option_liability_if_held(sym, pos, state, price, today)
+            state["positions"].pop(sym)
             
             # Slippage-Protected Limit Stop (STP LMT - R&D #8): Execute at exactly the stop price
             # if the market close price dropped below our stop-loss floor, preventing slippage leaks.
@@ -1799,8 +1808,10 @@ def run_daily_ai_management(force=False, manual_profile=None):
         )
         
         for sym_to_sell in sells_to_rotate:
-            pos = state["positions"].pop(sym_to_sell)
+            pos = state["positions"][sym_to_sell]
             price = prices.get(sym_to_sell, pos["cost"])
+            options.unwind_option_liability_if_held(sym_to_sell, pos, state, price, today)
+            state["positions"].pop(sym_to_sell)
             
             # Retrieve score for logging details if available
             score_val = active_position_scores.get(sym_to_sell, 0.0)
@@ -1887,6 +1898,12 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
                                     _log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f} (Blended Cost: ${blended_cost:.2f})")
                                     _log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f}")
+                # ───────────────────────────────────────────────────────────
+
+                # ── Dynamic Covered Call Writing (R&D #26): Generate weekly premium cash-flow ──
+                if is_market_hours():
+                    _log.info("🚀 [Options Pass] Checking active holdings to write weekly Covered Calls...")
+                    options.execute_weekly_covered_call_pass(state, today, prices, ws)
                 # ───────────────────────────────────────────────────────────
 
     except RuntimeError:
