@@ -21,6 +21,9 @@ NON_TRADEABLE_STUBS = {"931CVR013"}
 import data_api
 import instruments
 from aether import etrade
+from aether.logger import get_logger as _get_logger
+
+_log = _get_logger("verify_data_contiguity")
 
 
 def get_expected_weekdays(days_count: int = 15) -> list[str]:
@@ -41,9 +44,9 @@ def get_expected_weekdays(days_count: int = 15) -> list[str]:
     return sorted(expected)
 
 def audit_database() -> bool:
-    print("="*80)
-    print(" 🛡️  PROJECT AETHER: ZERO-TRUST DATABASE CONTIGUITY & PRICING AUDIT")
-    print("="*80)
+    _log.console("="*80)
+    _log.console(" 🛡️  PROJECT AETHER: ZERO-TRUST DATABASE CONTIGUITY & PRICING AUDIT")
+    _log.console("="*80)
 
     # Probe for a genuinely usable E*TRADE session (valid tokens), not merely a token
     # file on disk — an expired/rejected token file exists but yields no live prices, so
@@ -56,16 +59,16 @@ def audit_database() -> bool:
         is_etrade_online = False
 
     if not is_etrade_online:
-        print("  ⚠️  E*TRADE live session is unauthenticated; running on cached/fallback portfolio data.")
-        print("  ⚠️  Skipping E*TRADE-vs-cache pricing audits (no live quotes) to avoid false-alarm mismatches.")
-        print("-"*80)
+        _log.console("  ⚠️  E*TRADE live session is unauthenticated; running on cached/fallback portfolio data.")
+        _log.console("  ⚠️  Skipping E*TRADE-vs-cache pricing audits (no live quotes) to avoid false-alarm mismatches.")
+        _log.console("-"*80)
 
     # 1. Fetch active symbols from E*TRADE accounts
     try:
         accts_data = data_api.read_accounts()
         accounts = accts_data.get("accounts", [])
     except Exception as e:
-        print(f"❌ [CRITICAL] Failed to load brokerage accounts: {e}")
+        _log.console(f"❌ [CRITICAL] Failed to load brokerage accounts: {e}")
         return False
 
     unique_symbols = set()
@@ -78,15 +81,15 @@ def audit_database() -> bool:
                 positions_map[sym] = h
 
     if not unique_symbols:
-        print("ℹ️ No active held symbols found to audit.")
+        _log.console("ℹ️ No active held symbols found to audit.")
         return True
 
-    print(f"Auditing {len(unique_symbols)} active portfolio holdings: {sorted(list(unique_symbols))}")
-    print("-"*80)
+    _log.console(f"Auditing {len(unique_symbols)} active portfolio holdings: {sorted(list(unique_symbols))}")
+    _log.console("-"*80)
     
     expected_days = get_expected_weekdays(15)
-    print(f"Verifying contiguity over expected weekdays (Mon-Fri) from {expected_days[0]} to {expected_days[-1]}...")
-    print("-"*80)
+    _log.console(f"Verifying contiguity over expected weekdays (Mon-Fri) from {expected_days[0]} to {expected_days[-1]}...")
+    _log.console("-"*80)
 
     all_passed = True
     gaps_count = 0
@@ -99,7 +102,7 @@ def audit_database() -> bool:
         # ── Check 1: Contiguity Gaps in Symbol_full ──
         path = Path("Data/Symbol_full") / f"{sym}_daily.json"
         if not path.exists():
-            print(f"❌ {sym:<6} | [GAP FAIL] Cache file Symbol_full/{sym}_daily.json is missing entirely!")
+            _log.console(f"❌ {sym:<6} | [GAP FAIL] Cache file Symbol_full/{sym}_daily.json is missing entirely!")
             all_passed = False
             gaps_count += 1
             continue
@@ -108,7 +111,7 @@ def audit_database() -> bool:
             with open(path, "r", encoding="utf-8") as f:
                 ts = json.load(f).get("Time Series (Daily)", {})
         except Exception as e:
-            print(f"❌ {sym:<6} | [GAP FAIL] Failed to parse JSON cache: {e}")
+            _log.console(f"❌ {sym:<6} | [GAP FAIL] Failed to parse JSON cache: {e}")
             all_passed = False
             gaps_count += 1
             continue
@@ -156,22 +159,22 @@ def audit_database() -> bool:
             status_parts.append(f"🚨 PRICE MISMATCH: {', '.join(discrepancy_msg)}")
             
         if not status_parts:
-            print(f"✅ {sym:<6} | [PASS] Timeline continuous. Prices synchronized (E*TRADE ${live_price:.2f} | Cache ${cache_price:.2f} | PG ${chaikin_price or 0.0:.2f})")
+            _log.console(f"✅ {sym:<6} | [PASS] Timeline continuous. Prices synchronized (E*TRADE ${live_price:.2f} | Cache ${cache_price:.2f} | PG ${chaikin_price or 0.0:.2f})")
         else:
-            print(f"❌ {sym:<6} | [FAIL] " + " | ".join(status_parts))
+            _log.console(f"❌ {sym:<6} | [FAIL] " + " | ".join(status_parts))
 
-    print("="*80)
-    print(" 📊 AUDIT SUMMARY:")
-    print("="*80)
-    print(f"  * Total unique positions audited: {len(unique_symbols)}")
-    print(f"  * Timeline Contiguity Gaps:       {gaps_count}")
-    print(f"  * 3-Way Pricing Discrepancies:    {discrepancy_count}")
+    _log.console("="*80)
+    _log.console(" 📊 AUDIT SUMMARY:")
+    _log.console("="*80)
+    _log.console(f"  * Total unique positions audited: {len(unique_symbols)}")
+    _log.console(f"  * Timeline Contiguity Gaps:       {gaps_count}")
+    _log.console(f"  * 3-Way Pricing Discrepancies:    {discrepancy_count}")
     
     if all_passed:
-        print("\n✅  [STATUS] PASS: All audited holdings have contiguous timelines and synchronized pricing.")
+        _log.console("\n✅  [STATUS] PASS: All audited holdings have contiguous timelines and synchronized pricing.")
     else:
-        print("\n⚠️  [STATUS] FAIL: Discrepancies or database gaps were detected. Please run 'rapidapi.py' to heal the gaps.")
-    print("="*80 + "\n")
+        _log.console("\n⚠️  [STATUS] FAIL: Discrepancies or database gaps were detected. Please run 'rapidapi.py' to heal the gaps.")
+    _log.console("="*80 + "\n")
     return all_passed
 
 if __name__ == "__main__":

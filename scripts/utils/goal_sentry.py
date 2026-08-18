@@ -23,6 +23,9 @@ sys.path.insert(0, str(BASE_DIR))
 import data_api
 from aether import etrade
 from aether.config import CFG
+from aether.logger import get_logger as _get_logger
+
+_log = _get_logger("goal_sentry")
 
 
 TARGET_PATH = os.path.join(BASE_DIR, "Data", "active_targets.json")
@@ -138,7 +141,7 @@ def run_sentry():
     os.makedirs(os.path.dirname(TARGET_PATH), exist_ok=True)
     with open(TARGET_PATH, "w") as f:
         json.dump(results, f, indent=4)
-    print(f"Sentry update complete: active targets saved to {TARGET_PATH}")
+    _log.console(f"Sentry update complete: active targets saved to {TARGET_PATH}")
 
 
 if __name__ == "__main__":
