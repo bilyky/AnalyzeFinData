@@ -87,11 +87,15 @@ machine's only job is to keep a *human-created* session warm during the day.
   `python -m unittest discover tests` run never reads or writes the real files.
 - `etrade_reauth.lock` / `etrade_renew.lock` — cross-process mutexes (auto-cleaned).
 
-**Testing is separated from production** at two layers: (1) the breaker state is per-env (above);
+**Testing is separated from production** at three layers: (1) the breaker state is per-env (above);
 (2) `tests/__init__.py` installs a hermeticity guard that blocks all non-loopback sockets and
 Playwright browser launches for the whole suite — a test that forgets to mock a network boundary
-fails loudly instead of contacting a live broker. The live-gated contract tests opt back in with
-`AETHER_LIVE_TESTS=1`.
+fails loudly instead of contacting a live broker; (3) the same file redirects every module's
+`XLSX_FILE` constant to a throwaway temp workbook, so no test can **write** the production
+`Data/state_of_the_day.xlsx` (existence checks and reads still succeed; every `wb.save()` lands in
+temp). Layers (1)–(2) opt back in under `AETHER_LIVE_TESTS=1`; the workbook guard (3) is
+**unconditional** — the live tier still must never mutate prod trading state. `tests/test_prod_workbook_isolation.py`
+red-green-guards it: remove the redirect and it fails.
 
 ---
 

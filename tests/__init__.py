@@ -44,6 +44,37 @@ try:
 except Exception:
     _pw_sync = None
 
+# ---------------------------------------------------------------------------
+# Prod-workbook guard — no test may WRITE the production state_of_the_day.xlsx.
+# ---------------------------------------------------------------------------
+# The workbook is gitignored live-portfolio state. powergauge.check_from_xls and
+# the pipeline savers call wb.save(XLSX_FILE); a save-path test would corrupt
+# real trading state. Point every module's XLSX_FILE at a throwaway temp book:
+# .exists() and load_workbook still work, every save lands in temp. Every test
+# that reads the workbook mocks load_workbook with its own in-memory book, so the
+# temp only has to exist — it deliberately does NOT mirror prod (no real data in
+# temp, no per-import copy). Unconditional: the live tier opts into the real
+# network, never into writing prod state. Per-test overrides (test_breadth_filter)
+# still win; they default to temp now.
+import openpyxl as _openpyxl
+
+_test_xlsx_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+_test_xlsx_path = Path(_test_xlsx_dir.name) / "state_of_the_day.xlsx"
+_seed_wb = _openpyxl.Workbook()
+_seed_wb.active.title = "Research"
+_seed_wb.save(_test_xlsx_path)
+
+for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomous_pipeline"):
+    try:
+        _mod = _importlib.import_module(_mod_name)
+    except Exception:
+        continue
+    _orig_xlsx_const = getattr(_mod, "XLSX_FILE", None)
+    if _orig_xlsx_const is None:
+        continue
+    # powergauge stores a str (os.path.join), the others a Path — preserve each.
+    _mod.XLSX_FILE = _test_xlsx_path if isinstance(_orig_xlsx_const, Path) else str(_test_xlsx_path)
+
 if not _os.getenv("AETHER_LIVE_TESTS"):
     # -- State side: redirect prod auth-state / cache files to a throwaway temp dir --
     # A test that reaches get_tokens() finds no saved browser state (so the automated
