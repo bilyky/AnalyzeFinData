@@ -364,12 +364,11 @@ def get_atr_position_size(price, atr, risk_usd=500):
     return int(risk_usd // risk_per_share)
 
 def is_elite_breakout_candidate(total_score: float, short10: float) -> bool:
-    """Centralized, AI-agnostic quantitative validation gate for elite breakout leaders.
-    Waives both Chaikin PGR and strict Risk-to-Reward limits when trend momentum is extreme.
+    """Centralized quantitative gate for elite breakout leaders.
+    Waives both the Chaikin PGR and the strict Risk-to-Reward limit when trend
+    momentum is extreme. Thresholds are single-sourced from CFG.system_bypass_*.
     """
-    score_floor = getattr(CFG, "system_bypass_score_floor", 8.0)
-    s10_floor = getattr(CFG, "system_bypass_s10_floor", 2.0)
-    return (total_score >= score_floor) and (short10 >= s10_floor)
+    return (total_score >= CFG.system_bypass_score_floor) and (short10 >= CFG.system_bypass_s10_floor)
 
 
 
