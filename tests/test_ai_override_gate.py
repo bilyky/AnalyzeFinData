@@ -4,11 +4,11 @@ Dedicated unit tests for the AI Second-Opinion Exit Override Gate in ai_portfoli
 import os
 import sys
 import unittest
-import openpyxl
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game
+from tests._helpers import research_workbook
 
 class TestAIOverrideGate(unittest.TestCase):
     def setUp(self):
@@ -42,11 +42,9 @@ class TestAIOverrideGate(unittest.TestCase):
         mock_load_game.return_value = state
         mock_get_prices.return_value = {"ULTA": 450.0}
 
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Research"
-        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
-        ws.append([1, None, None, "ULTA", "Retail", None, "Bu", None, None, None, 450.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.65, -5.0, -5.0])
+        wb = research_workbook(
+            [1, None, None, "ULTA", "Retail", None, "Bu", None, None, None, 450.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.65, -5.0, -5.0]
+        )
         mock_load_wb.return_value = wb
 
         game.run_daily_ai_management(force=True, manual_profile="BALANCED")
@@ -77,11 +75,9 @@ class TestAIOverrideGate(unittest.TestCase):
         mock_load_game.return_value = state
         mock_get_prices.return_value = {"GMED": 72.0}
 
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Research"
-        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
-        ws.append([1, None, None, "GMED", "Medical", None, "Bu", None, None, None, 72.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.65, -3.0, -3.0])
+        wb = research_workbook(
+            [1, None, None, "GMED", "Medical", None, "Bu", None, None, None, 72.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.65, -3.0, -3.0]
+        )
         mock_load_wb.return_value = wb
 
         game.run_daily_ai_management(force=True, manual_profile="BALANCED")
@@ -114,12 +110,10 @@ class TestAIOverrideGate(unittest.TestCase):
         # Price is above stop but well below cost with strong negative scores → SELL
         mock_get_prices.return_value = {"TSCO": 90.0}
 
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Research"
-        ws.append(["Rank", "Symbol", "Industry", "Ticker", "Sector", "Other", "PGR", "Other", "Other", "Other", "Price", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Other", "Setup", "Other", "Other", "Win%", "Short10", "Long60"])
         # S10=-8.0, L60=-8.0 — deep negative momentum, no winner protection (price < cost)
-        ws.append([1, None, None, "TSCO", "Retail", None, "Wk", None, None, None, 90.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.30, -8.0, -8.0])
+        wb = research_workbook(
+            [1, None, None, "TSCO", "Retail", None, "Wk", None, None, None, 90.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.30, -8.0, -8.0]
+        )
         mock_load_wb.return_value = wb
 
         game.run_daily_ai_management(force=True, manual_profile="BALANCED")
