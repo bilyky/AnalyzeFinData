@@ -119,11 +119,6 @@ def _probe_token_auth(tokens, env="production"):
         return None
 
 
-def _test_tokens_valid(tokens, env="production") -> bool:
-    """Perform a lightweight, 0.1-second live API call to verify if the cached tokens are actively authorized by E*TRADE."""
-    return _probe_token_auth(tokens, env) is True
-
-
 # ---------------------------------------------------------------------------
 # Token renewal / revocation
 # ---------------------------------------------------------------------------
@@ -622,8 +617,13 @@ def get_tokens(env="sandbox", allow_browser=False):
     2. Yesterday's cached tokens → silent renewal attempt.
     3. Silent renewal failed + saved browser state exists → headless Playwright re-auth
        using trusted-device cookies (no MFA, no human needed on most days).
-    4. Browser state missing/stale → return None if allow_browser=False,
+    4. Browser state missing/stale → raise RuntimeError if allow_browser=False,
        or interactive full login if allow_browser=True.
+
+    Note: when allow_browser=False and every silent/headless path is exhausted this
+    RAISES RuntimeError (it does not return None) so the failure is loud and triggers
+    the pipeline healer. Callers must guard with try/except and fall back accordingly
+    (e.g. get_live_prices → Google Finance, read_accounts → Excel).
     """
     ck, cs, username, password = _load_config(env)
 

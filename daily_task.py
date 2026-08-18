@@ -133,6 +133,39 @@ def get_description(r):
     return "; ".join(desc) if desc else "Solid technicals"
 
 
+def _sync_warning(sync_ok, today, error=None):
+    """Build the post-run data-sync (warning_html, subject_line) for the daily email.
+
+    watchdog.sync_data_folder() returns a bool: it is False only on a genuine sync
+    failure (robocopy rc>=8, missing source, or an exception it caught internally).
+    True covers both success and the intentional "offline but not a failure" bypass,
+    so only False (or a raised `error`) raises the warning banner. `error` is set when
+    the sync call itself raised out to the caller.
+    """
+    ok_subject = f"AETHER Daily Rotation & Momentum Report: {today}"
+    fail_subject = f"⚠️ AETHER Daily Rotation & Momentum Report: {today} (Sync Failed)"
+
+    if error is not None:
+        html = (
+            "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
+            "<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Post-Run Data Synchronization Error!</h4>"
+            f"<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The data synchronization engine threw an exception: {error}</p>"
+        )
+        return html, fail_subject
+
+    if sync_ok is False:
+        html = (
+            "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
+            "<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Post-Run Data Synchronization Failed!</h4>"
+            "<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The backup drive or UNC storage path \\\\10.0.0.156\\Storage\\ was unreachable or disconnected during this run. "
+            "All local trade entries completed nominal, but Data caches were not mirrored to the network storage drive. "
+            "Please check your backup drive connectivity.</p>"
+        )
+        return html, fail_subject
+
+    return "", ok_subject
+
+
 def main():
     # Ensure we are in the script's directory
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -317,23 +350,10 @@ def main():
         try:
             # We execute the data sync BEFORE the email is sent so we can append any failures transparently!
             sync_ok = watchdog.sync_data_folder()
-            if sync_ok in ("FAILED", "SKIPPED_OFFLINE"):
-                sync_warning_html = (
-                    "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
-                    "<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Post-Run Data Synchronization Failed!</h4>"
-                    "<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The backup drive or UNC storage path \\\\10.0.0.156\\Storage\\ was unreachable or disconnected during this run. "
-                    "All local trade entries completed nominal, but Data caches were not mirrored to the network storage drive. "
-                    "Please check your backup drive connectivity.</p>"
-                )
-                subject_line = f"⚠️ AETHER Daily Rotation & Momentum Report: {today} (Sync Failed)"
+            sync_warning_html, subject_line = _sync_warning(sync_ok, today)
         except Exception as sync_err:
             _log.warning(f"Post-run sync failed: {sync_err}")
-            sync_warning_html = (
-                "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
-                f"<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Post-Run Data Synchronization Error!</h4>"
-                f"<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The data synchronization engine threw an exception: {sync_err}</p>"
-            )
-            subject_line = f"⚠️ AETHER Daily Rotation & Momentum Report: {today} (Sync Failed)"
+            sync_warning_html, subject_line = _sync_warning(None, today, error=sync_err)
 
         if sync_warning_html:
             html = html.replace("</body>", f"{sync_warning_html}</body>")
