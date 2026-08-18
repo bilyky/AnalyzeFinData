@@ -73,3 +73,15 @@ To completely prevent un-cleaned programmatic debris, lingering scheduled tasks,
     1.  **Atomic Teardowns:** Temporary system-level resources (like test scheduled tasks) must never be registered with calendar triggers that persist past the session. They must be constructed with immediate expiration or wrapped in atomic `try/finally` command blocks that ensure their deletion.
     2.  **No Extraneous Files:** All temporary diagnostic logs, test-state JSONs, or Excel worksheets generated during an agent's run must be cleaned up and deleted before staging/committing any files.
 
+---
+
+## 📁 5. Autonomous Git Branch & Merge Safety Standards
+
+### 🚫 Strict Banning of Unprompted Merges and Swaps
+To permanently prevent unprompted branch switches, branch merges, and remote force-pushes, and to guarantee that the user remains the absolute sovereign authority over git repository states:
+
+*   **The Mandate:** The agent is **strictly forbidden** from switching branches to merge code, fast-forwarding local `main`, merging any pull requests, or executing `git push` commands to stable production branches (such as `main`) unprompted or automatically. All final merging, branch lifetime decisions, and push execution must be left exclusively to the user.
+*   **The Rules:**
+    1.  **Prepare and Rebase Only:** The agent's scope is strictly limited to the preparation, rebasing, linting, and testing of feature branches.
+    2.  **Verify and Wait:** When a feature branch is ready and tested 100% green, the agent must stop, present the results, and wait for the user's explicit merge directive before executing any merge or push commands. Never assume approval or make fast-forward modifications on production branches automatically.
+
