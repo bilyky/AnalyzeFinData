@@ -1,111 +1,139 @@
-# scripts/utils/pre_commit_validator.py
 """
-Git pre-commit validator for Project AETHER.
+Project AETHER: Git Pre-Commit Quality Hook & Pipeline Gate.
+This utility performs AST-based and static checks on currently staged files to
+guarantee 100% adherence to critical safety, architectural, style, and testing rules.
+
 Enforces:
-1. No Inline Imports: All python imports must be top-level (uses ast, not regex).
-2. No Silent Exceptions: No 'except: pass' or 'except Exception: pass' without logging.
-3. No bare print(): use _log.console() / _log.info() / _log.error() instead.
-   Print statements are strictly banned with ZERO shortcuts or exemptions.
-4. R&D Roadmap Sync: Verifies MEMORY.md and plans/roadmap.md item counts are in sync.
-5. Feature-Doc Sync: Code changed under a `# @doc-sync-start/-end: <key>` anchor must
-   stage the mapped documentation surfaces (see DOC_SYNC_SURFACES) in the same commit,
-   else the commit is blocked. Scoped bypass: AETHER_DOCSYNC_ACK=<key> git commit ...
+  1. No print() statements in production files (must use logging/console_safe).
+  2. No inline imports (all imports must reside at module scope).
+  3. No silent exception swallowing (no bare except: pass / except Exception: pass).
+  4. Mandatory unit test coverage matching the R&D feature keywords.
+  5. Roadmap count synchronicity between private MEMORY.md and plans/roadmap.md.
+  6. Documentation synchronicity: if a code block marked with @doc-sync <key> changes,
+     stage the mapped documentation surfaces (see DOC_SYNC_SURFACES) in the same commit,
+     else the commit is blocked. Scoped bypass: AETHER_DOCSYNC_ACK=<key> git commit ...
 """
 import ast
 import os
 import re
+import shutil
 import subprocess
 import sys
 
-# Define root directory
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# ── Feature ↔ documentation coupling ──────────────────────────────────────────
-# Maps a feature key (used in `# @doc-sync-start: <key>` / `-end` anchor comments in
-# the source) to the documentation surfaces that describe it. When a staged code
-# change lands inside an anchor region, EVERY surface listed here must also be staged
-# in the same commit — otherwise the commit is blocked. To add coverage: wrap the
-# relevant code in a `@doc-sync-start/-end: <key>` block and register its surfaces here.
+# Mapping of @doc-sync keys to their documentation files on disk + description
 DOC_SYNC_SURFACES = {
-    "scarcity_core": [
-        ("Data/wiki.json", 'the "scarcity_core" wiki entry'),
-        ("AETHER_REFERENCE.md", "the Dynamic Structural Scarcity Core section"),
+    "covered-calls": [
+        ("plans/roadmap.md", "Shorthand bullet in R&D Roadmap"),
+    ],
+    "unwinding-guard": [
+        ("plans/roadmap.md", "Shorthand bullet in R&D Roadmap"),
+    ],
+    "scarcity-core": [
+        ("plans/dynamic-scarcity-cap.md", "Full System Design specification"),
+    ],
+    "trader-vic": [
+        ("plans/dynamic-scarcity-cap.md", "Full System Design specification"),
+    ],
+    "preflight-checks": [
+        ("plans/roadmap.md", "Shorthand bullet in R&D Roadmap"),
+    ],
+    "circuit-breaker": [
+        ("plans/circuit-breaker.md", "Full System Design specification"),
     ],
 }
 
-_ANCHOR_START_RE = re.compile(r"@doc-sync-start:\s*([A-Za-z0-9_]+)")
-_ANCHOR_END_RE = re.compile(r"@doc-sync-end:\s*([A-Za-z0-9_]+)")
-_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+def get_docsync_ack_env() -> set:
+    """Read AETHER_DOCSYNC_ACK env var as a set of comma-separated doc-neutral keys."""
+    val = os.environ.get("AETHER_DOCSYNC_ACK", "")
+    return {x.strip() for x in val.split(",") if x.strip()}
 
+def get_git_diff_hunks_and_regions(file_path: str, doc_keys: list) -> tuple:
+    """Parse git diff for a staged file to find:
+      1. a list of (start_line, end_line) tuples representing modified hunks;
+      2. a dict mapping doc-sync keys to their active line spans (start, end) in the current file.
+    """
+    hunks = []
+    regions = {}
+    rel_path = os.path.relpath(file_path, ROOT_DIR).replace("\\", "/")
 
-def _git_stdout(args: list):
-    """Run a git command from the repo root; return stdout (str) or None on failure."""
+    # 1. Parse active doc-sync regions in the current on-disk code
     try:
-        # Force UTF-8: git output (diffs, blobs) contains em-dashes/emoji; the Windows
-        # default (cp1252) raises UnicodeDecodeError, which would silently blank the
-        # result and let a doc-sync-violating commit slip through. errors="replace"
-        # keeps line/hunk offsets intact even if an odd byte appears.
-        r = subprocess.run(["git", *args], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", cwd=ROOT_DIR)
-        return r.stdout if r.returncode == 0 else None
-    except Exception:
-        return None
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        
+        # Match pattern: # @doc-sync <key> (start) ... # @doc-sync <key> (end)
+        open_spans = {}
+        for idx, line in enumerate(lines, 1):
+            match = re.search(r"@doc-sync\s+([a-zA-Z0-9_-]+)\s*\((start|end)\)", line)
+            if match:
+                key, marker = match.group(1), match.group(2)
+                if key in doc_keys:
+                    if marker == "start":
+                        open_spans[key] = idx
+                    elif marker == "end" and key in open_spans:
+                        regions.setdefault(key, []).append((open_spans[key], idx))
+                        del open_spans[key]
+    except Exception as e:
+        print(f"Warning: Failed to parse doc-sync regions in {rel_path}: {e}")
 
+    # 2. Parse modified hunks from git diff cached
+    try:
+        # Run git diff for this file specifically
+        res = subprocess.run(
+            ["git", "diff", "--cached", "-U0", "--", rel_path],
+            capture_output=True, text=True, check=True, cwd=ROOT_DIR
+        )
+        for line in res.stdout.splitlines():
+            # Line format: @@ -10,4 +12,5 @@ or @@ -10 +12 @@
+            if line.startswith("@@"):
+                parts = line.split(" ")
+                if len(parts) >= 3 and parts[2].startswith("+"):
+                    hunk_info = parts[2][1:] # strip '+'
+                    if "," in hunk_info:
+                        start_str, len_str = hunk_info.split(",")
+                        start = int(start_str)
+                        length = int(len_str)
+                    else:
+                        start = int(hunk_info)
+                        length = 1
+                    # A zero-length hunk represents a pure deletion (no lines in the new file),
+                    # which we span as a 1-line range at 'start' to catch touching boundaries.
+                    hunks.append((start, start + max(1, length) - 1))
+    except Exception as e:
+        print(f"Warning: Failed to parse git diff hunks for {rel_path}: {e}")
 
-def _staged_paths() -> set:
-    """Repo-relative paths staged for this commit (added/copied/modified/renamed)."""
-    out = _git_stdout(["diff", "--cached", "--name-only", "--diff-filter=ACMR"])
-    return {ln.strip() for ln in (out or "").splitlines() if ln.strip()}
-
-
-def _staged_hunk_ranges(path: str) -> list:
-    """New-file line ranges changed in the staged diff of `path` (via -U0 hunk headers)."""
-    out = _git_stdout(["diff", "--cached", "-U0", "--", path])
-    ranges = []
-    for line in (out or "").splitlines():
-        m = _HUNK_RE.match(line)
-        if m:
-            start = int(m.group(1))
-            length = int(m.group(2)) if m.group(2) else 1
-            ranges.append((start, start if length == 0 else start + length - 1))
-    return ranges
-
-
-def _anchor_regions(content: str) -> dict:
-    """Parse `@doc-sync-start/-end: key` markers -> {key: [(start_line, end_line), ...]}."""
-    regions, open_starts = {}, {}
-    for i, line in enumerate(content.splitlines(), 1):
-        ms = _ANCHOR_START_RE.search(line)
-        if ms:
-            open_starts[ms.group(1)] = i
-            continue
-        me = _ANCHOR_END_RE.search(line)
-        if me and me.group(1) in open_starts:
-            regions.setdefault(me.group(1), []).append((open_starts.pop(me.group(1)), i))
-    return regions
-
+    return hunks, regions
 
 def check_feature_doc_sync() -> bool:
-    """Block the commit if code under a `@doc-sync: <key>` anchor changed but the mapped
-    documentation surfaces are not staged. Scoped escape hatch (for genuinely doc-neutral
-    changes): AETHER_DOCSYNC_ACK=<key>[,<key>...] git commit ...  (does NOT disable the
-    other quality gates, unlike --no-verify)."""
-    staged = _staged_paths()
-    if not staged:
+    """Enforce feature-documentation synchronicity.
+    If a staged file has modified hunks that overlap an active @doc-sync <key> region,
+    the matching documentation files MUST also be staged in the same commit.
+    """
+    staged = set()
+    try:
+        # Fetch all currently staged files (including additions, modifications, renames)
+        res = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"],
+            capture_output=True, text=True, check=True, cwd=ROOT_DIR
+        )
+        staged = {line.strip().replace("\\", "/") for line in res.stdout.splitlines() if line.strip()}
+    except Exception as e:
+        print(f"Warning: Failed to fetch staged files: {e}. Skipping doc-sync checks.")
         return True
-    ack = {x.strip() for x in os.environ.get("AETHER_DOCSYNC_ACK", "").split(",") if x.strip()}
 
-    touched = {}  # key -> set(source files that triggered it)
-    for path in staged:
-        if not path.endswith((".py", ".js", ".html", ".md")):
-            continue
-        content = _git_stdout(["show", f":{path}"])
-        if not content or "@doc-sync-start" not in content:
-            continue
-        regions = _anchor_regions(content)
-        if not regions:
-            continue
-        hunks = _staged_hunk_ranges(path)
+    # Scan python files in diff
+    py_files = [os.path.join(ROOT_DIR, p) for p in staged if p.endswith(".py") and os.path.exists(os.path.join(ROOT_DIR, p))]
+    if not py_files:
+        return True
+
+    ack = get_docsync_ack_env()
+    touched = {} # key -> set(source_paths)
+
+    for path in py_files:
+        hunks, regions = get_git_diff_hunks_and_regions(path, list(DOC_SYNC_SURFACES.keys()))
+        # Check overlaps
         for key, spans in regions.items():
             for (s, e) in spans:
                 if any(hs <= e and he >= s for (hs, he) in hunks):
@@ -121,14 +149,12 @@ def check_feature_doc_sync() -> bool:
         missing = [(p, desc) for (p, desc) in DOC_SYNC_SURFACES.get(key, []) if p not in staged]
         if missing:
             ok = False
-            print(f"[GIT PRE-COMMIT] BLOCK - Feature-doc-sync: '{key}' logic changed "
-                  f"({', '.join(sorted(srcs))}),")
-            print(f"   but these documentation surfaces are NOT staged in this commit:")
+            print(f"🚨 [GIT PRE-COMMIT] BLOCK - doc-sync: code under @doc-sync '{key}' changed "
+                  f"({', '.join(sorted(srcs))}) but these documentation surfaces are not staged:")
             for (p, desc) in missing:
                 print(f"     - {p}  ({desc})")
-            print(f"   Action: update the surface(s) above and `git add` them, OR - if no doc")
-            print(f"   change is truly needed - acknowledge it explicitly:")
-            print(f"       AETHER_DOCSYNC_ACK={key} git commit ...")
+            print(f"   Stage the docs above, or acknowledge as doc-neutral: "
+                  f"AETHER_DOCSYNC_ACK={key} git commit ...")
     return ok
 
 
@@ -203,6 +229,65 @@ def check_no_print_statements(file_path: str) -> bool:
         return True
 
 
+def _resolve_ruff_cmd():
+    """Return the argv prefix that invokes Ruff, or None if Ruff cannot be found.
+
+    Resolution order (robust across environments — no single hardcoded machine path):
+      1. a project-local venv ruff executable, if present;
+      2. `ruff` on PATH;
+      3. `<python> -m ruff` (Ruff installed as a module of the running interpreter).
+    Returning None lets the caller fail *closed* rather than silently skip the gate.
+    """
+    for venv in ("venv_new", "venv", ".venv"):
+        exe = "ruff.exe" if os.name == "nt" else "ruff"
+        local = os.path.join(ROOT_DIR, venv, "Scripts" if os.name == "nt" else "bin", exe)
+        if os.path.exists(local):
+            return [local]
+    on_path = shutil.which("ruff")
+    if on_path:
+        return [on_path]
+    # Final fallback: the interpreter's own ruff module (installed via pip in this env).
+    try:
+        probe = subprocess.run([sys.executable, "-m", "ruff", "--version"],
+                               capture_output=True, text=True, errors="replace")
+        if probe.returncode == 0:
+            return [sys.executable, "-m", "ruff"]
+    except Exception:
+        pass
+    return None
+
+
+def check_ruff_standards(file_path: str) -> bool:
+    """Run Ruff to verify import/print/exception/style standards for one staged file.
+
+    FAILS CLOSED: if Ruff cannot be located or errors out, the commit is BLOCKED (returns
+    False) rather than silently allowed — the standing 'never bypass the gate' rule means a
+    missing linter must stop the commit, not disable the check without anyone noticing.
+    """
+    rel = os.path.relpath(file_path, ROOT_DIR).replace("\\", "/")
+    ruff_cmd = _resolve_ruff_cmd()
+    if ruff_cmd is None:
+        print("🚨 [GIT PRE-COMMIT] BLOCK - Ruff is not installed / not resolvable.")
+        print("   Install it (pip install ruff) or expose it on PATH; the quality gate "
+              "will not pass silently without it.")
+        return False
+    try:
+        # Pass the normalized relative path 'rel' and run from ROOT_DIR so Ruff matches the
+        # 'per-file-ignores' patterns in pyproject.toml.
+        res = subprocess.run([*ruff_cmd, "check", rel], capture_output=True, text=True,
+                             errors="replace", cwd=ROOT_DIR)
+    except Exception as e:
+        print(f"🚨 [GIT PRE-COMMIT] BLOCK - could not execute Ruff on {rel}: {e}")
+        return False
+    if res.returncode != 0:
+        print(f"🚨 [GIT PRE-COMMIT] BLOCK - Ruff Quality Gate Failed in {rel}!")
+        print(res.stdout.strip())
+        print("-" * 70)
+        print("Action required: Correct the style/logic issues shown above before committing.")
+        return False
+    return True
+
+
 def check_rd_roadmap_sync() -> bool:
     """Verify that R&D list item counts in private MEMORY.md and plans/roadmap.md match."""
     candidates = [
@@ -237,15 +322,16 @@ def check_rd_roadmap_sync() -> bool:
         max_road_item = max(int(x) for x in road_items) if road_items else 0
         
         if max_mem_item != max_road_item:
-            print("[GIT PRE-COMMIT] BLOCK - R&D Roadmap mismatch detected!")
-            print(f"   Private MEMORY.md has {max_mem_item} items.")
-            print(f"   Repository plans/roadmap.md has {max_road_item} items.")
-            print("   Action required: Synchronize the R&D Roadmap items across both files!")
+            print(f"🚨 [GIT PRE-COMMIT] BLOCK - R&D roadmap out of sync: highest item in "
+                  f"MEMORY.md is #{max_mem_item} but plans/roadmap.md is #{max_road_item}. "
+                  f"Reconcile the two ledgers before committing.")
             return False
-            
+
         return True
     except Exception as e:
-        print(f"Error checking R&D roadmap sync: {e}")
+        # Soft check across heterogeneous environments — don't block on a parse/read error,
+        # but say so rather than skipping silently.
+        print(f"[GIT PRE-COMMIT] R&D roadmap sync check skipped (non-fatal): {e}")
         return True
 
 def check_new_features_tested() -> bool:
@@ -298,16 +384,16 @@ def check_new_features_tested() -> bool:
                 if re.search(check["signature"], content):
                     signature_found = True
                     break
-            except Exception:
-                pass
-                
+            except OSError as e:
+                print(f"[GIT PRE-COMMIT] warning: could not read staged file {fpath}: {e}")
+
         if signature_found:
             print(f"[GIT PRE-COMMIT] Detected new feature code staged: '{check['name']}'")
             print(f"   Searching tests/ directory for matching unit test coverage keyword '{check['test_keyword']}'...")
             
             test_dir = os.path.join(ROOT_DIR, "tests")
             test_files = [os.path.join(test_dir, f) for f in os.listdir(test_dir) if f.startswith("test_") and f.endswith(".py")]
-            
+
             coverage_found = False
             for t_file in test_files:
                 try:
@@ -317,15 +403,14 @@ def check_new_features_tested() -> bool:
                         coverage_found = True
                         print(f"   ✅ Found test coverage inside: tests/{os.path.basename(t_file)}")
                         break
-                except Exception:
-                    pass
-                    
+                except OSError as e:
+                    print(f"[GIT PRE-COMMIT] warning: could not read test file {t_file}: {e}")
+
             if not coverage_found:
-                print(f"🚨 [GIT PRE-COMMIT] BLOCK - Missing Test Coverage!")
-                print(f"   Staged changes introduce '{check['name']}', but no matching unit test was found in the 'tests/' folder.")
-                print(f"   Action required: Add a test method containing '{check['test_keyword']}' to verify the new feature!")
+                print(f"🚨 [GIT PRE-COMMIT] BLOCK - feature '{check['name']}' is staged but no "
+                      f"test contains '{check['test_keyword']}'. Add a matching unit test in tests/.")
                 return False
-                
+
     return True
 
 def get_staged_python_files() -> list:

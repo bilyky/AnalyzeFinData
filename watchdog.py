@@ -322,10 +322,13 @@ def heal_tasks(missing_tasks, force=False):
             _log.error(f"❌ Failed to heal {task}: {e}")
 
 def kill_ghost_processes():
-    """Kill any hung python or excel processes that might be locking resources."""
-    _log.console("🧹 Cleaning up hung ghost processes...")
+    """Kill hung background python processes that might be locking resources."""
+    _log.console("🧹 Cleaning up hung background python processes...")
     try:
-        subprocess.run(["powershell", "Get-Process | Where-Object { $_.Name -match 'excel|python' -and $_.CommandLine -match 'AnalyzeFinData' } | Stop-Process -Force"], capture_output=True)
+        # We strictly terminate background python processes holding AnalyzeFinData resources.
+        # We NEVER forcefully terminate excel.exe automatically because the user may have
+        # other open, unsaved, and highly important unrelated spreadsheets!
+        subprocess.run(["powershell", "Get-Process | Where-Object { $_.Name -match 'python' -and $_.CommandLine -match 'AnalyzeFinData' } | Stop-Process -Force"], capture_output=True)
     except:
         pass
 

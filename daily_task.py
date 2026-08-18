@@ -1,17 +1,20 @@
-import os
-import sys
-import datetime
-import subprocess
-import notify
-import watchdog
-import openpyxl
-import traceback
-import json
-import powergauge
-import logging
 import argparse
-from config import CFG
+import datetime
+import json
+import logging
+import os
+import subprocess
+import sys
+import traceback
 from pathlib import Path
+
+import openpyxl
+
+import notify
+import powergauge
+import watchdog
+from config import CFG
+
 
 # --- LOGGING CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -74,7 +77,7 @@ def get_all_data(date):
         symbol_dir = BASE_DIR / "Data" / "Symbol"
         cached_symbols = []
         if symbol_dir.exists():
-            for root, dirs, files in os.walk(symbol_dir):
+            for _root, _dirs, files in os.walk(symbol_dir):
                 for f in files:
                     if f.endswith(f"_{date}.json"):
                         cached_symbols.append(f.rsplit('_', 1)[0])
@@ -128,6 +131,39 @@ def get_description(r):
     if r['pgr'] == 'Bu+':
         desc.append("Very Bullish")
     return "; ".join(desc) if desc else "Solid technicals"
+
+
+def _sync_warning(sync_ok, today, error=None):
+    """Build the post-run data-sync (warning_html, subject_line) for the daily email.
+
+    watchdog.sync_data_folder() returns a bool: it is False only on a genuine sync
+    failure (robocopy rc>=8, missing source, or an exception it caught internally).
+    True covers both success and the intentional "offline but not a failure" bypass,
+    so only False (or a raised `error`) raises the warning banner. `error` is set when
+    the sync call itself raised out to the caller.
+    """
+    ok_subject = f"AETHER Daily Rotation & Momentum Report: {today}"
+    fail_subject = f"⚠️ AETHER Daily Rotation & Momentum Report: {today} (Sync Failed)"
+
+    if error is not None:
+        html = (
+            "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
+            "<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Post-Run Data Synchronization Error!</h4>"
+            f"<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The data synchronization engine threw an exception: {error}</p>"
+        )
+        return html, fail_subject
+
+    if sync_ok is False:
+        html = (
+            "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
+            "<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Post-Run Data Synchronization Failed!</h4>"
+            "<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The backup drive or UNC storage path \\\\10.0.0.156\\Storage\\ was unreachable or disconnected during this run. "
+            "All local trade entries completed nominal, but Data caches were not mirrored to the network storage drive. "
+            "Please check your backup drive connectivity.</p>"
+        )
+        return html, fail_subject
+
+    return "", ok_subject
 
 
 def main():
@@ -307,13 +343,24 @@ def main():
         </html>
         """
 
-        _log.info("Generating rich HTML report...")
-        notify.send_email(f"AETHER Daily Rotation & Momentum Report: {today}", html, is_html=True)
-        _log.info("Automation completed successfully.")
+        _log.info("Running post-run Data synchronization...")
+        sync_warning_html = ""
+        subject_line = f"AETHER Daily Rotation & Momentum Report: {today}"
+        
         try:
-            watchdog.sync_data_folder()
-        except Exception as e:
-            _log.warning(f"Post-run sync failed: {e}")
+            # We execute the data sync BEFORE the email is sent so we can append any failures transparently!
+            sync_ok = watchdog.sync_data_folder()
+            sync_warning_html, subject_line = _sync_warning(sync_ok, today)
+        except Exception as sync_err:
+            _log.warning(f"Post-run sync failed: {sync_err}")
+            sync_warning_html, subject_line = _sync_warning(None, today, error=sync_err)
+
+        if sync_warning_html:
+            html = html.replace("</body>", f"{sync_warning_html}</body>")
+
+        _log.info("Generating rich HTML report...")
+        notify.send_email(subject_line, html, is_html=True)
+        _log.info("Automation completed successfully.")
 
     except Exception as e:
         error_msg = f"Automation Failed for {today}\n\nError: {str(e)}\n\nFull Traceback:\n{traceback.format_exc()}"
