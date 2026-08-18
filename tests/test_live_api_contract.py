@@ -3,11 +3,13 @@ import sys
 import unittest
 from pathlib import Path
 
+
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import powergauge
 import etrade
+import powergauge
+
 
 _LIVE = os.getenv("AETHER_LIVE_TESTS")
 

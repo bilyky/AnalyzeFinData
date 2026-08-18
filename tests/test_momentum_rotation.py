@@ -1,7 +1,9 @@
 import unittest
+
 import ai_portfolio_game as game
 from aether import risk_utils
 from aether.config import CFG
+
 
 class TestDynamicMomentumRotation(unittest.TestCase):
 

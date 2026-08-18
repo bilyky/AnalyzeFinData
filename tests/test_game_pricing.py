@@ -10,6 +10,7 @@ import sys
 import unittest
 from unittest import mock
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game
 
@@ -34,6 +35,7 @@ class TestLiveEquity(unittest.TestCase):
 
 
 import datetime
+
 
 class MockDate(datetime.date):
     @classmethod
@@ -65,6 +67,16 @@ class TestGetLivePricesPartialFill(unittest.TestCase):
             out = game.get_live_prices(["AAA", "BBB"])
         self.assertEqual(out, {"AAA": 10.0, "BBB": 20.0})
         goog.assert_not_called()
+
+    def test_etrade_failure_falls_back_entirely_to_google(self):
+        with mock.patch("ai_portfolio_game.datetime.date", MockDate), \
+             mock.patch.object(game, "is_market_hours", return_value=True), \
+             mock.patch.object(game.etrade, "get_tokens", side_effect=RuntimeError("E*TRADE authentication failed")), \
+             mock.patch.object(game, "get_google_prices_fallback",
+                               return_value={"AAA": 12.0, "BBB": 22.0}) as goog:
+            out = game.get_live_prices(["AAA", "BBB"])
+        self.assertEqual(out, {"AAA": 12.0, "BBB": 22.0})
+        goog.assert_called_once_with(["AAA", "BBB"])
 
 
 class TestSummaryEquityPersistence(unittest.TestCase):

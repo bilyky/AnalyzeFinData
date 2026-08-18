@@ -6,10 +6,12 @@ import sys
 import unittest
 from unittest import mock
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../scripts/utils"))
 
 import intraday_monitor as monitor
+
 
 class TestIntradayMonitor(unittest.TestCase):
 
@@ -100,6 +102,30 @@ class TestIntradayMonitor(unittest.TestCase):
         
         # Saved state is now clean
         mock_save.assert_called_with({"last_breached": {}})
+
+    @mock.patch("intraday_monitor.load_state")
+    @mock.patch("intraday_monitor.save_state")
+    @mock.patch("intraday_monitor.get_monitored_positions")
+    @mock.patch("intraday_monitor.get_live_prices")
+    @mock.patch("ai_portfolio_game.get_google_prices_fallback")
+    @mock.patch("intraday_monitor.generate_ai_analysis")
+    @mock.patch("notify.send_email")
+    def test_monitor_etrade_failure_fallback(self, mock_send_email, mock_ai, mock_google_fallback, mock_prices, mock_positions, mock_save, mock_load):
+        """If E*TRADE price fetching fails, fallback to Google Finance is executed."""
+        mock_positions.return_value = [{"symbol": "AAPL", "stop": 150.0}]
+        mock_prices.side_effect = RuntimeError("E*TRADE Connection Failed")
+        mock_google_fallback.return_value = {"AAPL": 140.0}
+        mock_load.return_value = {"last_breached": {}}
+        mock_ai.return_value = "AI Analysis Text"
+        
+        monitor.monitor()
+        
+        # Google fallback should be called
+        mock_google_fallback.assert_called_once_with(["AAPL"])
+        # Stop breach detected via Google Finance quote, triggering email
+        mock_send_email.assert_called_once()
+        # State saved correctly
+        mock_save.assert_called_with({"last_breached": {"AAPL": {"stop": 150.0, "price": 140.0}}})
 
 if __name__ == "__main__":
     unittest.main()

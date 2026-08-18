@@ -1,11 +1,12 @@
 import os
 import sys
 import unittest
-import numpy as np
+
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import patterns
+
 
 class TestTraderVicPatterns(unittest.TestCase):
     def test_trader_vic_123_bottom(self):

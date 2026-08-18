@@ -1,13 +1,16 @@
 import datetime
+import json
 import os
 import sys
-import json
+
 import openpyxl
+
 
 # Add current dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
+
 
 def get_top_br():
     date = datetime.date(2026, 5, 26)
@@ -47,9 +50,8 @@ def get_top_br():
             continue
 
     top_5 = sorted(results, key=lambda x: x['br'], reverse=True)[:5]
-    print("Top 5 by Buying Ratio (Bullish only):")
-    for i, r in enumerate(top_5, 1):
-        print(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})")
+    for _i, _r in enumerate(top_5, 1):
+        pass
 
 if __name__ == "__main__":
     get_top_br()

@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
@@ -58,7 +59,8 @@ class TestLoggerInit(unittest.TestCase):
         self.assertEqual(log.name, "aether.pipeline")
 
     def test_jsonl_output_is_valid_json(self):
-        import aether_logger, logging.handlers
+
+        import aether_logger
         aether_logger._init()
         log = aether_logger.get_logger("test")
         log.info("hello world", extra={"sym": "INTC"})

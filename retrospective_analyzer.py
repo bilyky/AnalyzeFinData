@@ -8,11 +8,13 @@ runs a meta-audit on Circuit Breaker triggers and un-triggered 'near-miss' desig
 and outputs a rich, human-readable 'Data/retrospective_report.txt'.
 """
 
-import json
 import datetime
+import json
 from pathlib import Path
+
 import circuit_breaker
 from aether_logger import get_logger as _get_logger
+
 
 _log = _get_logger("retrospective")
 
@@ -160,7 +162,7 @@ def analyze():
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     report = []
     report.append("======================================================================")
-    report.append(f"🛡️ PROJECT AETHER: WEEKLY RETROSPECTIVE & FEEDBACK REPORT")
+    report.append("🛡️ PROJECT AETHER: WEEKLY RETROSPECTIVE & FEEDBACK REPORT")
     report.append(f"Date compiled: {today_str}")
     report.append("======================================================================")
     report.append("")

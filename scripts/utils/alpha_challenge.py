@@ -1,10 +1,14 @@
-import sys, os
+import os
+import sys
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-import json
 import datetime
+import json
 import os
 from pathlib import Path
+
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,13 +36,11 @@ def pick_stock(symbol):
     # Ensure symbols are tracked in performance_log first
     perf = load_json(PERFORMANCE_LOG)
     if today not in perf:
-        print(f"Error: No picks logged for {today} yet. Run the daily pipeline first.")
         return
 
     valid_symbols = [p["symbol"].upper() for p in perf[today]]
     if symbol.upper() not in valid_symbols:
-        print(f"Warning: {symbol} is not in today's Top 5 list ({', '.join(valid_symbols)}).")
-        print("You can still pick it, but the odds are against you!")
+        pass
 
     state["current_pick"] = {
         "date": today,
@@ -53,21 +55,18 @@ def pick_stock(symbol):
             break
             
     save_json(GAME_STATE_FILE, state)
-    print(f"🎯 Challenge Accepted! Your pick for {today} is {symbol.upper()}.")
 
 def evaluate_challenge():
     """Check how yesterday's pick performed."""
     state = load_json(GAME_STATE_FILE)
     pick = state.get("current_pick")
     if not pick:
-        print("No active challenge found. Use --pick <SYM> to start.")
         return
 
     today_date = datetime.date.today()
     pick_date = datetime.datetime.strptime(pick["date"], "%Y-%m-%d").date()
     
     if pick_date >= today_date:
-        print(f"Patience! We need to wait for the market to close on {pick['date']} to evaluate.")
         return
 
     # To evaluate, we need today's price for the picked symbol
@@ -76,7 +75,6 @@ def evaluate_challenge():
     XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
     
     if not XLSX_FILE.exists():
-        print("Workbook not found. Evaluation deferred.")
         return
 
     wb = load_workbook(XLSX_FILE, data_only=True)
@@ -107,28 +105,22 @@ def evaluate_challenge():
         state["current_pick"] = None # Reset
         
         save_json(GAME_STATE_FILE, state)
-        print(f"🏁 Challenge Complete for {pick['date']} ({pick['symbol']})!")
-        print(f"Result: {round(pct_change, 2)}% | Alpha vs SPY: {round(alpha, 2)}%")
-        print(f"Total Alpha Generated: {state['total_alpha']}%")
     else:
-        print("Could not find required prices for evaluation. Ensure workbook is updated.")
+        pass
 
 def show_status():
     state = load_json(GAME_STATE_FILE)
-    print("--- 🏆 DAILY ALPHA CHALLENGE STATUS ---")
     pick = state.get("current_pick")
     if pick:
-        print(f"Current Pick: {pick['symbol']} (from {pick['date']})")
+        pass
     else:
-        print("Current Pick: None (Ready for a new pick!)")
+        pass
     
-    print(f"Total Lifetime Alpha: {state.get('total_alpha', 0)}%")
     
     history = state.get("history", [])
     if history:
-        print("\nLast 5 Challenges:")
-        for h in history[-5:]:
-            print(f"- {h['date']}: {h['symbol']} ({h['return']}%) | Alpha: {h['alpha']}%")
+        for _h in history[-5:]:
+            pass
 
 if __name__ == "__main__":
     import argparse

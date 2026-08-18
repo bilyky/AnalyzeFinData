@@ -1,13 +1,16 @@
 import datetime
+import json
 import os
 import sys
-import json
+
 import openpyxl
+
 
 # Add current dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
+
 
 def get_comprehensive_stats():
     date = datetime.date(2026, 5, 26)
@@ -49,19 +52,16 @@ def get_comprehensive_stats():
         except Exception:
             continue
 
-    print(f"Total symbols processed: {len(all_data)}")
 
     # 1. Top 5 by Short10 (Unfiltered)
     top_short = sorted(all_data, key=lambda x: x['short10'], reverse=True)[:5]
-    print("\n--- Top 5 by Short10 (Unfiltered) ---")
-    for i, r in enumerate(top_short, 1):
-        print(f"{i}. {r['symbol']} (S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})")
+    for _i, _r in enumerate(top_short, 1):
+        pass
 
     # 2. Top 5 by Buying Ratio (Unfiltered)
     top_br = sorted(all_data, key=lambda x: x['br'], reverse=True)[:5]
-    print("\n--- Top 5 by Buying Ratio (Unfiltered) ---")
-    for i, r in enumerate(top_br, 1):
-        print(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})")
+    for _i, _r in enumerate(top_br, 1):
+        pass
 
     # 3. Check Sheet1 symbols
     ws_sheet1 = wb['Sheet1']
@@ -70,13 +70,12 @@ def get_comprehensive_stats():
         if row[4].value: sheet1_symbols.append(row[4].value) # Col E
         if row[6].value: sheet1_symbols.append(row[6].value) # Col G
     
-    print("\n--- Stats for Sheet1 Symbols ---")
     for sym in sheet1_symbols:
         match = next((d for d in all_data if d['symbol'] == sym), None)
         if match:
-            print(f"{sym}: S10: {match['short10']}, BR: {match['br']}, PGR: {match['pgr']}")
+            pass
         else:
-            print(f"{sym}: No data found")
+            pass
 
 if __name__ == "__main__":
     get_comprehensive_stats()

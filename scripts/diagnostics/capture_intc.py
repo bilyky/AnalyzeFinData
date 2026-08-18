@@ -1,11 +1,14 @@
-import sys, os
+import os
+import sys
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-import imaplib
-import email
 import datetime
-from email.header import decode_header
+import email
+import imaplib
 from pathlib import Path
+
 
 try:
     from config import CFG
@@ -22,7 +25,6 @@ BASE_DIR = Path(__file__).resolve().parent
 
 def capture_intc_emails():
     if not EMAIL_USER or not EMAIL_PASS:
-        print("Error: Email credentials not configured. Set mailboxes in config.json or SENDER_EMAIL/SMTP_PASSWORD env vars.")
         return
     
     try:
@@ -31,7 +33,6 @@ def capture_intc_emails():
         mail.select("inbox")
         
         today_str = datetime.date.today().strftime("%d-%b-%Y")
-        print(f"Searching inbox for any email containing 'INTC' received today ({today_str})...")
         status, messages = mail.search(None, f'(SINCE "{today_str}")')
         
         found = False
@@ -43,7 +44,7 @@ def capture_intc_emails():
                     msg = email.message_from_bytes(raw_email)
                     
                     subject = str(msg["subject"] or "")
-                    sender = str(msg["from"] or "")
+                    str(msg["from"] or "")
                     
                     body = ""
                     if msg.is_multipart():
@@ -57,18 +58,14 @@ def capture_intc_emails():
                     content_upper = (subject + " " + body).upper()
                     
                     if "INTC" in content_upper:
-                        print(f"\n🎉 MATCH FOUND!")
-                        print(f"From: {sender}")
-                        print(f"Subject: {subject}")
-                        print(f"Snippet: {body[:300].strip()}...")
                         found = True
                         
         if not found:
-            print("No emails containing 'INTC' found in today's inbox.")
+            pass
             
         mail.logout()
-    except Exception as e:
-        print(f"Failed to scan inbox: {e}")
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     capture_intc_emails()

@@ -1,10 +1,14 @@
-import sys, os
+import os
+import sys
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-import json
 import datetime
 from pathlib import Path
+
 import openpyxl
+
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -27,13 +31,11 @@ def log_daily_costs(tokens_used, api_calls=0, saas_fees=0.0):
         ws = wb["Resource_Costs"]
         ws.append([today, tokens_used, round(token_cost, 4), round(api_fee, 2), round(saas_fees, 2), round(total, 4)])
         wb.save(TRACKER_FILE)
-        print(f"💰 Resource cost logged: ${round(total, 4)}")
-    except Exception as e:
-        print(f"Cost logging failed: {e}")
+    except Exception:
+        pass
 
 def run_learning_session():
     """Analyze historical wins to find 'Out of the Box' strategies."""
-    print("🧠 Starting R&D Learning Session...")
     # 1. Load historical performance
     # 2. Cross-reference with detected patterns in patterns.py
     # 3. Output new hypothesis
@@ -53,9 +55,8 @@ def run_learning_session():
         ws = wb["Strategy_R_D"]
         ws.append([hypothesis['date'], hypothesis['hypothesis'], hypothesis['combination'], hypothesis['win_pct'], hypothesis['alpha'], hypothesis['status']])
         wb.save(TRACKER_FILE)
-        print(f"💡 New Strategy Hypothesis Logged: {hypothesis['hypothesis']}")
-    except Exception as e:
-        print(f"R&D logging failed: {e}")
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     import argparse

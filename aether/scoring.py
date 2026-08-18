@@ -8,9 +8,11 @@ import json
 import logging
 import os
 import threading
-from aether.utils import _to_float
-from aether.risk_utils import detect_support, detect_resistance
+
 from aether.primal_funcs import gann_sq9_levels
+from aether.risk_utils import detect_resistance, detect_support
+from aether.utils import _to_float
+
 
 _log = logging.getLogger("aether.scoring")
 

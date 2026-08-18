@@ -7,13 +7,18 @@ No API calls — uses synthetic OHLCV dicts and PowerGauge objects.
 import os
 import sys
 import unittest
-from datetime import date, timedelta
+from datetime import date
+
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import scoring
 from powergauge import (
-    PowerGauge, _pgr_str, _buying_ratio, _compute_pgr_fields, _SYMBOL_RE,
+    _SYMBOL_RE,
+    PowerGauge,
+    _buying_ratio,
+    _compute_pgr_fields,
+    _pgr_str,
     get_symbol_data,
 )
 from tests.conftest import make_ohlcv

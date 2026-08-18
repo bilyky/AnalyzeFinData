@@ -73,3 +73,38 @@ To completely prevent un-cleaned programmatic debris, lingering scheduled tasks,
     1.  **Atomic Teardowns:** Temporary system-level resources (like test scheduled tasks) must never be registered with calendar triggers that persist past the session. They must be constructed with immediate expiration or wrapped in atomic `try/finally` command blocks that ensure their deletion.
     2.  **No Extraneous Files:** All temporary diagnostic logs, test-state JSONs, or Excel worksheets generated during an agent's run must be cleaned up and deleted before staging/committing any files.
 
+---
+
+## 🛡️ 5. Autonomous Context & Logical-Reporting Safety Standards
+
+### 🚀 The Transparent Factual Reporting & Context Safety Mandate (The Truth Standard)
+To completely prevent silent logical bypasses, "lying" or misleading system-health emails, and context-based privilege failures (such as Task Scheduler runs failing silently over Windows credential/SYSTEM boundaries):
+
+*   **The Mandate:** All autonomous reporting, backup synchronization, and background pipeline execution layers **MUST** guarantee absolute, unspeculated, and privilege-aware transparency.
+*   **The Rules:**
+    1.  **Strict Three-State Logical Tracking:** Bypasses, safe-skips, and warnings (such as market-hours skips, offline drives, or incomplete API loads) **MUST NEVER** be collapsed or reported as boolean `True` (SUCCESS). They must be returned and modeled as explicit, descriptive string statuses or Enums. High-level email and dashboard reporters must render yellow/orange warning badges for skips and red badges for failures, reserving green badges **only** for actual, successful execution.
+    2.  **Explicit Context Privilege Verification:** Before assuming or logging that an infrastructure resource (like a NAS, server, or UNC share) is offline/disconnected because a path-existence check failed, the script **MUST** execute a direct, low-level network diagnostic check (e.g., pinging the IP address directly). If the IP is pingable, the script is strictly prohibited from claiming a "drive outage" and must explicitly report a **Local Windows User Permission/SYSTEM Context Block**.
+    3.  **Headless User Context Locking:** All registered Task Scheduler tasks or cron daemons **MUST** be explicitly configured to run under your credentialed active user account context (`Yura`) rather than the local machine `SYSTEM` account to ensure they possess the necessary network share and SMB access privileges.
+    4.  **Notification as the Absolute Final Step:** In any pipeline or task execution script, drafting and dispatching success notifications (emails/SMS/slack) **MUST** take place as the absolute final step of the program, after all database updates, network syncs, and backups have fully completed. Any late-stage sync or writing failure must be dynamically appended to the report and reflected loudly in the email's subject line.
+    5.  **Strict Project Target & Progress Reporting Sentry Rules:** Any AI agent, copilot, or automated reporting utility **MUST** strictly read the auto-generated `Data/active_targets.json` file on disk before explaining or reporting the targets, goals, progress, or trajectory of **either** Project AETHER challenge (the AI Portfolio Game or the Oracle Project). You are strictly forbidden from guessing, calculating from memory, fabricating metrics, or using speculative "make-ups".
+
+---
+
+## 📁 6. Directory Filtering & Workspace Navigation Standards
+
+### 🛡️ The Generic Directory Filtering and Search Standard (The Skip-Folders Rule)
+To completely eliminate filesystem indexing hangs, regex timeout errors, and runaway API token depletion (such as 429 Resource Exhausted rate-limits):
+
+*   **The Mandate:** **Any** AI agent, developer copilot, or automated search utility operating in this workspace **MUST** strictly ignore, filter out, and skip heavy virtual environments, caches, local logs, and binary data directories during all file searches, recursive globbing, indexing, and regex scanning.
+*   **The Excluded Directories:** The following directories are strictly designated as non-source, search-exempt zones and **MUST** always be excluded:
+    *   `venv/`
+    *   `venv_new/`
+    *   `.git/`
+    *   `.idea/`
+    *   `.ruff_cache/`
+    *   `Data/`
+    *   `__pycache__/`
+*   **The Rules:**
+    1.  **Scoped Searches:** Never perform wide, unrestricted global searches or generic `grep_search` across the entire workspace directory without setting narrow include filters (e.g., specifying `dir_path` or using narrow file globbing patterns like `aether/**/*.py` or `scripts/**/*.py`).
+    2.  **Active Exclusion:** Always respect both `.gitignore` and `.geminiignore` (or other agent-specific ignore files) and actively pass exclusion parameters (like `exclude_pattern`) in search/grep tool calls to prevent scanning venv/log paths.
+

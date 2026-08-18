@@ -31,13 +31,15 @@ import os
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import instruments
 import notify
 import patterns
 from aether_logger import get_logger as _get_logger
-from patterns import ohlcv_to_array, rbr_leg1, RBR_LOOKBACK, RBR_VOL_WIN, RBR_WARMUP
+from patterns import RBR_LOOKBACK, RBR_VOL_WIN, RBR_WARMUP, ohlcv_to_array, rbr_leg1
+
 
 _log = _get_logger("rbr_watch")
 

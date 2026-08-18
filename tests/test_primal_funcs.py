@@ -8,6 +8,7 @@ import os
 import sys
 import unittest
 
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from primal_funcs import gann_sq9_levels

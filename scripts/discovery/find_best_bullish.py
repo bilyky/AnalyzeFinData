@@ -1,13 +1,16 @@
 import datetime
+import json
 import os
 import sys
+
 import openpyxl
-import json
+
 
 # Add current dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
+
 
 def get_picks():
     xlsx_file = 'Data/state_of_the_day.xlsx'
@@ -49,15 +52,13 @@ def get_picks():
     # Filter for Bullish PGR (Bu or Bu+, which are values 4 and 5)
     bullish_picks = [d for d in picks_data if d['pgr_val'] >= 4]
 
-    print("TOP 5 BULLISH STOCKS (PGR Bu/Bu+) by Short10:")
     top_short = sorted(bullish_picks, key=lambda x: x['short10'], reverse=True)[:5]
-    for i, p in enumerate(top_short, 1):
-        print(f"{i}. {p['symbol']} (Short10: {p['short10']}, PGR: {p['pgr']})")
+    for _i, _p in enumerate(top_short, 1):
+        pass
 
-    print("\nTOP 5 BULLISH STOCKS (PGR Bu/Bu+) by Long60:")
     top_long = sorted(bullish_picks, key=lambda x: x['long60'], reverse=True)[:5]
-    for i, p in enumerate(top_long, 1):
-        print(f"{i}. {p['symbol']} (Long60: {p['long60']}, PGR: {p['pgr']})")
+    for _i, _p in enumerate(top_long, 1):
+        pass
 
 if __name__ == "__main__":
     get_picks()

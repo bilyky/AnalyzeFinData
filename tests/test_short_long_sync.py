@@ -2,14 +2,16 @@
 Unit tests for update_short_long_scores — specifically the sell/rebuy detection
 and buy date handling.  No E*TRADE API calls; uses an in-memory openpyxl workbook.
 """
-import sys
-import os
-import unittest
 import datetime
+import os
+import sys
+import unittest
+
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import openpyxl
+
 from workbook_write import update_short_long_scores
 
 

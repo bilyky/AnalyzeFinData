@@ -63,10 +63,13 @@ import os
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _study_utils import WINDOWS
+
 from aether_logger import get_logger as _get_logger
+
 
 _log = _get_logger("carry_unwind")
 
@@ -187,14 +190,14 @@ def _pearson(xs, ys):
     syy = sum((y - my) ** 2 for y in ys)
     if sxx <= 0 or syy <= 0:
         return None
-    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=False))
     return sxy / math.sqrt(sxx * syy)
 
 
 def _returns(closes):
     """Simple daily returns; returns[i] corresponds to the move INTO closes[i+1]."""
     out = []
-    for a, b in zip(closes, closes[1:]):
+    for a, b in zip(closes, closes[1:], strict=False):
         out.append((b - a) / a if a > 0 else 0.0)
     return out
 

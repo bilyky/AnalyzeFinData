@@ -7,16 +7,20 @@ report avg 10-day forward return + win%.
 
 Usage: python backtest_components.py [min_year]
 """
-import sys, os
+import os
+import sys
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
 
+import glob
 import json
 import os
 import sys
-import glob
 from collections import defaultdict
+
 
 SYM_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
@@ -220,27 +224,21 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
 
 def report(label, groups):
     """groups = {key: [fwd10, ...]}"""
-    print(f"\n  {label}")
-    print(f"  {'Value':<12} {'Count':>7} {'Avg10d':>8} {'Win%':>7}")
-    print(f"  {'-'*40}")
     for key in sorted(groups.keys(), key=lambda x: (isinstance(x, str), x)):
         vals = groups[key]
         if not vals:
             continue
-        avg = sum(vals) / len(vals)
-        win = 100 * sum(1 for v in vals if v > 0) / len(vals)
-        print(f"  {str(key):<12} {len(vals):>7,} {avg:>+7.2f}% {win:>6.1f}%")
+        sum(vals) / len(vals)
+        100 * sum(1 for v in vals if v > 0) / len(vals)
 
 
 def run(min_year=2023):
-    print(f"\nComponent analysis >= {min_year} ...")
 
     ohlcv_files = {os.path.basename(f).replace('_daily.json', '')
                    for f in glob.glob(os.path.join(OHLCV_DIR, '*_daily.json'))}
     cache_syms  = {os.path.basename(f).rsplit('_', 1)[0]
                    for f in glob.glob(os.path.join(SYM_DIR, '*.json'))}
     symbols = sorted(ohlcv_files & cache_syms)
-    print(f"  Symbols: {len(symbols)}")
 
     # Accumulators per component
     pgr_g      = defaultdict(list)
@@ -284,10 +282,8 @@ def run(min_year=2023):
             season_g[s].append(f)
             total += 1
         if i % 50 == 0:
-            print(f"  ... {i}/{len(symbols)}")
+            pass
 
-    print(f"\n  Total: {total:,} observations, {FWD_W}d forward return\n")
-    print("=" * 50)
 
     report("PGR corrected (1-5)", pgr_g)
     report("PGR delta (vs prev day)", delta_g)

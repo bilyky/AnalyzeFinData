@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 
+
 # LF-only: a `#!/bin/sh` script with CRLF line endings fails to launch under sh.
 HOOK = (
     "#!/bin/sh\n"
@@ -36,7 +37,6 @@ def _git(*args):
 def main():
     top = _git("rev-parse", "--show-toplevel")
     if not top:
-        print("Not inside a git repository — nothing to install.")
         return 1
 
     hooks_dir = _git("rev-parse", "--git-path", "hooks")
@@ -60,9 +60,8 @@ def main():
             try:
                 with open(backup, "w", encoding="utf-8", newline="\n") as f:
                     f.write(existing)
-                print(f"Backed up existing pre-commit hook -> {backup}")
             except Exception:
-                print("Warning: could not back up the existing pre-commit hook; overwriting.")
+                pass
 
     with open(hook_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(HOOK)
@@ -72,10 +71,6 @@ def main():
     except Exception:
         pass  # Windows ignores the exec bit; git runs the hook regardless.
 
-    print(f"Installed pre-commit hook -> {hook_path}")
-    print("It runs scripts/utils/pre_commit_validator.py on every commit.")
-    print("Scoped doc-sync bypass (when a code change genuinely needs no doc update):")
-    print("    AETHER_DOCSYNC_ACK=<feature-key> git commit ...")
     return 0
 
 

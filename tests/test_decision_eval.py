@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import decision_eval as de
 
@@ -44,7 +45,7 @@ class TestLogRoundTrip(unittest.TestCase):
         self.assertEqual(de.read_log(path="/nonexistent/x.jsonl"), [])
 
     def test_skips_malformed_line(self):
-        tmp = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w");
+        tmp = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w")
         tmp.write('{"symbol": "AAA"}\n')
         tmp.write('this is not json\n')        # a half-written crash line
         tmp.write('{"symbol": "BBB"}\n')

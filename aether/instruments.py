@@ -15,8 +15,10 @@ algorithm is built for these instruments (see CLAUDE.md R&D roadmap).
 
 import json
 from pathlib import Path
+
 from aether import ai_client
 from aether.logger import get_logger as _get_logger
+
 
 _log = _get_logger("instruments")
 

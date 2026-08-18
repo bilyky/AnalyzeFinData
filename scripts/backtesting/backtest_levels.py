@@ -17,7 +17,10 @@ backtest_symbol() loads from the local cache.
     python backtest_levels.py INTC
     python backtest_levels.py INTC AAPL --horizon 20 --step 5
 """
-import sys, os
+import os
+import sys
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
@@ -143,22 +146,18 @@ def backtest_universe(symbols, horizon=20, step=10, start_after=200):
 
 
 def _print_report(agg):
-    sym = agg.get("symbol", "?")
+    agg.get("symbol", "?")
     if agg.get("error"):
-        print(f"{sym}: {agg['error']}")
         return
-    print(f"\n=== {sym} — {agg['samples']} predictions (horizon per sample) ===")
     s = agg.get("support")
     if s:
-        print(f"  SUPPORT (stop):  n={s['n']}  held={s['hold_rate']}%  "
-              f"tested<=1%={s['tested_within_1pct']}%  median gap={s['median_gap_pct']}%")
+        pass
     r = agg.get("resistance")
     if r:
-        print(f"  RESISTANCE (tgt): n={r['n']}  hit={r['hit_rate']}%  median gap={r['median_gap_pct']}%")
+        pass
     o = agg.get("outcome")
     if o:
-        print(f"  OUTCOME: target-first={o['target_first']} stop-first={o['stop_first']} "
-              f"neither={o['neither']}  ->  win-rate={o['win_rate']}%")
+        pass
 
 
 if __name__ == "__main__":
@@ -172,18 +171,17 @@ if __name__ == "__main__":
 
     if "--all" in args:
         # Aggregate across every cached symbol (or the Research sheet's symbols).
-        import glob, os
+        import glob
+        import os
         cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
         all_syms = sorted(os.path.basename(p)[:-11] for p in glob.glob(os.path.join(cache, "*_daily.json")))
-        print(f"[backtest] universe over {len(all_syms)} cached symbols (step={step or 10})...")
         agg = backtest_universe(all_syms, horizon=horizon, step=(step if "--step" in args else 10))
         _print_report(agg)
         wr = [p["win_rate"] for p in agg["per_symbol"] if p["win_rate"] is not None]
         if wr:
-            print(f"  per-symbol win-rate: min={min(wr)}% median={statistics.median(wr)}% max={max(wr)}%")
+            pass
     elif syms:
         for sym in syms:
             _print_report(backtest_symbol(sym, horizon=horizon, step=step))
     else:
-        print("usage: python backtest_levels.py SYMBOL [...] [--all] [--horizon 20] [--step 5]")
         sys.exit(1)

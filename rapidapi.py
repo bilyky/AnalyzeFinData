@@ -35,6 +35,7 @@ from bar_provenance import is_provisional
 from config import CFG
 from run_history import load_symbols
 
+
 _log = _get_logger("rapidapi")
 
 _DIR      = os.path.dirname(os.path.abspath(__file__))
@@ -102,7 +103,9 @@ _SYMBOL_OVERRIDES = {
 _UNSUPPORTED_SYMBOLS = {"NDX", "SPX", "DJI"}
 
 def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
-    """Single Alpha Vantage HTTP call. Returns parsed JSON. Raises on error."""
+    """Single Alpha Vantage HTTP call. Returns parsed JSON. Raises on error.
+    Retries on HTTP 429 or rate-limit notes to handle transient burst limits.
+    """
     key = CFG.rapidapi_key
     if not key:
         raise RuntimeError(
@@ -114,23 +117,57 @@ def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
     api_symbol = _SYMBOL_OVERRIDES.get(symbol.upper(), symbol)
     api_symbol = api_symbol.replace(".", "-")
 
-    resp = requests.get(
-        _BASE_URL,
-        headers={**_HEADERS, "X-RapidAPI-Key": key},
-        params={
-            "function": "TIME_SERIES_DAILY",
-            "symbol": api_symbol,
-            "outputsize": outputsize,
-            "datatype": "json",
-        },
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if "Time Series (Daily)" not in data:
-        note = data.get("Note") or data.get("Information") or str(data)[:120]
-        raise RuntimeError(f"Alpha Vantage error for {symbol}: {note}")
-    return data
+    max_attempts = 4
+    for attempt in range(max_attempts):
+        try:
+            resp = requests.get(
+                _BASE_URL,
+                headers={**_HEADERS, "X-RapidAPI-Key": key},
+                params={
+                    "function": "TIME_SERIES_DAILY",
+                    "symbol": api_symbol,
+                    "outputsize": outputsize,
+                    "datatype": "json",
+                },
+                timeout=30,
+            )
+            
+            # Catch HTTP 429 Too Many Requests status
+            if resp.status_code == 429 and attempt < max_attempts - 1:
+                sleep_sec = (attempt + 1) * 30
+                _log.warning("  [RapidAPI] %s: HTTP 429 Too Many Requests. Retrying in %d seconds (attempt %d/%d)...",
+                             symbol, sleep_sec, attempt + 1, max_attempts - 1)
+                time.sleep(sleep_sec)
+                continue
+                
+            resp.raise_for_status()
+            data = resp.json()
+            
+            if "Time Series (Daily)" not in data:
+                note = data.get("Note") or data.get("Information") or str(data)[:120]
+                is_rate_limit = (not data) or any(
+                    word in note.lower()
+                    for word in ["rate limit", "burst pattern", "too many requests", "concurrency"]
+                )
+                if is_rate_limit and attempt < max_attempts - 1:
+                    sleep_sec = (attempt + 1) * 30
+                    _log.warning("  [RapidAPI] %s: Alpha Vantage rate limit or empty response detected (%s). Retrying in %d seconds (attempt %d/%d)...",
+                                 symbol, note, sleep_sec, attempt + 1, max_attempts - 1)
+                    time.sleep(sleep_sec)
+                    continue
+                raise RuntimeError(f"Alpha Vantage error for {symbol}: {note}")
+                
+            return data
+            
+        except requests.exceptions.HTTPError as e:
+            # Fallback check in case raise_for_status got hit on a 429 (not caught above)
+            if e.response is not None and e.response.status_code == 429 and attempt < max_attempts - 1:
+                sleep_sec = (attempt + 1) * 30
+                _log.warning("  [RapidAPI] %s: HTTP 429 exception. Retrying in %d seconds (attempt %d/%d)...",
+                             symbol, sleep_sec, attempt + 1, max_attempts - 1)
+                time.sleep(sleep_sec)
+                continue
+            raise
 
 
 def _write_atomic(path: str, data: dict) -> None:
@@ -168,9 +205,13 @@ def _fetch_and_merge(symbol: str, path: str, outputsize: str = "compact") -> Non
     for d in new_dates[:3]:
         existing_ts[d] = new_ts[d]
 
-    # Plus, append any older historical dates that are missing
-    added = {d: v for d, v in new_ts.items() if d not in existing_ts}
-    existing_ts.update(added)
+    # Overwrite any older historical dates if they are missing, OR if they are currently
+    # marked as provisional in the cache but the new API data has a real settled bar.
+    for d, v in new_ts.items():
+        if d not in existing_ts:
+            existing_ts[d] = v
+        elif is_provisional(existing_ts[d]) and not is_provisional(v):
+            existing_ts[d] = v
 
     latest = max(existing_ts.keys())
     existing.setdefault("Meta Data", {})["3. Last Refreshed"] = latest
@@ -215,6 +256,7 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> d
         # self-healer) use it to retry later instead of treating the symbol as un-healable.
         return {"updated": 0, "skipped": len(symbols), "errors": [], "locked": True}
 
+    consecutive_429s = 0
     try:
         for i, sym in enumerate(symbols, 1):
             if sym.upper() in _UNSUPPORTED_SYMBOLS:
@@ -231,6 +273,7 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> d
             try:
                 _fetch_and_merge(sym, path, outputsize=outputsize)
                 results["updated"] += 1
+                consecutive_429s = 0
                 _log.console("  [RapidAPI] %s: %s fetch OK (%d/%d, updated=%d)",
                              sym, outputsize, i, len(symbols), results["updated"])
                 time.sleep(SLEEP_SEC)
@@ -239,6 +282,17 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> d
                 _log.error("  [RapidAPI] %s: ERROR - %s", sym, e)
                 # Sleep even on failure to avoid a rapid-fire cascade hammering the API
                 time.sleep(SLEEP_SEC)
+
+                err_msg = str(e).lower()
+                is_rate_limit = "429" in err_msg or "too many requests" in err_msg or "rate limit" in err_msg
+                if is_rate_limit:
+                    consecutive_429s += 1
+                else:
+                    consecutive_429s = 0
+
+                if consecutive_429s >= 3:
+                    _log.error("  [RapidAPI] Met %d consecutive 429/rate-limit errors. Quota is likely exhausted. Aborting recovery pass early.", consecutive_429s)
+                    break
     finally:
         if fd is not None:
             try:

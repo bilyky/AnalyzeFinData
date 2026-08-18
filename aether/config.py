@@ -20,6 +20,7 @@ import os
 import sys
 from pathlib import Path
 
+
 _DIR      = str(Path(__file__).resolve().parent.parent)
 _CFG_PATH = os.path.join(_DIR, "config.json")
 

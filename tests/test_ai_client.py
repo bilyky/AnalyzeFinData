@@ -14,8 +14,10 @@ import sys
 import unittest
 from unittest import mock
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import aether.ai_client as ai_client
+
 
 _GPT    = {"type": "openai_compatible", "enabled": True,
            "endpoint": "https://example/api", "model": "gpt-x", "api_key_source": "env:FAKE"}
@@ -92,6 +94,20 @@ class TestAIClientTransport(unittest.TestCase):
         with self._providers({"gem": _GEMINI}):
             with self.assertRaises(RuntimeError):
                 ai_client.evaluate("SYS", "USR", provider="gem")
+
+    @mock.patch("aether.ai_client.subprocess.run")
+    @mock.patch("aether.ai_client.sys.platform", "win32")
+    @mock.patch("aether.ai_client.os.path.exists", return_value=True)
+    def test_gemini_path_injection_on_win32(self, m_exists, m_run):
+        m_run.return_value = mock.MagicMock(returncode=0, stdout="OK", stderr="")
+        with self._providers({"gem": _GEMINI}), \
+             mock.patch.dict("os.environ", {"APPDATA": r"C:\Users\dummy"}):
+            ai_client.evaluate("SYS", "USR", provider="gem")
+        
+        m_run.assert_called_once()
+        run_env = m_run.call_args.kwargs.get("env")
+        self.assertIsNotNone(run_env)
+        self.assertIn(r"C:\Users\dummy\npm", run_env.get("PATH", ""))
 
     @mock.patch.object(ai_client, "_resolve_key", return_value="KEY")
     def test_unknown_provider_type_raises(self, _key):

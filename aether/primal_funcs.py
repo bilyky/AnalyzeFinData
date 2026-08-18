@@ -1,26 +1,27 @@
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 from aether.logger import get_logger as _get_logger
+
 
 _log = _get_logger("primal_funcs")
 
 
 def add_column(data, times):
-    for i in range(1, times + 1):
+    for _i in range(1, times + 1):
         new = np.zeros((len(data), 1), dtype=float)
         data = np.append(data, new, axis=1)
     return data
 
 
 def delete_column(data, index, times):
-    for i in range(1, times + 1):
+    for _i in range(1, times + 1):
         data = np.delete(data, index, axis=1)
     return data
 
 
 def add_row(data, times):
-    for i in range(1, times + 1):
+    for _i in range(1, times + 1):
         columns = np.shape(data)[1]
         new = np.zeros((1, columns), dtype=float)
         data = np.append(data, new, axis=0)

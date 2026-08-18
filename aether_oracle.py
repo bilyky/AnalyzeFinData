@@ -15,6 +15,7 @@ from aether.config import CFG
 from aether.risk_utils import is_elite_breakout_candidate
 from aether_logger import get_logger as _get_logger
 
+
 _oracle_log = _get_logger("oracle")
 
 

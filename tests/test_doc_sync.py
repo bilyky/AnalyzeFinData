@@ -13,6 +13,7 @@ import os
 import unittest
 from unittest import mock
 
+
 # The validator lives under scripts/utils, which is deliberately NOT a package,
 # so load it by path (conftest.py has already put the repo root on sys.path).
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -8,21 +8,25 @@ Does NOT require a full check_from_xls run. Uses cached production tokens
 (or runs browser auth if not cached). Picks scores come from the last
 Research sheet data already in the workbook.
 """
-import sys, os
+import os
+import sys
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
 
 import argparse
-import datetime
 import json
 import os
+
 import openpyxl
 
 import etrade
 from aether.logger import get_logger
-from workbook_write import update_short_long_scores, fix_comment_shape_ids, backup_xlsx
-from powergauge import XLSX_FILE, SRC_XLSX, OHLCV_DIR
+from powergauge import OHLCV_DIR, SRC_XLSX, XLSX_FILE
+from workbook_write import backup_xlsx, fix_comment_shape_ids, update_short_long_scores
+
 
 _log = get_logger("sync_short_long")
 

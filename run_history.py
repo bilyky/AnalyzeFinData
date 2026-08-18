@@ -22,11 +22,14 @@ Python deps: requests, openpyxl, playwright (for browser login fallback)
 import datetime
 import os
 import sys
-import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import pytz
+
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import powergauge
+
 
 US_HOLIDAYS_2026 = {
     datetime.date(2026, 1, 1),   # New Year's Day
@@ -53,7 +56,9 @@ def trading_days(n: int) -> list[datetime.date]:
 
 
 def load_symbols() -> list[str]:
-    import openpyxl, re
+    import re
+
+    import openpyxl
     _sym_re = re.compile(r"^[A-Z0-9._\-]+$")
     try:
         wb = openpyxl.load_workbook(powergauge.XLSX_FILE, data_only=True, read_only=True)
@@ -99,7 +104,7 @@ def days_missing(symbols: list[str], day: datetime.date) -> list[str]:
 def main():
     n_days = int(sys.argv[1]) if len(sys.argv) > 1 else 14
 
-    print(f"Loading symbols from Research sheet...")
+    print("Loading symbols from Research sheet...")
     symbols = load_symbols()
     print(f"  {len(symbols)} symbols")
 

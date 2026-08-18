@@ -26,11 +26,13 @@ import os
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import notify
 from aether import stock_compare
 from aether.logger import get_logger as _get_logger
+
 
 _log = _get_logger("compare_stocks")
 
@@ -74,12 +76,12 @@ def render_console(data: dict) -> str:
     lines = []
     widths = [max(len(h), *(len(f(r.get(k))) for r in rows)) if rows else len(h)
               for (h, k, f) in _COLS]
-    header = "  ".join(h.ljust(w) for (h, _, _), w in zip(_COLS, widths))
+    header = "  ".join(h.ljust(w) for (h, _, _), w in zip(_COLS, widths, strict=False))
     lines.append(header)
     lines.append("-" * len(header))
     for r in rows:
         lines.append("  ".join(f(r.get(k)).ljust(w)
-                               for (_, k, f), w in zip(_COLS, widths)))
+                               for (_, k, f), w in zip(_COLS, widths, strict=False)))
     missing = data["meta"].get("missing") or []
     if missing:
         lines.append(f"\nnot found: {', '.join(missing)}")

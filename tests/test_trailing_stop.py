@@ -4,8 +4,10 @@ Unit tests for the profit-lock trailing stop ratchet in ai_portfolio_game.py.
 import os
 import sys
 import unittest
-import openpyxl
 from unittest import mock
+
+import openpyxl
+
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game

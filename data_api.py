@@ -4,6 +4,7 @@ No HTTP, no FastAPI — only reads from files and calls existing modules.
 All functions are safe to call from async FastAPI route handlers.
 """
 
+import glob
 import json
 import logging
 import re
@@ -11,26 +12,34 @@ import subprocess
 import sys
 import threading
 import time
-import glob
-import pytz
-from datetime import datetime, date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from scripts.backtesting import backtest_levels
-from aether import decision_eval as _decision_eval
-from aether.config import CFG as _cfg
+
+import openpyxl
+import pytz
+
 import ai_portfolio_game
+import etrade
 import instruments
+import powergauge as _pg
 import risk_utils
 import sell_rules
-import openpyxl
-import etrade
+from aether import decision_eval as _decision_eval
+from aether.config import CFG as _cfg
+from scripts.backtesting import backtest_levels
 from workbook_read import (
-    get_top_5_picks as _ap_picks,
     get_market_regime as _ap_regime,
+)
+from workbook_read import (
     get_replacement_pairs as _ap_replacements,
+)
+from workbook_read import (
     get_reserves_data as _ap_reserves,
 )
-import powergauge as _pg
+from workbook_read import (
+    get_top_5_picks as _ap_picks,
+)
+
 
 _log = logging.getLogger("aether.data_api")
 
@@ -413,7 +422,8 @@ def read_research() -> dict:
                 sym = r[_RESEARCH["sym"]]
                 if not sym or not isinstance(sym, str) or sym.strip().upper() == "SYMB":
                     continue
-                g = lambda k: r[_RESEARCH[k]]
+                def g(k):
+                    return r[_RESEARCH[k]]
                 s10, l60 = _f(g("s10")), _f(g("l60"))
                 setup_raw = g("setup")
                 win = _f(g("winpct"))
@@ -1111,6 +1121,13 @@ def get_system_health() -> dict:
     # Watchdog — check if watchdog.log or similar file was updated today
     watchdog_ok = True  # default optimistic; future: check watchdog log
 
+    market_regime_val = "Unknown"
+    try:
+        regime, _ = _ap_regime()
+        market_regime_val = regime
+    except Exception:
+        pass
+
     return {
         "data_fresh":           data_fresh,
         "last_refresh":         last_refresh,
@@ -1119,6 +1136,7 @@ def get_system_health() -> dict:
         "watchdog_ok":          watchdog_ok,
         "server_time":          now.isoformat(timespec="seconds"),
         "server_needs_restart": _server_needs_restart(),
+        "market_regime":        market_regime_val,
     }
 
 
@@ -1361,13 +1379,30 @@ def read_symbol(symbol: str) -> dict:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     ts = json.load(f).get("Time Series (Daily)", {})
-                dates = sorted(ts.keys())[-365:]
+                dates = sorted(ts.keys())
+                
+                # Dynamic filter: Filter out weekends and closed market days (volume == 0)
+                # without any hardcoded holiday lists.
+                valid_dates = []
+                for d in dates:
+                    try:
+                        # Skip weekends
+                        if date.fromisoformat(d).weekday() in (5, 6):
+                            continue
+                        # Skip any closed day/holiday (where volume is 0 or less)
+                        if int(float(ts[d].get("5. volume", 0))) <= 0:
+                            continue
+                        valid_dates.append(d)
+                    except (TypeError, ValueError):
+                        pass
+                
+                chart_dates = valid_dates[-365:]
                 chart = [{"date": d,
                           "open":   round(float(ts[d]["1. open"]),  2),
                           "high":   round(float(ts[d]["2. high"]),  2),
                           "low":    round(float(ts[d]["3. low"]),   2),
                           "close":  round(float(ts[d]["4. close"]), 2),
-                          "volume": int(float(ts[d].get("5. volume", 0)))} for d in dates]
+                          "volume": int(float(ts[d].get("5. volume", 0)))} for d in chart_dates]
             except Exception:
                 pass
         out["chart"] = chart

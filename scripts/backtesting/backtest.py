@@ -13,9 +13,13 @@ Usage:
     python backtest.py              # 2023-2025 data
     python backtest.py 2024 2025    # specific years
 """
-import sys, os
+import os
+import sys
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from aether_logger import get_logger as _get_logger
+
 
 _log = _get_logger("backtest")
 
@@ -26,7 +30,7 @@ import json
 import os
 import sys
 from collections import defaultdict
-from datetime import date, timedelta
+
 
 DATA_DIR  = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Data")
 HIST_DIR  = os.path.join(DATA_DIR, "History")

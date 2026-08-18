@@ -1,13 +1,16 @@
 import datetime
+import json
 import os
 import sys
-import json
+
 import openpyxl
+
 
 # Add current dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
+
 
 def get_best(date):
     session_id = "dummy"
@@ -44,11 +47,10 @@ def get_best(date):
                 'br': f['buying_ratio'],
                 'setup': (1 if f['setup_ok'] else 0) if f['setup_ok'] is not None else None
             })
-        except Exception as e:
+        except Exception:
             continue
 
     if not results:
-        print(f"No results found for {date}")
         return
 
     # Filter for Bullish (4 or 5) and Setup OK (1)
@@ -58,24 +60,21 @@ def get_best(date):
 
     # Sort by short10 (best for entry)
     best_short = sorted(bullish, key=lambda x: x['short10'], reverse=True)[:5]
-    print(f"\nBest 5 Stocks for {date} (by Short10 score):")
-    for i, r in enumerate(best_short, 1):
-        print(f"{i}. {r['symbol']} (Short10: {r['short10']}, PGR: {r['pgr']}, BR: {r['br']})")
+    for _i, _r in enumerate(best_short, 1):
+        pass
 
     # Sort by Buying Ratio
     best_br = sorted(bullish, key=lambda x: x['br'], reverse=True)[:5]
-    print(f"\nBest 5 Stocks for {date} (by Buying Ratio):")
-    for i, r in enumerate(best_br, 1):
-        print(f"{i}. {r['symbol']} (BR: {r['br']}, Short10: {r['short10']}, PGR: {r['pgr']})")
+    for _i, _r in enumerate(best_br, 1):
+        pass
 
     # Combined score (Short10 + BR)
     def combined_score(r):
         return r['short10'] + r['br']
 
     best_combined = sorted(bullish, key=combined_score, reverse=True)[:5]
-    print(f"\nBest 5 Stocks for {date} (Combined Score):")
-    for i, r in enumerate(best_combined, 1):
-        print(f"{i}. {r['symbol']} (Score: {combined_score(r):.1f}, S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})")
+    for _i, _r in enumerate(best_combined, 1):
+        pass
 
 if __name__ == "__main__":
     # Friday, May 29, 2026

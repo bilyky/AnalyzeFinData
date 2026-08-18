@@ -7,7 +7,9 @@ DATABASE_URL environment variable:
     DATABASE_URL=postgresql://user:pass@host:port/dbname
 """
 import json
+
 import sqlalchemy as db
+
 
 try:
     from config import CFG as _CFG
@@ -22,8 +24,7 @@ def connect_to_db():
         raise RuntimeError("DATABASE_URL environment variable is not set.")
     engine = db.create_engine(_DB_URL)
     conn = engine.connect()
-    output = conn.execute("SELECT * FROM test_table")
-    print(output.fetchall())
+    conn.execute("SELECT * FROM test_table")
     conn.close()
 
 
@@ -59,7 +60,6 @@ def update_daily_ohlcv(symbol: str):
                         {"sym": symbol, "d": date, "o": ss[0], "h": ss[1],
                          "l": ss[2], "c": ss[3], "v": ss[4]}
                     )
-                    print(f"Inserted {symbol} {date}")
                 elif float(output[0][3]) != float(ss[0]):
                     conn.execute(
                         "UPDATE public.daily_ohlcv "
@@ -68,9 +68,8 @@ def update_daily_ohlcv(symbol: str):
                         {"o": ss[0], "h": ss[1], "l": ss[2], "c": ss[3],
                          "v": ss[4], "d": date, "s": symbol.upper()}
                     )
-                    print(f"Updated {symbol} {date}")
-    except Exception as ex:
-        print(ex)
+    except Exception:
+        pass
     finally:
         conn.close()
 

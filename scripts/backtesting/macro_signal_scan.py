@@ -49,15 +49,30 @@ import os
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Reuse the carry-unwind study's pure, tested helpers (import is side-effect free —
 # its scan is guarded by __main__), so the two studies stay in lock-step.
 from carry_unwind_study import (
-    _closes_by_date, _trend_score, _pearson, _returns, _fwd, _agg, qualifies,
-    FWD_WINDOWS, GATE_N, MIN_HISTORY, RECENT_CUTOFF,
-    SWEEP_CORR, SWEEP_STATE, SWEEP_CWIN, ERAS_EXT,
+    ERAS_EXT,
+    FWD_WINDOWS,
+    GATE_N,
+    MIN_HISTORY,
+    RECENT_CUTOFF,
+    SWEEP_CORR,
+    SWEEP_CWIN,
+    SWEEP_STATE,
+    _agg,
+    _closes_by_date,
+    _fwd,
+    _pearson,
+    _returns,
+    _trend_score,
+    qualifies,
 )
+
 from aether_logger import get_logger as _get_logger
+
 
 _log = _get_logger("macro_scan")
 

@@ -9,8 +9,10 @@ from unittest import mock
 
 import pytz
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import powergauge
+
 
 _NY = pytz.timezone("America/New_York")
 

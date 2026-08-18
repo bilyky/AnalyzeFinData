@@ -10,6 +10,7 @@ from unittest import mock
 
 import openpyxl
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import data_api
 

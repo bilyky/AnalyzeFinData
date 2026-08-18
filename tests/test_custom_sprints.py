@@ -4,16 +4,18 @@ Tests for the custom-sprint features, exercising the REAL production helpers
 rather than copies of their logic, so a regression in the shipped code fails here.
 E*TRADE / verify / ATR are mocked; no network.
 """
+import json
 import os
 import sys
-import unittest
 import tempfile
-import json
+import unittest
+from datetime import datetime as real_datetime
+from pathlib import Path
+from unittest import mock
+
 import openpyxl
 import pytz
-from unittest import mock
-from pathlib import Path
-from datetime import datetime as real_datetime
+
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -271,12 +273,13 @@ class TestCoreSatelliteAllocation(unittest.TestCase):
 
 
 class TestAfterHoursOrderQueuing(unittest.TestCase):
+    @mock.patch("ai_portfolio_game.is_market_open", return_value=(True, "Market is open"))
     @mock.patch("ai_portfolio_game.is_market_hours", return_value=False)
     @mock.patch("ai_portfolio_game.get_live_prices")
     @mock.patch("ai_portfolio_game.load_game")
     @mock.patch("ai_portfolio_game.save_game")
     @mock.patch("ai_portfolio_game.openpyxl.load_workbook")  # patch at point-of-use
-    def test_after_hours_orders_are_queued(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
+    def test_after_hours_orders_are_queued(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours, mock_market_open):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Research"
@@ -318,12 +321,13 @@ class TestMarketHolidayChecks(unittest.TestCase):
 
 
 class TestPersistentProfileModes(unittest.TestCase):
+    @mock.patch("ai_portfolio_game.is_market_open", return_value=(True, "Market is open"))
     @mock.patch("ai_portfolio_game.get_market_regime", return_value="DEFENSIVE")
     @mock.patch("ai_portfolio_game.get_live_prices")
     @mock.patch("ai_portfolio_game.load_game")
     @mock.patch("ai_portfolio_game.save_game")
     @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
-    def test_persistent_manual_profile_override(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_regime):
+    def test_persistent_manual_profile_override(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_regime, mock_market_open):
         # 1. First run: Explicit manual override via CLI should lock into MANUAL mode
         state = {
             "balance": 5000.0,
@@ -360,6 +364,7 @@ class TestPersistentProfileModes(unittest.TestCase):
         self.assertEqual(state["profile"], "DEFENSIVE")
         self.assertEqual(state["profile_mode"], "ADAPTIVE")
 
+    @mock.patch("ai_portfolio_game.is_market_open", return_value=(True, "Market is open"))
     @mock.patch("ai_portfolio_game._has_strong_setups_today", return_value=True)
     @mock.patch("ai_portfolio_game.get_market_regime", return_value="DEFENSIVE")
     @mock.patch("ai_portfolio_game.get_live_prices")
@@ -367,7 +372,7 @@ class TestPersistentProfileModes(unittest.TestCase):
     @mock.patch("ai_portfolio_game.save_game")
     @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
     def test_adaptive_upgrade_cash_gate(self, mock_load_wb, mock_save_game, mock_load_game,
-                                        mock_get_prices, mock_regime, mock_strong_setups):
+                                        mock_get_prices, mock_regime, mock_strong_setups, mock_market_open):
         wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Research"
         ws.append(["Rank"] + [None] * 25)
         mock_load_wb.return_value = wb
@@ -488,8 +493,9 @@ class TestPersistentProfileModes(unittest.TestCase):
 
     def test_circuit_breaker_stop_tightening(self):
         """Verify that the breaker successfully freezes buying and tightens stops on satellites."""
-        import circuit_breaker
         from unittest import mock
+
+        import circuit_breaker
         
         state = {
             "balance": 1000.0,
@@ -535,8 +541,9 @@ class TestPersistentProfileModes(unittest.TestCase):
 
     def test_circuit_breaker_vxx_volatility_capitulation(self):
         """Verify that a VXX surge > 15.0% successfully triggers the Volatility Capitulation breaker."""
-        import circuit_breaker
         from unittest import mock
+
+        import circuit_breaker
         
         # Mock yesterday's VXX close to 100.0, and today's VXX price to 116.0 (up 16.0%!)
         mock_series = [{"close": 100.0}] * 15
@@ -550,8 +557,9 @@ class TestPersistentProfileModes(unittest.TestCase):
 
     def test_circuit_breaker_idiosyncratic_gap_guard(self):
         """Verify that a single-stock gap-down > 8% is successfully detected during opening window."""
-        import circuit_breaker
         from unittest import mock
+
+        import circuit_breaker
         
         # Test Case 1: Inside opening window, -10% gap-down -> Must return True!
         with mock.patch("circuit_breaker.is_market_opening_window", return_value=True):
@@ -569,8 +577,9 @@ class TestPersistentProfileModes(unittest.TestCase):
 
     def test_circuit_breaker_elastic_memory(self):
         """Verify that the breaker successfully caches original stops and restores them on stabilization."""
-        import circuit_breaker
         from unittest import mock
+
+        import circuit_breaker
         
         state = {
             "balance": 1000.0,
@@ -671,7 +680,10 @@ class TestRequalifyPromptBuilder(unittest.TestCase):
         self.assertIn("Invalid symbol", result["error"])
         self.assertEqual(result["factors"], {})
 
-    def test_valid_symbol_format_passes_validation(self):
+    @mock.patch("data_api.etrade.get_tokens", return_value=None)
+    @mock.patch("data_api._google_prices", return_value={"AAPL": 150.0})
+    @mock.patch("data_api._pg.get_symbol_data", return_value=None)
+    def test_valid_symbol_format_passes_validation(self, mock_get_symbol_data, mock_google_prices, mock_get_tokens):
         import data_api
         # Should not be rejected at the validation gate (may fail later on network/session)
         result = data_api.requalify_symbol("AAPL")
@@ -708,16 +720,18 @@ class TestDigitSumScoring(unittest.TestCase):
         self.assertEqual(_price_digit_sum_full(9.99),   9)   # 9+9+9=27->9
 
     def test_digit_sum_score_no_signal_returns_zero(self):
-        from aether.scoring import digit_sum_score
         import unittest.mock as _mock
+
+        from aether.scoring import digit_sum_score
         # Empty index -> score must be 0.0
         with _mock.patch("aether.scoring._digit_index", {}), \
              _mock.patch("aether.scoring._digit_full_index", {}):
             self.assertEqual(digit_sum_score("AAPL", close_price=247.35), 0.0)
 
     def test_digit_sum_score_fires_from_full_cents_index(self):
-        from aether.scoring import digit_sum_score, _price_digit_sum_full
         import unittest.mock as _mock
+
+        from aether.scoring import _price_digit_sum_full, digit_sum_score
         dg_full = _price_digit_sum_full(247.35)
         fake_full = {("AAPL", "CLOSE", dg_full): 3.0}
         with _mock.patch("aether.scoring._digit_index", {}), \
@@ -727,8 +741,9 @@ class TestDigitSumScoring(unittest.TestCase):
         self.assertLessEqual(score, 1.0)
 
     def test_digit_sum_score_fires_from_integer_index(self):
-        from aether.scoring import digit_sum_score, _price_digit_sum
         import unittest.mock as _mock
+
+        from aether.scoring import _price_digit_sum, digit_sum_score
         dg_int = _price_digit_sum(247.35)   # int(247.35)=247 -> 2+4+7=13->4
         fake_int = {("NVDA", "CLOSE", dg_int): -2.4}  # negative z -> down signal
         with _mock.patch("aether.scoring._digit_index", fake_int), \
@@ -738,15 +753,18 @@ class TestDigitSumScoring(unittest.TestCase):
         self.assertGreaterEqual(score, -1.0)
 
     def test_digit_sum_open_score_zero_without_signal(self):
-        from aether.scoring import digit_sum_open_score
         import unittest.mock as _mock
+
+        from aether.scoring import digit_sum_open_score
         with _mock.patch("aether.scoring._digit_index", {}), \
              _mock.patch("aether.scoring._digit_full_index", {}):
             self.assertEqual(digit_sum_open_score("SPY", 500.0), 0.0)
 
     def test_build_digit_index_quality_filter(self):
+        import json as _json
+        import tempfile
+
         from aether.scoring import _build_digit_index
-        import tempfile, json as _json
         rows = [
             {"symbol":"AAA","type":"OPEN","digit":5,"z":2.5,"up_pct":0.6,"base":0.5,"n":100,
              "temporal":"consistent","has_flip":False,"is_sparse":False},  # PASS

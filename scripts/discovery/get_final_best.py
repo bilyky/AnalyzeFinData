@@ -1,12 +1,14 @@
 import datetime
+import json
 import os
 import sys
-import json
+
 
 # Add current dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
+
 
 def get_best():
     date = datetime.date(2026, 5, 26)
@@ -46,29 +48,25 @@ def get_best():
                 'br': f['buying_ratio'],
                 'setup': (1 if f['setup_ok'] else 0) if f['setup_ok'] is not None else None
             })
-        except Exception as e:
+        except Exception:
             # print(f"Error for {symbol}: {e}")
             continue
 
-    print(f"Total results with data: {len(results)}")
     
     # Filter for Bullish (4 or 5) and Setup OK (1)
     bullish = [r for r in results if r['pgr_val'] >= 4 and r['setup'] == 1]
     if not bullish:
-        print("No bullish symbols passed setup filter. Showing all bullish.")
         bullish = [r for r in results if r['pgr_val'] >= 4]
 
     # Sort by short10
     best_short = sorted(bullish, key=lambda x: x['short10'], reverse=True)[:5]
-    print("\nBest 5 Bullish by Short10 (Entry Score):")
-    for i, r in enumerate(best_short, 1):
-        print(f"{i}. {r['symbol']} (Short10: {r['short10']}, PGR: {r['pgr']}, BR: {r['br']})")
+    for _i, _r in enumerate(best_short, 1):
+        pass
 
     # Sort by long60
     best_long = sorted(bullish, key=lambda x: x['long60'], reverse=True)[:5]
-    print("\nBest 5 Bullish by Long60 (Position Score):")
-    for i, r in enumerate(best_long, 1):
-        print(f"{i}. {r['symbol']} (Long60: {r['long60']}, PGR: {r['pgr']}, BR: {r['br']})")
+    for _i, _r in enumerate(best_long, 1):
+        pass
 
 if __name__ == "__main__":
     get_best()

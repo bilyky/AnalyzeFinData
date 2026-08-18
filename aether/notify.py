@@ -1,11 +1,13 @@
+import datetime
 import os
 import smtplib
-import datetime
 import sys
-from pathlib import Path
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from pathlib import Path
+
 from aether.config import CFG
+
 
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
