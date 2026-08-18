@@ -89,6 +89,13 @@ def _find_peaks_troughs(closes: np.ndarray, n: int = 3):
 
 # ── Candlestick score ─────────────────────────────────────────────────────────
 
+# Per-pattern *magnitude* weights — how strongly each pattern's fire moves the raw
+# bull/bear tally. These are hand-set reliability priors (NOT per-pattern backtested)
+# and remain PROVISIONAL pending per-pattern calibration; only the aggregate
+# candlestick factor weight is backtested (3.49% spread) and consumed CONTRARIAN
+# (negative) in scoring.short_score/long_score — so a larger fire on a "strong"
+# bullish pattern lowers the buy score. The reliability labels below describe the
+# pattern's classical strength, not a directional/bullish contribution.
 CANDLESTICK_WEIGHTS = {
     "engulfing":       1.50, # High reliability
     "harami":          0.75, # Moderate
@@ -156,6 +163,10 @@ def candlestick_score(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> float
     _check(sig.double_trouble_signal(arr_atr.copy(), 0, 1, 2, 3, 5, 6, 7), 6, 7, "double_trouble")
 
     raw = bull - bear
+    # Normalize to [-2, +2]. The /5.0 saturation point (raw >= 5 -> full scale) is a
+    # provisional hand-set constant, NOT backtest-derived — it caps a few concurrent
+    # fires at the rail so no single bar dominates. Calibrate alongside the per-pattern
+    # CANDLESTICK_WEIGHTS when the per-pattern backtest lands.
     score = max(-2.0, min(2.0, raw / 5.0 * 2.0))
     return round(score, 2)
 
@@ -358,7 +369,7 @@ RBR_RANGE_MIN     = 0.50   # reversal close must sit in the upper half of its ra
 RBR_WARMUP        = RBR_VOL_WIN + RBR_LOOKBACK + 2   # 32 bars
 
 
-def rbr_leg1(o, h, l, c, i):
+def rbr_leg1(o, h, low, c, i):
     """Leg-1 overreaction-drawdown geometry at bar ``i``, using only bars <= i.
 
     Returns a dict(h_idx, pre_high, t_idx, trough_low, drop_pct, speed, had_gap), or
@@ -373,8 +384,8 @@ def rbr_leg1(o, h, l, c, i):
     pre_high = c[h_idx]
     if pre_high <= 0 or h_idx == i:
         return None
-    t_idx = min(range(h_idx, i + 1), key=lambda j: l[j])
-    trough_low = l[t_idx]
+    t_idx = min(range(h_idx, i + 1), key=lambda j: low[j])
+    trough_low = low[t_idx]
     drop_pct = (trough_low - pre_high) / pre_high
     speed = t_idx - h_idx
     if drop_pct > RBR_DEPTH_MIN or speed < 1 or speed > RBR_SPEED_MAX:
@@ -408,21 +419,21 @@ def rubber_band_reversal_score(ohlcv_ts: dict, date_str: str):
         return 0.0, []
     # volume is intentionally unused: the validated pocket (vol>=0.0 in the sweep)
     # carried no marginal edge, so the detector stays price-only.
-    o, h, l, c = (arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3])
+    o, h, low, c = (arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3])
     i = len(arr) - 1
 
     # ── Leg 1: overreaction drawdown (shared geometry) ──
-    leg1 = rbr_leg1(o, h, l, c, i)
+    leg1 = rbr_leg1(o, h, low, c, i)
     if leg1 is None or leg1["t_idx"] >= i:   # need the trough already in — today is the recovery bar
         return 0.0, []
     trough_low, drop_pct, speed, had_gap = (
         leg1["trough_low"], leg1["drop_pct"], leg1["speed"], leg1["had_gap"])
 
     # ── Leg 2: recovery confirmation on today's bar ──
-    if not (l[i] > trough_low and c[i] > c[i - 1]):   # higher low + green close
+    if not (low[i] > trough_low and c[i] > c[i - 1]):   # higher low + green close
         return 0.0, []
-    rng = h[i] - l[i]
-    range_pos = (c[i] - l[i]) / rng if rng > 0 else 0.0
+    rng = h[i] - low[i]
+    range_pos = (c[i] - low[i]) / rng if rng > 0 else 0.0
     if range_pos < RBR_RANGE_MIN:                     # weak close = not a real reversal
         return 0.0, []
 
