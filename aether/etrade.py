@@ -157,6 +157,25 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
     return renewer.ensure(current_token=tokens)
 
 
+def keep_alive(env="production") -> dict | None:
+    """Ban-safe session keeper for automated/scheduled contexts (watchdog, cron).
+
+    Renew-ONLY: never opens a browser, never calls _login_headless. It refreshes a
+    still-valid same-day token via the OAuth renew endpoint (pure HTTP) and returns it.
+    If no valid same-day token exists (e.g. after the nightly midnight-ET expiry or a
+    weekend gap), it returns None WITHOUT making any brokerage call — the caller must
+    alert a human to re-auth manually (scripts/diagnostics/test_etrade.py). This is the
+    correct anti-ban contract: a machine may keep a live session warm, but only a human
+    at a browser may create a new one.
+    """
+    tokens = _load_tokens(env)          # same-day tokens only; None once expired
+    if not tokens:
+        return None
+    if _probe_token_auth(tokens, env) is False:   # broker explicitly rejected (401/403)
+        return None
+    return renew_tokens(tokens, env)
+
+
 def revoke_tokens(tokens, env="sandbox") -> bool:
     """Revoke tokens at E*TRADE (e.g. on logout). Returns True on success."""
     ck, cs, _, _ = _load_config(env)
@@ -176,6 +195,106 @@ def revoke_tokens(tokens, env="sandbox") -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Automated re-auth circuit breaker (anti-ban)
+# ---------------------------------------------------------------------------
+# Replaying a stale saved browser session from an automation-flagged Chrome trips
+# Akamai Bot Manager, which serves a silent spinner-hang instead of the login page.
+# Retrying that in a tight loop is exactly what drives E*TRADE to IP-ban us (observed
+# 2026-08-18: 4 headless re-auths in 8 min). This breaker is the SINGLE throttle for
+# the automated browser path — it escalates the cooldown on every consecutive failure
+# and only clears on a SUCCESSFUL login (automated or human). It never blocks the
+# human-initiated interactive path; recovery must always be possible.
+# Production keeps the canonical filename (back-compat + the file existing test/tooling
+# patches point at); every OTHER env gets its own file so a sandbox or test re-auth
+# failure can NEVER engage the PRODUCTION breaker — testing stays separated from prod.
+_REAUTH_STATE_PATH        = os.path.join(_DIR, "Data", "etrade_reauth_state.json")
+_REAUTH_BACKOFF_BASE_MIN  = 15    # first failure → 15 min; doubles each consecutive failure
+_REAUTH_BACKOFF_CAP_MIN   = 360   # 6 h ceiling for the first several failures
+# Deep-failure ceiling: a sustained streak (>= this many consecutive failures) means the
+# saved session is almost certainly dead / the IP is being watched, so the exponential is
+# allowed to climb to a hard 24 h lockout instead of flattening at 6 h. Past this, only a
+# human re-auth (which resets the breaker) should bring the automated path back.
+_REAUTH_DEEP_FAIL_THRESHOLD = 5
+_REAUTH_DEEP_CAP_MIN        = 1440  # 24 h
+
+
+def _reauth_state_path(env: str = "production") -> str:
+    """Per-env circuit-breaker state file. Production uses the canonical path; any other
+    env (sandbox/test) is isolated to its own file so its failures cannot cool down the
+    production automated-reauth gate. The non-production name is derived from the canonical
+    path's directory, so redirecting _REAUTH_STATE_PATH (e.g. to a tempfile in tests)
+    relocates every env's state file together."""
+    if env == "production":
+        return _REAUTH_STATE_PATH
+    base, name = os.path.split(_REAUTH_STATE_PATH)
+    root, ext  = os.path.splitext(name)
+    return os.path.join(base, f"{root}_{env}{ext}")
+
+
+def _load_reauth_state(env: str = "production") -> dict:
+    """Circuit-breaker state: {consecutive_failures, last_attempt, cooldown_until}.
+
+    A missing/corrupt file reads as a fully-open gate (no active cooldown).
+    """
+    try:
+        with open(_reauth_state_path(env)) as f:
+            s = json.load(f)
+        return {
+            "consecutive_failures": int(s.get("consecutive_failures", 0)),
+            "last_attempt":         float(s.get("last_attempt", 0.0)),
+            "cooldown_until":       float(s.get("cooldown_until", 0.0)),
+        }
+    except (OSError, ValueError, TypeError):
+        return {"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}
+
+
+def _save_reauth_state(state: dict, env: str = "production") -> None:
+    path = _reauth_state_path(env)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(state, f, indent=2)
+    except OSError:
+        pass
+
+
+def _reauth_cooldown_remaining(env: str = "production") -> float:
+    """Seconds left on the automated-reauth cooldown. 0.0 means the gate is open."""
+    return max(0.0, _load_reauth_state(env)["cooldown_until"] - time.time())
+
+
+def reset_reauth_circuit_breaker(env: str = "production") -> None:
+    """Clear the breaker. Called automatically on any SUCCESSFUL login (including the
+    human `scripts/diagnostics/test_etrade.py` path), so a good re-auth restores normal
+    automated operation. Safe to call by hand to force a retry."""
+    _save_reauth_state({"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}, env)
+
+
+def _record_reauth_attempt(env: str = "production") -> None:
+    state = _load_reauth_state(env)
+    state["last_attempt"] = time.time()
+    _save_reauth_state(state, env)
+
+
+def _record_reauth_result(success: bool, env: str = "production") -> None:
+    if success:
+        reset_reauth_circuit_breaker(env)
+        return
+    state    = _load_reauth_state(env)
+    failures = state["consecutive_failures"] + 1
+    cap      = _REAUTH_DEEP_CAP_MIN if failures >= _REAUTH_DEEP_FAIL_THRESHOLD else _REAUTH_BACKOFF_CAP_MIN
+    backoff  = min(_REAUTH_BACKOFF_BASE_MIN * (2 ** (failures - 1)), cap)
+    state["consecutive_failures"] = failures
+    state["cooldown_until"]       = time.time() + backoff * 60
+    _save_reauth_state(state, env)
+    _log.error(
+        f"E*TRADE: automated browser re-auth FAILED ({failures} consecutive); circuit "
+        f"breaker engaged for {backoff:.0f} min. It clears on the next SUCCESSFUL login — "
+        f"run: python scripts/diagnostics/test_etrade.py {env}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # OAuth — automated via Playwright
 # ---------------------------------------------------------------------------
 
@@ -183,7 +302,22 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str) ->
     """Fully automatic Playwright login using saved browser state (trusted-device cookies).
     No human interaction required — MFA is skipped by the saved cookies.
     Returns token dict on success, None on failure.
+
+    This is the SINGLE choke point for the automated browser path: the anti-ban circuit
+    breaker is enforced here, so no retry loop or second caller can bypass it. The human
+    interactive login in get_tokens() does NOT pass through here and is never blocked.
     """
+    remaining = _reauth_cooldown_remaining(env)
+    if remaining > 0:
+        failures = _load_reauth_state(env)["consecutive_failures"]
+        _log.error(
+            f"E*TRADE: automated re-auth suppressed by circuit breaker "
+            f"({remaining / 60:.0f} min remaining, {failures} consecutive failures). "
+            f"Manual re-auth: python scripts/diagnostics/test_etrade.py {env}"
+        )
+        return None
+
+    _record_reauth_attempt(env)
     try:
         oauth = pyetrade.ETradeOAuth(ck, cs)
         auth_url = oauth.get_request_token()
@@ -194,8 +328,13 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str) ->
         if verifier_code:
             tokens = oauth.get_access_token(verifier_code)
             _save_tokens(tokens, env)
+            _record_reauth_result(True, env)
             return tokens
+        # Reached the browser but got no verifier — a real failed attempt (e.g. the
+        # Akamai spinner-hang). Escalate the cooldown so we back off instead of hammering.
+        _record_reauth_result(False, env)
     except Exception as e:
+        _record_reauth_result(False, env)
         _log.debug(f"_login_headless: {e}")
     return None
 
@@ -538,32 +677,6 @@ def _get_failure_state():
     return {"consecutive_failures": 0, "last_failure_time": 0}
 
 
-def _reset_failure_count():
-    fail_path = _FAIL_STATE_PATH
-    try:
-        state = _get_failure_state()
-        if state["consecutive_failures"] > 0:
-            state["consecutive_failures"] = 0
-            os.makedirs(os.path.dirname(fail_path), exist_ok=True)
-            with open(fail_path, "w") as f:
-                json.dump(state, f)
-    except Exception:
-        pass
-
-
-def _increment_failure_count():
-    fail_path = _FAIL_STATE_PATH
-    state = _get_failure_state()
-    state["consecutive_failures"] += 1
-    state["last_failure_time"] = time.time()
-    try:
-        os.makedirs(os.path.dirname(fail_path), exist_ok=True)
-        with open(fail_path, "w") as f:
-            json.dump(state, f)
-    except Exception:
-        pass
-
-
 def check_etrade_cookie_freshness():
     """Verify that our saved Playwright browser state (cookies) is fresh.
     If it is older than 25 days, send a proactive email warning to re-auth.
@@ -667,73 +780,44 @@ def get_tokens(env="sandbox", allow_browser=False):
     # Uses the same cross-process file lock as renew_tokens() to guarantee only ONE
     # process opens a browser even when multiple tasks fire simultaneously.
     if os.path.exists(_BROWSER_STATE_PATH):
-        _log.info("Attempting automatic re-authentication via saved browser state...")
-
-        def _do_headless_login_with_cooldown():
-            # ── Headless Re-auth Cooldown Circuit Breaker (Anti-Ban Guard) ──
-            # Run the cooldown check and touch INSIDE the cross-process lock to prevent race conditions
-            cooldown_path = os.path.join(_DIR, "Data", "etrade_cooldown.lock")
-            if os.path.exists(cooldown_path):
-                try:
-                    mtime = os.path.getmtime(cooldown_path)
-                    cooldown_age_min = (time.time() - mtime) / 60
-                    
-                    # Calculate dynamic cooldown duration based on consecutive failure count
-                    fail_state = _get_failure_state()
-                    fails = fail_state.get("consecutive_failures", 0)
-                    if fails >= 3:
-                        cooldown_duration_min = 1440.0  # 24 hours backoff (1 day)
-                        msg_str = f"Critical consecutive failure lockout (24h backoff active, {fails} failures)."
-                    elif fails >= 2:
-                        cooldown_duration_min = 120.0   # 2 hours backoff
-                        msg_str = f"Moderate failure backoff (2h backoff active, {fails} failures)."
-                    else:
-                        cooldown_duration_min = 15.0    # 15 minutes default
-                        msg_str = "Headless re-authentication is on cooldown."
-
-                    if cooldown_age_min < cooldown_duration_min:
-                        remaining_min = cooldown_duration_min - cooldown_age_min
-                        _log.warning(f"❌ [E*TRADE ANTI-BAN BLOCK] {msg_str} ({remaining_min:.1f}m/{cooldown_duration_min:.0f}m remaining). Aborting browser launch to prevent brokerage bans!")
-                        raise RuntimeError("E*TRADE: Headless auto-login blocked by Anti-Ban Cooldown Circuit Breaker.")
-                except Exception as ce:
-                    if "Anti-Ban" in str(ce):
-                        raise ce
-
-            # Touch/create the cooldown lock file immediately before launching the browser!
+        # Anti-ban circuit breaker (single source of truth = etrade_reauth_state.json,
+        # enforced inside _login_headless). Fast-fail here for a clean log + to skip the
+        # renewer setup while the breaker is cooling down; _login_headless self-gates too,
+        # so this pre-check can never be the only line of defence.
+        remaining = _reauth_cooldown_remaining(env)
+        if remaining > 0:
+            failures = _load_reauth_state(env)["consecutive_failures"]
+            _log.error(
+                f"E*TRADE: skipping automated re-auth — circuit breaker active "
+                f"({remaining / 60:.0f} min remaining, {failures} consecutive failures). "
+                f"Manual re-auth: python scripts/diagnostics/test_etrade.py {env}"
+            )
+        else:
+            _log.info("Attempting automatic re-authentication via saved browser state...")
+            lock_path = os.path.join(_DIR, "Data", "etrade_reauth.lock")
+            reauth_renewer = _TokenRenewer(
+                lock_path,
+                renew_fn=lambda: _login_headless(ck, cs, username, password, env),
+                load_fn=lambda: _load_tokens(env),   # date-checked: only returns today's tokens
+                lock_ttl=120,   # browser login can take up to 2 min
+                wait_timeout=150,
+            )
             try:
-                os.makedirs(os.path.dirname(cooldown_path), exist_ok=True)
-                with open(cooldown_path, "w") as cf:
-                    cf.write(str(time.time()))
-            except Exception:
-                pass
-
-            return _login_headless(ck, cs, username, password, env)
-
-        lock_path = os.path.join(_DIR, "Data", "etrade_reauth.lock")
-        reauth_renewer = _TokenRenewer(
-            lock_path,
-            renew_fn=_do_headless_login_with_cooldown,
-            load_fn=lambda: _load_tokens(env),   # date-checked: only returns today's tokens
-            lock_ttl=120,   # browser login can take up to 2 min
-            wait_timeout=150,
-        )
-        try:
-            tokens = reauth_renewer.ensure(current_token=cached)
-            if tokens and tokens.get("issued_date_et") == _et_today():
-                _log.info("E*TRADE: automatic re-authentication succeeded.")
-                _reset_failure_count()
-                return tokens
-            _log.warning("E*TRADE: automatic re-authentication failed (browser state may be stale).")
-            _increment_failure_count()
-        except Exception as e:
-            if "Anti-Ban" in str(e) or "cooldown" in str(e).lower():
-                raise e
-            _log.warning(f"E*TRADE: headless Playwright re-auth error: {e}")
-            _increment_failure_count()
+                tokens = reauth_renewer.ensure(current_token=cached)
+                if tokens and tokens.get("issued_date_et") == _et_today():
+                    _log.info("E*TRADE: automatic re-authentication succeeded.")
+                    return tokens
+                _log.warning("E*TRADE: automatic re-authentication failed (browser state may be stale).")
+            except Exception as e:
+                _log.warning(f"E*TRADE: headless Playwright re-auth error: {e}")
 
     if not allow_browser:
-        # FAIL LOUD AND SCREAM: Throw a clear, un-swallowed RuntimeError to trigger the AETHER Healer!
-        raise RuntimeError("🚨 [CRITICAL E*TRADE FAILURE] All automatic renewal and headless re-authentication methods failed! Your live E*TRADE feed is unauthorized/offline.")
+        # Documented contract (-> dict | None): the headless/automated path fails soft so
+        # guarded callers can fall back (e.g. Google Finance pricing). Callers that use the
+        # return value unconditionally MUST guard it themselves — not all of them do.
+        _log.warning("E*TRADE: all automatic renewal and headless re-auth methods failed; "
+                     "returning None. Run scripts/diagnostics/test_etrade.py once to re-authenticate.")
+        return None
 
     if not sys.stdin.isatty():
         raise RuntimeError("E*TRADE: cannot re-authenticate in a headless environment.")
@@ -752,6 +836,9 @@ def get_tokens(env="sandbox", allow_browser=False):
 
     tokens = oauth.get_access_token(verifier_code)
     _save_tokens(tokens, env)
+    # A successful human re-auth clears the automated-reauth circuit breaker, so scheduled
+    # jobs resume normal operation without waiting out any residual cooldown.
+    reset_reauth_circuit_breaker(env)
     print("Tokens saved to cache.")
     return tokens
 
@@ -900,7 +987,7 @@ def is_market_open_now(tokens, env="production") -> bool | None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    tokens = get_tokens()  # raises if tokens expired; use scripts/diagnostics/test_etrade.py to re-auth
+    tokens = get_tokens()  # -> dict | None (fails soft); use scripts/diagnostics/test_etrade.py to re-auth
 
     print("\n--- Quote: AAPL ---")
     market = get_market(tokens)
