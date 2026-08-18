@@ -199,7 +199,9 @@ def chart_pattern_score(ohlcv_ts: dict, date_str: str, lookback: int = 250):
         c80 = closes[-80:]
         peaks, troughs = _find_peaks_troughs(c80)
         if len(peaks) >= 3:
-            p3 = peaks[-1]; p2 = peaks[-2]; p1 = peaks[-3]
+            p3 = peaks[-1]
+            p2 = peaks[-2]
+            p1 = peaks[-3]
             if (p2[1] > p1[1] and p2[1] > p3[1]
                     and abs(p1[1] - p3[1]) / p2[1] < 0.05):
                 # neckline: troughs between shoulders
@@ -216,7 +218,9 @@ def chart_pattern_score(ohlcv_ts: dict, date_str: str, lookback: int = 250):
         c80 = closes[-80:]
         peaks, troughs = _find_peaks_troughs(c80)
         if len(troughs) >= 3:
-            t3 = troughs[-1]; t2 = troughs[-2]; t1 = troughs[-3]
+            t3 = troughs[-1]
+            t2 = troughs[-2]
+            t1 = troughs[-3]
             if (t2[1] < t1[1] and t2[1] < t3[1]
                     and abs(t1[1] - t3[1]) / max(t2[1], 1e-6) < 0.05):
                 p_mid = [p for p in peaks if t1[0] < p[0] < t3[0]]
@@ -290,7 +294,8 @@ def chart_pattern_score(ohlcv_ts: dict, date_str: str, lookback: int = 250):
     if len(closes) >= 40:
         peaks, _ = _find_peaks_troughs(closes)
         if len(peaks) >= 2:
-            p2 = peaks[-1]; p1 = peaks[-2]
+            p2 = peaks[-1]
+            p1 = peaks[-2]
             gap = p2[0] - p1[0]
             if gap >= 15 and abs(p1[1] - p2[1]) / max(p1[1], 1e-6) < 0.03:
                 valley = float(np.min(closes[p1[0]:p2[0] + 1]))
@@ -302,7 +307,8 @@ def chart_pattern_score(ohlcv_ts: dict, date_str: str, lookback: int = 250):
     if len(closes) >= 40:
         _, troughs = _find_peaks_troughs(closes)
         if len(troughs) >= 2:
-            t2 = troughs[-1]; t1 = troughs[-2]
+            t2 = troughs[-1]
+            t1 = troughs[-2]
             gap = t2[0] - t1[0]
             if gap >= 15 and abs(t1[1] - t2[1]) / max(t1[1], 1e-6) < 0.03:
                 peak = float(np.max(closes[t1[0]:t2[0] + 1]))
