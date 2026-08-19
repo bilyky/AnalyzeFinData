@@ -35,7 +35,17 @@ _FAIL_STATE_PATH = os.path.join(_DATA_DIR, "etrade_fail_state.json")
 from aether.token_renewer import TokenRenewer as _TokenRenewer
 
 
-_ET = ZoneInfo("America/New_York")
+try:
+    _ET = ZoneInfo("America/New_York")
+except Exception:
+    # Safe fallback if system lacks tzdata (e.g. stripped-down Docker or minimal OS)
+    try:
+        import pytz
+        _ET = pytz.timezone("America/New_York")
+    except Exception:
+        # Extreme fallback to fixed EST offset (UTC-5)
+        import datetime
+        _ET = datetime.timezone(datetime.timedelta(hours=-5))
 _RENEW_URL = {
     "sandbox":    "https://apisb.etrade.com/oauth/renew_access_token",
     "production": "https://api.etrade.com/oauth/renew_access_token",
