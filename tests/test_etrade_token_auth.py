@@ -81,11 +81,15 @@ class TestGetTokensDeletionScoping(unittest.TestCase):
             self.addCleanup(p.stop)
 
     def test_explicit_rejection_deletes_cache(self):
+        # An explicit 401 invalidates the cache, and with every automated path exhausted
+        # get_tokens fails SOFT to None (documented -> dict | None contract; ETRADE_AUTH.md
+        # rule 6), never raising — guarded callers fall back on the None.
         with mock.patch.object(etrade, "_probe_token_auth", return_value=False), \
              mock.patch.object(etrade, "_load_tokens_any_date", return_value=None), \
              mock.patch.object(etrade.os.path, "exists", return_value=False), \
              mock.patch.object(etrade.os, "remove") as rm:
             result = etrade.get_tokens(env="production", allow_browser=False)
+        self.assertIsNone(result)
         rm.assert_called_once_with(etrade._TOKEN_PATH)
         self.assertIsNone(result)  # all fallbacks disabled -> None
 
