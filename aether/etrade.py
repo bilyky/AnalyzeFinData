@@ -20,8 +20,17 @@ from aether.config import CFG
 _log = logging.getLogger("aether.etrade")
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_TOKEN_PATH = os.path.join(_DIR, "Data", "etrade_tokens.json")
-_FAIL_STATE_PATH = os.path.join(_DIR, "Data", "etrade_fail_state.json")
+
+# Canonical directory for E*TRADE auth-state files (token, browser state, breaker, locks).
+# Defaults to <this checkout>/Data — unchanged for a normal prod-from-prod run and for the
+# per-test temp dirs. But the path is CHECKOUT-RELATIVE: a human re-auth launched from a git
+# worktree would otherwise write the fresh token into that worktree's dead Data/, where prod's
+# scheduled tasks never look (the 2026-08-19 "agent couldn't locate the token file" incident).
+# Set AETHER_DATA_DIR to an absolute path to pin every auth-state file to one shared location
+# regardless of which checkout runs the code, so re-auth from anywhere lands where prod reads.
+_DATA_DIR = os.environ.get("AETHER_DATA_DIR") or os.path.join(_DIR, "Data")
+_TOKEN_PATH = os.path.join(_DATA_DIR, "etrade_tokens.json")
+_FAIL_STATE_PATH = os.path.join(_DATA_DIR, "etrade_fail_state.json")
 
 from aether.token_renewer import TokenRenewer as _TokenRenewer
 
@@ -43,7 +52,7 @@ _ACCTLIST_URL = {
     "sandbox":    "https://apisb.etrade.com/v1/accounts/list.json",
     "production": "https://api.etrade.com/v1/accounts/list.json",
 }
-_BROWSER_STATE_PATH = os.path.join(_DIR, "Data", "etrade_browser_state.json")
+_BROWSER_STATE_PATH = os.path.join(_DATA_DIR, "etrade_browser_state.json")
 
 # Auth-state files are never hard-deleted in the hot path: a fresh, still-valid token
 # can be destroyed by one transient/edge 401, so on rejection/revoke we route through
@@ -92,6 +101,10 @@ def _save_tokens(tokens, env):
     os.makedirs(os.path.dirname(_TOKEN_PATH), exist_ok=True)
     with open(_TOKEN_PATH, "w") as f:
         json.dump(tokens, f, indent=2)
+    # Log the ABSOLUTE destination: the token path is checkout-relative, so a re-auth run
+    # from the wrong worktree silently saves where prod never reads. Making the target
+    # visible turns that class of mistake into something you can see in one glance.
+    _log.info(f"E*TRADE {env} token saved ({tokens['issued_date_et']}) -> {_TOKEN_PATH}")
 
 
 def _load_tokens(env):
@@ -170,7 +183,7 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
             _log.warning(f"Renew error: {e}")
         return None
 
-    lock_path = os.path.join(_DIR, "Data", "etrade_renew.lock")
+    lock_path = os.path.join(_DATA_DIR, "etrade_renew.lock")
     renewer = _TokenRenewer(lock_path, _do_renew, lambda: _load_tokens(env),
                             lock_ttl=30, wait_timeout=15)
     return renewer.ensure(current_token=tokens)
@@ -225,7 +238,7 @@ def revoke_tokens(tokens, env="sandbox") -> bool:
 # Production keeps the canonical filename (back-compat + the file existing test/tooling
 # patches point at); every OTHER env gets its own file so a sandbox or test re-auth
 # failure can NEVER engage the PRODUCTION breaker — testing stays separated from prod.
-_REAUTH_STATE_PATH        = os.path.join(_DIR, "Data", "etrade_reauth_state.json")
+_REAUTH_STATE_PATH        = os.path.join(_DATA_DIR, "etrade_reauth_state.json")
 _REAUTH_BACKOFF_BASE_MIN  = 15    # first failure → 15 min; doubles each consecutive failure
 _REAUTH_BACKOFF_CAP_MIN   = 360   # soft pre-deep cap; at BASE=15 it never actually binds — the
                                   # sequence steps 120→240→480, skipping past 360 (see below)
@@ -426,7 +439,7 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
 
         page.on("framenavigated", _on_framenavigated)
 
-        _SS = os.path.join(_DIR, "Data")
+        _SS = _DATA_DIR
 
         def _snap(name):
             try:
@@ -702,7 +715,7 @@ def check_etrade_cookie_freshness():
     """Verify that our saved Playwright browser state (cookies) is fresh.
     If it is older than 25 days, send a proactive email warning to re-auth.
     """
-    state_path = os.path.join(_DIR, "Data", "etrade_browser_state.json")
+    state_path = _BROWSER_STATE_PATH
     if os.path.exists(state_path):
         try:
             mtime = os.path.getmtime(state_path)
@@ -813,7 +826,7 @@ def get_tokens(env="sandbox", allow_browser=False):
             )
         else:
             _log.info("Attempting automatic re-authentication via saved browser state...")
-            lock_path = os.path.join(_DIR, "Data", "etrade_reauth.lock")
+            lock_path = os.path.join(_DATA_DIR, "etrade_reauth.lock")
             reauth_renewer = _TokenRenewer(
                 lock_path,
                 renew_fn=lambda: _login_headless(ck, cs, username, password, env),
