@@ -283,22 +283,52 @@ def reset_reauth_circuit_breaker(env: str = "production") -> None:
     _save_reauth_state({"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}, env)
 
 
+def _escalate_failure_state(state: dict) -> tuple[int, float]:
+    """Advance the breaker one failure step in-place: bump the consecutive-failure count and
+    set the exponential cooldown (lifting to the 24 h deep-fail ceiling past
+    _REAUTH_DEEP_FAIL_THRESHOLD). Returns (failures, backoff_minutes).
+
+    Shared by the pre-attempt ARM (_record_reauth_attempt) and the direct failure recorder
+    (_record_reauth_result) so the escalation schedule can never drift between them.
+    """
+    failures = state["consecutive_failures"] + 1
+    cap      = _REAUTH_DEEP_CAP_MIN if failures >= _REAUTH_DEEP_FAIL_THRESHOLD else _REAUTH_BACKOFF_CAP_MIN
+    backoff  = min(_REAUTH_BACKOFF_BASE_MIN * (2 ** (failures - 1)), cap)
+    now = time.time()
+    state["consecutive_failures"] = failures
+    state["last_attempt"]         = now
+    state["cooldown_until"]       = now + backoff * 60
+    return failures, backoff
+
+
 def _record_reauth_attempt(env: str = "production") -> None:
+    """PESSIMISTIC ARM of the anti-ban breaker: pre-count a STARTING browser re-auth as a
+    failure and engage the exponential cooldown UP FRONT, before the browser opens.
+
+    Why up front: the dominant real-world failure mode is a hang/crash/kill during the
+    browser step (the Akamai spinner never resolves, then the daemon restarts the process).
+    That path never returns to record a result — so recording the failure only *after* the
+    attempt left consecutive_failures pinned at 0 and the breaker never engaged, which is
+    exactly how the automated re-auth storm was able to relaunch a browser every few minutes.
+    Arming here means an attempt that never comes back still backs the next one off. A
+    confirmed success immediately retracts it (_record_reauth_result(True) -> reset).
+    """
     state = _load_reauth_state(env)
-    state["last_attempt"] = time.time()
+    failures, backoff = _escalate_failure_state(state)
     _save_reauth_state(state, env)
+    _log.warning(
+        f"E*TRADE: automated re-auth attempt #{failures} starting — breaker pre-armed for "
+        f"{backoff:.0f} min. A confirmed success clears it; a hang/crash/failure leaves it "
+        f"engaged (manual re-auth: python scripts/diagnostics/test_etrade.py {env})."
+    )
 
 
 def _record_reauth_result(success: bool, env: str = "production") -> None:
     if success:
         reset_reauth_circuit_breaker(env)
         return
-    state    = _load_reauth_state(env)
-    failures = state["consecutive_failures"] + 1
-    cap      = _REAUTH_DEEP_CAP_MIN if failures >= _REAUTH_DEEP_FAIL_THRESHOLD else _REAUTH_BACKOFF_CAP_MIN
-    backoff  = min(_REAUTH_BACKOFF_BASE_MIN * (2 ** (failures - 1)), cap)
-    state["consecutive_failures"] = failures
-    state["cooldown_until"]       = time.time() + backoff * 60
+    state = _load_reauth_state(env)
+    failures, backoff = _escalate_failure_state(state)
     _save_reauth_state(state, env)
     _log.error(
         f"E*TRADE: automated browser re-auth FAILED ({failures} consecutive); circuit "
@@ -330,6 +360,11 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str) ->
         )
         return None
 
+    # PESSIMISTIC ARM: count this attempt and engage the cooldown NOW, before the browser
+    # opens. The dominant failure mode (the Akamai spinner-hang, then a daemon restart) kills
+    # this process mid-browser and never returns here — so counting the failure only after the
+    # attempt left the breaker pinned at 0. Arming up front means an attempt that never comes
+    # back still backs the next one off; a confirmed success retracts it below.
     _record_reauth_attempt(env)
     try:
         oauth = pyetrade.ETradeOAuth(ck, cs)
@@ -341,13 +376,13 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str) ->
         if verifier_code:
             tokens = oauth.get_access_token(verifier_code)
             _save_tokens(tokens, env)
-            _record_reauth_result(True, env)
+            _record_reauth_result(True, env)   # success RETRACTS the pre-armed failure
             return tokens
-        # Reached the browser but got no verifier — a real failed attempt (e.g. the
-        # Akamai spinner-hang). Escalate the cooldown so we back off instead of hammering.
-        _record_reauth_result(False, env)
+        # No verifier (e.g. the Akamai spinner-hang): the pre-armed failure stands — nothing
+        # more to record. The breaker is already engaged; we back off instead of hammering.
     except Exception as e:
-        _record_reauth_result(False, env)
+        # Any error: the pre-armed failure stands. (A killed/hung process never even reaches
+        # here — that is exactly the case the up-front arm is designed to cover.)
         _log.debug(f"_login_headless: {e}")
     return None
 
@@ -743,13 +778,14 @@ def get_tokens(env="sandbox", allow_browser=False):
     2. Yesterday's cached tokens → silent renewal attempt.
     3. Silent renewal failed + saved browser state exists → headless Playwright re-auth
        using trusted-device cookies (no MFA, no human needed on most days).
-    4. Browser state missing/stale → raise RuntimeError if allow_browser=False,
+    4. Browser state missing/stale → return None if allow_browser=False,
        or interactive full login if allow_browser=True.
 
-    Note: when allow_browser=False and every silent/headless path is exhausted this
-    RAISES RuntimeError (it does not return None) so the failure is loud and triggers
-    the pipeline healer. Callers must guard with try/except and fall back accordingly
-    (e.g. get_live_prices → Google Finance, read_accounts → Excel).
+    Return contract (-> dict | None): when allow_browser=False and every silent/headless
+    path is exhausted this FAILS SOFT and returns None (it does NOT raise) so guarded
+    callers can fall back (e.g. get_live_prices → Google Finance, read_accounts → Excel).
+    Callers that use the returned tokens unconditionally MUST guard for None themselves.
+    Only the interactive allow_browser=True path can raise (headless-environment guard).
     """
     ck, cs, username, password = _load_config(env)
 
@@ -812,7 +848,12 @@ def get_tokens(env="sandbox", allow_browser=False):
                 lock_path,
                 renew_fn=lambda: _login_headless(ck, cs, username, password, env),
                 load_fn=lambda: _load_tokens(env),   # date-checked: only returns today's tokens
-                lock_ttl=120,   # browser login can take up to 2 min
+                # Must exceed the browser's worst case: _get_tokens_via_playwright polls the
+                # verifier for up to ~3 min (36 × 5 s) on top of login-nav time. A ttl below
+                # that let a *live but slow* winner's lock be reclaimed mid-browser, so a
+                # second process could launch an overlapping browser — the opposite of what a
+                # single-flight lock is for. 5 min covers the poll plus margin.
+                lock_ttl=300,
                 wait_timeout=150,
             )
             try:
@@ -1001,6 +1042,11 @@ def is_market_open_now(tokens, env="production") -> bool | None:
 
 if __name__ == "__main__":
     tokens = get_tokens()  # -> dict | None (fails soft); use scripts/diagnostics/test_etrade.py to re-auth
+    if tokens is None:
+        raise SystemExit(
+            "E*TRADE tokens unavailable (expired / re-auth needed). "
+            "Run: python scripts/diagnostics/test_etrade.py production"
+        )
 
     print("\n--- Quote: AAPL ---")
     market = get_market(tokens)
