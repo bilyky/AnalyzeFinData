@@ -181,8 +181,9 @@ class TestAutomatedBrowserGuards(_EtradeScenarioBase):
 
     def test_C3_spinner_hang_exception_engages_breaker_soft_none(self):
         # The Akamai soft-block manifests as the Playwright step *raising* (spinner-hang /
-        # timeout), not returning None. _login_headless must catch it, record a failure
-        # (escalating the cooldown), and return None — never propagate, never loop.
+        # timeout), not returning None. _login_headless arms the breaker before the browser,
+        # so the failure stands (cooldown engaged) even as it swallows the exception and
+        # returns None — never propagate, never loop.
         etrade.reset_reauth_circuit_breaker("production")   # gate open
         with mock.patch.object(etrade, "pyetrade") as m_pye, \
              mock.patch.object(etrade, "_get_tokens_via_playwright",
@@ -199,7 +200,7 @@ class TestAutomatedBrowserGuards(_EtradeScenarioBase):
         # get_tokens must skip the automated re-auth entirely and fail soft to None.
         self._write_token(_yesterday_et(), age_min=90.0)
         self._make_browser_state()
-        etrade._record_reauth_result(False, "production")   # engage cooldown
+        etrade._record_reauth_attempt("production")         # engage cooldown
         m_pw, m_lh = self._no_browser_guard()
         with mock.patch.object(etrade, "_probe_token_auth", return_value=None), \
              mock.patch.object(etrade, "renew_tokens", return_value=None):

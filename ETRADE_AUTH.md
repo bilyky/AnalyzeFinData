@@ -49,12 +49,11 @@ machine's only job is to keep a *human-created* session warm during the day.
 2. **Only a human at a TTY may create a new session.** The single sanctioned interactive path is
    `python scripts/diagnostics/test_etrade.py production` (calls `get_tokens(..., allow_browser=True)`).
 3. **The automated browser path is circuit-broken.** `_login_headless` is the *single choke point*
-   for any automated browser re-auth and it enforces an **escalating cooldown**: 15 → 30 → 60 → 120 →
-   240 min, capped at **360 min (6 h)** for the first several failures. Once the streak reaches **5
-   consecutive failures** the ceiling escalates to a hard **1440 min (24 h)** lockout — a sustained
-   streak means the saved session is dead or the IP is being watched, so only a human re-auth should
-   revive the automated path. The breaker clears **only on a successful login**. It cannot be bypassed
-   by a retry loop or a second process.
+   for any automated browser re-auth and it enforces an **escalating cooldown** that doubles on each
+   consecutive failure — 15 → 30 → 60 → 120 → 240 → 480 → 960 min — pinned at a hard **1440 min (24 h)**
+   ceiling from the 8th failure on. A sustained streak means the saved session is dead or the IP is
+   being watched, so only a human re-auth should revive the automated path. The breaker clears **only
+   on a successful login**. It cannot be bypassed by a retry loop or a second process.
 4. **Never hammer after a failure.** One failed automated re-auth = back off. Repeated failures = the
    IP is likely being watched; stop and re-auth manually from a **clean context**.
 5. **If you suspect a ban, stop all automated E*TRADE contact and let the IP cool** (hours). Then do a
@@ -71,8 +70,8 @@ machine's only job is to keep a *human-created* session warm during the day.
 | Piece | File | Role |
 |-------|------|------|
 | `keep_alive(env)` | `aether/etrade.py` | **Renew-only** session keeper for automation. Never opens a browser; zero brokerage calls on a dead token. |
-| Circuit breaker | `aether/etrade.py` (`_reauth_cooldown_remaining` / `_record_reauth_result` / `reset_reauth_circuit_breaker`) | Escalating anti-ban throttle, enforced inside `_login_headless`. State in `Data/etrade_reauth_state.json`. |
-| `_login_headless` | `aether/etrade.py` | The **only** automated browser path. Self-gates on the breaker; records success/failure. |
+| Circuit breaker | `aether/etrade.py` (`_reauth_cooldown_remaining` / `_record_reauth_attempt` / `reset_reauth_circuit_breaker`) | Escalating anti-ban throttle, enforced inside `_login_headless`. State in `Data/etrade_reauth_state.json`. |
+| `_login_headless` | `aether/etrade.py` | The **only** automated browser path. Self-gates on the breaker, then **pessimistically arms** it (`_record_reauth_attempt`) *before* opening the browser and retracts (`reset_reauth_circuit_breaker`) only on a confirmed success — so an attempt killed/hung mid-browser still leaves the breaker engaged instead of silently at 0. |
 | `get_tokens(env, allow_browser=False)` | `aether/etrade.py` | `allow_browser` gates the **human interactive** login only. Automated headless re-auth still runs (breaker-guarded) then fails soft to `None`. |
 | Watchdog keeper | `watchdog.py` §0 | Uses `keep_alive` + emails a human on a dead token. Never launches Playwright. |
 | Manual re-auth | `scripts/diagnostics/test_etrade.py` | The sanctioned human login. On success it **resets the breaker**. |

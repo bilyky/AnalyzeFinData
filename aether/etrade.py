@@ -222,11 +222,13 @@ def revoke_tokens(tokens, env="sandbox") -> bool:
 # failure can NEVER engage the PRODUCTION breaker — testing stays separated from prod.
 _REAUTH_STATE_PATH        = os.path.join(_DIR, "Data", "etrade_reauth_state.json")
 _REAUTH_BACKOFF_BASE_MIN  = 15    # first failure → 15 min; doubles each consecutive failure
-_REAUTH_BACKOFF_CAP_MIN   = 360   # 6 h ceiling for the first several failures
-# Deep-failure ceiling: a sustained streak (>= this many consecutive failures) means the
-# saved session is almost certainly dead / the IP is being watched, so the exponential is
-# allowed to climb to a hard 24 h lockout instead of flattening at 6 h. Past this, only a
-# human re-auth (which resets the breaker) should bring the automated path back.
+_REAUTH_BACKOFF_CAP_MIN   = 360   # soft pre-deep cap; at BASE=15 it never actually binds — the
+                                  # sequence steps 120→240→480, skipping past 360 (see below)
+# Deep-failure ceiling: a sustained streak (>= this many consecutive failures) means the saved
+# session is almost certainly dead / the IP is being watched, so from the threshold on the cap
+# lifts to a hard 24 h lockout. In practice the observable cooldown just keeps doubling:
+# 15→30→60→120→240→480→960, then pins at 1440 (24 h) from the 8th failure. Past a deep streak
+# only a human re-auth (which resets the breaker) should bring the automated path back.
 _REAUTH_DEEP_FAIL_THRESHOLD = 5
 _REAUTH_DEEP_CAP_MIN        = 1440  # 24 h
 
@@ -283,14 +285,18 @@ def reset_reauth_circuit_breaker(env: str = "production") -> None:
     _save_reauth_state({"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}, env)
 
 
-def _escalate_failure_state(state: dict) -> tuple[int, float]:
-    """Advance the breaker one failure step in-place: bump the consecutive-failure count and
-    set the exponential cooldown (lifting to the 24 h deep-fail ceiling past
-    _REAUTH_DEEP_FAIL_THRESHOLD). Returns (failures, backoff_minutes).
+def _record_reauth_attempt(env: str = "production") -> None:
+    """Pessimistically arm the anti-ban breaker as a browser re-auth STARTS: bump the
+    consecutive-failure count and engage the exponential cooldown up front (15→30→60→120→240
+    min, lifting to a 24 h ceiling past _REAUTH_DEEP_FAIL_THRESHOLD). A confirmed success then
+    retracts it via reset_reauth_circuit_breaker().
 
-    Shared by the pre-attempt ARM (_record_reauth_attempt) and the direct failure recorder
-    (_record_reauth_result) so the escalation schedule can never drift between them.
+    Counting up front rather than after the attempt is the whole fix: the common failure is a
+    hang/kill during the browser step (Akamai spinner, then a daemon restart) that never
+    returns to record anything, which used to leave the count pinned at 0 so the breaker never
+    engaged. Arming first means an attempt that never comes back still backs the next one off.
     """
+    state    = _load_reauth_state(env)
     failures = state["consecutive_failures"] + 1
     cap      = _REAUTH_DEEP_CAP_MIN if failures >= _REAUTH_DEEP_FAIL_THRESHOLD else _REAUTH_BACKOFF_CAP_MIN
     backoff  = min(_REAUTH_BACKOFF_BASE_MIN * (2 ** (failures - 1)), cap)
@@ -298,42 +304,10 @@ def _escalate_failure_state(state: dict) -> tuple[int, float]:
     state["consecutive_failures"] = failures
     state["last_attempt"]         = now
     state["cooldown_until"]       = now + backoff * 60
-    return failures, backoff
-
-
-def _record_reauth_attempt(env: str = "production") -> None:
-    """PESSIMISTIC ARM of the anti-ban breaker: pre-count a STARTING browser re-auth as a
-    failure and engage the exponential cooldown UP FRONT, before the browser opens.
-
-    Why up front: the dominant real-world failure mode is a hang/crash/kill during the
-    browser step (the Akamai spinner never resolves, then the daemon restarts the process).
-    That path never returns to record a result — so recording the failure only *after* the
-    attempt left consecutive_failures pinned at 0 and the breaker never engaged, which is
-    exactly how the automated re-auth storm was able to relaunch a browser every few minutes.
-    Arming here means an attempt that never comes back still backs the next one off. A
-    confirmed success immediately retracts it (_record_reauth_result(True) -> reset).
-    """
-    state = _load_reauth_state(env)
-    failures, backoff = _escalate_failure_state(state)
     _save_reauth_state(state, env)
-    _log.warning(
-        f"E*TRADE: automated re-auth attempt #{failures} starting — breaker pre-armed for "
-        f"{backoff:.0f} min. A confirmed success clears it; a hang/crash/failure leaves it "
-        f"engaged (manual re-auth: python scripts/diagnostics/test_etrade.py {env})."
-    )
-
-
-def _record_reauth_result(success: bool, env: str = "production") -> None:
-    if success:
-        reset_reauth_circuit_breaker(env)
-        return
-    state = _load_reauth_state(env)
-    failures, backoff = _escalate_failure_state(state)
-    _save_reauth_state(state, env)
-    _log.error(
-        f"E*TRADE: automated browser re-auth FAILED ({failures} consecutive); circuit "
-        f"breaker engaged for {backoff:.0f} min. It clears on the next SUCCESSFUL login — "
-        f"run: python scripts/diagnostics/test_etrade.py {env}"
+    _log.info(
+        f"E*TRADE: automated re-auth attempt #{failures} — breaker armed for {backoff:.0f} min "
+        f"(cleared on success). Manual re-auth: python scripts/diagnostics/test_etrade.py {env}"
     )
 
 
@@ -360,11 +334,9 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str) ->
         )
         return None
 
-    # PESSIMISTIC ARM: count this attempt and engage the cooldown NOW, before the browser
-    # opens. The dominant failure mode (the Akamai spinner-hang, then a daemon restart) kills
-    # this process mid-browser and never returns here — so counting the failure only after the
-    # attempt left the breaker pinned at 0. Arming up front means an attempt that never comes
-    # back still backs the next one off; a confirmed success retracts it below.
+    # Arm the breaker BEFORE the browser (see _record_reauth_attempt): a hang/kill mid-attempt
+    # never returns here, so only an up-front arm survives it. Success retracts; any other exit
+    # (no verifier, exception, killed process) leaves the arm standing so we back off.
     _record_reauth_attempt(env)
     try:
         oauth = pyetrade.ETradeOAuth(ck, cs)
@@ -376,13 +348,9 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str) ->
         if verifier_code:
             tokens = oauth.get_access_token(verifier_code)
             _save_tokens(tokens, env)
-            _record_reauth_result(True, env)   # success RETRACTS the pre-armed failure
+            reset_reauth_circuit_breaker(env)   # success retracts the pre-armed failure
             return tokens
-        # No verifier (e.g. the Akamai spinner-hang): the pre-armed failure stands — nothing
-        # more to record. The breaker is already engaged; we back off instead of hammering.
     except Exception as e:
-        # Any error: the pre-armed failure stands. (A killed/hung process never even reaches
-        # here — that is exactly the case the up-front arm is designed to cover.)
         _log.debug(f"_login_headless: {e}")
     return None
 
@@ -848,11 +816,9 @@ def get_tokens(env="sandbox", allow_browser=False):
                 lock_path,
                 renew_fn=lambda: _login_headless(ck, cs, username, password, env),
                 load_fn=lambda: _load_tokens(env),   # date-checked: only returns today's tokens
-                # Must exceed the browser's worst case: _get_tokens_via_playwright polls the
-                # verifier for up to ~3 min (36 × 5 s) on top of login-nav time. A ttl below
-                # that let a *live but slow* winner's lock be reclaimed mid-browser, so a
-                # second process could launch an overlapping browser — the opposite of what a
-                # single-flight lock is for. 5 min covers the poll plus margin.
+                # ttl must exceed the browser's worst case (verifier poll is up to ~3 min +
+                # login nav); a shorter ttl lets a second process treat a live winner's lock as
+                # stale and launch an overlapping browser (_TokenRenewer._acquire steal path).
                 lock_ttl=300,
                 wait_timeout=150,
             )
