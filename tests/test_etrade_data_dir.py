@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 
 import aether.etrade as etrade
+import aether.trash as trash
 
 
 class TestCanonicalAuthDataDir(unittest.TestCase):
@@ -57,6 +58,28 @@ class TestCanonicalAuthDataDir(unittest.TestCase):
         e = self._reload_with(AETHER_DATA_DIR=canonical)
         self.assertEqual(e._reauth_state_path("production"), e._REAUTH_STATE_PATH)
         self.assertEqual(os.path.dirname(e._reauth_state_path("sandbox")), canonical)
+
+    def test_trash_co_locates_with_the_same_override(self):
+        # Single source of truth: etrade auth-state and the soft-delete trash resolve Data/
+        # through the SAME aether.paths.data_dir(), so a rejected token (under the override)
+        # is trashed INTO that override's .trash — same filesystem, not a different checkout's
+        # dead Data/. Red-green anchor for the split-brain the hardcoded TRASH_DIR created.
+        canonical = os.path.join(os.sep + "srv", "aether-prod", "Data")
+        base = dict(os.environ)
+        base.pop("AETHER_DATA_DIR", None)
+        base["AETHER_DATA_DIR"] = canonical
+        try:
+            with mock.patch.dict(os.environ, base, clear=True):
+                importlib.reload(etrade)
+                importlib.reload(trash)
+                self.assertEqual(trash.TRASH_DIR, os.path.join(canonical, ".trash"))
+                # co-located with the token it soft-deletes (same dir ⇒ atomic os.replace)
+                self.assertEqual(os.path.dirname(trash.TRASH_DIR), etrade._DATA_DIR)
+        finally:
+            env = dict(os.environ)
+            env.pop("AETHER_DATA_DIR", None)
+            with mock.patch.dict(os.environ, env, clear=True):
+                importlib.reload(trash)   # etrade is restored by tearDown
 
 
 if __name__ == "__main__":

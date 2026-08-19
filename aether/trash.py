@@ -16,10 +16,14 @@ import logging
 import os
 import time
 
+from aether import paths
+
 _log = logging.getLogger("aether.trash")
 
-_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TRASH_DIR = os.path.join(_DIR, "Data", ".trash")
+# Co-located with the auth-state Data/ dir (same aether.paths resolver aether.etrade uses),
+# so a file soft-deleted from an overridden $AETHER_DATA_DIR moves into THAT dir's .trash —
+# same filesystem, atomic os.replace, no split-brain, never silently left live.
+TRASH_DIR = os.path.join(paths.data_dir(), ".trash")
 RETENTION_DAYS = 30   # ~1 month; watchdog.run_watchdog() calls purge_trash()
 
 

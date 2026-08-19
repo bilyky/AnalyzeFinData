@@ -14,6 +14,7 @@ from playwright.sync_api import sync_playwright
 from requests_oauthlib import OAuth1Session
 
 from aether import notify
+from aether import paths
 from aether.config import CFG
 
 
@@ -22,13 +23,12 @@ _log = logging.getLogger("aether.etrade")
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Canonical directory for E*TRADE auth-state files (token, browser state, breaker, locks).
-# Defaults to <this checkout>/Data — unchanged for a normal prod-from-prod run and for the
-# per-test temp dirs. But the path is CHECKOUT-RELATIVE: a human re-auth launched from a git
-# worktree would otherwise write the fresh token into that worktree's dead Data/, where prod's
-# scheduled tasks never look (the 2026-08-19 "agent couldn't locate the token file" incident).
-# Set AETHER_DATA_DIR to an absolute path to pin every auth-state file to one shared location
-# regardless of which checkout runs the code, so re-auth from anywhere lands where prod reads.
-_DATA_DIR = os.environ.get("AETHER_DATA_DIR") or os.path.join(_DIR, "Data")
+# Resolved through aether.paths.data_dir() — the ONE place the $AETHER_DATA_DIR-vs-<checkout>/Data
+# rule lives, shared with aether.trash so the token and its soft-delete trash always co-locate.
+# Defaults to <checkout>/Data (checkout-relative — the 2026-08-19 "agent couldn't locate the
+# token file" incident came from a re-auth in a worktree writing to that worktree's dead Data/);
+# set AETHER_DATA_DIR to an absolute path to pin every auth-state file where prod reads.
+_DATA_DIR = paths.data_dir()
 _TOKEN_PATH = os.path.join(_DATA_DIR, "etrade_tokens.json")
 _FAIL_STATE_PATH = os.path.join(_DATA_DIR, "etrade_fail_state.json")
 
@@ -369,7 +369,6 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str, he
         auth_url = oauth.get_request_token()
         verifier_code = _get_tokens_via_playwright(
             auth_url, username, password,
-            storage_state=_BROWSER_STATE_PATH,
             headless=headless,
         )
         if verifier_code:
@@ -382,7 +381,7 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str, he
     return None
 
 
-def _get_tokens_via_playwright(auth_url, username, password, storage_state=None, headless=False):
+def _get_tokens_via_playwright(auth_url, username, password, headless=False):
     """Open the E*TRADE auth URL, log in, accept, and return the verifier code.
 
     Runs a PERSISTENT real-Chrome profile (_CHROME_PROFILE_DIR) rather than a throwaway
@@ -391,9 +390,8 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None,
     daily re-auth needs no manual OTP. After a successful auth the live cookies are also
     dumped to _BROWSER_STATE_PATH as a harmless secondary backup (the profile is primary).
 
-    storage_state: legacy parameter, retained for caller compatibility. It is NO LONGER used
-    to seed the context (storage_state= is incompatible with launch_persistent_context — the
-    profile jar supersedes it); kept only so existing call sites need not change.
+    (There is no storage_state parameter: launch_persistent_context is incompatible with
+    storage_state= — the profile jar supersedes it — so no caller passes a cookie snapshot.)
     headless: run the browser without a window. Default False (headed) for the supervised
     bootstrap / human path; a proven-trusted profile can later drive a headless daily run.
     """
@@ -430,7 +428,7 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None,
         # device-trust across runs, so there is no separate browser/context to seed or close
         # (launch_persistent_context returns the context and owns the browser).
         os.makedirs(_CHROME_PROFILE_DIR, exist_ok=True)
-        print(f"  [Auth] Using persistent Chrome profile: {_CHROME_PROFILE_DIR}")
+        _log.info("  [Auth] Using persistent Chrome profile: %s", _CHROME_PROFILE_DIR)
         ctx = p.chromium.launch_persistent_context(
             _CHROME_PROFILE_DIR,
             headless=headless,
@@ -452,7 +450,7 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None,
             nonlocal verifier
             if frame == page.main_frame and "oauth_verifier=" in frame.url:
                 verifier = frame.url.split("oauth_verifier=")[1].split("&")[0]
-                print(f"  [Auth] Verifier captured from redirect: {verifier}")
+                _log.info("  [Auth] Verifier captured from redirect: [captured]")
 
         page.on("framenavigated", _on_framenavigated)
 
@@ -879,10 +877,11 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
 
     verifier_code = _get_tokens_via_playwright(
         auth_url, username, password,
-        storage_state=_BROWSER_STATE_PATH,
         headless=headless,
     )
-    print(f"Verifier code: {verifier_code}")
+    # Redacted: this is captured to a served task-run log by POST /api/etrade/reauth, so log
+    # only whether a verifier was captured, never the one-time-use code itself.
+    _log.info("Verifier %s", "captured" if verifier_code else "not captured")
 
     tokens = oauth.get_access_token(verifier_code)
     _save_tokens(tokens, env)
@@ -919,9 +918,11 @@ def reauthenticate(env: str = "production", bootstrap: bool = False, headless: b
     """
     if bootstrap:
         headless = False   # a human must watch to enter the one-time OTP that re-seeds trust
+    # breaker_state is filled in on every return path below (post get_tokens, so it reflects
+    # the attempt); no eager snapshot here — it would just be overwritten.
     result = {
         "ok": False, "env": env, "bootstrap": bootstrap, "issued_date_et": None,
-        "has_token": False, "quote_ok": False, "breaker_state": _breaker_summary(env),
+        "has_token": False, "quote_ok": False, "breaker_state": None,
         "message": "",
     }
     try:
@@ -947,7 +948,7 @@ def reauthenticate(env: str = "production", bootstrap: bool = False, headless: b
         market = get_market(tokens, env)
         data = market.get_quote(["AAPL"], resp_format="json")
         quotes = _walk(data, "QuoteData")
-        px = float((quotes[0].get("All") or {}).get("lastTrade", 0) or 0) if quotes else 0.0
+        px = _last_trade(quotes[0]) if quotes else 0.0
         result["quote_ok"] = px > 0
         if px > 0:
             result["aapl"] = px
@@ -977,6 +978,15 @@ def _walk(d, key):
     return []
 
 
+def _last_trade(container, key="All") -> float:
+    """lastTrade out of an E*TRADE quote node as a float, 0.0 if missing/blank.
+
+    The price lives under a sub-object — `All` on a market quote, `Quick` on a portfolio
+    position — so callers pass the enclosing node and the sub-object key.
+    """
+    return float((container.get(key) or {}).get("lastTrade", 0) or 0)
+
+
 def fetch_positions(tokens, env="sandbox") -> list[dict]:
     """Return open positions across all accounts as flat dicts."""
     accts = get_accounts(tokens, env)
@@ -1000,7 +1010,7 @@ def fetch_positions(tokens, env="sandbox") -> list[dict]:
                 qty  = float(pos.get("quantity",    0) or 0)
                 cost = float(pos.get("costPerShare", 0) or 0)
                 mval = float(pos.get("marketValue",  0) or 0)
-                px   = float((pos.get("Quick") or {}).get("lastTrade", 0) or 0)
+                px   = _last_trade(pos, "Quick")
                 date_ms = int(pos.get("dateAcquired", 0) or 0)
                 acq_date = (datetime.datetime
                             .fromtimestamp(date_ms / 1000, tz=datetime.timezone.utc)
@@ -1033,7 +1043,7 @@ def fetch_quotes(tokens, symbols: list[str], env="sandbox") -> dict[str, float]:
             data = market.get_quote(batch, resp_format="json")
             for q in _walk(data, "QuoteData"):
                 sym = q.get("Product", {}).get("symbol", "").upper()
-                px  = float((q.get("All") or {}).get("lastTrade", 0) or 0)
+                px  = _last_trade(q)
                 if sym and px:
                     out[sym] = px
         except Exception:
