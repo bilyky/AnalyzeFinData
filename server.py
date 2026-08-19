@@ -155,6 +155,15 @@ def create_app():
             return FileResponse(str(index))
         return JSONResponse({"status": "AETHER API running", "docs": "/docs"})
 
+    @app.get("/plan/intc", include_in_schema=False)
+    async def intc_plan():
+        # Personal, printable income/protection plan. Lives in Data/ (gitignored, private),
+        # so the page is served on demand and 404s cleanly on any checkout that lacks it.
+        plan = _DIR / "Data" / "INTC_Income_Plan.html"
+        if plan.exists():
+            return FileResponse(str(plan))
+        raise HTTPException(status_code=404, detail="Data/INTC_Income_Plan.html not found")
+
     # ── Health ────────────────────────────────────────────────────────────────
 
     @app.get("/api/health")

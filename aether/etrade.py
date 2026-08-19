@@ -28,6 +28,14 @@ _REVOKE_URL = {
     "sandbox":    "https://apisb.etrade.com/oauth/revoke_access_token",
     "production": "https://api.etrade.com/oauth/revoke_access_token",
 }
+# Authoritative auth-probe endpoint. The public market-clock path 404s (it is not a
+# valid REST resource on this host), so a clock probe can NEVER return 200 and always
+# reads as "inconclusive" even for good tokens. accounts/list is the lightest endpoint
+# that actually exercises the OAuth credential and returns 200/401/403 truthfully.
+_ACCTLIST_URL = {
+    "sandbox":    "https://apisb.etrade.com/v1/accounts/list.json",
+    "production": "https://api.etrade.com/v1/accounts/list.json",
+}
 _BROWSER_STATE_PATH = os.path.join(_DIR, "Data", "etrade_browser_state.json")
 
 
@@ -90,20 +98,24 @@ def _load_tokens(env):
 
 
 def _probe_token_auth(tokens, env="production"):
-    """Live-probe cached tokens against E*TRADE's public market-clock endpoint.
+    """Live-probe cached tokens against E*TRADE's accounts-list endpoint.
 
     Returns a tri-state so callers can tell a real rejection from a transient blip:
       True  → authorized (HTTP 200)
       False → explicitly rejected by the broker (HTTP 401/403) — safe to invalidate
-      None  → indeterminate (5xx, rate-limit, network/proxy/timeout) — do NOT destroy
-              the token on a transient failure.
+      None  → indeterminate (404/5xx, rate-limit, network/proxy/timeout) — do NOT
+              destroy the token on a transient failure.
+
+    Uses accounts/list (an authenticated GET that truthfully returns 200/401/403) and
+    the same proxy/verify settings as every other brokerage call in this module. The
+    old market-clock probe hit a path that 404s on this host, so it could never see a
+    200 and always reported "inconclusive" even for valid tokens.
     """
     try:
         ck, cs, _, _ = _load_config(env)
-        # Market clock is the standard, public, zero-cost, lightweight endpoint
-        url = "https://api.etrade.com/v1/market/clock.json"
+        url = _ACCTLIST_URL.get(env, _ACCTLIST_URL["production"])
         session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
-        resp = session.get(url)
+        resp = session.get(url, proxies=_proxies(), verify=False, timeout=10)
         if resp.status_code == 200:
             return True
         if resp.status_code in (401, 403):
