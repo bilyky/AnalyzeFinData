@@ -45,6 +45,12 @@ _ACCTLIST_URL = {
 }
 _BROWSER_STATE_PATH = os.path.join(_DIR, "Data", "etrade_browser_state.json")
 
+# Auth-state files are never hard-deleted in the hot path: a fresh, still-valid token
+# can be destroyed by one transient/edge 401, so on rejection/revoke we route through
+# the project-wide soft-delete (moved to Data/.trash, recoverable, purged after the
+# retention window by the watchdog). See aether/trash.py.
+from aether import trash
+
 
 def _et_today() -> str:
     # Always read the unmocked, physical OS system epoch clock (time.time())
@@ -196,8 +202,7 @@ def revoke_tokens(tokens, env="sandbox") -> bool:
     try:
         r = session.get(_REVOKE_URL[env], proxies=_proxies(), verify=False, timeout=10)
         if r.ok:
-            if os.path.exists(_TOKEN_PATH):
-                os.remove(_TOKEN_PATH)
+            trash.soft_delete(_TOKEN_PATH, reason="revoked")   # soft-delete (recoverable)
             print("Tokens revoked and cache cleared.")
             return True
         print(f"  [Token] Revoke failed: HTTP {r.status_code}")
@@ -766,11 +771,8 @@ def get_tokens(env="sandbox", allow_browser=False):
         # If it is authorized (True) or indeterminate (None), we KEEP the token and attempt renewal!
         auth = _probe_token_auth(cached, env)
         if auth is False:
-            _log.warning("🚨 [E*TRADE ALERT] Cached token failed server verification (401 Unauthorized). Invalidating cache...")
-            try:
-                os.remove(_TOKEN_PATH)
-            except Exception:
-                pass
+            _log.warning("🚨 [E*TRADE ALERT] Cached token failed server verification (401 Unauthorized). Soft-deleting to trash (recoverable)...")
+            trash.soft_delete(_TOKEN_PATH, reason="rejected-401")
             cached = None
         else:
             renewed = renew_tokens(cached, env)

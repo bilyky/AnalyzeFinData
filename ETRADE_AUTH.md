@@ -77,8 +77,14 @@ machine's only job is to keep a *human-created* session warm during the day.
 | Manual re-auth | `scripts/diagnostics/test_etrade.py` | The sanctioned human login. On success it **resets the breaker**. |
 
 **State files (all under `Data/`, gitignored):**
-- `etrade_tokens.json` — the OAuth token (deleted automatically on a 401/403).
+- `etrade_tokens.json` — the OAuth token. On a 401/403 (or an explicit revoke) it is **soft-deleted**:
+  moved to `Data/.trash/` (never `os.remove`d in the hot path), so a token wrongly invalidated by a
+  transient/edge rejection stays recoverable. See the garbage-can note below.
 - `etrade_browser_state.json` — saved Playwright cookies for trusted-device MFA-skip.
+- `.trash/` — the auth-state **garbage can**. Files land here as `<UTC-ish stamp>.<reason>.<name>`
+  (`reason` = `rejected-401` / `revoked`) and are physically deleted only by `trash.purge_trash()`
+  (default retention **30 days ≈ 1 month**), which the watchdog runs each cycle. Recovery = copy the
+  file back out. The single place auth-state files are truly removed.
 - `etrade_reauth_state.json` — **production** circuit-breaker state (`consecutive_failures`,
   `cooldown_until`). The breaker state is **per-environment**: any non-production env writes a
   separate `etrade_reauth_state_<env>.json` (e.g. `_sandbox`), so a sandbox or test re-auth

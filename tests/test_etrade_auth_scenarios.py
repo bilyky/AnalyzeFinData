@@ -34,6 +34,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import aether.etrade as etrade
+from aether import trash
 
 
 def _yesterday_et() -> str:
@@ -58,6 +59,12 @@ class _EtradeScenarioBase(unittest.TestCase):
             p = mock.patch.object(etrade, const, os.path.join(d, name))
             p.start()
             self.addCleanup(p.stop)
+
+        # Isolate the project-wide garbage can to the temp dir too (soft-deleted
+        # tokens must never land in the real Data/.trash during tests).
+        tp = mock.patch.object(trash, "TRASH_DIR", os.path.join(d, ".trash"))
+        tp.start()
+        self.addCleanup(tp.stop)
 
         cfg = mock.patch.object(etrade, "_load_config",
                                 return_value=("ck", "cs", "user", "pw"))
@@ -149,14 +156,18 @@ class TestTokenLifecycle(_EtradeScenarioBase):
 class TestBrokerRejection(_EtradeScenarioBase):
     """B-series: explicit rejection vs. transient blip."""
 
-    def test_B1_explicit_401_invalidates_cache(self):
-        # Broker explicitly rejects (401/403) → token file deleted, soft None, no browser.
+    def test_B1_explicit_401_invalidates_cache_but_soft_deletes(self):
+        # Broker explicitly rejects (401/403) → token removed from the live path, soft None,
+        # no browser — but NOT hard-deleted: it lands in the garbage can, recoverable within
+        # the retention window (the "never delete right away" guarantee).
         self._write_token(etrade._et_today(), age_min=1.0)
         m_pw, m_lh = self._no_browser_guard()
         with mock.patch.object(etrade, "_probe_token_auth", return_value=False):
             out = etrade.get_tokens("production", allow_browser=False)
         self.assertIsNone(out)
-        self.assertFalse(os.path.exists(etrade._TOKEN_PATH))   # cache invalidated
+        self.assertFalse(os.path.exists(etrade._TOKEN_PATH))   # gone from the live path
+        trashed = os.listdir(trash.TRASH_DIR)                  # …but recoverable in the trash
+        self.assertTrue(any("rejected-401" in n for n in trashed), trashed)
         m_pw.assert_not_called()
         m_lh.assert_not_called()
 

@@ -10,6 +10,7 @@ import rapidapi
 import sys
 import console_safe
 import circuit_breaker
+from aether import trash
 import aether.notify as notify
 import argparse
 from pathlib import Path
@@ -808,7 +809,7 @@ def save_game(state):
             backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime)
             if len(backups) > 15:
                 for old_b in backups[:-15]:
-                    old_b.unlink()
+                    trash.soft_delete(old_b, reason="game-backup-prune", force=True)
         except Exception as e:
             _log.warning(f"  [Warning] Game backup failed: {e}")
 
