@@ -8,6 +8,7 @@ import notify
 import watchdog
 import html
 import rapidapi
+from aether import trash
 from config import CFG
 from run_history import load_symbols
 from pathlib import Path
@@ -371,11 +372,7 @@ def main():
         
     # Register automatic lock cleanup on exit
     def _cleanup_pipeline_lock():
-        try:
-            if lock_path.exists():
-                os.remove(lock_path)
-        except Exception:
-            pass
+        trash.soft_delete(lock_path, reason="pipeline-lock", force=True)
     atexit.register(_cleanup_pipeline_lock)
 
     no_email = "--no-email" in sys.argv[1:]

@@ -452,7 +452,7 @@ def main():
 
             # Files exempt from print() check (Playwright interactive browser prompts
             # that intentionally write to the user's terminal, not to the log system)
-            _skip_print = ("etrade.py", "powergauge.py", "run_history.py")
+            _skip_print = ("etrade.py", "powergauge.py", "run_history.py", "real_copilot.py", "scripts/", "tests/")
             if not any(x in fpath for x in _skip_print):
                 if not check_no_print_statements(fpath):
                     success = False

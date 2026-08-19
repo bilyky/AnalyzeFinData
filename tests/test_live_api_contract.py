@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import powergauge
-import etrade
+from aether import etrade
 
 _LIVE = os.getenv("AETHER_LIVE_TESTS")
 

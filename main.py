@@ -5,7 +5,7 @@ import pytz
 import pandas as pd
 import MetaTrader5 as mt5
 
-import etrade
+from aether import etrade
 import primal_funcs as pf
 import powergauge
 import numpy as np
