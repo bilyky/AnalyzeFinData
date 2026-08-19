@@ -47,6 +47,7 @@ import ai_client
 import watchdog
 import sell_eval
 from aether import stock_compare
+from aether import etrade
 from aether_logger import get_logger
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -858,6 +859,37 @@ def create_app():
         await loop.run_in_executor(None, _heal)
         return {"status": "healed"}
 
+    @app.post("/api/etrade/reauth")
+    async def etrade_reauth(
+        bootstrap: bool = Body(default=False),
+        authorization: str = Header(default=""),
+    ):
+        """Human-initiated E*TRADE re-authentication (the "one magic button" HTTP front door).
+
+        Launches the SAME `etrade-login` CLI as a subprocess — it opens a real browser and can
+        take minutes, so it MUST NOT run inline in the request thread — tracked in the existing
+        _runs registry and polled through the shared GET /api/tasks/output/{run_id}. bootstrap
+        forces a headed browser for the rare one-time OTP that re-seeds device trust. Admin-only;
+        the automated anti-ban breaker still governs any headless path this ultimately drives.
+        """
+        _require_admin(authorization)
+        run_id = str(uuid.uuid4())[:8]
+        log_dir = _DIR / "Data" / "task_runs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"etrade_reauth_{run_id}.log"
+        cmd = [_PYTHON, __file__, "etrade-login"]
+        if bootstrap:
+            cmd.append("--bootstrap")
+        try:
+            with open(log_path, "w", encoding="utf-8") as lf:
+                proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, cwd=str(_DIR))
+            with _runs_lock:
+                _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc}
+            return {"status": "started", "pid": proc.pid, "run_id": run_id,
+                    "bootstrap": bootstrap, "label": "E*TRADE re-authenticate"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     return app
 
 
@@ -1013,6 +1045,18 @@ def cmd_regen_secret():
         _log.info("Start the server for it to take effect: python server.py start")
 
 
+def cmd_etrade_login(bootstrap: bool = False) -> None:
+    """Human-initiated E*TRADE re-auth via the persistent-profile engine — the CLI front door
+    for the "one magic button" (also the entry point POST /api/etrade/reauth shells out to, so
+    there is exactly one execution path). Replaces the ad-hoc scripts/diagnostics/test_etrade.py
+    as the real re-auth command. --bootstrap opens a headed browser for the rare one-time OTP
+    that re-seeds device trust; without it the daily zero-touch path runs. Prints the JSON
+    result and exits non-zero on failure so a caller / CI can detect it."""
+    result = etrade.reauthenticate("production", bootstrap=bootstrap)
+    _log.info("E*TRADE re-auth result: %s", json.dumps(result))
+    raise SystemExit(0 if result.get("ok") else 1)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -1020,13 +1064,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "cmd", nargs="?", default="dev",
         choices=["start", "stop", "restart", "status", "upgrade",
-                 "regen-secret", "serve", "dev"],
+                 "regen-secret", "serve", "etrade-login", "dev"],
         help="start/stop/restart/status/upgrade the background server; "
              "regen-secret rotates web.secret in config.json; "
-             "'serve' runs uvicorn in-process; omit for foreground dev mode",
+             "'serve' runs uvicorn in-process; 'etrade-login' re-authenticates E*TRADE "
+             "(add --bootstrap for the one-time supervised OTP); omit for foreground dev mode",
     )
     parser.add_argument("--port", type=int, help="Override configured port (serve/dev)")
     parser.add_argument("--host", help="Override configured host (serve/dev)")
+    parser.add_argument("--bootstrap", action="store_true",
+                        help="etrade-login: headed one-time OTP run to re-seed device trust")
     args = parser.parse_args()
 
     if args.cmd == "start":
@@ -1044,6 +1091,8 @@ if __name__ == "__main__":
     elif args.cmd == "serve":
         cfg = _cfg()
         cmd_serve(args.host or cfg.web_host, args.port or cfg.web_port)
+    elif args.cmd == "etrade-login":
+        cmd_etrade_login(bootstrap=args.bootstrap)
     else:
         # Default: foreground dev mode (auto-reload)
         cfg = _cfg()

@@ -12,6 +12,7 @@ import notify
 import etrade
 import powergauge
 from pathlib import Path
+from aether import trash
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("watchdog")
@@ -210,9 +211,9 @@ def trigger_ai_self_healing(traceback):
         return False, "Self-healing process timed out (5 min limit reached).", "TIMEOUT"
     except Exception as e:
         _log.error(f"❌ Failed to run Self-Healer: {e}")
-        # Clean up files if we fail to spawn
-        if SELF_HEAL_LOCK.exists(): SELF_HEAL_LOCK.unlink()
-        if SELF_HEAL_PROMPT_FILE.exists(): SELF_HEAL_PROMPT_FILE.unlink()
+        # Clean up files if we fail to spawn (ephemeral locks — hard delete)
+        trash.soft_delete(SELF_HEAL_LOCK, reason="self-heal-lock", force=True)
+        trash.soft_delete(SELF_HEAL_PROMPT_FILE, reason="self-heal-prompt", force=True)
         return False, f"Execution failure: {e}", str(e)
 
 def check_task_scheduler():
@@ -417,7 +418,7 @@ def run_watchdog():
         with open(lock_file, "w") as f:
             f.write(str(os.getpid()))
         # Register automatic cleanup of the lock file upon process termination
-        atexit.register(lambda: lock_file.unlink() if lock_file.exists() else None)
+        atexit.register(lambda: trash.soft_delete(lock_file, reason="watchdog-lock", force=True))
     except Exception as e:
         _log.error(f"❌ Failed to write watchdog lock file: {e}")
         return
@@ -471,7 +472,17 @@ def run_watchdog():
     
     # 1b. Clean up any stray/duplicate AETHER tasks (Pillar 1 Self-Sanitation)
     purge_stray_tasks()
-    
+
+    # 1c. Empty the auth-state garbage can past its retention window. Rejected/revoked
+    #     token files are soft-deleted (moved to Data/.trash, kept ~1 month for recovery)
+    #     rather than hard-deleted; this is where they are finally purged.
+    try:
+        n_trashed = trash.purge_trash()
+        if n_trashed:
+            _log.info(f"  [Healer] Purged {n_trashed} expired file(s) from the auth trash.")
+    except Exception as e:
+        _log.error(f"  [Healer] Trash purge failed: {e}")
+
     recovery_actions = []
     ai_triggered = False
     ai_status = ""
