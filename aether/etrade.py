@@ -54,6 +54,14 @@ _ACCTLIST_URL = {
 }
 _BROWSER_STATE_PATH = os.path.join(_DATA_DIR, "etrade_browser_state.json")
 
+# Persistent real-Chrome profile jar for the "one magic button" re-auth engine. Unlike the
+# static etrade_browser_state.json SNAPSHOT (a frozen cookie dump that Akamai Bot Manager's
+# rolling _abck/bm_sz sensors invalidate the moment JS revalidation is due), a persistent
+# profile lets those rolling cookies AND E*TRADE's device-trust live organically in a real
+# profile and survive across runs — which is what makes the daily re-auth zero-touch. Under
+# _DATA_DIR (gitignored Data/), so the profile — and its cookies — never reach git.
+_CHROME_PROFILE_DIR = os.path.join(_DATA_DIR, "etrade_chrome_profile")
+
 # Auth-state files are never hard-deleted in the hot path: a fresh, still-valid token
 # can be destroyed by one transient/edge 401, so on rejection/revoke we route through
 # the project-wide soft-delete (moved to Data/.trash, recoverable, purged after the
@@ -333,7 +341,7 @@ def _record_reauth_attempt(env: str = "production") -> None:
 # OAuth — automated via Playwright
 # ---------------------------------------------------------------------------
 
-def _login_headless(ck: str, cs: str, username: str, password: str, env: str) -> dict | None:
+def _login_headless(ck: str, cs: str, username: str, password: str, env: str, headless: bool = False) -> dict | None:
     """Fully automatic Playwright login using saved browser state (trusted-device cookies).
     No human interaction required — MFA is skipped by the saved cookies.
     Returns token dict on success, None on failure.
@@ -362,6 +370,7 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str) ->
         verifier_code = _get_tokens_via_playwright(
             auth_url, username, password,
             storage_state=_BROWSER_STATE_PATH,
+            headless=headless,
         )
         if verifier_code:
             tokens = oauth.get_access_token(verifier_code)
@@ -373,12 +382,20 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str) ->
     return None
 
 
-def _get_tokens_via_playwright(auth_url, username, password, storage_state=None):
+def _get_tokens_via_playwright(auth_url, username, password, storage_state=None, headless=False):
     """Open the E*TRADE auth URL, log in, accept, and return the verifier code.
 
-    storage_state: path to a saved Playwright browser state (cookies/localStorage).
-    When supplied, E*TRADE's trusted-device cookie skips MFA on subsequent runs.
-    After a successful auth the browser state is always re-saved to _BROWSER_STATE_PATH.
+    Runs a PERSISTENT real-Chrome profile (_CHROME_PROFILE_DIR) rather than a throwaway
+    browser seeded with a static cookie snapshot: the profile dir now IS the state, so
+    Akamai's rolling sensor cookies and E*TRADE's device-trust persist across runs and the
+    daily re-auth needs no manual OTP. After a successful auth the live cookies are also
+    dumped to _BROWSER_STATE_PATH as a harmless secondary backup (the profile is primary).
+
+    storage_state: legacy parameter, retained for caller compatibility. It is NO LONGER used
+    to seed the context (storage_state= is incompatible with launch_persistent_context — the
+    profile jar supersedes it); kept only so existing call sites need not change.
+    headless: run the browser without a window. Default False (headed) for the supervised
+    bootstrap / human path; a proven-trusted profile can later drive a headless daily run.
     """
     _USER_SELECTORS = ["input#USER", "input[name='USER']", "input[name='username']",
                        "input[type='text']", "input[autocomplete='username']"]
@@ -409,26 +426,26 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
     pw_proxy = {"server": proxy_url} if proxy_url else None
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=False,
+        # Persistent context: the profile dir carries Akamai's rolling cookies + E*TRADE's
+        # device-trust across runs, so there is no separate browser/context to seed or close
+        # (launch_persistent_context returns the context and owns the browser).
+        os.makedirs(_CHROME_PROFILE_DIR, exist_ok=True)
+        print(f"  [Auth] Using persistent Chrome profile: {_CHROME_PROFILE_DIR}")
+        ctx = p.chromium.launch_persistent_context(
+            _CHROME_PROFILE_DIR,
+            headless=headless,
             channel="chrome",
             proxy=pw_proxy,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        ctx_kwargs = dict(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/124.0.0.0 Safari/537.36"
-            )
+            ),
+            args=["--disable-blink-features=AutomationControlled"],
         )
-        if storage_state and os.path.exists(storage_state):
-            ctx_kwargs["storage_state"] = storage_state
-            print("  [Auth] Restoring saved browser state (trusted-device cookies).")
-        ctx = browser.new_context(**ctx_kwargs)
         # Remove navigator.webdriver flag so E*TRADE doesn't detect automation
         ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        page = ctx.new_page()
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
 
         # Capture verifier from any URL navigation (redirect-based delivery)
         def _on_framenavigated(frame):
@@ -657,12 +674,9 @@ def _get_tokens_via_playwright(auth_url, username, password, storage_state=None)
                     print("  [Auth] Browser state saved — future logins skip MFA.")
                 except Exception as e:
                     print(f"  [Auth] Could not save browser state: {e}")
+            # Persistent context owns its browser — closing the context tears both down.
             try:
                 ctx.close()
-            except Exception:
-                pass
-            try:
-                browser.close()
             except Exception:
                 pass
 
@@ -756,7 +770,7 @@ def check_etrade_cookie_freshness():
             _log.error(f"Error checking E*TRADE cookie freshness: {e}")
 
 
-def get_tokens(env="sandbox", allow_browser=False):
+def get_tokens(env="sandbox", allow_browser=False, headless=False):
     """Return valid OAuth tokens, minimising browser interaction.
 
     Priority:
@@ -829,7 +843,7 @@ def get_tokens(env="sandbox", allow_browser=False):
             lock_path = os.path.join(_DATA_DIR, "etrade_reauth.lock")
             reauth_renewer = _TokenRenewer(
                 lock_path,
-                renew_fn=lambda: _login_headless(ck, cs, username, password, env),
+                renew_fn=lambda: _login_headless(ck, cs, username, password, env, headless=headless),
                 load_fn=lambda: _load_tokens(env),   # date-checked: only returns today's tokens
                 # ttl must exceed the browser's worst case (verifier poll is up to ~3 min +
                 # login nav); a shorter ttl lets a second process treat a live winner's lock as
@@ -866,6 +880,7 @@ def get_tokens(env="sandbox", allow_browser=False):
     verifier_code = _get_tokens_via_playwright(
         auth_url, username, password,
         storage_state=_BROWSER_STATE_PATH,
+        headless=headless,
     )
     print(f"Verifier code: {verifier_code}")
 
@@ -876,6 +891,74 @@ def get_tokens(env="sandbox", allow_browser=False):
     reset_reauth_circuit_breaker(env)
     print("Tokens saved to cache.")
     return tokens
+
+
+def _breaker_summary(env: str = "production") -> dict:
+    """JSON-friendly snapshot of the automated-reauth breaker for the re-auth result dict."""
+    st = _load_reauth_state(env)
+    return {
+        "consecutive_failures": st["consecutive_failures"],
+        "cooldown_remaining_min": round(_reauth_cooldown_remaining(env) / 60, 1),
+    }
+
+
+def reauthenticate(env: str = "production", bootstrap: bool = False, headless: bool = False) -> dict:
+    """Human-initiated full E*TRADE re-auth — the single core every front door calls
+    (CLI `etrade-login`, POST /api/etrade/reauth, web button).
+
+    Drives the persistent-Chrome-profile engine (_CHROME_PROFILE_DIR): Akamai's rolling
+    sensor cookies and E*TRADE's device-trust live in a real profile jar that survives across
+    runs, so the daily happy path needs no manual verifier/OTP paste. A rare one-time
+    supervised bootstrap re-seeds device trust when it lapses (a human enters the SMS OTP and
+    checks "remember this device"); after that the trust window carries the zero-touch runs.
+
+    bootstrap=True forces a headed browser (a human must be present for the OTP). Returns a
+    JSON-serializable dict so the HTTP endpoint and CLI render it uniformly. This is a
+    HUMAN-initiated action ONLY — the anti-ban contract still forbids scheduled jobs from ever
+    opening a browser (they use keep_alive); nothing here is wired into the scheduler.
+    """
+    if bootstrap:
+        headless = False   # a human must watch to enter the one-time OTP that re-seeds trust
+    result = {
+        "ok": False, "env": env, "bootstrap": bootstrap, "issued_date_et": None,
+        "has_token": False, "quote_ok": False, "breaker_state": _breaker_summary(env),
+        "message": "",
+    }
+    try:
+        tokens = get_tokens(env, allow_browser=True, headless=headless)
+    except Exception as e:
+        result["message"] = f"re-auth raised: {e}"
+        result["breaker_state"] = _breaker_summary(env)
+        return result
+
+    if not tokens:
+        result["message"] = ("re-auth failed — no token minted. If the circuit breaker is "
+                             "cooling down, wait it out or reset_reauth_circuit_breaker(); "
+                             "otherwise re-run supervised with bootstrap=True.")
+        result["breaker_state"] = _breaker_summary(env)
+        return result
+
+    result["has_token"] = True
+    result["issued_date_et"] = tokens.get("issued_date_et")
+
+    # Light live smoke check — a real AAPL quote proves the minted token actually authorizes
+    # (mirrors scripts/diagnostics/test_etrade.py). A token that saves but can't quote is a FAIL.
+    try:
+        market = get_market(tokens, env)
+        data = market.get_quote(["AAPL"], resp_format="json")
+        quotes = _walk(data, "QuoteData")
+        px = float((quotes[0].get("All") or {}).get("lastTrade", 0) or 0) if quotes else 0.0
+        result["quote_ok"] = px > 0
+        if px > 0:
+            result["aapl"] = px
+    except Exception as e:
+        result["message"] = f"token minted but smoke quote failed: {e}"
+
+    result["breaker_state"] = _breaker_summary(env)
+    result["ok"] = result["has_token"] and result["quote_ok"]
+    if result["ok"] and not result["message"]:
+        result["message"] = f"E*TRADE {env} re-authenticated; token issued {result['issued_date_et']}."
+    return result
 
 
 # ---------------------------------------------------------------------------
