@@ -1111,6 +1111,16 @@ def get_system_health() -> dict:
     # Watchdog — check if watchdog.log or similar file was updated today
     watchdog_ok = True  # default optimistic; future: check watchdog log
 
+    # E*TRADE auth state — the shared read-only classifier (probe=False: pure-local, no network,
+    # no mutation, since /api/health is polled frequently). Trust/breaker state alone already
+    # surfaces whether a human bootstrap is needed. The dedicated GET /api/etrade/status?probe=true
+    # is the broker-confirmed view. Never let a broker read break the health blob.
+    etrade_auth = None
+    try:
+        etrade_auth = etrade.auth_status("production", probe=False)
+    except Exception:
+        etrade_auth = None
+
     return {
         "data_fresh":           data_fresh,
         "last_refresh":         last_refresh,
@@ -1119,6 +1129,7 @@ def get_system_health() -> dict:
         "watchdog_ok":          watchdog_ok,
         "server_time":          now.isoformat(timespec="seconds"),
         "server_needs_restart": _server_needs_restart(),
+        "etrade":               etrade_auth,
     }
 
 

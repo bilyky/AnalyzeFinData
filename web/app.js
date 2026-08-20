@@ -1032,12 +1032,25 @@ async function loadSystem() {
         api("/api/tasks/manual"),
     ]);
 
+    // E*TRADE auth state — from the shared read-only classifier embedded in /api/health
+    // (probe=false, so this is the instant local view). Green = live, red = a human must run the
+    // SMS bootstrap, muted = a self-healing expiry the daily automated door will refresh.
+    const et = health.etrade;
+    const etRow = et
+        ? `<div title="${(et.summary || "").replace(/"/g, "&quot;")}">E*TRADE auth: <b class="${
+              et.needs_manual_auth ? "neg" : (et.state === "live" ? "pos" : "mut")
+            }">${(et.state || "—").toUpperCase()}</b>${
+              et.needs_manual_auth ? ' <span class="neg">— manual re-auth needed</span>' : ""
+            }</div>`
+        : `<div>E*TRADE auth: <span class="mut">—</span></div>`;
+
     $("health-body").innerHTML = `
         <div>Data fresh: <b class="${health.data_fresh ? "pos" : "neg"}">${health.data_fresh ? "YES" : "NO"}</b></div>
         <div>Last refresh: <span class="mut">${health.last_refresh || "—"}</span></div>
         <div>Last pipeline: <span class="mut">${health.last_pipeline_run || "—"}</span></div>
         <div>Pipeline status: <b class="${health.pipeline_status === "OK" ? "pos" : "mut"}">${health.pipeline_status}</b></div>
-        <div>Server time: <span class="mut">${health.server_time || "—"}</span></div>`;
+        <div>Server time: <span class="mut">${health.server_time || "—"}</span></div>
+        ${etRow}`;
 
     // Scheduled tasks — with a "Run Now" button that triggers the matching manual task
     const manualById = Object.fromEntries((manual.tasks || []).map((t) => [t.id, t]));
