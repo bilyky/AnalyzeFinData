@@ -1791,6 +1791,25 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         "industry": row[4]
                     })
         
+        # ── R&D #32 Overbought Breakout Guard score penalty ──
+        for buy_cand in top_buys:
+            sym_upper = buy_cand["sym"].upper()
+            cache_path = BASE_DIR / "Data" / "Symbol" / sym_upper / f"{sym_upper}_{today}.json"
+            if cache_path.exists():
+                try:
+                    with open(cache_path, "r", encoding="utf-8") as f_cache:
+                        cache = json.load(f_cache)
+                    checklist = cache.get("checklist_stocks", {})
+                    strength_count = checklist.get("strengthCount", 1)
+                    timing_count = checklist.get("timingCount", 1)
+                    industry_rating = checklist.get("industry", "Neutral")
+                    
+                    if (strength_count < 1 and timing_count < 1) or industry_rating == "Weak":
+                        buy_cand["total"] -= 1.5
+                        _log.info(f"🛡️ [R&D #32 Guard] Applied -1.5 score penalty to {sym_upper} (overbought/weak-sector: strength={strength_count}, timing={timing_count}, industry={industry_rating})")
+                except Exception as ex_b:
+                    _log.warning(f"Failed to check R&D #32 breakout guard for {sym_upper}: {ex_b}")
+
         top_buys.sort(key=lambda x: x["total"], reverse=True)
 
         # ── R&D #27: Dynamic Momentum Rotation Engine ──
