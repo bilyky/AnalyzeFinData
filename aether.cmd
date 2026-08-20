@@ -33,5 +33,6 @@ echo  Additional Commands:
 echo    aether serve         - Runs the server in-process (foreground)
 echo    aether dev           - Runs the server in foreground auto-reload mode
 echo    aether etrade-login  - Re-authenticates E*TRADE (add --bootstrap for one-time OTP)
+echo    aether etrade-reauth - Unattended daily E*TRADE re-auth (--scheduled; alerts on SMS)
 echo =======================================================================
 exit /b 0

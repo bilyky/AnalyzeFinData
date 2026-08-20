@@ -48,6 +48,7 @@ import watchdog
 import sell_eval
 from aether import stock_compare
 from aether import etrade
+from aether import notify
 from aether_logger import get_logger
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -1057,6 +1058,25 @@ def cmd_etrade_login(bootstrap: bool = False) -> None:
     raise SystemExit(0 if result.get("ok") else 1)
 
 
+def cmd_etrade_reauth() -> None:
+    """The AUTOMATED (unattended) daily E*TRADE re-auth door — what the Task Scheduler runs.
+
+    Delegates to etrade.scheduled_reauth(), which is safe by construction: it renews first
+    (no browser), opens the ONE allowed automated browser only while the persistent profile is
+    trusted, and latches 'sms_required' the instant an OTP wall appears — so nothing here ever
+    hammers the login or risks a ban. On a state that needs a human (sms_required / unseeded /
+    failed) it fires the throttled email + desktop-push alert. Prints the JSON result; exits 0
+    on ok (renewed or reauthed), 1 otherwise so the scheduler/CI can detect it."""
+    result = etrade.scheduled_reauth("production")
+    _log.info("E*TRADE scheduled re-auth result: %s", json.dumps(result))
+    if not result.get("ok") and result.get("reason") in {"sms_required", "unseeded", "failed"}:
+        try:
+            notify.send_reauth_alert("production", result["reason"])
+        except Exception as e:
+            _log.warning("E*TRADE re-auth alert failed: %s", e)
+    raise SystemExit(0 if result.get("ok") else 1)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -1064,16 +1084,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "cmd", nargs="?", default="dev",
         choices=["start", "stop", "restart", "status", "upgrade",
-                 "regen-secret", "serve", "etrade-login", "dev"],
+                 "regen-secret", "serve", "etrade-login", "etrade-reauth", "dev"],
         help="start/stop/restart/status/upgrade the background server; "
              "regen-secret rotates web.secret in config.json; "
              "'serve' runs uvicorn in-process; 'etrade-login' re-authenticates E*TRADE "
-             "(add --bootstrap for the one-time supervised OTP); omit for foreground dev mode",
+             "(add --bootstrap for the one-time supervised OTP); 'etrade-reauth --scheduled' "
+             "is the unattended daily door (renew-first, trusted-profile only, alerts on SMS); "
+             "omit for foreground dev mode",
     )
     parser.add_argument("--port", type=int, help="Override configured port (serve/dev)")
     parser.add_argument("--host", help="Override configured host (serve/dev)")
     parser.add_argument("--bootstrap", action="store_true",
                         help="etrade-login: headed one-time OTP run to re-seed device trust")
+    parser.add_argument("--scheduled", action="store_true",
+                        help="etrade-reauth: run as the unattended scheduled daily re-auth")
     args = parser.parse_args()
 
     if args.cmd == "start":
@@ -1093,6 +1117,8 @@ if __name__ == "__main__":
         cmd_serve(args.host or cfg.web_host, args.port or cfg.web_port)
     elif args.cmd == "etrade-login":
         cmd_etrade_login(bootstrap=args.bootstrap)
+    elif args.cmd == "etrade-reauth":
+        cmd_etrade_reauth()
     else:
         # Default: foreground dev mode (auto-reload)
         cfg = _cfg()
