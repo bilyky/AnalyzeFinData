@@ -20,6 +20,20 @@ from aether.config import CFG
 
 _log = logging.getLogger("aether.etrade")
 
+
+class SmsRequired(Exception):
+    """Raised when an AUTOMATED (headless) re-auth reaches E*TRADE's SMS/OTP wall.
+
+    Device-trust has lapsed, so E*TRADE demands a one-time SMS code no code can supply. This
+    is NOT a failure/ban condition — the browser and login worked, trust merely expired — so
+    the automated door (scheduled_reauth) catches it to latch the profile 'sms_required' and
+    alert a human, WITHOUT escalating the anti-ban circuit breaker. Carries the env for logs.
+    """
+    def __init__(self, env: str = "production"):
+        super().__init__(f"E*TRADE {env}: SMS/OTP required — device trust lapsed")
+        self.env = env
+
+
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Canonical directory for E*TRADE auth-state files (token, browser state, breaker, locks).
@@ -61,6 +75,24 @@ _BROWSER_STATE_PATH = os.path.join(_DATA_DIR, "etrade_browser_state.json")
 # profile and survive across runs — which is what makes the daily re-auth zero-touch. Under
 # _DATA_DIR (gitignored Data/), so the profile — and its cookies — never reach git.
 _CHROME_PROFILE_DIR = os.path.join(_DATA_DIR, "etrade_chrome_profile")
+
+# Trust-state marker driving the automated daily re-auth door (scheduled_reauth). The state
+# machine is UNSEEDED → TRUSTED → SMS_REQUIRED: the automated path opens a browser ONLY when
+# this reads "trusted" (a supervised bootstrap proved the profile holds device-trust), and
+# latches to "sms_required" the instant a headless run hits the OTP wall — so no automated
+# browser ever hammers the login while device-trust is down. Gitignored Data/, never in git.
+_TRUST_MARKER_PATH = os.path.join(_DATA_DIR, "etrade_profile_trusted.json")
+
+# Single-source JS predicate: "has the browser LEFT the login page?" — true once we've reached
+# the OAuth consent page, the OTP wall, or any non-login URL. Used by both the headed (human)
+# and headless (auto-submit) waits below so the detection rule can't drift between them.
+_LEFT_LOGIN_PAGE_JS = """() => {
+    const href = location.href.toLowerCase();
+    if (!href.includes('/pxy/login')) return true;   // left the login page
+    if (href.includes('otp')) return true;           // OTP wall reached
+    return !!document.querySelector(
+        "input[value='Accept'], button[value='Accept'], #oauth_pin");
+}"""
 
 # Auth-state files are never hard-deleted in the hot path: a fresh, still-valid token
 # can be destroyed by one transient/edge 401, so on rejection/revoke we route through
@@ -113,6 +145,12 @@ def _save_tokens(tokens, env):
     # from the wrong worktree silently saves where prod never reads. Making the target
     # visible turns that class of mistake into something you can see in one glance.
     _log.info(f"E*TRADE {env} token saved ({tokens['issued_date_et']}) -> {_TOKEN_PATH}")
+    # A fresh token means the session is healthy again — end any active re-auth alert episode
+    # so the next time a wall appears the throttled email/push fires anew (best-effort).
+    try:
+        notify.clear_reauth_alert(env)
+    except Exception:
+        pass
 
 
 def _load_tokens(env):
@@ -338,6 +376,57 @@ def _record_reauth_attempt(env: str = "production") -> None:
 
 
 # ---------------------------------------------------------------------------
+# Persistent-profile trust state (gates the automated daily re-auth door)
+# ---------------------------------------------------------------------------
+
+def _profile_trust_state(env: str = "production") -> str:
+    """Automated-reauth trust state for env: 'trusted' | 'sms_required' | 'unseeded'.
+
+    'unseeded'     — no supervised bootstrap has proved the profile yet (default; missing file).
+    'trusted'      — a bootstrap (or a prior zero-touch run) minted a token through the profile
+                     browser; the automated door MAY open a browser.
+    'sms_required' — a headless run hit the OTP wall; the automated door must NOT open a browser
+                     until a human re-seeds via `aether etrade-login --bootstrap`.
+    """
+    try:
+        with open(_TRUST_MARKER_PATH) as f:
+            m = json.load(f)
+    except (OSError, ValueError, TypeError):
+        return "unseeded"
+    if not isinstance(m, dict) or m.get("env") != env:
+        return "unseeded"
+    state = m.get("state")
+    return state if state in ("trusted", "sms_required") else "unseeded"
+
+
+def _set_profile_trust(env: str, state: str) -> None:
+    """Persist the profile trust state ('trusted' or 'sms_required'). Best-effort."""
+    try:
+        os.makedirs(os.path.dirname(_TRUST_MARKER_PATH), exist_ok=True)
+        with open(_TRUST_MARKER_PATH, "w") as f:
+            json.dump({
+                "env": env,
+                "state": state,
+                "updated_at": time.time(),
+                "updated_date_et": _et_today(),
+            }, f, indent=2)
+        _log.info(f"E*TRADE {env} profile trust -> {state}")
+    except OSError as e:
+        _log.warning(f"E*TRADE: could not write trust marker: {e}")
+
+
+def _scheduled_headless() -> bool:
+    """Whether the automated daily re-auth (scheduled_reauth) runs headless. Default True; set
+    AETHER_ETRADE_SCHEDULED_HEADLESS=0 (or config etrade_scheduled_headless=false) to run headful
+    without a code change — the escape hatch if the prove stage finds headless trips Akamai and a
+    real window survives the challenge."""
+    v = os.environ.get("AETHER_ETRADE_SCHEDULED_HEADLESS")
+    if v is None:
+        v = str(getattr(CFG, "etrade_scheduled_headless", "") or "")
+    return v.strip().lower() not in ("0", "false", "no", "off")
+
+
+# ---------------------------------------------------------------------------
 # OAuth — automated via Playwright
 # ---------------------------------------------------------------------------
 
@@ -375,7 +464,14 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str, he
             tokens = oauth.get_access_token(verifier_code)
             _save_tokens(tokens, env)
             reset_reauth_circuit_breaker(env)   # success retracts the pre-armed failure
+            _set_profile_trust(env, "trusted")  # a clean mint through the profile proves trust
             return tokens
+    except SmsRequired:
+        # OTP wall in a headless run: the browser and login WORKED — trust merely lapsed. That
+        # is not a ban-risk failure, so retract the pre-armed breaker (don't let it escalate)
+        # and propagate the signal so the caller latches sms_required and alerts a human.
+        reset_reauth_circuit_breaker(env)
+        raise SmsRequired(env)
     except Exception as e:
         _log.debug(f"_login_headless: {e}")
     return None
@@ -469,10 +565,35 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
             page.goto(auth_url, wait_until="domcontentloaded", timeout=30000)
             _snap("01_loaded")
 
-            # Auto-fill login form
-            user_ok = _try_fill(page, _USER_SELECTORS, username, "username")
-            pass_ok = _try_fill(page, _PASS_SELECTORS, password, "password")
-            _snap("02_filled")
+            # How the login form gets filled depends on WHO drives it. Programmatic keystrokes
+            # (page.type / page.press) carry a behavioral fingerprint E*TRADE's Akamai bot-check
+            # flags — the "Log on" button then spins forever on the .../pxy/login URL and the flow
+            # stalls. A HUMAN typing on a trusted device passes cleanly (and, device-trust intact,
+            # is never even asked for SMS). So:
+            #   * headless (automated daily run on an already-PROVEN profile) -> auto-fill + submit
+            #   * headed  (supervised bootstrap / re-seed)                    -> the HUMAN types
+            if headless:
+                user_ok = _try_fill(page, _USER_SELECTORS, username, "username")
+                pass_ok = _try_fill(page, _PASS_SELECTORS, password, "password")
+                _snap("02_filled")
+            else:
+                user_ok = pass_ok = False   # skip the auto-submit + 30s auto-wait blocks below
+                _snap("02_login_page")
+                print("\n" + "=" * 68)
+                print("  ACTION NEEDED - log in YOURSELF in the browser window:")
+                print("    1. Type your User ID + password and click 'Log on'.")
+                print("       (If the SCRIPT types, Akamai stalls the login; your own")
+                print("        typing on this trusted device passes cleanly.)")
+                print("    2. If asked, complete SMS and tick 'remember this device'.")
+                print("    3. On the 'Authorize application' page, click Accept.")
+                print("  Then return here - the verifier is captured automatically.")
+                print("=" * 68 + "\n")
+                try:
+                    page.wait_for_function(_LEFT_LOGIN_PAGE_JS, timeout=180000)  # 3 min for the human
+                    print(f"  [Auth] Login processed - page is now: {page.url[:80]}")
+                except Exception:
+                    print("  [Auth] Did not leave the login page within 3 min - inspecting state.")
+                _snap("03b_post_login")
             if user_ok and pass_ok:
                 # Press Enter exactly once on the first matching password field to prevent duplicate submission loops
                 submitted = False
@@ -502,9 +623,38 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                         print(f"  [Auth] Submit failed ({e}) — click Log on manually.")
             _snap("03_after_submit")
 
+            # E*TRADE's login submit is an AJAX/SPA call: no full-document navigation fires, so
+            # the domcontentloaded wait above returns while the "Log on" button is still spinning
+            # on the SAME .../pxy/login URL. Proceeding immediately made the flow hunt for consent
+            # controls on the login page itself (it toggled the login page's "Remember User ID"
+            # box and found no Accept button), then poll fruitlessly for a verifier that never
+            # appears. Wait for the page to actually LEAVE the login screen — the OAuth consent
+            # page, the OTP wall, or any non-login URL — before running the OTP / Accept logic.
+            # Bounded so a genuine Akamai spinner-hang still fails fast instead of blocking.
+            if user_ok and pass_ok:
+                try:
+                    page.wait_for_function(_LEFT_LOGIN_PAGE_JS, timeout=30000)
+                    print(f"  [Auth] Login processed — page is now: {page.url[:80]}")
+                except Exception:
+                    print("  [Auth] Still on the login page after 30s (slow render or Akamai "
+                          "hold) — proceeding to inspect the current state.")
+                _snap("03b_post_login")
+
             # Handle MFA / OTP step (sendotpcode page)
             if "sendotpcode" in page.url or "otp" in page.url.lower():
                 _snap("04_otp_page")
+                if headless:
+                    # Automated/scheduled path: device-trust lapsed and E*TRADE wants a one-time
+                    # SMS. No human is here — do NOT click "Send Code" (that fires a real SMS for
+                    # nothing) and do NOT wait. Abort instantly with a distinct signal so the
+                    # caller latches 'sms_required' and alerts a human. Close the context first so
+                    # any partial Akamai cookie progress flushes to the persistent profile.
+                    _log.warning("  [Auth] OTP wall hit in headless mode — aborting for manual SMS re-auth.")
+                    try:
+                        ctx.close()
+                    except Exception:
+                        pass
+                    raise SmsRequired()
                 print("  [Auth] MFA required — clicking 'Send Code'...")
                 for sel in ["button:has-text('Send Code')", "input[value='Send Code']",
                             "button[type='submit']"]:
@@ -658,6 +808,11 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                         break
                     page.wait_for_timeout(5000)
 
+        except SmsRequired:
+            # Device trust lapsed and the OTP wall appeared in a headless run. This is NOT a
+            # browser-interaction failure (login worked) — propagate it intact so the caller
+            # latches sms_required. The finally still runs; verifier is None so no state save.
+            raise
         except Exception as e:
             print(f"  [Auth] Browser interaction error: {e}")
         finally:
@@ -855,6 +1010,10 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
                     _log.info("E*TRADE: automatic re-authentication succeeded.")
                     return tokens
                 _log.warning("E*TRADE: automatic re-authentication failed (browser state may be stale).")
+            except SmsRequired:
+                # Trust lapsed mid-renewal; don't swallow it as a generic error — let the
+                # dedicated door (scheduled_reauth) latch sms_required and alert a human.
+                raise
             except Exception as e:
                 _log.warning(f"E*TRADE: headless Playwright re-auth error: {e}")
 
@@ -888,6 +1047,9 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     # A successful human re-auth clears the automated-reauth circuit breaker, so scheduled
     # jobs resume normal operation without waiting out any residual cooldown.
     reset_reauth_circuit_breaker(env)
+    # A clean interactive mint through the profile browser (re-)proves device trust, so the
+    # automated daily door is armed again after a monthly SMS bootstrap.
+    _set_profile_trust(env, "trusted")
     print("Tokens saved to cache.")
     return tokens
 
@@ -912,9 +1074,11 @@ def reauthenticate(env: str = "production", bootstrap: bool = False, headless: b
     checks "remember this device"); after that the trust window carries the zero-touch runs.
 
     bootstrap=True forces a headed browser (a human must be present for the OTP). Returns a
-    JSON-serializable dict so the HTTP endpoint and CLI render it uniformly. This is a
-    HUMAN-initiated action ONLY — the anti-ban contract still forbids scheduled jobs from ever
-    opening a browser (they use keep_alive); nothing here is wired into the scheduler.
+    JSON-serializable dict so the HTTP endpoint and CLI render it uniformly. This is the
+    HUMAN door. The scheduler now has its OWN dedicated automated door, scheduled_reauth(),
+    which is gated by the persistent-profile trust marker + circuit breaker + a once/day guard
+    and never opens a browser while trust is down — so the anti-ban contract holds: an
+    unattended browser opens at most once/day, only through that door, only while trusted.
     """
     if bootstrap:
         headless = False   # a human must watch to enter the one-time OTP that re-seeds trust
@@ -959,6 +1123,77 @@ def reauthenticate(env: str = "production", bootstrap: bool = False, headless: b
     result["ok"] = result["has_token"] and result["quote_ok"]
     if result["ok"] and not result["message"]:
         result["message"] = f"E*TRADE {env} re-authenticated; token issued {result['issued_date_et']}."
+    return result
+
+
+def scheduled_reauth(env: str = "production") -> dict:
+    """The ONE automated (unattended) E*TRADE re-auth door — safe by construction.
+
+    Called only by the daily Task-Scheduler entry (server.py `etrade-reauth --scheduled`) and
+    the watchdog catch-up. Opens a browser at most ONCE per invocation, and only when ALL of
+    these hold, in order:
+      1. keep_alive() couldn't renew a live same-day token (pure HTTP, no browser). If it
+         could, we return renewed with NO browser.
+      2. The persistent-profile trust marker reads 'trusted'. If it is 'sms_required' or
+         'unseeded', we open NO browser and return that reason so the caller alerts a human.
+      3. The circuit breaker isn't cooling.
+    Only then does it call _login_headless() DIRECTLY (the single breaker/trust choke point) —
+    not get_tokens()'s priority-3 ladder, which many non-scheduled callers (pricing) hit and
+    must never pop a browser through. A headless OTP wall raises SmsRequired, which latches the
+    marker to 'sms_required' (no more automated browsers until a human bootstraps) and reports.
+
+    The "at most one browser per day" property is not a standalone gate but an emergent one:
+    step 1 renews any live same-day token first (so a fresh mint is reused, not re-opened); a
+    failed attempt arms the breaker (step 3 blocks the rest of the day); and an OTP wall latches
+    'sms_required' (step 2 blocks it) — so after any outcome of the first open, same-day reruns
+    do not open a second browser.
+
+    Returns a JSON-serializable dict: {ok, env, reason, browser_opened, ...}. `reason` is one
+    of: renewed | reauthed | sms_required | unseeded | breaker | failed.
+    """
+    result = {"ok": False, "env": env, "reason": "", "browser_opened": False,
+              "issued_date_et": None, "breaker_state": None}
+
+    # 1. Renew-first: a still-live same-day token needs no browser at all (ban-free HTTP).
+    alive = keep_alive(env)
+    if alive:
+        result.update(ok=True, reason="renewed", issued_date_et=alive.get("issued_date_et"))
+        result["breaker_state"] = _breaker_summary(env)
+        return result
+
+    # 2. Token is dead. The automated door opens a browser ONLY while the profile is trusted.
+    trust = _profile_trust_state(env)
+    if trust != "trusted":
+        # 'unseeded' (never bootstrapped) or 'sms_required' (trust lapsed, awaiting a human).
+        result["reason"] = trust
+        result["breaker_state"] = _breaker_summary(env)
+        return result
+
+    # 3. Don't open a browser while the breaker is cooling (a hang/kill mid-attempt armed it).
+    if _reauth_cooldown_remaining(env) > 0:
+        result["reason"] = "breaker"
+        result["breaker_state"] = _breaker_summary(env)
+        return result
+
+    # All gates passed → the one allowed automated browser open, through the breaker choke point.
+    ck, cs, username, password = _load_config(env)
+    try:
+        tokens = _login_headless(ck, cs, username, password, env, headless=_scheduled_headless())
+    except SmsRequired:
+        # Trust lapsed: the browser+login worked but E*TRADE demanded an OTP. Latch the marker
+        # so NO further automated browser opens until a human re-seeds; breaker already cleared.
+        _set_profile_trust(env, "sms_required")
+        result.update(reason="sms_required", browser_opened=True)
+        result["breaker_state"] = _breaker_summary(env)
+        return result
+
+    result["browser_opened"] = True
+    if tokens:
+        result.update(ok=True, reason="reauthed", issued_date_et=tokens.get("issued_date_et"))
+    else:
+        # _login_headless already escalated the breaker (or was suppressed by it).
+        result["reason"] = "failed"
+    result["breaker_state"] = _breaker_summary(env)
     return result
 
 
