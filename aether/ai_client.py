@@ -213,7 +213,7 @@ def _run_gemini(model: str, context: str, instruction: str) -> str:
             args,
             input=context,
             capture_output=True, text=True, timeout=_TIMEOUT,
-            shell=False,
+            shell=(sys.platform == "win32"),
             cwd=_get_gemini_sandbox(),
             encoding="utf-8",
             env=env,

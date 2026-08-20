@@ -784,6 +784,10 @@ def check_from_file(prefer_cache: bool, date=None):
     syms_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "symbols_to_check.txt")
     csv_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", f"symbols_to_check_{date}.csv")
     
+    if not os.path.exists(syms_path):
+        _pg_log.warning(f"Symbols file not found: {syms_path}. Skipping file-based check.")
+        return
+    
     # ── Phase 1: parse and gather valid rows ──
     valid_entries: list[tuple[str, str]] = []
     with open(syms_path, "r") as f:

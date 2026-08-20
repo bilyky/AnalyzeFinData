@@ -45,24 +45,18 @@ Write-Host "----------------------------------------------------------"
 $Tasks = @(
     @{
         Name     = "AETHER_Watchdog"
-        # Two-trigger design:
-        # 1. Hourly during market & pre-market session (6:00 AM PST - 2:00 PM PST)
-        # 2. Every 2 hours during out-of-market hours (2:00 PM PST - 6:00 AM PST)
+        # 24/7 Hourly Trigger Design:
+        # Runs every 1 hour, 24/7 indefinitely, ensuring E*TRADE tokens are always kept alive before expiring.
         Triggers  = @(
             $(
-                $T = New-ScheduledTaskTrigger -Daily -At "6:00 AM"
-                $T.Repetition = (New-ScheduledTaskTrigger -Once -At "6:00 AM" -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Hours 8)).Repetition
-                $T
-            ),
-            $(
-                $T = New-ScheduledTaskTrigger -Daily -At "2:00 PM"
-                $T.Repetition = (New-ScheduledTaskTrigger -Once -At "2:00 PM" -RepetitionInterval (New-TimeSpan -Hours 2) -RepetitionDuration (New-TimeSpan -Hours 16)).Repetition
+                $T = New-ScheduledTaskTrigger -Daily -At "12:00 AM"
+                $T.Repetition = (New-ScheduledTaskTrigger -Once -At "12:00 AM" -RepetitionInterval (New-TimeSpan -Hours 1)).Repetition
                 $T
             )
         )
         Prompt   = "Execute the automated skill defined in .claude/commands/watchdog.md"
         Log      = "watchdog_agent.log"
-        Desc     = "Hourly pre-market/market diagnostics and 2-hourly off-market self-healing loop."
+        Desc     = "Hourly diagnostics and self-healing loop running 24/7."
     },
     @{
         Name     = "AETHER_StopMonitor"
