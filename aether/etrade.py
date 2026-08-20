@@ -108,6 +108,31 @@ def _et_today() -> str:
     return datetime.datetime.fromtimestamp(time.time(), _ET).date().isoformat()
 
 
+def _et_now() -> str:
+    """Full ET timestamp (seconds) — stamps WHEN an auth verdict was computed (Temporal
+    Zero-Trust: a status is only true as of its check time). Same unmocked physical clock."""
+    return datetime.datetime.fromtimestamp(time.time(), _ET).isoformat(timespec="seconds")
+
+
+class AuthReason:
+    """The E*TRADE auth-state vocabulary, defined once.
+
+    Shared by auth_status() and scheduled_reauth() so neither hardcodes a divergent string. The
+    first six values double as scheduled_reauth's `reason` field (string values unchanged), so
+    both paths speak one language.
+    """
+    RENEWED       = "renewed"        # a live same-day token was refreshed via ban-free HTTP renew
+    REAUTHED      = "reauthed"       # a fresh token was minted through the browser (automated door)
+    SMS_REQUIRED  = "sms_required"   # device trust lapsed — a human SMS bootstrap is required
+    UNSEEDED      = "unseeded"       # profile never bootstrapped — a supervised bootstrap is required
+    BREAKER       = "breaker"        # the anti-ban circuit breaker is cooling down
+    FAILED        = "failed"         # an automated browser re-auth attempt failed
+    LIVE          = "live"           # token present and valid (local record, or probe-confirmed)
+    EXPIRED       = "expired"        # token dead (overnight/midnight-ET) or broker-rejected (401/403)
+    MISSING       = "missing"        # no token file present
+    INDETERMINATE = "indeterminate"  # transient/unknown (probe blip) — never act destructively
+
+
 # ---------------------------------------------------------------------------
 # Config / token helpers
 # ---------------------------------------------------------------------------
@@ -337,9 +362,15 @@ def _save_reauth_state(state: dict, env: str = "production") -> None:
         pass
 
 
+def _cooldown_remaining_from_state(state: dict) -> float:
+    """Seconds left on the automated-reauth cooldown for an ALREADY-LOADED breaker state dict —
+    the single home of the cooldown arithmetic. 0.0 means the gate is open."""
+    return max(0.0, state["cooldown_until"] - time.time())
+
+
 def _reauth_cooldown_remaining(env: str = "production") -> float:
     """Seconds left on the automated-reauth cooldown. 0.0 means the gate is open."""
-    return max(0.0, _load_reauth_state(env)["cooldown_until"] - time.time())
+    return _cooldown_remaining_from_state(_load_reauth_state(env))
 
 
 def reset_reauth_circuit_breaker(env: str = "production") -> None:
@@ -1054,12 +1085,14 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     return tokens
 
 
-def _breaker_summary(env: str = "production") -> dict:
-    """JSON-friendly snapshot of the automated-reauth breaker for the re-auth result dict."""
-    st = _load_reauth_state(env)
+def _breaker_summary(env: str = "production", *, state: dict | None = None) -> dict:
+    """JSON-friendly snapshot of the automated-reauth breaker for the re-auth result dict.
+    Pass an already-loaded `state` to reuse a single read of the breaker file (else it reads
+    its own)."""
+    st = state if state is not None else _load_reauth_state(env)
     return {
         "consecutive_failures": st["consecutive_failures"],
-        "cooldown_remaining_min": round(_reauth_cooldown_remaining(env) / 60, 1),
+        "cooldown_remaining_min": round(_cooldown_remaining_from_state(st) / 60, 1),
     }
 
 
@@ -1126,6 +1159,147 @@ def reauthenticate(env: str = "production", bootstrap: bool = False, headless: b
     return result
 
 
+def _dead_token_gate(trust: str, cooling: bool):
+    """Classify why a dead/absent token can't be auto-refreshed right now — the single
+    definition of the trust->breaker gate, shared by the read-only classifier auth_status()
+    and the acting door scheduled_reauth().
+
+    Returns (reason, needs_manual, can_auto):
+      * trust lapsed (sms_required/unseeded) -> a human must re-seed the profile.
+      * breaker cooling                       -> neither human nor automation acts yet.
+      * trusted + breaker clear (reason=None) -> the automated door can refresh unattended.
+    trust's non-'trusted' values equal the AuthReason.SMS_REQUIRED/UNSEEDED strings, so they
+    are returned verbatim as the reason.
+    """
+    if trust in ("sms_required", "unseeded"):
+        return trust, True, False
+    if cooling:
+        return AuthReason.BREAKER, False, False
+    return None, False, True
+
+
+def _auth_summary(env: str, r: dict) -> str:
+    """Human one-liner for an auth_status verdict — points at the exact next action."""
+    state = r["state"]
+    boot = "`aether etrade-login --bootstrap`"
+    if state == AuthReason.LIVE:
+        probe = r["probe"]
+        if probe == "authorized":
+            return f"E*TRADE {env}: authorized (broker-confirmed)."
+        if probe == "indeterminate":
+            return (f"E*TRADE {env}: token present; broker probe inconclusive (transient) — "
+                    f"treating as live.")
+        return f"E*TRADE {env}: token valid (issued today)."
+    if state == AuthReason.MISSING:
+        return (f"E*TRADE {env}: no token — supervised bootstrap required ({boot})."
+                if r["needs_manual_auth"]
+                else f"E*TRADE {env}: no token — the daily automated re-auth will mint one.")
+    if state == AuthReason.EXPIRED:
+        return f"E*TRADE {env}: token expired — the daily automated re-auth will refresh it."
+    if state == AuthReason.SMS_REQUIRED:
+        return f"E*TRADE {env}: device trust lapsed — a one-time SMS bootstrap is required ({boot})."
+    if state == AuthReason.UNSEEDED:
+        return f"E*TRADE {env}: profile not seeded — a supervised bootstrap is required ({boot})."
+    if state == AuthReason.BREAKER:
+        return (f"E*TRADE {env}: automated re-auth cooling down "
+                f"({r['breaker']['cooldown_remaining_min']} min left).")
+    return f"E*TRADE {env}: {state}."
+
+
+def auth_status(env: str = "production", *, probe: bool = False) -> dict:
+    """Read-only E*TRADE auth-state classifier, shared by every surface (the /api/etrade/status
+    endpoint, the /api/health embed, and the `server.py etrade-status` CLI all call this function).
+    The read-only mirror of the automated door scheduled_reauth(): it reuses the AuthReason
+    vocabulary and the _dead_token_gate trust/breaker gate, but NEVER opens a browser.
+
+    Local-check -> refresh -> probe ladder (mirrors scheduled_reauth's renew-first order):
+      * probe=False (default) -> pure-local: no network, no mutation. Cheap enough to embed in
+        a frequently-polled health blob; the trust/breaker state alone already surfaces whether
+        a human bootstrap is needed.
+      * probe=True -> for a SAME-DAY token, first REFRESH via the ban-free HTTP renew (fixes the
+        2 h idle timeout cheaply), then PROBE the refreshed token against the broker
+        (_probe_token_auth) for ground truth. A previous-day token is an overnight/midnight-ET
+        hard expiry that renew cannot bridge, so it is ruled dead locally with NO wasted probe.
+
+    Returns a JSON-serializable dict. Every non-live state carries needs_manual_auth /
+    can_auto_reauth so any caller decides what to do without re-deriving the state machine.
+    """
+    trust   = _profile_trust_state(env)
+    _bstate = _load_reauth_state(env)          # one read of the breaker file, reused below
+    breaker = _breaker_summary(env, state=_bstate)
+    # Cool off the RAW remaining seconds, not the display-rounded cooldown_remaining_min (rounded
+    # to 1 decimal, so it reads clear for the last ~3 s of a cooldown that scheduled_reauth still
+    # honors) — derived from the same loaded state, so no extra read and no rounding drift.
+    cooling = _cooldown_remaining_from_state(_bstate) > 0
+    tokens  = _load_tokens_any_date(env)
+    issued  = tokens.get("issued_date_et") if tokens else None
+    is_today = bool(tokens) and issued == _et_today()
+
+    result = {
+        "env": env,
+        "state": None,
+        "reason": None,
+        "needs_manual_auth": False,
+        "can_auto_reauth": False,
+        "token": {"present": bool(tokens), "issued_date_et": issued, "is_today": is_today},
+        "trust": trust,
+        "breaker": breaker,
+        "probe": "skipped",
+        "checked_at_et": _et_now(),
+        "summary": "",
+    }
+
+    def _finalize(state, reason, *, needs_manual, can_auto):
+        result["state"] = state
+        result["reason"] = reason
+        result["needs_manual_auth"] = needs_manual
+        result["can_auto_reauth"] = can_auto
+        result["summary"] = _auth_summary(env, result)
+        return result
+
+    def _dead(state):
+        # Token is absent or dead. Why it can't be auto-refreshed is the SAME trust->breaker gate
+        # scheduled_reauth uses, via the shared _dead_token_gate. reason=None means trusted+clear:
+        # report the raw dead-state (missing/expired) and let the automated door fix it.
+        gate_reason, needs_manual, can_auto = _dead_token_gate(trust, cooling)
+        st = gate_reason or state
+        return _finalize(st, st, needs_manual=needs_manual, can_auto=can_auto)
+
+    # 1. Local, no network.
+    if not tokens:
+        return _dead(AuthReason.MISSING)
+    if not is_today:
+        # Previous-day token = overnight/midnight-ET hard expiry; renew cannot bridge it and a
+        # probe would only confirm rejected -> rule dead locally, skip both refresh and probe.
+        return _dead(AuthReason.EXPIRED)
+    if not probe:
+        # Same-day token, cheap path: valid per local record (no network touched).
+        return _finalize(AuthReason.LIVE, AuthReason.LIVE, needs_manual=False, can_auto=False)
+
+    # 2. Refresh (same-day, ban-free HTTP; the 55-min guard reuses a fresh token with no call).
+    orig_saved_at = tokens.get("saved_at")
+    renewed = renew_tokens(tokens, env)
+    live_tokens = renewed or tokens
+    # A real renew stamps a new saved_at (renew_tokens); a <55-min guard-reuse returns the same
+    # token with saved_at unchanged. Comparing saved_at — not re-checking the 55-min threshold
+    # (a second source of truth) and not just bool(renewed) (true for a reuse too) — is what
+    # separates a genuine refresh from a reuse, so RENEWED means the token really changed.
+    did_renew = bool(renewed) and live_tokens.get("saved_at") != orig_saved_at
+
+    # 3. Probe the (possibly-renewed) token for broker ground truth.
+    verdict = _probe_token_auth(live_tokens, env)
+    if verdict is True:
+        result["probe"] = "authorized"
+        reason = AuthReason.RENEWED if did_renew else AuthReason.LIVE
+        return _finalize(AuthReason.LIVE, reason, needs_manual=False, can_auto=False)
+    if verdict is False:
+        result["probe"] = "rejected"
+        return _dead(AuthReason.EXPIRED)
+    # None -> transient/indeterminate: never downgrade a same-day token on a blip.
+    result["probe"] = "indeterminate"
+    return _finalize(AuthReason.LIVE, AuthReason.INDETERMINATE, needs_manual=False, can_auto=False)
+
+
 def scheduled_reauth(env: str = "production") -> dict:
     """The ONE automated (unattended) E*TRADE re-auth door — safe by construction.
 
@@ -1157,21 +1331,19 @@ def scheduled_reauth(env: str = "production") -> dict:
     # 1. Renew-first: a still-live same-day token needs no browser at all (ban-free HTTP).
     alive = keep_alive(env)
     if alive:
-        result.update(ok=True, reason="renewed", issued_date_et=alive.get("issued_date_et"))
+        result.update(ok=True, reason=AuthReason.RENEWED, issued_date_et=alive.get("issued_date_et"))
         result["breaker_state"] = _breaker_summary(env)
         return result
 
-    # 2. Token is dead. The automated door opens a browser ONLY while the profile is trusted.
+    # 2-3. Token is dead. The automated door opens a browser ONLY while the profile is trusted
+    # AND the breaker is clear — the SAME gate the read-only auth_status reports, via the shared
+    # _dead_token_gate (trust lapse 'sms_required'/'unseeded' -> no browser, awaiting a human;
+    # cooling -> 'breaker'). reason=None means both gates are open.
     trust = _profile_trust_state(env)
-    if trust != "trusted":
-        # 'unseeded' (never bootstrapped) or 'sms_required' (trust lapsed, awaiting a human).
-        result["reason"] = trust
-        result["breaker_state"] = _breaker_summary(env)
-        return result
-
-    # 3. Don't open a browser while the breaker is cooling (a hang/kill mid-attempt armed it).
-    if _reauth_cooldown_remaining(env) > 0:
-        result["reason"] = "breaker"
+    gate_reason, _needs_manual, _can_auto = _dead_token_gate(
+        trust, _reauth_cooldown_remaining(env) > 0)
+    if gate_reason is not None:
+        result["reason"] = gate_reason
         result["breaker_state"] = _breaker_summary(env)
         return result
 
@@ -1183,16 +1355,16 @@ def scheduled_reauth(env: str = "production") -> dict:
         # Trust lapsed: the browser+login worked but E*TRADE demanded an OTP. Latch the marker
         # so NO further automated browser opens until a human re-seeds; breaker already cleared.
         _set_profile_trust(env, "sms_required")
-        result.update(reason="sms_required", browser_opened=True)
+        result.update(reason=AuthReason.SMS_REQUIRED, browser_opened=True)
         result["breaker_state"] = _breaker_summary(env)
         return result
 
     result["browser_opened"] = True
     if tokens:
-        result.update(ok=True, reason="reauthed", issued_date_et=tokens.get("issued_date_et"))
+        result.update(ok=True, reason=AuthReason.REAUTHED, issued_date_et=tokens.get("issued_date_et"))
     else:
         # _login_headless already escalated the breaker (or was suppressed by it).
-        result["reason"] = "failed"
+        result["reason"] = AuthReason.FAILED
     result["breaker_state"] = _breaker_summary(env)
     return result
 

@@ -22,6 +22,17 @@ import sys
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# The BLOCK/PASS messages below use emoji, but a git hook on Windows usually inherits a
+# cp1252 console that cannot encode them -> a legitimate BLOCK would die with
+# UnicodeEncodeError and mask the real reason for the block. Force UTF-8 (replace on
+# failure) so the message always prints. No-op where the stream is already UTF-8 / not a
+# TextIOWrapper.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 # Mapping of @doc-sync keys to their documentation files on disk + description
 DOC_SYNC_SURFACES = {
     "covered-calls": [
@@ -130,6 +141,41 @@ def check_feature_doc_sync() -> bool:
             print(f"   change is truly needed - acknowledge it explicitly:")
             print(f"       AETHER_DOCSYNC_ACK={key} git commit ...")
     return ok
+
+
+def check_wiki_about_sync() -> bool:
+    """Documentation Sentry drift guard (aether-documentation-sentry skill).
+
+    Data/wiki.json is the single source for the About-tab feature cards; the parity invariant
+    is that every `data-wiki="KEY"` card in web/index.html has exactly one wiki.json entry and
+    vice-versa (the drift that produced dead modals / orphaned entries). When either surface is
+    staged, run the real guard suite (tests/test_about_wiki_sync.py) so the drift cannot silently
+    return. Uses `unittest` — the project's available runner (pytest is not installed here).
+
+    Fails CLOSED: a red or unrunnable guard BLOCKS the commit. Skipped (returns True) when no
+    wiki surface is staged, so unrelated commits are not slowed."""
+    staged = _staged_paths()
+    surfaces = {"Data/wiki.json", "web/index.html"}
+    if not (staged & surfaces):
+        return True
+    print("[GIT PRE-COMMIT] Wiki surface staged - running About/wiki drift guard "
+          "(tests/test_about_wiki_sync.py)...")
+    try:
+        res = subprocess.run(
+            [sys.executable, "-m", "unittest", "tests.test_about_wiki_sync"],
+            capture_output=True, text=True, errors="replace", cwd=ROOT_DIR)
+    except Exception as e:
+        print(f"🚨 [GIT PRE-COMMIT] BLOCK - could not run the wiki drift guard: {e}")
+        return False
+    if res.returncode != 0:
+        print("🚨 [GIT PRE-COMMIT] BLOCK - About-tab <-> Data/wiki.json drift detected:")
+        print((res.stderr or res.stdout).strip())
+        print("-" * 70)
+        print("   Action: reconcile web/index.html data-wiki cards with Data/wiki.json "
+              "(aether-documentation-sentry skill) until the guard is green.")
+        return False
+    print("   ✅ Wiki/About parity guard passed.")
+    return True
 
 
 def check_no_inline_imports(file_path: str) -> bool:
@@ -418,6 +464,10 @@ def main():
 
     # Check Feature <-> Documentation Synchronicity (@doc-sync anchors)
     if not check_feature_doc_sync():
+        success = False
+
+    # Check About-tab <-> Data/wiki.json parity (Documentation Sentry drift guard)
+    if not check_wiki_about_sync():
         success = False
 
     # Check New Features Test Coverage Hook

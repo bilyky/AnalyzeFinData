@@ -59,9 +59,10 @@ If introducing a new card, add its HTML container inside the appropriate section
 ### Step 4: Run Factual Verification
 Before staging or committing any documentation or wiki changes, you **MUST** run the drift guard test suite to prove 100% synchronicity:
 ```bash
-python -m pytest tests/test_about_wiki_sync.py
+python -m unittest tests.test_about_wiki_sync
 ```
 *   **Access Denied:** If the test fails (RED), you have a mismatched key or an orphaned card. You must resolve the discrepancy until the suite is 100% green (PASS) before presenting the changes or pushing.
+*   **Automatic enforcement:** This same guard is wired into the pre-commit hook (`scripts/utils/pre_commit_validator.py` → `check_wiki_about_sync()`); staging `web/index.html` or `Data/wiki.json` runs it automatically and blocks the commit on drift. Running it by hand is still required before staging so you catch drift early.
 
 ---
 
