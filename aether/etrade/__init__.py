@@ -905,6 +905,25 @@ def is_market_open_now(tokens, env="production") -> bool | None:
 
 
 # ---------------------------------------------------------------------------
+# Object facade (encapsulation / extensibility)
+# ---------------------------------------------------------------------------
+# Imported at the BOTTOM, after every free function/constant above is defined, so
+# these submodules can `from aether import etrade` and resolve a fully-initialised
+# package. They touch the package only at call time, so there is no circular-import
+# hazard. The proven free-function API above is UNCHANGED and remains the back-compat
+# seam every test patches; ETradeClient is the new front door that delegates to it.
+from aether.etrade.store import (          # noqa: E402
+    make_etrade_store, EtradeStore,
+    TokenStore, BrowserStateStore, ReauthStateStore, LockProvider,
+    AuthEventLog, PositionSnapshotStore,
+)
+from aether.etrade.endpoints import Endpoints                      # noqa: E402
+from aether.etrade.client import (                                 # noqa: E402
+    ETradeClient, ETradeError, RoleNotPermitted,
+)
+
+
+# ---------------------------------------------------------------------------
 # Quick test
 # ---------------------------------------------------------------------------
 
