@@ -115,12 +115,11 @@ def _et_now() -> str:
 
 
 class AuthReason:
-    """Single source of truth for E*TRADE auth-state vocabulary.
+    """The E*TRADE auth-state vocabulary, defined once.
 
-    Shared by the read-only classifier auth_status() and the automated door scheduled_reauth()
-    so neither hardcodes a divergent string. The first six values ALSO double as scheduled_reauth's
-    `reason` field (their string values are unchanged from the literals it used before), so the
-    two paths speak one language and the existing hermetic tests stay green.
+    Shared by auth_status() and scheduled_reauth() so neither hardcodes a divergent string. The
+    first six values double as scheduled_reauth's `reason` field (string values unchanged), so
+    both paths speak one language.
     """
     RENEWED       = "renewed"        # a live same-day token was refreshed via ban-free HTTP renew
     REAUTHED      = "reauthed"       # a fresh token was minted through the browser (automated door)
@@ -363,9 +362,15 @@ def _save_reauth_state(state: dict, env: str = "production") -> None:
         pass
 
 
+def _cooldown_remaining_from_state(state: dict) -> float:
+    """Seconds left on the automated-reauth cooldown for an ALREADY-LOADED breaker state dict —
+    the single home of the cooldown arithmetic. 0.0 means the gate is open."""
+    return max(0.0, state["cooldown_until"] - time.time())
+
+
 def _reauth_cooldown_remaining(env: str = "production") -> float:
     """Seconds left on the automated-reauth cooldown. 0.0 means the gate is open."""
-    return max(0.0, _load_reauth_state(env)["cooldown_until"] - time.time())
+    return _cooldown_remaining_from_state(_load_reauth_state(env))
 
 
 def reset_reauth_circuit_breaker(env: str = "production") -> None:
@@ -1080,12 +1085,14 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     return tokens
 
 
-def _breaker_summary(env: str = "production") -> dict:
-    """JSON-friendly snapshot of the automated-reauth breaker for the re-auth result dict."""
-    st = _load_reauth_state(env)
+def _breaker_summary(env: str = "production", *, state: dict | None = None) -> dict:
+    """JSON-friendly snapshot of the automated-reauth breaker for the re-auth result dict.
+    Pass an already-loaded `state` to reuse a single read of the breaker file (else it reads
+    its own)."""
+    st = state if state is not None else _load_reauth_state(env)
     return {
         "consecutive_failures": st["consecutive_failures"],
-        "cooldown_remaining_min": round(_reauth_cooldown_remaining(env) / 60, 1),
+        "cooldown_remaining_min": round(_cooldown_remaining_from_state(st) / 60, 1),
     }
 
 
@@ -1152,6 +1159,25 @@ def reauthenticate(env: str = "production", bootstrap: bool = False, headless: b
     return result
 
 
+def _dead_token_gate(trust: str, cooling: bool):
+    """Classify why a dead/absent token can't be auto-refreshed right now — the single
+    definition of the trust->breaker gate, shared by the read-only classifier auth_status()
+    and the acting door scheduled_reauth().
+
+    Returns (reason, needs_manual, can_auto):
+      * trust lapsed (sms_required/unseeded) -> a human must re-seed the profile.
+      * breaker cooling                       -> neither human nor automation acts yet.
+      * trusted + breaker clear (reason=None) -> the automated door can refresh unattended.
+    trust's non-'trusted' values equal the AuthReason.SMS_REQUIRED/UNSEEDED strings, so they
+    are returned verbatim as the reason.
+    """
+    if trust in ("sms_required", "unseeded"):
+        return trust, True, False
+    if cooling:
+        return AuthReason.BREAKER, False, False
+    return None, False, True
+
+
 def _auth_summary(env: str, r: dict) -> str:
     """Human one-liner for an auth_status verdict — points at the exact next action."""
     state = r["state"]
@@ -1181,13 +1207,10 @@ def _auth_summary(env: str, r: dict) -> str:
 
 
 def auth_status(env: str = "production", *, probe: bool = False) -> dict:
-    """Read-only E*TRADE auth-state classifier — the ONE detection primitive.
-
-    Interface-free: web (GET /api/etrade/status, embedded in /api/health), the CLI
-    (`server.py etrade-status`), and any script call THIS SAME function — so "what auth state
-    are we in" is defined in exactly one place and can never drift per surface. It shares the
-    AuthReason vocabulary and the trust/breaker helpers with the automated door
-    scheduled_reauth(), of which it is the read-only mirror. It NEVER opens a browser.
+    """Read-only E*TRADE auth-state classifier, shared by every surface (the /api/etrade/status
+    endpoint, the /api/health embed, and the `server.py etrade-status` CLI all call this function).
+    The read-only mirror of the automated door scheduled_reauth(): it reuses the AuthReason
+    vocabulary and the _dead_token_gate trust/breaker gate, but NEVER opens a browser.
 
     Local-check -> refresh -> probe ladder (mirrors scheduled_reauth's renew-first order):
       * probe=False (default) -> pure-local: no network, no mutation. Cheap enough to embed in
@@ -1202,8 +1225,12 @@ def auth_status(env: str = "production", *, probe: bool = False) -> dict:
     can_auto_reauth so any caller decides what to do without re-deriving the state machine.
     """
     trust   = _profile_trust_state(env)
-    breaker = _breaker_summary(env)
-    cooling = breaker["cooldown_remaining_min"] > 0
+    _bstate = _load_reauth_state(env)          # one read of the breaker file, reused below
+    breaker = _breaker_summary(env, state=_bstate)
+    # Cool off the RAW remaining seconds, not the display-rounded cooldown_remaining_min (rounded
+    # to 1 decimal, so it reads clear for the last ~3 s of a cooldown that scheduled_reauth still
+    # honors) — derived from the same loaded state, so no extra read and no rounding drift.
+    cooling = _cooldown_remaining_from_state(_bstate) > 0
     tokens  = _load_tokens_any_date(env)
     issued  = tokens.get("issued_date_et") if tokens else None
     is_today = bool(tokens) and issued == _et_today()
@@ -1231,19 +1258,12 @@ def auth_status(env: str = "production", *, probe: bool = False) -> dict:
         return result
 
     def _dead(state):
-        # Token is absent or dead. What resolves it is governed by the trust marker (our record
-        # of the ~monthly device-trust wall) and the breaker — the SAME gates scheduled_reauth uses.
-        if trust == "sms_required":
-            return _finalize(AuthReason.SMS_REQUIRED, AuthReason.SMS_REQUIRED,
-                             needs_manual=True, can_auto=False)
-        if trust == "unseeded":
-            return _finalize(AuthReason.UNSEEDED, AuthReason.UNSEEDED,
-                             needs_manual=True, can_auto=False)
-        if cooling:
-            return _finalize(AuthReason.BREAKER, AuthReason.BREAKER,
-                             needs_manual=False, can_auto=False)
-        # trusted + breaker clear -> the daily automated door mints/refreshes unattended, no human.
-        return _finalize(state, state, needs_manual=False, can_auto=True)
+        # Token is absent or dead. Why it can't be auto-refreshed is the SAME trust->breaker gate
+        # scheduled_reauth uses, via the shared _dead_token_gate. reason=None means trusted+clear:
+        # report the raw dead-state (missing/expired) and let the automated door fix it.
+        gate_reason, needs_manual, can_auto = _dead_token_gate(trust, cooling)
+        st = gate_reason or state
+        return _finalize(st, st, needs_manual=needs_manual, can_auto=can_auto)
 
     # 1. Local, no network.
     if not tokens:
@@ -1260,6 +1280,10 @@ def auth_status(env: str = "production", *, probe: bool = False) -> dict:
     orig_saved_at = tokens.get("saved_at")
     renewed = renew_tokens(tokens, env)
     live_tokens = renewed or tokens
+    # A real renew stamps a new saved_at (renew_tokens); a <55-min guard-reuse returns the same
+    # token with saved_at unchanged. Comparing saved_at — not re-checking the 55-min threshold
+    # (a second source of truth) and not just bool(renewed) (true for a reuse too) — is what
+    # separates a genuine refresh from a reuse, so RENEWED means the token really changed.
     did_renew = bool(renewed) and live_tokens.get("saved_at") != orig_saved_at
 
     # 3. Probe the (possibly-renewed) token for broker ground truth.
@@ -1311,17 +1335,15 @@ def scheduled_reauth(env: str = "production") -> dict:
         result["breaker_state"] = _breaker_summary(env)
         return result
 
-    # 2. Token is dead. The automated door opens a browser ONLY while the profile is trusted.
+    # 2-3. Token is dead. The automated door opens a browser ONLY while the profile is trusted
+    # AND the breaker is clear — the SAME gate the read-only auth_status reports, via the shared
+    # _dead_token_gate (trust lapse 'sms_required'/'unseeded' -> no browser, awaiting a human;
+    # cooling -> 'breaker'). reason=None means both gates are open.
     trust = _profile_trust_state(env)
-    if trust != "trusted":
-        # 'unseeded' (never bootstrapped) or 'sms_required' (trust lapsed, awaiting a human).
-        result["reason"] = trust
-        result["breaker_state"] = _breaker_summary(env)
-        return result
-
-    # 3. Don't open a browser while the breaker is cooling (a hang/kill mid-attempt armed it).
-    if _reauth_cooldown_remaining(env) > 0:
-        result["reason"] = AuthReason.BREAKER
+    gate_reason, _needs_manual, _can_auto = _dead_token_gate(
+        trust, _reauth_cooldown_remaining(env) > 0)
+    if gate_reason is not None:
+        result["reason"] = gate_reason
         result["breaker_state"] = _breaker_summary(env)
         return result
 

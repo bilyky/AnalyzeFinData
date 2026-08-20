@@ -125,6 +125,20 @@ class TestAuthStatusLocal(_AuthStatusBase):
         self.assertFalse(r["can_auto_reauth"])
         self.assertGreater(r["breaker"]["cooldown_remaining_min"], 0)
 
+    def test_breaker_sub_3s_tail_still_reads_cooling(self):
+        # Regression guard for the raw-seconds `cooling` fix: a ~2 s remaining cooldown rounds to
+        # 0.0 display-minutes (breaker["cooldown_remaining_min"]), but auth_status must still read
+        # the breaker as cooling off the RAW seconds — matching scheduled_reauth — so it reports
+        # BREAKER and does NOT falsely claim can_auto_reauth on the last ~3 s of a cooldown.
+        # (Deriving `cooling` from the rounded display value regresses this to EXPIRED/can_auto.)
+        self._write_token(_yesterday_et(), age_min=90.0)
+        self._seed_trust("trusted")
+        self._arm_breaker(2.0 / 60.0)  # ~2 seconds remaining -> rounds to 0.0 min
+        self.assertEqual(round(etrade._reauth_cooldown_remaining("production") / 60, 1), 0.0)
+        r = etrade.auth_status("production", probe=False)
+        self.assertEqual(r["state"], etrade.AuthReason.BREAKER)
+        self.assertFalse(r["can_auto_reauth"])
+
 
 class TestAuthStatusProbe(_AuthStatusBase):
     """probe=True on a SAME-DAY token — the refresh -> probe ladder."""
@@ -161,6 +175,20 @@ class TestAuthStatusProbe(_AuthStatusBase):
         self.assertEqual(r["probe"], "authorized")
         m_renew.assert_called_once()
         m_probe.assert_called_once()
+
+    def test_guard_reuse_truthy_but_unrenewed_reason_live(self):
+        # renew_tokens returns the SAME token on a <55-min guard-reuse: truthy, but saved_at is
+        # unchanged, so it is NOT a real renew. Reason must be LIVE, not RENEWED. Guards the
+        # saved_at heuristic against being simplified to bool(renewed) (which would mislabel a
+        # reuse as RENEWED) — the one case the two other probe tests (None / fresh-token) miss.
+        self._write_token(etrade._et_today(), age_min=1.0)
+        self._seed_trust("trusted")
+        reused = etrade._load_tokens_any_date("production")  # same saved_at renew_tokens returns
+        _, m_renew, m_probe = self._mock_io(probe_ret=True, renew_ret=reused)
+        r = etrade.auth_status("production", probe=True)
+        self.assertEqual(r["state"], etrade.AuthReason.LIVE)
+        self.assertEqual(r["reason"], etrade.AuthReason.LIVE)   # NOT renewed
+        self.assertEqual(r["probe"], "authorized")
 
     def test_probe_rejected_is_expired(self):
         self._write_token(etrade._et_today(), age_min=90.0)

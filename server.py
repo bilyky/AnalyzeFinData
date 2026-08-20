@@ -895,11 +895,10 @@ def create_app():
     async def etrade_status(probe: bool = True, authorization: str = Header(default="")):
         """Read-only E*TRADE auth state — the broker-confirmed view (probe=true, the default).
 
-        Delegates to the shared etrade.auth_status() classifier — the SAME primitive the CLI
-        (`server.py etrade-status`) and the /api/health embed use, so every surface reports one
-        truth. probe=true runs the ban-free local->refresh->probe ladder (at most a renew + one
-        authenticated GET, never a browser), so it runs in a worker thread to keep the event loop
-        free; ?probe=false is the instant pure-local view. Admin-only: a probe touches the broker."""
+        Delegates to etrade.auth_status(). probe=true runs the ban-free local->refresh->probe
+        ladder (at most a renew + one authenticated GET, never a browser), so it runs in a worker
+        thread to keep the event loop free; ?probe=false is the instant pure-local view.
+        Admin-only: a probe touches the broker."""
         _require_admin(authorization)
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -1092,13 +1091,12 @@ def cmd_etrade_reauth() -> None:
 
 
 def cmd_etrade_status(probe: bool = True) -> None:
-    """Print the shared E*TRADE auth-state classifier as JSON — the 'from a script' door.
+    """Print the E*TRADE auth-state classifier (etrade.auth_status) as JSON — the script door.
 
-    Same etrade.auth_status() primitive the web badge (/api/health) and GET /api/etrade/status
-    use, so every surface reports one truth — no per-interface duplication. probe=True (default)
-    runs the ban-free local->refresh->probe ladder for the broker-confirmed state; --no-probe is
-    the instant pure-local view. Exits non-zero IFF a human must act (needs_manual_auth) so cron/CI
-    can gate on 'does someone need to run the SMS bootstrap?' — a self-healing expiry stays exit 0."""
+    probe=True (default) runs the ban-free local->refresh->probe ladder for the broker-confirmed
+    state; --no-probe is the instant pure-local view. Exits non-zero IFF a human must act
+    (needs_manual_auth) so cron/CI can gate on 'does someone need to run the SMS bootstrap?' — a
+    self-healing expiry stays exit 0."""
     result = etrade.auth_status("production", probe=probe)
     _log.info("E*TRADE auth status: %s", json.dumps(result))
     raise SystemExit(1 if result.get("needs_manual_auth") else 0)

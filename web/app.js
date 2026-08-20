@@ -1032,12 +1032,17 @@ async function loadSystem() {
         api("/api/tasks/manual"),
     ]);
 
-    // E*TRADE auth state — from the shared read-only classifier embedded in /api/health
-    // (probe=false, so this is the instant local view). Green = live, red = a human must run the
-    // SMS bootstrap, muted = a self-healing expiry the daily automated door will refresh.
+    // E*TRADE auth state — the non-sensitive posture embedded in /api/health (state +
+    // needs_manual_auth; the rich detail is admin-only at GET /api/etrade/status). Green = live,
+    // red = a human must run the SMS bootstrap, muted = a self-healing expiry the daily door fixes.
     const et = health.etrade;
+    const etTitle = et
+        ? (et.needs_manual_auth ? "A human must run the one-time SMS bootstrap."
+           : et.state === "live" ? "Token valid."
+           : "Self-healing: the daily automated re-auth will refresh it.")
+        : "";
     const etRow = et
-        ? `<div title="${(et.summary || "").replace(/"/g, "&quot;")}">E*TRADE auth: <b class="${
+        ? `<div title="${etTitle}">E*TRADE auth: <b class="${
               et.needs_manual_auth ? "neg" : (et.state === "live" ? "pos" : "mut")
             }">${(et.state || "—").toUpperCase()}</b>${
               et.needs_manual_auth ? ' <span class="neg">— manual re-auth needed</span>' : ""
