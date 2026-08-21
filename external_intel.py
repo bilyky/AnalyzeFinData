@@ -128,6 +128,24 @@ def fetch_idea_emails():
     Supports scanning multiple mailboxes defined in config.json.
     Returns standard ticker ideas (analyze_email_content) AND structural intel
     (extract_email_intel.extract) per email as 'intel' key."""
+    # Load persistent email ideas cache to enable smart, incremental reuse
+    cache = {}
+    cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "intel_ideas_cache.json")
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cached_list = json.load(f)
+                if isinstance(cached_list, list):
+                    for item in cached_list:
+                        subj = item.get("subject")
+                        if subj:
+                            if subj not in cache:
+                                cache[subj] = []
+                            cache[subj].append(item)
+                    _log.console(f"  [AETHER] Loaded {len(cache)} unique cached email subjects for smart reuse.")
+        except Exception as e:
+            _log.warning(f"Failed to load intel_ideas_cache.json in external_intel: {e}")
+
     # Gmail IMAP folder names. Spam is deliberately excluded — financial newsletters
     # rarely land there legitimately and it adds noise.
     FOLDERS = [
@@ -203,6 +221,13 @@ def fetch_idea_emails():
                             processed_msg_ids.add(msg_id)
 
                         subject = str(msg["subject"] or "")
+
+                        # Smart Cache Reuse: If this exact subject is already cached, reuse it instantly
+                        if subject in cache:
+                            _log.console(f"  [AETHER] Reusing cached email intelligence for: '{subject[:40]}...'")
+                            ideas.extend(cache[subject])
+                            continue
+
                         body = ""
                         if msg.is_multipart():
                             for part in msg.walk():
