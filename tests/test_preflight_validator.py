@@ -70,15 +70,21 @@ class TestActiveLocks(unittest.TestCase):
 
 
 class TestSendPreflightEmail(unittest.TestCase):
-    def _send(self, all_ok, **check_overrides):
-        checks = dict(imap_ok=True, smtp_ok=True, chaikin_ok=True,
-                      etrade_ok=True, integrity_ok=True, locks_ok=True)
-        checks.update(check_overrides)
+    def _send(self, all_ok, imap=True, smtp=True, chaikin=True,
+              etrade=True, integrity=True, locks=True):
+        # Mirrors the (label, ok, kind) roster the caller builds in
+        # run_preflight_diagnostics — the single source of truth for the table.
+        checks = [
+            ("Gmail IMAP",                  imap,      "conn"),
+            ("Gmail SMTP Dispatch",         smtp,      "conn"),
+            ("Chaikin PowerGauge API",      chaikin,   "conn"),
+            ("E*TRADE Brokerage OAuth",     etrade,    "conn"),
+            ("File & Directory Integrity",  integrity, "conn"),
+            ("Active Process & File Locks", locks,     "lock"),
+        ]
         with mock.patch.object(pf.notify, "send_email") as send:
             pf.send_preflight_email(
-                checks["imap_ok"], checks["smtp_ok"], checks["chaikin_ok"],
-                checks["etrade_ok"], checks["integrity_ok"], checks["locks_ok"],
-                missing_items=[], active_locks=[], duration=1.0, all_ok=all_ok)
+                checks, missing_items=[], active_locks=[], duration=1.0, all_ok=all_ok)
         return send
 
     def test_success_verdict_uses_passed_all_ok(self):
@@ -98,6 +104,18 @@ class TestSendPreflightEmail(unittest.TestCase):
         body = send.call_args[0][1]
         self.assertIn("[ALERT]", body)
         self.assertNotIn("[SUCCESS]", body)
+
+    def test_roster_renders_pass_fail_and_lock_badges_from_checks(self):
+        # A failing connection check renders [FAIL]; the lock-kind check renders
+        # its CLEAN/LOCKED badge, not PASS/FAIL — proving both the labels and the
+        # badge kind come from the shared roster the caller passes in.
+        send = self._send(all_ok=False, chaikin=False, locks=False)
+        body = send.call_args[0][1]
+        self.assertIn("Chaikin PowerGauge API", body)
+        self.assertIn("[FAIL]", body)
+        self.assertIn("[LOCKED]", body)
+        # An all-pass conn check still shows [PASS], and the lock badge is never PASS/FAIL.
+        self.assertIn("[PASS]", body)
 
 
 if __name__ == "__main__":

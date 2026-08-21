@@ -219,6 +219,20 @@ class TestIntelCacheKeying(unittest.TestCase):
         self.assertEqual([i["symbol"] for i in ideas], ["AAPL"])
         self.assertNotIn("STALE", [i.get("symbol") for i in ideas])
 
+    def test_legacy_cache_entries_without_msg_id_are_ignored(self):
+        # Graceful migration: a cache written before msg_id keying has no
+        # "msg_id" field. Those entries must be skipped (not crash, not reused),
+        # so the incoming message is parsed fresh rather than serving old intel.
+        cached = [{"from": "x", "subject": "Daily Brief", "folder": "INBOX",
+                   "intel": {}, "symbol": "LEGACY", "sentiment": "BUY",
+                   "thesis": "pre-migration"}]
+        ideas, mock_analyze = self._run_with_cache(
+            cached, incoming_msg_id="<mid-new>", incoming_subject="Daily Brief",
+            analyze_return=[{"symbol": "NVDA", "sentiment": "BUY", "thesis": "fresh"}])
+        mock_analyze.assert_called_once()
+        self.assertEqual([i["symbol"] for i in ideas], ["NVDA"])
+        self.assertNotIn("LEGACY", [i.get("symbol") for i in ideas])
+
 
 if __name__ == "__main__":
     unittest.main()

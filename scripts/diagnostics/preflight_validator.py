@@ -262,22 +262,33 @@ def check_active_locks(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
     return True, []
 
 
-def send_preflight_email(imap_ok, smtp_ok, chaikin_ok, etrade_ok, integrity_ok,
-                         locks_ok, missing_items, active_locks, duration, all_ok):
+def send_preflight_email(checks, missing_items, active_locks, duration, all_ok):
     """Compile and dispatch an HTML status briefing email to the user.
 
-    `all_ok` is the single overall verdict computed by the caller so the
-    pass/fail decision has exactly one source of truth."""
+    `checks` is the single ordered roster of (label, ok, kind) tuples shared with
+    the console summary, so the email table and the console can never drift. `all_ok`
+    is the overall verdict computed by the caller, so the pass/fail decision has
+    exactly one source of truth."""
     _log.console("  Sending pre-flight status email...")
     try:
         today = datetime.date.today().strftime("%Y-%m-%d")
         subject = f"🔔 AETHER Pre-Flight Status Briefing: {today}"
-        
+
         def _badge(ok):
             return '<span style="color: #2ea043; font-weight: bold;">[PASS]</span>' if ok else '<span style="color: #f85149; font-weight: bold;">[FAIL]</span>'
-            
+
         def _lock_badge(ok):
             return '<span style="color: #2ea043; font-weight: bold;">[CLEAN]</span>' if ok else '<span style="color: #db6d28; font-weight: bold;">[LOCKED]</span>'
+
+        rows = ""
+        for i, (label, ok, kind) in enumerate(checks, 1):
+            badge = _lock_badge(ok) if kind == "lock" else _badge(ok)
+            rows += (
+                '<tr style="border-bottom: 1px solid #21262d;">'
+                f'<td style="padding: 10px 0; color: #8b949e;">[{i}] {label}</td>'
+                f'<td style="padding: 10px 0; text-align: right;">{badge}</td>'
+                '</tr>'
+            )
 
         html = f"""
         <div style="font-family: monospace; background-color: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 8px; padding: 25px; max-width: 650px; margin: 20px auto; box-shadow: 0 4px 6px rgba(0,0,0,0.15);">
@@ -288,32 +299,9 @@ def send_preflight_email(imap_ok, smtp_ok, chaikin_ok, etrade_ok, integrity_ok,
                 Generated on: {datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")}<br>
                 Check Duration: {duration:.2f}s
             </p>
-            
+
             <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
-                <tr style="border-bottom: 1px solid #21262d;">
-                    <td style="padding: 10px 0; color: #8b949e;">[1] Gmail IMAP Connection</td>
-                    <td style="padding: 10px 0; text-align: right;">{_badge(imap_ok)}</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #21262d;">
-                    <td style="padding: 10px 0; color: #8b949e;">[2] Gmail SMTP Dispatch</td>
-                    <td style="padding: 10px 0; text-align: right;">{_badge(smtp_ok)}</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #21262d;">
-                    <td style="padding: 10px 0; color: #8b949e;">[3] Chaikin PowerGauge API</td>
-                    <td style="padding: 10px 0; text-align: right;">{_badge(chaikin_ok)}</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #21262d;">
-                    <td style="padding: 10px 0; color: #8b949e;">[4] E*TRADE Brokerage OAuth Session</td>
-                    <td style="padding: 10px 0; text-align: right;">{_badge(etrade_ok)}</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #21262d;">
-                    <td style="padding: 10px 0; color: #8b949e;">[5] File & Directory Integrity</td>
-                    <td style="padding: 10px 0; text-align: right;">{_badge(integrity_ok)}</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #21262d;">
-                    <td style="padding: 10px 0; color: #8b949e;">[6] Active Process & File Locks</td>
-                    <td style="padding: 10px 0; text-align: right;">{_lock_badge(locks_ok)}</td>
-                </tr>
+                {rows}
             </table>
         """
         
@@ -340,7 +328,7 @@ def send_preflight_email(imap_ok, smtp_ok, chaikin_ok, etrade_ok, integrity_ok,
         if all_ok:
             html += """
             <div style="background-color: rgba(46,160,67,0.15); border: 1px solid #2ea043; border-radius: 6px; padding: 15px; text-align: center; color: #56d364; font-size: 13px; font-weight: bold;">
-                ☀️ [SUCCESS] All systems verified nominal and ready for tomorrow's run.
+                ☀️ [SUCCESS] All pre-flight checks passed. System ready for tomorrow's run.
             </div>
             """
         else:
@@ -378,24 +366,32 @@ def run_preflight_diagnostics() -> bool:
     locks_ok, active_locks = check_active_locks()
     
     duration = time.time() - start_time
+
+    # Single source of truth for the check roster: (label, result, kind). "lock"
+    # renders CLEAN/LOCKED, everything else PASS/FAIL. Both the console summary
+    # below and the email table render from this one list, so they cannot drift.
+    checks = [
+        ("Gmail IMAP",                  imap_ok,      "conn"),
+        ("Gmail SMTP Dispatch",         smtp_ok,      "conn"),
+        ("Chaikin PowerGauge API",      chaikin_ok,   "conn"),
+        ("E*TRADE Brokerage OAuth",     etrade_ok,    "conn"),
+        ("File & Directory Integrity",  integrity_ok, "conn"),
+        ("Active Process & File Locks", locks_ok,     "lock"),
+    ]
+
     _log.console("=" * 70)
     _log.console(f"PRE-FLIGHT DIAGNOSTIC SUMMARY (Duration: {duration:.2f}s)")
     _log.console("-" * 70)
-    
-    _log.console(f"  [1] Gmail IMAP Inbox     : {'PASS' if imap_ok else 'FAIL'}")
-    _log.console(f"  [2] Gmail SMTP Dispatch  : {'PASS' if smtp_ok else 'FAIL'}")
-    _log.console(f"  [3] Chaikin PowerGauge   : {'PASS' if chaikin_ok else 'FAIL'}")
-    _log.console(f"  [4] E*TRADE OAuth Feed   : {'PASS' if etrade_ok else 'FAIL'}")
-    _log.console(f"  [5] File & Dir Integrity : {'PASS' if integrity_ok else 'FAIL'}")
-    _log.console(f"  [6] Active Process Locks : {'CLEAN' if locks_ok else 'LOCKED'}")
+    for i, (label, ok, kind) in enumerate(checks, 1):
+        word = ("CLEAN" if ok else "LOCKED") if kind == "lock" else ("PASS" if ok else "FAIL")
+        _log.console(f"  [{i}] {label:<28}: {word}")
     _log.console("=" * 70)
-    
-    all_ok = imap_ok and smtp_ok and chaikin_ok and etrade_ok and integrity_ok and locks_ok
-    
+
+    all_ok = all(ok for _, ok, _ in checks)
+
     # Send email status if the --email flag is set
     if "--email" in sys.argv:
-        send_preflight_email(imap_ok, smtp_ok, chaikin_ok, etrade_ok, integrity_ok,
-                             locks_ok, missing_items, active_locks, duration, all_ok)
+        send_preflight_email(checks, missing_items, active_locks, duration, all_ok)
         
     if all_ok:
         _log.console("☀️ [PRE-FLIGHT SUCCESS] All external API and email gateways are online.")
