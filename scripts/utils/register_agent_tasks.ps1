@@ -129,14 +129,14 @@ foreach ($T in $Tasks) {
     $PromptPayload = $T.Prompt
     $LogFile = Join-Path $LogDir $T.Log
     
-    # Standard clean execution command via PowerShell to navigate to root and run engine or script
+    # Build the command: cd to repo root, then run either a raw script or the engine+prompt.
     if ($T.Script) {
         $ExecCmd = "cd '$RepoRoot'; $($T.Script) >> '$LogFile' 2>&1"
     } else {
         $ExecCmd = "cd '$RepoRoot'; $Engine $Args -p '$PromptPayload' >> '$LogFile' 2>&1"
     }
-    
-    # Action block running invisible background shell
+
+    # Run in a hidden PowerShell window (no visible console) so the scheduled task is non-interactive.
     $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$ExecCmd`""
     
     Write-Host "Registering task: $TaskName..." -ForegroundColor Yellow

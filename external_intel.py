@@ -128,21 +128,22 @@ def fetch_idea_emails():
     Supports scanning multiple mailboxes defined in config.json.
     Returns standard ticker ideas (analyze_email_content) AND structural intel
     (extract_email_intel.extract) per email as 'intel' key."""
-    # Load persistent email ideas cache to enable smart, incremental reuse
+    # Reuse a prior run's AI extractions for messages already processed, keyed on
+    # the unique Message-ID. Subjects are deliberately NOT used as the key: daily
+    # newsletters reuse subject lines, so a subject key would serve a brand-new
+    # email stale intel and never parse its real body.
     cache = {}
     cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "intel_ideas_cache.json")
     if os.path.exists(cache_path):
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
                 cached_list = json.load(f)
-                if isinstance(cached_list, list):
-                    for item in cached_list:
-                        subj = item.get("subject")
-                        if subj:
-                            if subj not in cache:
-                                cache[subj] = []
-                            cache[subj].append(item)
-                    _log.console(f"  [AETHER] Loaded {len(cache)} unique cached email subjects for smart reuse.")
+            if isinstance(cached_list, list):
+                for item in cached_list:
+                    mid = item.get("msg_id")
+                    if mid:
+                        cache.setdefault(mid, []).append(item)
+                _log.console(f"  Loaded {len(cache)} cached message(s) for incremental reuse.")
         except Exception as e:
             _log.warning(f"Failed to load intel_ideas_cache.json in external_intel: {e}")
 
@@ -220,13 +221,13 @@ def fetch_idea_emails():
                                 continue
                             processed_msg_ids.add(msg_id)
 
-                        subject = str(msg["subject"] or "")
+                            # Reuse this message's cached extraction if a prior run
+                            # already parsed it (unique Message-ID match).
+                            if msg_id in cache:
+                                ideas.extend(cache[msg_id])
+                                continue
 
-                        # Smart Cache Reuse: If this exact subject is already cached, reuse it instantly
-                        if subject in cache:
-                            _log.console(f"  [AETHER] Reusing cached email intelligence for: '{subject[:40]}...'")
-                            ideas.extend(cache[subject])
-                            continue
+                        subject = str(msg["subject"] or "")
 
                         body = ""
                         if msg.is_multipart():
@@ -247,6 +248,7 @@ def fetch_idea_emails():
                             continue
 
                         candidates.append({
+                            "msg_id": msg_id,
                             "from": msg["from"],
                             "subject": subject,
                             "body": body,
@@ -308,6 +310,7 @@ def fetch_idea_emails():
                 intel = res.get("intel")
                 
                 base = {
+                    "msg_id": cand.get("msg_id"),
                     "from": cand.get("from"),
                     "subject": cand.get("subject"),
                     "folder": cand.get("folder"),

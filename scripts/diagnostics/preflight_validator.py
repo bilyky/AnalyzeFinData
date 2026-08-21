@@ -201,19 +201,19 @@ def check_etrade_api() -> bool:
         return False
 
 
-def check_file_and_directory_integrity() -> tuple[bool, list[str]]:
+def check_file_and_directory_integrity(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
     """Verify that all required folders and files exist on disk."""
     _log.console("  Checking File & Directory Integrity...")
     missing = []
-    
+
     required_dirs = [
-        BASE_DIR / "Data",
-        BASE_DIR / "Data" / "Backup",
-        BASE_DIR / "Data" / "Symbol_full"
+        base_dir / "Data",
+        base_dir / "Data" / "Backup",
+        base_dir / "Data" / "Symbol_full"
     ]
     required_files = [
-        BASE_DIR / "config.json",
-        BASE_DIR / "Data" / "state_of_the_day.xlsx"
+        base_dir / "config.json",
+        base_dir / "Data" / "state_of_the_day.xlsx"
     ]
     
     for d in required_dirs:
@@ -231,25 +231,26 @@ def check_file_and_directory_integrity() -> tuple[bool, list[str]]:
     return True, []
 
 
-def check_active_locks() -> tuple[bool, list[str]]:
+def check_active_locks(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
     """Check for active or stale file locks that would block execution."""
     _log.console("  Checking Active Process & File Locks...")
     locks = []
-    
-    pipeline_lock = BASE_DIR / "Data" / "pipeline_run.lock"
-    rapidapi_lock = BASE_DIR / "Data" / "rapidapi.lock"
-    xlsx_file = BASE_DIR / "Data" / "state_of_the_day.xlsx"
-    
+
+    pipeline_lock = base_dir / "Data" / "pipeline_run.lock"
+    rapidapi_lock = base_dir / "Data" / "rapidapi.lock"
+    xlsx_file = base_dir / "Data" / "state_of_the_day.xlsx"
+
     if pipeline_lock.exists():
         locks.append("Pipeline Active Lock (pipeline_run.lock)")
-        
+
     if rapidapi_lock.exists():
         locks.append("RapidAPI Active Lock (rapidapi.lock)")
-        
-    # Check if state_of_the_day.xlsx is locked by Excel or another process
+
+    # Detect an exclusive lock (e.g. the workbook open in Excel) without mutating
+    # the file: renaming a path to itself raises PermissionError/OSError when the
+    # OS holds a write/delete lock, and is a no-op otherwise.
     if xlsx_file.exists():
         try:
-            # Try to rename the file to itself (non-destructive lock test on Windows)
             os.rename(str(xlsx_file), str(xlsx_file))
         except (PermissionError, OSError):
             locks.append("Excel File Lock (state_of_the_day.xlsx is open/locked)")
@@ -261,11 +262,14 @@ def check_active_locks() -> tuple[bool, list[str]]:
     return True, []
 
 
-def send_preflight_email(imap_ok, smtp_ok, chaikin_ok, etrade_ok, integrity_ok, locks_ok, missing_items, active_locks, duration):
-    """Compile and dispatch a rich HTML status briefing email to the user."""
+def send_preflight_email(imap_ok, smtp_ok, chaikin_ok, etrade_ok, integrity_ok,
+                         locks_ok, missing_items, active_locks, duration, all_ok):
+    """Compile and dispatch an HTML status briefing email to the user.
+
+    `all_ok` is the single overall verdict computed by the caller so the
+    pass/fail decision has exactly one source of truth."""
     _log.console("  Sending pre-flight status email...")
     try:
-        
         today = datetime.date.today().strftime("%Y-%m-%d")
         subject = f"🔔 AETHER Pre-Flight Status Briefing: {today}"
         
@@ -281,7 +285,7 @@ def send_preflight_email(imap_ok, smtp_ok, chaikin_ok, etrade_ok, integrity_ok, 
                 🔔 AETHER Pre-Flight Status Briefing
             </h2>
             <p style="font-size: 13px; color: #8b949e; margin-bottom: 20px;">
-                Generated on: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} PST<br>
+                Generated on: {datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")}<br>
                 Check Duration: {duration:.2f}s
             </p>
             
@@ -333,7 +337,6 @@ def send_preflight_email(imap_ok, smtp_ok, chaikin_ok, etrade_ok, integrity_ok, 
             </div>
             """
             
-        all_ok = imap_ok and smtp_ok and chaikin_ok and etrade_ok and integrity_ok and locks_ok
         if all_ok:
             html += """
             <div style="background-color: rgba(46,160,67,0.15); border: 1px solid #2ea043; border-radius: 6px; padding: 15px; text-align: center; color: #56d364; font-size: 13px; font-weight: bold;">
@@ -389,9 +392,10 @@ def run_preflight_diagnostics() -> bool:
     
     all_ok = imap_ok and smtp_ok and chaikin_ok and etrade_ok and integrity_ok and locks_ok
     
-    # Send email status if requested or command line arg --email is set
+    # Send email status if the --email flag is set
     if "--email" in sys.argv:
-        send_preflight_email(imap_ok, smtp_ok, chaikin_ok, etrade_ok, integrity_ok, locks_ok, missing_items, active_locks, duration)
+        send_preflight_email(imap_ok, smtp_ok, chaikin_ok, etrade_ok, integrity_ok,
+                             locks_ok, missing_items, active_locks, duration, all_ok)
         
     if all_ok:
         _log.console("☀️ [PRE-FLIGHT SUCCESS] All external API and email gateways are online.")
