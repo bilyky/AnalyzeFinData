@@ -1,6 +1,7 @@
 """
 Tests for external_intel.py — resilient email fetching and early disconnection breaks.
 """
+import json
 import os
 import sys
 import unittest
@@ -157,6 +158,80 @@ class TestExternalIntelResilience(unittest.TestCase):
                  mock.patch("extract_email_intel.extract", return_value={}) as mock_extract:
                 ideas = external_intel.fetch_idea_emails()
                 self.assertEqual(len(ideas), 0)
+
+
+class TestIntelCacheKeying(unittest.TestCase):
+    """The email-reuse cache must key on the unique Message-ID, not the subject
+    (subjects repeat across daily newsletters)."""
+
+    def _base_cfg(self, mock_cfg):
+        mock_cfg.mailboxes = [{"email": "test@example.org",
+                               "password_env": "TEST_ENV_PASS",
+                               "imap_server": "imap.example.org"}]
+        mock_cfg.smtp_password = "dummy_password"
+        mock_cfg.ai_max_intel_emails = 20
+
+    def _run_with_cache(self, cached, incoming_msg_id, incoming_subject, analyze_return):
+        with mock.patch("external_intel.CFG") as mock_cfg, \
+             mock.patch("external_intel._log"), \
+             mock.patch("imaplib.IMAP4_SSL") as mock_imap_cls:
+            self._base_cfg(mock_cfg)
+            mock_mail = mock.MagicMock()
+            mock_imap_cls.return_value = mock_mail
+            mock_mail.select.return_value = ("OK", b"1")
+            mock_mail.search.return_value = ("OK", [b"1"])
+            mock_mail.fetch.return_value = ("OK", [(None, b"raw")])
+
+            mock_msg = mock.MagicMock()
+            mock_msg.get.return_value = incoming_msg_id          # msg.get("Message-ID", "")
+            mock_msg.__getitem__.return_value = incoming_subject  # msg["subject"] / msg["from"]
+            mock_msg.is_multipart.return_value = False
+            mock_msg.get_payload.return_value = b"Stock alert: buy $AAPL now!"
+
+            with mock.patch("external_intel.email.message_from_bytes", return_value=mock_msg), \
+                 mock.patch("external_intel.os.path.exists", return_value=True), \
+                 mock.patch("builtins.open", mock.mock_open(read_data=json.dumps(cached))), \
+                 mock.patch("external_intel.analyze_email_content", return_value=analyze_return) as mock_analyze, \
+                 mock.patch("extract_email_intel.extract", return_value={}):
+                ideas = external_intel.fetch_idea_emails()
+        return ideas, mock_analyze
+
+    def test_same_message_id_is_reused_without_reparsing(self):
+        cached = [{"msg_id": "<mid-1>", "from": "x", "subject": "Daily Brief",
+                   "folder": "INBOX", "intel": {}, "symbol": "CACHED",
+                   "sentiment": "BUY", "thesis": "cached"}]
+        ideas, mock_analyze = self._run_with_cache(
+            cached, incoming_msg_id="<mid-1>", incoming_subject="Daily Brief",
+            analyze_return=[{"symbol": "FRESH"}])
+        mock_analyze.assert_not_called()          # reuse skips the expensive AI call
+        self.assertEqual([i["symbol"] for i in ideas], ["CACHED"])
+
+    def test_repeated_subject_new_message_id_is_reparsed_not_reused(self):
+        # The bug the fix addresses: a NEW email reusing yesterday's subject line.
+        # Subject-keyed caching would wrongly serve stale intel; msg_id-keyed must reparse.
+        cached = [{"msg_id": "<old-id>", "from": "x", "subject": "Daily Brief",
+                   "folder": "INBOX", "intel": {}, "symbol": "STALE",
+                   "sentiment": "BUY", "thesis": "stale"}]
+        ideas, mock_analyze = self._run_with_cache(
+            cached, incoming_msg_id="<new-id>", incoming_subject="Daily Brief",
+            analyze_return=[{"symbol": "AAPL", "sentiment": "BUY", "thesis": "fresh"}])
+        mock_analyze.assert_called_once()         # new message must be parsed
+        self.assertEqual([i["symbol"] for i in ideas], ["AAPL"])
+        self.assertNotIn("STALE", [i.get("symbol") for i in ideas])
+
+    def test_legacy_cache_entries_without_msg_id_are_ignored(self):
+        # Graceful migration: a cache written before msg_id keying has no
+        # "msg_id" field. Those entries must be skipped (not crash, not reused),
+        # so the incoming message is parsed fresh rather than serving old intel.
+        cached = [{"from": "x", "subject": "Daily Brief", "folder": "INBOX",
+                   "intel": {}, "symbol": "LEGACY", "sentiment": "BUY",
+                   "thesis": "pre-migration"}]
+        ideas, mock_analyze = self._run_with_cache(
+            cached, incoming_msg_id="<mid-new>", incoming_subject="Daily Brief",
+            analyze_return=[{"symbol": "NVDA", "sentiment": "BUY", "thesis": "fresh"}])
+        mock_analyze.assert_called_once()
+        self.assertEqual([i["symbol"] for i in ideas], ["NVDA"])
+        self.assertNotIn("LEGACY", [i.get("symbol") for i in ideas])
 
 
 if __name__ == "__main__":
