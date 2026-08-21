@@ -46,11 +46,11 @@ $Tasks = @(
     @{
         Name     = "AETHER_Watchdog"
         # 24/7 Hourly Trigger Design:
-        # Runs every 1 hour, 24/7 indefinitely, ensuring E*TRADE tokens are always kept alive before expiring.
+        # Starts in the past (1/1/2000) to ensure Task Scheduler activates the repetition
+        # loop IMMEDIATELY upon registration, repeating every 1 hour indefinitely (9999 days).
         Triggers  = @(
             $(
-                $T = New-ScheduledTaskTrigger -Daily -At "12:00 AM"
-                $T.Repetition = (New-ScheduledTaskTrigger -Once -At "12:00 AM" -RepetitionInterval (New-TimeSpan -Hours 1)).Repetition
+                $T = New-ScheduledTaskTrigger -Once -At "1/1/2000 12:00 AM" -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 9999)
                 $T
             )
         )
