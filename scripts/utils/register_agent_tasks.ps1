@@ -108,6 +108,15 @@ $Tasks = @(
         Prompt   = "Execute the automated R&D skills defined in .claude/commands/pattern-discover.md and .claude/commands/failure-dna.md"
         Log      = "pattern_discovery_agent.log"
         Desc     = "Weekly self-improving R&D loop on Saturdays at 10:00 AM PST."
+    },
+    @{
+        Name     = "AETHER_PreFlight_Audit"
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Daily -At "9:30 PM")
+        )
+        Script   = "venv_new\Scripts\python.exe scripts/diagnostics/preflight_validator.py --email"
+        Log      = "preflight_audit.log"
+        Desc     = "Nightly pre-flight system diagnostics and connection check at 9:30 PM PST."
     }
 )
 
@@ -120,8 +129,12 @@ foreach ($T in $Tasks) {
     $PromptPayload = $T.Prompt
     $LogFile = Join-Path $LogDir $T.Log
     
-    # Standard clean execution command via PowerShell to navigate to root and run engine
-    $ExecCmd = "cd '$RepoRoot'; $Engine $Args -p '$PromptPayload' >> '$LogFile' 2>&1"
+    # Standard clean execution command via PowerShell to navigate to root and run engine or script
+    if ($T.Script) {
+        $ExecCmd = "cd '$RepoRoot'; $($T.Script) >> '$LogFile' 2>&1"
+    } else {
+        $ExecCmd = "cd '$RepoRoot'; $Engine $Args -p '$PromptPayload' >> '$LogFile' 2>&1"
+    }
     
     # Action block running invisible background shell
     $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$ExecCmd`""

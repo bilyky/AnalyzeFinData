@@ -20,6 +20,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
+import notify
 import powergauge
 from aether import etrade
 from aether.config import CFG
@@ -200,6 +201,160 @@ def check_etrade_api() -> bool:
         return False
 
 
+def check_file_and_directory_integrity() -> tuple[bool, list[str]]:
+    """Verify that all required folders and files exist on disk."""
+    _log.console("  Checking File & Directory Integrity...")
+    missing = []
+    
+    required_dirs = [
+        BASE_DIR / "Data",
+        BASE_DIR / "Data" / "Backup",
+        BASE_DIR / "Data" / "Symbol_full"
+    ]
+    required_files = [
+        BASE_DIR / "config.json",
+        BASE_DIR / "Data" / "state_of_the_day.xlsx"
+    ]
+    
+    for d in required_dirs:
+        if not d.exists():
+            missing.append(f"Directory: {d.name}")
+            
+    for f in required_files:
+        if not f.exists():
+            missing.append(f"File: {f.name}")
+            
+    if missing:
+        _log.console(f"  ❌ INTEGRITY: Missed files/dirs: {', '.join(missing)}")
+        return False, missing
+    _log.console("  ✅ INTEGRITY: All required directories and files are present on disk.")
+    return True, []
+
+
+def check_active_locks() -> tuple[bool, list[str]]:
+    """Check for active or stale file locks that would block execution."""
+    _log.console("  Checking Active Process & File Locks...")
+    locks = []
+    
+    pipeline_lock = BASE_DIR / "Data" / "pipeline_run.lock"
+    rapidapi_lock = BASE_DIR / "Data" / "rapidapi.lock"
+    xlsx_file = BASE_DIR / "Data" / "state_of_the_day.xlsx"
+    
+    if pipeline_lock.exists():
+        locks.append("Pipeline Active Lock (pipeline_run.lock)")
+        
+    if rapidapi_lock.exists():
+        locks.append("RapidAPI Active Lock (rapidapi.lock)")
+        
+    # Check if state_of_the_day.xlsx is locked by Excel or another process
+    if xlsx_file.exists():
+        try:
+            # Try to rename the file to itself (non-destructive lock test on Windows)
+            os.rename(str(xlsx_file), str(xlsx_file))
+        except (PermissionError, OSError):
+            locks.append("Excel File Lock (state_of_the_day.xlsx is open/locked)")
+            
+    if locks:
+        _log.console(f"  ⚠️ LOCKS: Found active/stale locks: {', '.join(locks)}")
+        return False, locks
+    _log.console("  ✅ LOCKS: No active process or spreadsheet locks detected.")
+    return True, []
+
+
+def send_preflight_email(imap_ok, smtp_ok, chaikin_ok, etrade_ok, integrity_ok, locks_ok, missing_items, active_locks, duration):
+    """Compile and dispatch a rich HTML status briefing email to the user."""
+    _log.console("  Sending pre-flight status email...")
+    try:
+        
+        today = datetime.date.today().strftime("%Y-%m-%d")
+        subject = f"🔔 AETHER Pre-Flight Status Briefing: {today}"
+        
+        def _badge(ok):
+            return '<span style="color: #2ea043; font-weight: bold;">[PASS]</span>' if ok else '<span style="color: #f85149; font-weight: bold;">[FAIL]</span>'
+            
+        def _lock_badge(ok):
+            return '<span style="color: #2ea043; font-weight: bold;">[CLEAN]</span>' if ok else '<span style="color: #db6d28; font-weight: bold;">[LOCKED]</span>'
+
+        html = f"""
+        <div style="font-family: monospace; background-color: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 8px; padding: 25px; max-width: 650px; margin: 20px auto; box-shadow: 0 4px 6px rgba(0,0,0,0.15);">
+            <h2 style="color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 12px; margin-top: 0; font-size: 18px; font-weight: bold; letter-spacing: 0.5px;">
+                🔔 AETHER Pre-Flight Status Briefing
+            </h2>
+            <p style="font-size: 13px; color: #8b949e; margin-bottom: 20px;">
+                Generated on: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} PST<br>
+                Check Duration: {duration:.2f}s
+            </p>
+            
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
+                <tr style="border-bottom: 1px solid #21262d;">
+                    <td style="padding: 10px 0; color: #8b949e;">[1] Gmail IMAP Connection</td>
+                    <td style="padding: 10px 0; text-align: right;">{_badge(imap_ok)}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #21262d;">
+                    <td style="padding: 10px 0; color: #8b949e;">[2] Gmail SMTP Dispatch</td>
+                    <td style="padding: 10px 0; text-align: right;">{_badge(smtp_ok)}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #21262d;">
+                    <td style="padding: 10px 0; color: #8b949e;">[3] Chaikin PowerGauge API</td>
+                    <td style="padding: 10px 0; text-align: right;">{_badge(chaikin_ok)}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #21262d;">
+                    <td style="padding: 10px 0; color: #8b949e;">[4] E*TRADE Brokerage OAuth Session</td>
+                    <td style="padding: 10px 0; text-align: right;">{_badge(etrade_ok)}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #21262d;">
+                    <td style="padding: 10px 0; color: #8b949e;">[5] File & Directory Integrity</td>
+                    <td style="padding: 10px 0; text-align: right;">{_badge(integrity_ok)}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #21262d;">
+                    <td style="padding: 10px 0; color: #8b949e;">[6] Active Process & File Locks</td>
+                    <td style="padding: 10px 0; text-align: right;">{_lock_badge(locks_ok)}</td>
+                </tr>
+            </table>
+        """
+        
+        if missing_items:
+            html += f"""
+            <div style="background-color: rgba(248,81,73,0.1); border: 1px solid #f85149; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 12px; color: #ff7b72;">
+                ⚠️ <b>Missed Required Files/Directories:</b>
+                <ul style="margin: 5px 0 0 15px; padding: 0;">
+                    {"".join(f"<li>{x}</li>" for x in missing_items)}
+                </ul>
+            </div>
+            """
+            
+        if active_locks:
+            html += f"""
+            <div style="background-color: rgba(219,109,40,0.1); border: 1px solid #db6d28; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 12px; color: #f0883e;">
+                ⚠️ <b>Active Process/Workbook Locks:</b>
+                <ul style="margin: 5px 0 0 15px; padding: 0;">
+                    {"".join(f"<li>{x}</li>" for x in active_locks)}
+                </ul>
+            </div>
+            """
+            
+        all_ok = imap_ok and smtp_ok and chaikin_ok and etrade_ok and integrity_ok and locks_ok
+        if all_ok:
+            html += """
+            <div style="background-color: rgba(46,160,67,0.15); border: 1px solid #2ea043; border-radius: 6px; padding: 15px; text-align: center; color: #56d364; font-size: 13px; font-weight: bold;">
+                ☀️ [SUCCESS] All systems verified nominal and ready for tomorrow's run.
+            </div>
+            """
+        else:
+            html += """
+            <div style="background-color: rgba(248,81,73,0.15); border: 1px solid #f85149; border-radius: 6px; padding: 15px; text-align: center; color: #ff7b72; font-size: 13px; font-weight: bold;">
+                🚨 [ALERT] One or more pre-flight check blocks exist. Action required.
+            </div>
+            """
+            
+        html += "</div>"
+        
+        notify.send_email(subject, html, is_html=True)
+        _log.console("  ✅ Email: Successfully sent pre-flight status email.")
+    except Exception as e:
+        _log.error(f"  ❌ Email: Failed to dispatch status briefing: {e}")
+
+
 def run_preflight_diagnostics() -> bool:
     """Execute all pre-flight diagnostic checks and return True only if every check passes."""
     # Purge browser/NodeJS zombies first so a stale process can't hang a later Playwright launch.
@@ -216,6 +371,8 @@ def run_preflight_diagnostics() -> bool:
     smtp_ok   = check_gmail_smtp()
     chaikin_ok = check_chaikin_api()
     etrade_ok  = check_etrade_api()
+    integrity_ok, missing_items = check_file_and_directory_integrity()
+    locks_ok, active_locks = check_active_locks()
     
     duration = time.time() - start_time
     _log.console("=" * 70)
@@ -226,9 +383,16 @@ def run_preflight_diagnostics() -> bool:
     _log.console(f"  [2] Gmail SMTP Dispatch  : {'PASS' if smtp_ok else 'FAIL'}")
     _log.console(f"  [3] Chaikin PowerGauge   : {'PASS' if chaikin_ok else 'FAIL'}")
     _log.console(f"  [4] E*TRADE OAuth Feed   : {'PASS' if etrade_ok else 'FAIL'}")
+    _log.console(f"  [5] File & Dir Integrity : {'PASS' if integrity_ok else 'FAIL'}")
+    _log.console(f"  [6] Active Process Locks : {'CLEAN' if locks_ok else 'LOCKED'}")
     _log.console("=" * 70)
     
-    all_ok = imap_ok and smtp_ok and chaikin_ok and etrade_ok
+    all_ok = imap_ok and smtp_ok and chaikin_ok and etrade_ok and integrity_ok and locks_ok
+    
+    # Send email status if requested or command line arg --email is set
+    if "--email" in sys.argv:
+        send_preflight_email(imap_ok, smtp_ok, chaikin_ok, etrade_ok, integrity_ok, locks_ok, missing_items, active_locks, duration)
+        
     if all_ok:
         _log.console("☀️ [PRE-FLIGHT SUCCESS] All external API and email gateways are online.")
         _log.console("=" * 70)
