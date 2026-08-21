@@ -24,6 +24,13 @@ Judge the decision against these lenses:
    patience; Bearish PGR below the 50-DMA argues for exit.
 5. DETERIORATING HOLD. If the engine says HOLD but the name is below its stop-ish
    level with weak scores, FLAG-FOR-REVIEW the other way.
+6. LEGACY DRAWDOWN / OPTION VALUE (Sunk-Cost Override). If a legacy position is 
+   down severely (>70% or more) and the marginal cash recovery is minor, simple 
+   mathematical stops can destroy option value. If there is an active qualitative 
+   corporate catalyst (such as a recent merger, acquisition, or fundamental business 
+   turnover) that could trigger a reversal, recommend FLAG-FOR-REVIEW rather than 
+   selling. The "Option Value" of holding is mathematically worth more than the 
+   negligible cash recovery.
 
 Verdict vocabulary:
 - AGREE            — the deterministic action looks right.
