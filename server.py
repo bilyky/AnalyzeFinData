@@ -862,7 +862,7 @@ def create_app():
 
     @app.post("/api/etrade/reauth")
     async def etrade_reauth(
-        bootstrap: bool = Body(default=False),
+        bootstrap: bool = Body(default=False, embed=True),
         authorization: str = Header(default=""),
     ):
         """Human-initiated E*TRADE re-authentication (the "one magic button" HTTP front door).
