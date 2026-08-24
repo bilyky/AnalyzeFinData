@@ -492,7 +492,12 @@ def main():
             # - test_*.py: inline imports inside test methods are legitimate (isolate failures)
             # - powergauge.py: optional try/except imports for Playwright automation
             # - run_history.py: historical backfill parallelized launcher script
-            _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py")
+            # - aether/etrade/store.py: mandatory lazy `_pkg()` import of the parent
+            #   package to break the circular init — it is imported *from* the package
+            #   __init__, so a top-level `from aether import etrade` would hit a
+            #   partially-initialised module. See the module's _pkg() docstring.
+            _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py",
+                             "etrade/store.py")
             if not any(x in fpath for x in _skip_imports):
                 if not check_no_inline_imports(fpath):
                     success = False

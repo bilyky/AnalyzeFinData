@@ -34,7 +34,9 @@ class SmsRequired(Exception):
         self.env = env
 
 
-_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Checkout root. This module lives at <root>/aether/etrade/__init__.py, so climb THREE
+# levels (etrade/ -> aether/ -> root). Was two when this was the single-file aether/etrade.py.
+_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Canonical directory for E*TRADE auth-state files (token, browser state, breaker, locks).
 # Resolved through aether.paths.data_dir() — the ONE place the $AETHER_DATA_DIR-vs-<checkout>/Data
@@ -1520,6 +1522,23 @@ def is_market_open_now(tokens, env="production") -> bool | None:
         return True
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Object facade (encapsulation / extensibility)
+# ---------------------------------------------------------------------------
+# Imported at the BOTTOM, after every free function/constant above is defined, so
+# these submodules can `from aether import etrade` and resolve a fully-initialised
+# package. They touch the package only at call time, so there is no circular-import
+# hazard. The proven free-function API above is UNCHANGED and remains the back-compat
+# seam every test patches; ETradeClient is the new front door that delegates to it.
+from aether.etrade.store import (          # noqa: E402
+    make_etrade_store, EtradeStore,
+    TokenStore, BrowserStateStore, ReauthStateStore,
+)
+from aether.etrade.client import (                                 # noqa: E402
+    ETradeClient, ETradeError, RoleNotPermitted,
+)
 
 
 # ---------------------------------------------------------------------------
