@@ -19,7 +19,7 @@ import json
 import os
 import openpyxl
 
-import etrade
+from aether import etrade
 from aether.logger import get_logger
 from workbook_write import update_short_long_scores, fix_comment_shape_ids, backup_xlsx
 from powergauge import XLSX_FILE, SRC_XLSX, OHLCV_DIR

@@ -506,9 +506,15 @@ def main():
                 success = False
 
             # Files exempt from print() check (Playwright interactive browser prompts
-            # that intentionally write to the user's terminal, not to the log system)
-            _skip_print = ("etrade.py", "powergauge.py", "run_history.py")
-            if not any(x in fpath for x in _skip_print):
+            # that intentionally write to the user's terminal, not to the log system;
+            # plus the diagnostics/ tests trees, which print by design).
+            # Filenames match by basename; the scripts/ and tests/ trees match by
+            # repo-relative path prefix — NOT substring, so an unrelated path (e.g.
+            # test_etrade.py, .../latests/...) can't accidentally slip the gate.
+            _skip_print_files = ("etrade.py", "powergauge.py", "run_history.py", "real_copilot.py")
+            _skip_print_trees = ("scripts/", "tests/")
+            _rel = os.path.relpath(fpath, ROOT_DIR).replace(os.sep, "/")
+            if not (os.path.basename(fpath) in _skip_print_files or _rel.startswith(_skip_print_trees)):
                 if not check_no_print_statements(fpath):
                     success = False
                 

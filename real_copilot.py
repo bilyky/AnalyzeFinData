@@ -1,6 +1,6 @@
 import os
 import openpyxl
-import etrade
+from aether import etrade
 import notify
 import ai_portfolio_game
 from pathlib import Path
