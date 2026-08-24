@@ -188,6 +188,35 @@ def create_app():
                 return {"markdown": f.read()}
         raise HTTPException(status_code=404, detail="plans/roadmap.md not found")
 
+    @app.get("/api/intel-ideas")
+    def get_intel_ideas():
+        cache_path = _DIR / "Data" / "intel_ideas_cache.json"
+        if not cache_path.exists():
+            return {"ideas": []}
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                records = json.load(f)
+            
+            seen_rd = set()
+            unique_rd = []
+            for r in records:
+                intel = r.get("intel") or {}
+                rd_topics_list = intel.get("rd_topics", [])
+                if isinstance(rd_topics_list, str):
+                    rd_topics_list = [rd_topics_list]
+                if isinstance(rd_topics_list, list):
+                    for topic in rd_topics_list:
+                        if isinstance(topic, str):
+                            topic_clean = topic.strip()
+                            if topic_clean:
+                                topic_norm = topic_clean.lower().rstrip(".").strip()
+                                if topic_norm not in seen_rd:
+                                    seen_rd.add(topic_norm)
+                                    unique_rd.append(topic_clean)
+            return {"ideas": unique_rd}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read intel ideas cache: {e}")
+
     @app.get("/api/wiki")
     async def get_wiki():
         wiki_path = _DIR / "Data" / "wiki.json"

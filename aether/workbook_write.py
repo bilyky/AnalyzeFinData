@@ -1391,8 +1391,13 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
     _log.console("Replacements sheet written: %d pairs.", n_pairs)
 
 
-def backup_xlsx(xlsx_path: str) -> str | None:
-    """Copy xlsx to a timestamped backup in Backup/{year}/. Returns backup path or None."""
+def backup_xlsx(xlsx_path: str, max_retries: int = 3, retry_delay: float = 1.0) -> str | None:
+    """Copy xlsx to a timestamped backup in Backup/{year}/. Returns backup path or None.
+    
+    Fail-soft: if the workbook is open in Excel and locked, retries 3 times with a delay.
+    If the lock persists, gracefully falls back to the most recent existing backup file
+    so that the daily pipeline doesn't crash.
+    """
     if not os.path.exists(xlsx_path):
         return None
     now = datetime.datetime.now()
@@ -1400,6 +1405,35 @@ def backup_xlsx(xlsx_path: str) -> str | None:
     dst = os.path.join(os.path.dirname(xlsx_path), "Backup",
                        str(now.year), f"investment_{ts}.xlsx")
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    shutil.copy2(xlsx_path, dst)
-    _log.console("Backup saved to %s", dst)
-    return dst
+    
+    import time
+    import shutil
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            shutil.copy2(xlsx_path, dst)
+            _log.console("Backup saved to %s", dst)
+            return dst
+        except (PermissionError, OSError) as e:
+            _log.warning("Attempt %d of %d failed to backup %s due to lock: %s",
+                         attempt, max_retries, xlsx_path, e)
+            if attempt < max_retries:
+                time.sleep(retry_delay)
+            else:
+                _log.error("Failed to copy %s to %s after %d attempts.",
+                           xlsx_path, dst, max_retries)
+                           
+    # Fallback: Find the most recent existing backup file in the flat Backup/{year} directory (no slow recursive crawls!)
+    try:
+        backup_dir = os.path.dirname(dst)
+        import glob
+        backups = glob.glob(os.path.join(backup_dir, "*.xlsx"))
+        if backups:
+            backups.sort(key=os.path.getmtime)
+            newest_backup = backups[-1]
+            _log.warning("Lock persistent. Using latest existing backup as fallback for comment recovery: %s", newest_backup)
+            return newest_backup
+    except Exception as fe:
+        _log.error("Failed to find a backup fallback: %s", fe)
+        
+    return None

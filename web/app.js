@@ -1746,7 +1746,43 @@ function loadTab(tab) {
     else if (tab === "accounts") loadAccounts();
     else if (tab === "chat") setTimeout(() => $("chat-input").focus(), 50);
     else if (tab === "system") { loadSystem(); _startLogRefresh(); }
-    else if (tab === "about") loadRoadmap();
+    else if (tab === "about") { loadRoadmap(); loadIntelIdeas(); }
+}
+
+function _esc(str) {
+    if (!str) return "";
+    return str.replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;")
+              .replace(/'/g, "&#039;");
+}
+
+async function loadIntelIdeas() {
+    const el = $("intel-ideas-dynamic-content");
+    if (!el) return;
+    el.innerHTML = '<span class="text-slate-500">Loading AI qualitative research ideas...</span>';
+    try {
+        const d = await api("/api/intel-ideas");
+        if (d.error) {
+            el.textContent = "Error loading research ideas: " + d.error;
+            return;
+        }
+        if (!d.ideas || d.ideas.length === 0) {
+            el.innerHTML = '<span class="text-slate-500">No AI qualitative research ideas in backlog.</span>';
+            return;
+        }
+        
+        let html = '<ul class="list-disc pl-4 space-y-2 mt-2">';
+        d.ideas.forEach((idea, idx) => {
+            html += `<li class="text-slate-300 hover:text-slate-100 transition"><b class="text-sky-400 font-semibold">Prompt #${idx+1}:</b> ${_esc(idea)}</li>`;
+        });
+        html += '</ul>';
+        el.innerHTML = html;
+    } catch (e) {
+        console.warn("Failed to load AI research ideas:", e);
+        el.innerHTML = '<span class="text-slate-500">Failed to load AI research ideas (offline fallback).</span>';
+    }
 }
 
 async function loadRoadmap() {
