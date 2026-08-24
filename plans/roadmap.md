@@ -66,3 +66,8 @@ The active experimental backlog, scoring studies, and structural risk-mitigation
     *   *Keep the E\*TRADE call non-interactive* (`etrade.get_tokens(..., allow_browser=False)` + fallback equity, both already present) and never let a sentry failure block the summary/watchdog.
     *   *Red-green tests:* the consumer (endpoint returns computed fields; missing-file path degrades cleanly) and the trigger ordering (sentry sees post-refresh equity, not stale).
 
+34. **Sector-Regime Conditional Penalties & Momentum Weighting (R&D #34, BACKLOG — Aug 22 Retrospective):** The weekly pattern retrospective on **2026-08-22** (July 28 replay) flagged multiple high-alpha missed winners (**RDW: +57.64%**, **BXC: +50.28%**, **PLTR: +41.62%**) that were systematically suppressed and skipped by AETHER's static defensive penalties:
+    *   *The Over-Penalization of Strength:* Currently, the system applies a flat **`-2.0` penalty** to `industry_strength=Strong` and a **`-1.5` penalty** to `lt_trend=Strong` to avoid chasing overextended breakouts. However, in strong uptrends, these exact strengths are the engine of massive runs.
+    *   *The Momentum Penalty Trap:* High `momentum_score` (z-score >= 1.5) is currently penalized because the system flags it as "overbought breakout chasing."
+    *   *The Proposed Fix:* Research and design **Sector-Regime Conditional Penalties** in `aether/scoring.py`. When the overall market breadth is healthy or a specific sector exhibits volume-confirmed breakouts, the system will **dynamically waive or positive-weight** these industry strength and high-momentum parameters instead of applying defensive penalties, allowing AETHER to cleanly catch explosive leaders like `RDW` and `BXC`.
+

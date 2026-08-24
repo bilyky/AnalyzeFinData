@@ -91,6 +91,13 @@ def check_failure_rules(symbol, pgr, score, z_score, industry) -> tuple[bool, st
 
             # 1. PGR Match
             if field == "pgr" and condition == "startswith_Be" and str(pgr).startswith("Be"):
+                # ── R&D #13: PGR Waivers ──
+                # A. HighHighScorePGRBypass: Bypass Bearish PGR on high-conviction scores (score >= 10.0)
+                # B. BottomSnipePGRWaiver: Bypass Bearish PGR on confirmed bottom setups
+                bottom_ok, _ = is_bottom_confirmed(symbol)
+                if score >= 10.0 or bottom_ok:
+                    _log.info(f"🛡️ [R&D #13 PGR Waiver] Bypassed Bearish PGR '{pgr}' for {symbol} due to strong conviction (Score: {score:.1f}, Bottom Confirmed: {bottom_ok}).")
+                    continue
                 return True, reason
 
             # 2. Score Match
@@ -113,6 +120,13 @@ def check_failure_rules(symbol, pgr, score, z_score, industry) -> tuple[bool, st
             
             # 1. PGR Match
             if field == "pgr" and condition == "startswith_Be" and str(pgr).startswith("Be"):
+                # ── R&D #13: PGR Waivers ──
+                # A. HighHighScorePGRBypass: Bypass Bearish PGR on high-conviction scores (score >= 10.0)
+                # B. BottomSnipePGRWaiver: Bypass Bearish PGR on confirmed bottom setups
+                bottom_ok, _ = is_bottom_confirmed(symbol)
+                if score >= 10.0 or bottom_ok:
+                    _log.info(f"🛡️ [R&D #13 PGR Waiver] Bypassed Bearish PGR '{pgr}' for {symbol} due to strong conviction (Score: {score:.1f}, Bottom Confirmed: {bottom_ok}).")
+                    continue
                 return True, reason
                 
             # 2. Score Match

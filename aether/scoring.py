@@ -560,15 +560,38 @@ def short_score(pg_fields: dict) -> float:
     score += {'High': 2.5, 'Very High': 0.5, 'Normal': 0.0, 'Low': -2.0}.get(rv or '', 0.0)
     score += {'Optimal': 3.0, 'Early': 1.0, 'Neutral': 0.0, 'Wait': -2.0}.get(pg_fields.get('ob_os', ''), 0.0)
     score += {'Strong': 3.0, 'Neutral': 0.0, 'Weak': -2.0}.get(pg_fields.get('money_flow', ''), 0.0)
-    score += {'Weak': 2.0, 'Strong': -2.0}.get(pg_fields.get('industry_strength', ''), 0.0)
-    score += {'Weak': 1.5, 'Neutral': 0.0, 'Strong': -1.5}.get(pg_fields.get('lt_trend', ''), 0.0)
+    # ── R&D #34: Sector-Regime Conditional Overrides ──
+    # If the market is in a Bull regime OR has a confirmed breakout setup (setup == 1),
+    # strong industries and strong trends are indicators of strength (waive penalties).
+    # Otherwise, apply contrarian defensive penalties to prevent bubble-chasing.
+    regime = pg_fields.get('market_regime', 'Neutral')
+    setup = pg_fields.get('setup', 0)
+    is_bullish_breakout = (regime == 'Bull' or setup == 1)
+
+    if is_bullish_breakout:
+        # Waive the strong industry and strong trend penalties (set to 0.0 instead of -2.0 / -1.5)
+        score += {'Weak': 2.0, 'Strong': 0.0}.get(pg_fields.get('industry_strength', ''), 0.0)
+        score += {'Weak': 1.5, 'Neutral': 0.0, 'Strong': 0.0}.get(pg_fields.get('lt_trend', ''), 0.0)
+    else:
+        score += {'Weak': 2.0, 'Strong': -2.0}.get(pg_fields.get('industry_strength', ''), 0.0)
+        score += {'Weak': 1.5, 'Neutral': 0.0, 'Strong': -1.5}.get(pg_fields.get('lt_trend', ''), 0.0)
+
     score += pg_fields.get('seasonality', 0.0)
-    score += {'Bull': 1.0, 'Neutral': 0.0, 'Bear': -1.0}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)
+    score += {'Bull': 1.0, 'Neutral': 0.0, 'Bear': -1.0}.get(regime, 0.0)
     score += pg_fields.get('fibonacci', 0.0)
     score += pg_fields.get('rsi_divergence', 0.0) * 0.5
     score += pg_fields.get('candlestick_score', 0.0) * 0.30
     score += pg_fields.get('chart_score', 0.0)        * -0.30
-    score += pg_fields.get('momentum_score', 0.0)     * -0.30
+
+    if is_bullish_breakout:
+        # Waive the momentum penalty (set weight to 0.0, or flip to positive if bullish)
+        mom_val = pg_fields.get('momentum_score', 0.0)
+        if mom_val > 0:
+            score += mom_val * 0.15  # positive momentum boost
+        else:
+            score += mom_val * -0.30  # keep negative penalty on true downward momentum
+    else:
+        score += pg_fields.get('momentum_score', 0.0)     * -0.30
     score += pg_fields.get('digit_sum', 0.0)
     # Rubber-Band Reversal: BULLISH (+), so a POSITIVE weight. Score is [0,+2];
     # 0.5 gives the validated reliable pocket up to +1.0. Defaults 0.0 = off.
