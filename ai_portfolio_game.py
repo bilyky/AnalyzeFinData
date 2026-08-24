@@ -10,6 +10,7 @@ import rapidapi
 import sys
 import console_safe
 import circuit_breaker
+from aether import trash
 import aether.notify as notify
 import argparse
 from pathlib import Path
@@ -41,11 +42,67 @@ from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
 
 
+_SYMBOL_DAY_CACHE = {}
+
+def _load_symbol_today_cache(symbol: str, today_str: str) -> dict:
+    """Flyweight Cache Pattern: loads and returns the daily JSON cache,
+    ensuring each symbol is read from the hard drive at most once."""
+    symbol = symbol.upper()
+    if symbol in _SYMBOL_DAY_CACHE:
+        return _SYMBOL_DAY_CACHE[symbol]
+        
+    cache_path = BASE_DIR / "Data" / "Symbol" / symbol / f"{symbol}_{today_str}.json"
+    cache = {}
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+        except Exception as e:
+            _log.warning(f"Failed to read daily cache for {symbol}: {e}")
+            
+    _SYMBOL_DAY_CACHE[symbol] = cache
+    return cache
+
 def check_failure_rules(symbol, pgr, score, z_score, industry) -> tuple[bool, str]:
-    """Check if the candidate matches any active toxic rules in Data/failure_dna_rules.json."""
+    """Check if the candidate matches any active toxic rules in Data/failure_dna_rules.json or dynamic filters."""
     rules_file = BASE_DIR / "Data" / "failure_dna_rules.json"
+    
+    # ── Earnings-Shock Failure Gate (Pillar 1 Guard) ──
+    # Programmatic, un-bypassable veto on any symbol that has just reported a massive earnings miss
+    today_str = str(datetime.date.today())
+    cache = _load_symbol_today_cache(symbol, today_str)
+    if cache:
+        eps_data = cache.get("EPSData", {})
+        eps_diff = eps_data.get("eps_diff_description", "")
+        warning_impact = eps_data.get("warning_impact", "")
+        
+        if "missed by" in (eps_diff or "").lower() or warning_impact == "Very Bearish":
+            return True, f"Earnings Shock Veto: {eps_diff or 'Very Bearish earnings'}"
+
     if not rules_file.exists() or rules_file.stat().st_size == 0:
         return False, ""
+    try:
+        with open(rules_file, "r", encoding="utf-8") as f:
+            rules = json.load(f)
+        for r in rules:
+            field = r.get("field")
+            condition = r.get("condition")
+            reason = r.get("reason", "Toxic pattern match")
+
+            # 1. PGR Match
+            if field == "pgr" and condition == "startswith_Be" and str(pgr).startswith("Be"):
+                return True, reason
+
+            # 2. Score Match
+            if field == "score" and condition == "less_than_5.0" and score < 5.0:
+                return True, reason
+
+            # 3. Z-Score Match
+            if field == "z_score" and condition == "greater_than_2.5" and z_score > 2.5:
+                return True, reason
+    except Exception as e:
+        _log.warning(f"Failed to evaluate failure rules: {e}")
+    return False, "" 
     try:
         with open(rules_file, "r", encoding="utf-8") as f:
             rules = json.load(f)
@@ -808,7 +865,7 @@ def save_game(state):
             backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime)
             if len(backups) > 15:
                 for old_b in backups[:-15]:
-                    old_b.unlink()
+                    trash.soft_delete(old_b, reason="game-backup-prune", force=True)
         except Exception as e:
             _log.warning(f"  [Warning] Game backup failed: {e}")
 
@@ -928,23 +985,11 @@ def is_market_hours():
         if not (start_time <= now_la <= end_time):
             return False
             
-        # 2. Dynamic Live Verification (Clock API + SPY Ticker)
-        try:
-            tokens = etrade.get_tokens("production")
-            if tokens:
-                is_open = etrade.is_market_open_now(tokens, "production")
-                if is_open is not None:
-                    if not is_open:
-                        _log.console("  [AETHER] Dynamic Market Checks confirm market is CLOSED (Holiday/Weekend).")
-                    return is_open
-        except Exception as e:
-            _log.warning(f"  [AETHER] Dynamic market clock failed: {e}. Falling back to static datetime checks.")
-            
-        # 3. Fallback: Weekend check (Saturday=5, Sunday=6)
+        # 2. Weekend check (Saturday=5, Sunday=6)
         if now_la.weekday() in (5, 6):
             return False
             
-        # 4. Fallback: Static US Stock Market Holiday (NYSE)
+        # 3. Static US Stock Market Holiday (NYSE)
         holidays_2026 = {
             "2026-01-01",  # New Year's Day
             "2026-01-19",  # Martin Luther King Jr. Day
@@ -965,6 +1010,18 @@ def is_market_hours():
         today_str = now_la.strftime("%Y-%m-%d")
         if today_str in holidays_2026:
             return False
+            
+        # 4. Dynamic Live Verification (Clock API + SPY Ticker)
+        try:
+            tokens = etrade.get_tokens("production")
+            if tokens:
+                is_open = etrade.is_market_open_now(tokens, "production")
+                if is_open is not None:
+                    if not is_open:
+                        _log.console("  [AETHER] Dynamic Market Checks confirm market is CLOSED (Holiday/Weekend).")
+                    return is_open
+        except Exception as e:
+            _log.warning(f"  [AETHER] Dynamic market clock failed: {e}. Falling back to static datetime checks.")
             
         return True
     except Exception:
@@ -1790,6 +1847,20 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         "industry": row[4]
                     })
         
+        # ── R&D #32 Overbought Breakout Guard score penalty ──
+        for buy_cand in top_buys:
+            sym_upper = buy_cand["sym"].upper()
+            cache = _load_symbol_today_cache(sym_upper, today)
+            if cache:
+                checklist = cache.get("checklist_stocks", {})
+                strength_count = checklist.get("strengthCount", 1)
+                timing_count = checklist.get("timingCount", 1)
+                industry_rating = checklist.get("industry", "Neutral")
+                
+                if (strength_count < 1 and timing_count < 1) or industry_rating == "Weak":
+                    buy_cand["total"] -= 1.5
+                    _log.info(f"🛡️ [R&D #32 Guard] Applied -1.5 score penalty to {sym_upper} (overbought/weak-sector: strength={strength_count}, timing={timing_count}, industry={industry_rating})")
+
         top_buys.sort(key=lambda x: x["total"], reverse=True)
 
         # ── R&D #27: Dynamic Momentum Rotation Engine ──

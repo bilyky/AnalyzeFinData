@@ -60,7 +60,8 @@ class TestProbeTokenAuthTriState(unittest.TestCase):
 
 
 class TestGetTokensDeletionScoping(unittest.TestCase):
-    """get_tokens may delete the cache ONLY on an explicit 401/403 — never on a transient blip."""
+    """get_tokens invalidates the cache ONLY on an explicit 401/403 — never on a transient
+    blip — and does so via SOFT delete (recoverable), never a hard os.remove."""
 
     def setUp(self):
         for name, kw in (
@@ -71,22 +72,30 @@ class TestGetTokensDeletionScoping(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def test_explicit_rejection_deletes_cache(self):
+    def test_explicit_rejection_soft_deletes_cache(self):
+        # An explicit 401 invalidates the cache via the project-wide SOFT delete — the token
+        # is moved to the garbage can (recoverable within retention), NEVER a hard os.remove.
+        # With every automated path exhausted get_tokens then fails SOFT to None (documented
+        # -> dict | None contract; ETRADE_AUTH.md rule 6), never raising.
         with mock.patch.object(etrade, "_probe_token_auth", return_value=False), \
              mock.patch.object(etrade, "_load_tokens_any_date", return_value=None), \
              mock.patch.object(etrade.os.path, "exists", return_value=False), \
+             mock.patch.object(etrade.trash, "soft_delete") as soft, \
              mock.patch.object(etrade.os, "remove") as rm:
             result = etrade.get_tokens(env="production", allow_browser=False)
-        rm.assert_called_once_with(etrade._TOKEN_PATH)
-        self.assertIsNone(result)  # all fallbacks disabled -> None
+        self.assertIsNone(result)
+        soft.assert_called_once_with(etrade._TOKEN_PATH, reason="rejected-401")
+        rm.assert_not_called()   # soft-delete only — the token is recoverable, not destroyed
 
     def test_transient_probe_does_not_delete_token(self):
-        # None (transient) must skip deletion AND still attempt renewal.
+        # None (transient) must skip deletion (soft OR hard) AND still attempt renewal.
         sentinel = {"renewed": True}
         with mock.patch.object(etrade, "_probe_token_auth", return_value=None), \
              mock.patch.object(etrade, "renew_tokens", return_value=sentinel) as renew, \
+             mock.patch.object(etrade.trash, "soft_delete") as soft, \
              mock.patch.object(etrade.os, "remove") as rm:
             result = etrade.get_tokens(env="production", allow_browser=False)
+        soft.assert_not_called()
         rm.assert_not_called()
         renew.assert_called_once()
         self.assertIs(result, sentinel)

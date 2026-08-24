@@ -47,6 +47,8 @@ import ai_client
 import watchdog
 import sell_eval
 from aether import stock_compare
+from aether import etrade
+from aether import notify
 from aether_logger import get_logger
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -858,6 +860,50 @@ def create_app():
         await loop.run_in_executor(None, _heal)
         return {"status": "healed"}
 
+    @app.post("/api/etrade/reauth")
+    async def etrade_reauth(
+        bootstrap: bool = Body(default=False),
+        authorization: str = Header(default=""),
+    ):
+        """Human-initiated E*TRADE re-authentication (the "one magic button" HTTP front door).
+
+        Launches the SAME `etrade-login` CLI as a subprocess — it opens a real browser and can
+        take minutes, so it MUST NOT run inline in the request thread — tracked in the existing
+        _runs registry and polled through the shared GET /api/tasks/output/{run_id}. bootstrap
+        forces a headed browser for the rare one-time OTP that re-seeds device trust. Admin-only;
+        the automated anti-ban breaker still governs any headless path this ultimately drives.
+        """
+        _require_admin(authorization)
+        run_id = str(uuid.uuid4())[:8]
+        log_dir = _DIR / "Data" / "task_runs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"etrade_reauth_{run_id}.log"
+        cmd = [_PYTHON, __file__, "etrade-login"]
+        if bootstrap:
+            cmd.append("--bootstrap")
+        try:
+            with open(log_path, "w", encoding="utf-8") as lf:
+                proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, cwd=str(_DIR))
+            with _runs_lock:
+                _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc}
+            return {"status": "started", "pid": proc.pid, "run_id": run_id,
+                    "bootstrap": bootstrap, "label": "E*TRADE re-authenticate"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    @app.get("/api/etrade/status")
+    async def etrade_status(probe: bool = True, authorization: str = Header(default="")):
+        """Read-only E*TRADE auth state — the broker-confirmed view (probe=true, the default).
+
+        Delegates to etrade.auth_status(). probe=true runs the ban-free local->refresh->probe
+        ladder (at most a renew + one authenticated GET, never a browser), so it runs in a worker
+        thread to keep the event loop free; ?probe=false is the instant pure-local view.
+        Admin-only: a probe touches the broker."""
+        _require_admin(authorization)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: etrade.auth_status("production", probe=probe))
+
     return app
 
 
@@ -1013,6 +1059,49 @@ def cmd_regen_secret():
         _log.info("Start the server for it to take effect: python server.py start")
 
 
+def cmd_etrade_login(bootstrap: bool = False) -> None:
+    """Human-initiated E*TRADE re-auth via the persistent-profile engine — the CLI front door
+    for the "one magic button" (also the entry point POST /api/etrade/reauth shells out to, so
+    there is exactly one execution path). Replaces the ad-hoc scripts/diagnostics/test_etrade.py
+    as the real re-auth command. --bootstrap opens a headed browser for the rare one-time OTP
+    that re-seeds device trust; without it the daily zero-touch path runs. Prints the JSON
+    result and exits non-zero on failure so a caller / CI can detect it."""
+    result = etrade.reauthenticate("production", bootstrap=bootstrap)
+    _log.info("E*TRADE re-auth result: %s", json.dumps(result))
+    raise SystemExit(0 if result.get("ok") else 1)
+
+
+def cmd_etrade_reauth() -> None:
+    """The AUTOMATED (unattended) daily E*TRADE re-auth door — what the Task Scheduler runs.
+
+    Delegates to etrade.scheduled_reauth(), which is safe by construction: it renews first
+    (no browser), opens the ONE allowed automated browser only while the persistent profile is
+    trusted, and latches 'sms_required' the instant an OTP wall appears — so nothing here ever
+    hammers the login or risks a ban. On a state that needs a human (sms_required / unseeded /
+    failed) it fires the throttled email + desktop-push alert. Prints the JSON result; exits 0
+    on ok (renewed or reauthed), 1 otherwise so the scheduler/CI can detect it."""
+    result = etrade.scheduled_reauth("production")
+    _log.info("E*TRADE scheduled re-auth result: %s", json.dumps(result))
+    if not result.get("ok") and result.get("reason") in {"sms_required", "unseeded", "failed"}:
+        try:
+            notify.send_reauth_alert("production", result["reason"])
+        except Exception as e:
+            _log.warning("E*TRADE re-auth alert failed: %s", e)
+    raise SystemExit(0 if result.get("ok") else 1)
+
+
+def cmd_etrade_status(probe: bool = True) -> None:
+    """Print the E*TRADE auth-state classifier (etrade.auth_status) as JSON — the script door.
+
+    probe=True (default) runs the ban-free local->refresh->probe ladder for the broker-confirmed
+    state; --no-probe is the instant pure-local view. Exits non-zero IFF a human must act
+    (needs_manual_auth) so cron/CI can gate on 'does someone need to run the SMS bootstrap?' — a
+    self-healing expiry stays exit 0."""
+    result = etrade.auth_status("production", probe=probe)
+    _log.info("E*TRADE auth status: %s", json.dumps(result))
+    raise SystemExit(1 if result.get("needs_manual_auth") else 0)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -1020,13 +1109,24 @@ if __name__ == "__main__":
     parser.add_argument(
         "cmd", nargs="?", default="dev",
         choices=["start", "stop", "restart", "status", "upgrade",
-                 "regen-secret", "serve", "dev"],
+                 "regen-secret", "serve", "etrade-login", "etrade-reauth",
+                 "etrade-status", "dev"],
         help="start/stop/restart/status/upgrade the background server; "
              "regen-secret rotates web.secret in config.json; "
-             "'serve' runs uvicorn in-process; omit for foreground dev mode",
+             "'serve' runs uvicorn in-process; 'etrade-login' re-authenticates E*TRADE "
+             "(add --bootstrap for the one-time supervised OTP); 'etrade-reauth --scheduled' "
+             "is the unattended daily door (renew-first, trusted-profile only, alerts on SMS); "
+             "'etrade-status' prints the read-only auth state (add --no-probe for local-only); "
+             "omit for foreground dev mode",
     )
     parser.add_argument("--port", type=int, help="Override configured port (serve/dev)")
     parser.add_argument("--host", help="Override configured host (serve/dev)")
+    parser.add_argument("--bootstrap", action="store_true",
+                        help="etrade-login: headed one-time OTP run to re-seed device trust")
+    parser.add_argument("--scheduled", action="store_true",
+                        help="etrade-reauth: run as the unattended scheduled daily re-auth")
+    parser.add_argument("--no-probe", action="store_true",
+                        help="etrade-status: skip the broker probe/renew — instant pure-local view")
     args = parser.parse_args()
 
     if args.cmd == "start":
@@ -1044,6 +1144,12 @@ if __name__ == "__main__":
     elif args.cmd == "serve":
         cfg = _cfg()
         cmd_serve(args.host or cfg.web_host, args.port or cfg.web_port)
+    elif args.cmd == "etrade-login":
+        cmd_etrade_login(bootstrap=args.bootstrap)
+    elif args.cmd == "etrade-reauth":
+        cmd_etrade_reauth()
+    elif args.cmd == "etrade-status":
+        cmd_etrade_status(probe=not args.no_probe)
     else:
         # Default: foreground dev mode (auto-reload)
         cfg = _cfg()

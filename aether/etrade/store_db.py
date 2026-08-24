@@ -9,19 +9,13 @@ pointer rather than silently returning wrong data.
 SECURITY CONTRACT (enforced when this is implemented):
   * ``tokens`` and ``browser_state`` are SECRET — they must NOT be written to a
     plain DB table. In a DB deployment they stay in a k8s Secret / envelope-
-    encrypted blob; only the NON-SECRET stores below are backed by DB tables:
+    encrypted blob; only the NON-SECRET store below is backed by a DB table:
         etrade_reauth_state      (circuit-breaker counters)
-        etrade_lock              (row-lease mutual exclusion across pods)
-        etrade_auth_event        (append-only audit log)
-        etrade_position_snapshot (aggregate position history)
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from aether.etrade.store import (
     EtradeStore, TokenStore, BrowserStateStore, ReauthStateStore,
-    LockProvider, AuthEventLog, PositionSnapshotStore,
 )
 
 _TODO = (
@@ -50,29 +44,11 @@ class _DbReauthStateStore(ReauthStateStore):
     def reset(self, env="production"): raise NotImplementedError(_TODO)
 
 
-class _DbLockProvider(LockProvider):
-    def acquire(self, name, ttl=30.0): raise NotImplementedError(_TODO)
-    def release(self, name): raise NotImplementedError(_TODO)
-
-
-class _DbAuthEventLog(AuthEventLog):
-    def append(self, env, event, detail="", source=""): raise NotImplementedError(_TODO)
-    def read(self, limit=None): raise NotImplementedError(_TODO)
-
-
-class _DbPositionSnapshotStore(PositionSnapshotStore):
-    def save(self, env, positions): raise NotImplementedError(_TODO)
-    def latest(self, env): raise NotImplementedError(_TODO)
-
-
 def make_db_store(database_url: str) -> EtradeStore:
     """Return a DB-backed store bundle. STUB — see module docstring / Phase 5."""
     return EtradeStore(
         tokens=_DbTokenStore(),
         browser_state=_DbBrowserStateStore(),
         reauth=_DbReauthStateStore(),
-        locks=_DbLockProvider(),
-        events=_DbAuthEventLog(),
-        positions=_DbPositionSnapshotStore(),
         backend="db",
     )

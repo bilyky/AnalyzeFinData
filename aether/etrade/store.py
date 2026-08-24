@@ -27,9 +27,9 @@ DESIGN NOTES
     - deletion goes through the package's ``os`` object, so ``mock.patch.object(
       etrade.os, "remove")`` still intercepts it.
 * **Secrets never go in a plain DB table.** The DB adapter (future) persists only
-  the *non-secret* rows — circuit-breaker state, the audit log, position
-  snapshots. OAuth secrets and browser state stay in a k8s Secret / envelope-
-  encrypted blob. The port split below marks each store SECRET or SHAREABLE.
+  the *non-secret* rows — circuit-breaker state. OAuth secrets and browser state
+  stay in a k8s Secret / envelope-encrypted blob. The port split below marks
+  each store SECRET or SHAREABLE.
 * Adapters touch the package lazily (inside methods), never at import time, so
   ``aether.etrade.__init__`` can import this module from its own bottom without a
   circular-import hazard.
@@ -39,7 +39,6 @@ from __future__ import annotations
 import abc
 import json
 import os
-import time
 from typing import Optional
 
 
@@ -124,57 +123,6 @@ class ReauthStateStore(abc.ABC):
     def reset(self, env: str = "production") -> None: ...
 
 
-class LockProvider(abc.ABC):
-    """Cross-process/pod mutual exclusion (so only ONE browser ever opens).
-
-    File adapter uses an O_EXCL lockfile now; a DB row-lease adapter can preserve
-    the same single-writer guarantee across pods later.
-    """
-
-    @abc.abstractmethod
-    def acquire(self, name: str, ttl: float = 30.0) -> bool: ...
-
-    @abc.abstractmethod
-    def release(self, name: str) -> None: ...
-
-
-class AuthEventLog(abc.ABC):
-    """Append-only, **secret-free** audit trail of the auth lifecycle. SHAREABLE.
-
-    Record schema (one JSON object per line)::
-
-        ts      float  epoch seconds
-        env     str
-        event   str    issued|renewed|revoked|probe_ok|probe_fail|
-                       reauth_attempt|reauth_fail|reauth_reset|cooldown_set
-        detail  str    short human note (NO tokens/accounts/credentials)
-        source  str    who wrote it (module / pod name)
-    """
-
-    @abc.abstractmethod
-    def append(self, env: str, event: str, detail: str = "", source: str = "") -> None: ...
-
-    @abc.abstractmethod
-    def read(self, limit: Optional[int] = None) -> list: ...
-
-
-class PositionSnapshotStore(abc.ABC):
-    """Optional history of fetched positions (non-secret aggregate trace). SHAREABLE.
-
-    Record schema::
-
-        ts        float
-        env       str
-        positions list[dict]   (symbol/qty/cost/price/mval/date_acquired/account_last4)
-    """
-
-    @abc.abstractmethod
-    def save(self, env: str, positions: list) -> None: ...
-
-    @abc.abstractmethod
-    def latest(self, env: str) -> Optional[dict]: ...
-
-
 # ===========================================================================
 # File adapters (today's behaviour — delegate to the proven core)
 # ===========================================================================
@@ -225,123 +173,18 @@ class FileReauthStateStore(ReauthStateStore):
         _pkg().reset_reauth_circuit_breaker(env)
 
 
-class FileLockProvider(LockProvider):
-    """Minimal O_EXCL lockfile with a TTL, beside the other Data/ state files.
-
-    This is the single-box adapter; the auth core still uses its own
-    ``TokenRenewer`` two-level lock for the browser/renew single-flight. This
-    port exists so a DB row-lease adapter can provide the SAME guarantee across
-    pods without any call-site change.
-    """
-
-    def _path(self, name: str) -> str:
-        return os.path.join(_pkg()._DIR, "Data", f"etrade_{name}.lock")
-
-    def acquire(self, name: str, ttl: float = 30.0) -> bool:
-        path = self._path(name)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        # Break a stale lock older than ttl.
-        try:
-            if os.path.exists(path) and (time.time() - os.path.getmtime(path)) > ttl:
-                os.remove(path)
-        except OSError:
-            pass
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
-            return True
-        except FileExistsError:
-            return False
-
-    def release(self, name: str) -> None:
-        try:
-            os.remove(self._path(name))
-        except OSError:
-            pass
-
-
-class FileAuthEventLog(AuthEventLog):
-    def _path(self) -> str:
-        return os.path.join(_pkg()._DIR, "Data", "etrade_auth_events.jsonl")
-
-    def append(self, env: str, event: str, detail: str = "", source: str = "") -> None:
-        rec = {"ts": time.time(), "env": env, "event": event,
-               "detail": detail, "source": source}
-        path = self._path()
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec) + "\n")
-        except OSError:
-            pass  # audit logging must never break the auth path
-
-    def read(self, limit: Optional[int] = None) -> list:
-        path = self._path()
-        if not os.path.exists(path):
-            return []
-        out = []
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        out.append(json.loads(line))
-                    except ValueError:
-                        continue
-        return out[-limit:] if limit else out
-
-
-class FilePositionSnapshotStore(PositionSnapshotStore):
-    def _path(self) -> str:
-        return os.path.join(_pkg()._DIR, "Data", "etrade_position_snapshots.jsonl")
-
-    def save(self, env: str, positions: list) -> None:
-        rec = {"ts": time.time(), "env": env, "positions": positions}
-        path = self._path()
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, default=str) + "\n")
-        except OSError:
-            pass
-
-    def latest(self, env: str) -> Optional[dict]:
-        path = self._path()
-        if not os.path.exists(path):
-            return None
-        found = None
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if rec.get("env") == env:
-                    found = rec
-        return found
-
-
 # ===========================================================================
 # Store bundle + factory
 # ===========================================================================
 
 class EtradeStore:
-    """Bundle of the six state ports, selected together for one backend."""
+    """Bundle of the three state ports, selected together for one backend."""
 
     def __init__(self, tokens: TokenStore, browser_state: BrowserStateStore,
-                 reauth: ReauthStateStore, locks: LockProvider,
-                 events: AuthEventLog, positions: PositionSnapshotStore,
-                 backend: str = "file"):
+                 reauth: ReauthStateStore, backend: str = "file"):
         self.tokens = tokens
         self.browser_state = browser_state
         self.reauth = reauth
-        self.locks = locks
-        self.events = events
-        self.positions = positions
         self.backend = backend
 
 
@@ -350,9 +193,6 @@ def _file_store() -> EtradeStore:
         tokens=FileTokenStore(),
         browser_state=FileBrowserStateStore(),
         reauth=FileReauthStateStore(),
-        locks=FileLockProvider(),
-        events=FileAuthEventLog(),
-        positions=FilePositionSnapshotStore(),
         backend="file",
     )
 

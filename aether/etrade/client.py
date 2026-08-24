@@ -17,20 +17,24 @@ use going forward. It composes five resource interfaces —
   token and call read endpoints — ``get_tokens`` / ``renew`` / ``revoke`` /
   ``keep_alive`` raise. This is the ban-safety boundary that lets the data plane
   scale without multiplying re-auth attempts on the shared credential.
-* **A pluggable data layer** (``store``) so token/breaker/audit persistence can move
-  from files to a DB with no call-site change.
+* **A pluggable data layer** (``store``) so token/browser-state/breaker persistence
+  can move from files to a DB with no call-site change, once wired.
 
 IMPLEMENTATION: every method **delegates to the proven free functions** in
 ``aether.etrade`` (looked up on the package at call time). The class adds structure,
 role enforcement and extension points; it does NOT re-implement — so all existing
 behaviour, tests and ban-safety guarantees carry through unchanged.
+
+``store`` is built and held (``self.store``) but not yet wired into the interfaces
+above — they still read/write through ``_pkg`` directly. Deliberate: each port
+(tokens / browser_state / reauth) moves over in its own follow-up PR rather than as
+one refactor across these already-tested paths.
 """
 from __future__ import annotations
 
 from typing import Optional
 
 from aether import etrade as _pkg
-from aether.etrade.endpoints import Endpoints
 from aether.etrade.store import make_etrade_store
 
 
@@ -220,7 +224,6 @@ class ETradeClient:
         self.role = role
         self.allow_browser = allow_browser
         self.store = store if store is not None else make_etrade_store()
-        self.endpoints = Endpoints(env)
 
         self.auth = _AuthInterface(self)
         self.market = _MarketInterface(self)

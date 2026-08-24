@@ -89,6 +89,33 @@ def _find_peaks_troughs(closes: np.ndarray, n: int = 3):
 
 # ── Candlestick score ─────────────────────────────────────────────────────────
 
+# Per-pattern *magnitude* weights — how strongly each pattern's fire moves the raw
+# bull/bear tally. These are hand-set reliability priors (NOT per-pattern backtested)
+# and remain PROVISIONAL pending per-pattern calibration; only the aggregate
+# candlestick factor weight is backtested (3.49% spread) and consumed CONTRARIAN
+# (negative) in scoring.short_score/long_score — so a larger fire on a "strong"
+# bullish pattern lowers the buy score. The reliability labels below describe the
+# pattern's classical strength, not a directional/bullish contribution.
+CANDLESTICK_WEIGHTS = {
+    "engulfing":       1.50, # High reliability
+    "harami":          0.75, # Moderate
+    "harami_strict":   1.00, # High strictness
+    "doji":            0.30, # Low reliability (indecision)
+    "piercing":        1.25, # High
+    "star":            1.40, # High (Morning/Evening star)
+    "tasuki":          0.80, # Moderate
+    "bottle":          0.90, # Moderate
+    "neck":            0.50, # Low
+    "h":               0.60, # Low
+    "slingshot":       1.10, # Moderate-High
+    "hikkake":         1.15, # Moderate-High
+    "three_methods":   1.35, # High continuation
+    "stick_sandwich":  1.20, # Moderate-High
+    "tweezers":        0.95, # Moderate
+    "quintuplets":     1.50, # High
+    "double_trouble":  1.60, # Very High (highly explosive breakout!)
+}
+
 def candlestick_score(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> float:
     """Run all signals.py patterns; aggregate bullish/bearish fires over last lookback bars.
 
@@ -101,40 +128,45 @@ def candlestick_score(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> float
     body = float(np.mean(arr[-lookback:, 3])) * 0.01  # 1% of avg close
     atr_vals = _wilder_atr(arr)
 
-    bull = 0
-    bear = 0
+    bull = 0.0
+    bear = 0.0
 
-    def _check(result, b_col, s_col):
+    def _check(result, b_col, s_col, pattern_name):
         nonlocal bull, bear
         window = result[-lookback:]
+        weight = CANDLESTICK_WEIGHTS.get(pattern_name, 1.0)
         if any(window[:, b_col] > 0):
-            bull += 1
+            bull += weight
         if any(window[:, s_col] < 0):
-            bear += 1
+            bear += weight
 
     # Each call needs a fresh copy: signals.py calls pf.add_column() expanding shape
-    _check(sig.engulfing_signal(arr.copy(),       0, 3, 5, 6),       5, 6)
-    _check(sig.harami_signal(arr.copy(),          0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.harami_strict_signal(arr.copy(),   0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.doji_signal(arr.copy(),            0, 3, 5, 6),       5, 6)
-    _check(sig.piersing_signal(arr.copy(),        0, 3, 5, 6),       5, 6)
-    _check(sig.star_signal(arr.copy(),            0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.tasuki_signal(arr.copy(),          0, 3, 5, 6),       5, 6)
-    _check(sig.bottle_signal(arr.copy(),          0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.neck_signal(arr.copy(),            0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.h_signal(arr.copy(),               0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.slingshot_signal(arr.copy(),       0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.hikkake_signal(arr.copy(),         0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.three_methods_signal(arr.copy(),   0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.stick_sandwich_signal(arr.copy(),  0, 1, 2, 3, 5, 6), 5, 6)
-    _check(sig.tweezers_signal(arr.copy(),        0, 1, 2, 3, 5, 6, body), 5, 6)
-    _check(sig.quintuplets_signal(arr.copy(),     0, 3, 5, 6, body), 5, 6)
+    _check(sig.engulfing_signal(arr.copy(),       0, 3, 5, 6),       5, 6, "engulfing")
+    _check(sig.harami_signal(arr.copy(),          0, 1, 2, 3, 5, 6), 5, 6, "harami")
+    _check(sig.harami_strict_signal(arr.copy(),   0, 1, 2, 3, 5, 6), 5, 6, "harami_strict")
+    _check(sig.doji_signal(arr.copy(),            0, 3, 5, 6),       5, 6, "doji")
+    _check(sig.piersing_signal(arr.copy(),        0, 3, 5, 6),       5, 6, "piercing")
+    _check(sig.star_signal(arr.copy(),            0, 1, 2, 3, 5, 6), 5, 6, "star")
+    _check(sig.tasuki_signal(arr.copy(),          0, 3, 5, 6),       5, 6, "tasuki")
+    _check(sig.bottle_signal(arr.copy(),          0, 1, 2, 3, 5, 6), 5, 6, "bottle")
+    _check(sig.neck_signal(arr.copy(),            0, 1, 2, 3, 5, 6), 5, 6, "neck")
+    _check(sig.h_signal(arr.copy(),               0, 1, 2, 3, 5, 6), 5, 6, "h")
+    _check(sig.slingshot_signal(arr.copy(),       0, 1, 2, 3, 5, 6), 5, 6, "slingshot")
+    _check(sig.hikkake_signal(arr.copy(),         0, 1, 2, 3, 5, 6), 5, 6, "hikkake")
+    _check(sig.three_methods_signal(arr.copy(),   0, 1, 2, 3, 5, 6), 5, 6, "three_methods")
+    _check(sig.stick_sandwich_signal(arr.copy(),  0, 1, 2, 3, 5, 6), 5, 6, "stick_sandwich")
+    _check(sig.tweezers_signal(arr.copy(),        0, 1, 2, 3, 5, 6, body), 5, 6, "tweezers")
+    _check(sig.quintuplets_signal(arr.copy(),     0, 3, 5, 6, body), 5, 6, "quintuplets")
 
     # double_trouble needs ATR pre-computed as column 5
     arr_atr = np.column_stack([arr, atr_vals])
-    _check(sig.double_trouble_signal(arr_atr.copy(), 0, 1, 2, 3, 5, 6, 7), 6, 7)
+    _check(sig.double_trouble_signal(arr_atr.copy(), 0, 1, 2, 3, 5, 6, 7), 6, 7, "double_trouble")
 
     raw = bull - bear
+    # Normalize to [-2, +2]. The /5.0 saturation point (raw >= 5 -> full scale) is a
+    # provisional hand-set constant, NOT backtest-derived — it caps a few concurrent
+    # fires at the rail so no single bar dominates. Calibrate alongside the per-pattern
+    # CANDLESTICK_WEIGHTS when the per-pattern backtest lands.
     score = max(-2.0, min(2.0, raw / 5.0 * 2.0))
     return round(score, 2)
 
@@ -167,7 +199,9 @@ def chart_pattern_score(ohlcv_ts: dict, date_str: str, lookback: int = 250):
         c80 = closes[-80:]
         peaks, troughs = _find_peaks_troughs(c80)
         if len(peaks) >= 3:
-            p3 = peaks[-1]; p2 = peaks[-2]; p1 = peaks[-3]
+            p3 = peaks[-1]
+            p2 = peaks[-2]
+            p1 = peaks[-3]
             if (p2[1] > p1[1] and p2[1] > p3[1]
                     and abs(p1[1] - p3[1]) / p2[1] < 0.05):
                 # neckline: troughs between shoulders
@@ -184,7 +218,9 @@ def chart_pattern_score(ohlcv_ts: dict, date_str: str, lookback: int = 250):
         c80 = closes[-80:]
         peaks, troughs = _find_peaks_troughs(c80)
         if len(troughs) >= 3:
-            t3 = troughs[-1]; t2 = troughs[-2]; t1 = troughs[-3]
+            t3 = troughs[-1]
+            t2 = troughs[-2]
+            t1 = troughs[-3]
             if (t2[1] < t1[1] and t2[1] < t3[1]
                     and abs(t1[1] - t3[1]) / max(t2[1], 1e-6) < 0.05):
                 p_mid = [p for p in peaks if t1[0] < p[0] < t3[0]]
@@ -258,7 +294,8 @@ def chart_pattern_score(ohlcv_ts: dict, date_str: str, lookback: int = 250):
     if len(closes) >= 40:
         peaks, _ = _find_peaks_troughs(closes)
         if len(peaks) >= 2:
-            p2 = peaks[-1]; p1 = peaks[-2]
+            p2 = peaks[-1]
+            p1 = peaks[-2]
             gap = p2[0] - p1[0]
             if gap >= 15 and abs(p1[1] - p2[1]) / max(p1[1], 1e-6) < 0.03:
                 valley = float(np.min(closes[p1[0]:p2[0] + 1]))
@@ -270,7 +307,8 @@ def chart_pattern_score(ohlcv_ts: dict, date_str: str, lookback: int = 250):
     if len(closes) >= 40:
         _, troughs = _find_peaks_troughs(closes)
         if len(troughs) >= 2:
-            t2 = troughs[-1]; t1 = troughs[-2]
+            t2 = troughs[-1]
+            t1 = troughs[-2]
             gap = t2[0] - t1[0]
             if gap >= 15 and abs(t1[1] - t2[1]) / max(t1[1], 1e-6) < 0.03:
                 peak = float(np.max(closes[t1[0]:t2[0] + 1]))
@@ -337,7 +375,7 @@ RBR_RANGE_MIN     = 0.50   # reversal close must sit in the upper half of its ra
 RBR_WARMUP        = RBR_VOL_WIN + RBR_LOOKBACK + 2   # 32 bars
 
 
-def rbr_leg1(o, h, l, c, i):
+def rbr_leg1(o, h, low, c, i):
     """Leg-1 overreaction-drawdown geometry at bar ``i``, using only bars <= i.
 
     Returns a dict(h_idx, pre_high, t_idx, trough_low, drop_pct, speed, had_gap), or
@@ -352,8 +390,8 @@ def rbr_leg1(o, h, l, c, i):
     pre_high = c[h_idx]
     if pre_high <= 0 or h_idx == i:
         return None
-    t_idx = min(range(h_idx, i + 1), key=lambda j: l[j])
-    trough_low = l[t_idx]
+    t_idx = min(range(h_idx, i + 1), key=lambda j: low[j])
+    trough_low = low[t_idx]
     drop_pct = (trough_low - pre_high) / pre_high
     speed = t_idx - h_idx
     if drop_pct > RBR_DEPTH_MIN or speed < 1 or speed > RBR_SPEED_MAX:
@@ -387,21 +425,21 @@ def rubber_band_reversal_score(ohlcv_ts: dict, date_str: str):
         return 0.0, []
     # volume is intentionally unused: the validated pocket (vol>=0.0 in the sweep)
     # carried no marginal edge, so the detector stays price-only.
-    o, h, l, c = (arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3])
+    o, h, low, c = (arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3])
     i = len(arr) - 1
 
     # ── Leg 1: overreaction drawdown (shared geometry) ──
-    leg1 = rbr_leg1(o, h, l, c, i)
+    leg1 = rbr_leg1(o, h, low, c, i)
     if leg1 is None or leg1["t_idx"] >= i:   # need the trough already in — today is the recovery bar
         return 0.0, []
     trough_low, drop_pct, speed, had_gap = (
         leg1["trough_low"], leg1["drop_pct"], leg1["speed"], leg1["had_gap"])
 
     # ── Leg 2: recovery confirmation on today's bar ──
-    if not (l[i] > trough_low and c[i] > c[i - 1]):   # higher low + green close
+    if not (low[i] > trough_low and c[i] > c[i - 1]):   # higher low + green close
         return 0.0, []
-    rng = h[i] - l[i]
-    range_pos = (c[i] - l[i]) / rng if rng > 0 else 0.0
+    rng = h[i] - low[i]
+    range_pos = (c[i] - low[i]) / rng if rng > 0 else 0.0
     if range_pos < RBR_RANGE_MIN:                     # weak close = not a real reversal
         return 0.0, []
 
@@ -470,7 +508,7 @@ def momentum_pattern_score(ohlcv_ts: dict, date_str: str):
     if len(closes) >= 40:
         ema12 = _ema(closes, 12)
         ema26 = _ema(closes, 26)
-        macd  = [e12 - e26 for e12, e26 in zip(ema12, ema26)]
+        macd  = [e12 - e26 for e12, e26 in zip(ema12, ema26, strict=False)]
         # Skip warmup (first 25 values of macd are unreliable)
         valid_macd = macd[25:]
         if len(valid_macd) >= 10:

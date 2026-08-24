@@ -1032,12 +1032,30 @@ async function loadSystem() {
         api("/api/tasks/manual"),
     ]);
 
+    // E*TRADE auth state — the non-sensitive posture embedded in /api/health (state +
+    // needs_manual_auth; the rich detail is admin-only at GET /api/etrade/status). Green = live,
+    // red = a human must run the SMS bootstrap, muted = a self-healing expiry the daily door fixes.
+    const et = health.etrade;
+    const etTitle = et
+        ? (et.needs_manual_auth ? "A human must run the one-time SMS bootstrap."
+           : et.state === "live" ? "Token valid."
+           : "Self-healing: the daily automated re-auth will refresh it.")
+        : "";
+    const etRow = et
+        ? `<div title="${etTitle}">E*TRADE auth: <b class="${
+              et.needs_manual_auth ? "neg" : (et.state === "live" ? "pos" : "mut")
+            }">${(et.state || "—").toUpperCase()}</b>${
+              et.needs_manual_auth ? ' <span class="neg">— manual re-auth needed</span>' : ""
+            }</div>`
+        : `<div>E*TRADE auth: <span class="mut">—</span></div>`;
+
     $("health-body").innerHTML = `
         <div>Data fresh: <b class="${health.data_fresh ? "pos" : "neg"}">${health.data_fresh ? "YES" : "NO"}</b></div>
         <div>Last refresh: <span class="mut">${health.last_refresh || "—"}</span></div>
         <div>Last pipeline: <span class="mut">${health.last_pipeline_run || "—"}</span></div>
         <div>Pipeline status: <b class="${health.pipeline_status === "OK" ? "pos" : "mut"}">${health.pipeline_status}</b></div>
-        <div>Server time: <span class="mut">${health.server_time || "—"}</span></div>`;
+        <div>Server time: <span class="mut">${health.server_time || "—"}</span></div>
+        ${etRow}`;
 
     // Scheduled tasks — with a "Run Now" button that triggers the matching manual task
     const manualById = Object.fromEntries((manual.tasks || []).map((t) => [t.id, t]));
@@ -1156,6 +1174,35 @@ $("heal-tasks-btn").addEventListener("click", async () => {
         if (r.status === 401) { logout(); $("action-msg").textContent = "Session expired — log in again."; return; }
         $("action-msg").textContent = "Tasks healed.";
         loadSystem();
+    } catch (e) { $("action-msg").textContent = "Error: " + e.message; }
+});
+
+$("etrade-reauth-btn").addEventListener("click", async () => {
+    if (!isAdmin()) { $("login-btn").click(); return; }
+    // First prompt is the real cancel point; the second picks the mode. Native dialogs only
+    // give a binary answer, so a two-step confirm keeps a clean "abort" AND a bootstrap choice.
+    if (!confirm("Re-authenticate E*TRADE now? A browser window will open on the server host.")) return;
+    const bootstrap = confirm(
+        "One-time DEVICE BOOTSTRAP?\n\n" +
+        "OK — you'll enter an SMS OTP and check \"remember this device\" (first time, or after " +
+        "device trust lapsed).\nCancel — normal daily re-auth (no OTP expected)."
+    );
+    $("action-msg").textContent = `Starting E*TRADE re-auth${bootstrap ? " · bootstrap (OTP)" : ""}…`;
+    try {
+        const r = await fetch("/api/etrade/reauth", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+            body: JSON.stringify({ bootstrap }),
+        });
+        if (r.status === 401) { logout(); $("action-msg").textContent = "Session expired — log in again."; return; }
+        const d = await r.json();
+        if (d.status === "started") {
+            $("action-msg").textContent = `E*TRADE re-auth started (pid ${d.pid})${bootstrap ? " · bootstrap" : ""}.`;
+            _openOutputPanel(`E*TRADE re-authenticate${bootstrap ? " · bootstrap (OTP)" : ""}`);
+            _startPolling(d.run_id);
+        } else {
+            $("action-msg").textContent = d.message || d.status;
+        }
     } catch (e) { $("action-msg").textContent = "Error: " + e.message; }
 });
 
