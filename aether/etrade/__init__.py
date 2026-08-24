@@ -569,6 +569,11 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
             args=["--disable-blink-features=AutomationControlled"],
+            # Suppress Chrome's default --enable-automation switch: it paints the
+            # "Chrome is being controlled by automated test software" infobar and is a
+            # cheap, well-known Akamai Bot Manager tell that stalls the login POST even
+            # when a human types the credentials. Removing it drops that fingerprint.
+            ignore_default_args=["--enable-automation"],
         )
         # Remove navigator.webdriver flag so E*TRADE doesn't detect automation
         ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
