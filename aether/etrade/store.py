@@ -17,15 +17,21 @@ from ``DATABASE_URL`` with *zero* call-site changes.
 
 DESIGN NOTES
 ------------
-* The file adapters **delegate to the proven free functions** in ``aether.etrade``
-  (``_load_tokens`` / ``_save_tokens`` / ``_load_reauth_state`` …) rather than
-  re-implementing the JSON shapes. That guarantees the file backend can never
-  drift from the battle-tested (IP-ban-hardened) core, and — critically — it
-  inherits the core's two non-negotiable test seams for free:
+* The **token and reauth** file adapters **delegate to the proven free functions**
+  in ``aether.etrade`` (``_load_tokens`` / ``_save_tokens`` / ``_load_reauth_state``
+  …) rather than re-implementing the JSON shapes, so those two backends can never
+  drift from the battle-tested (IP-ban-hardened) core, and — critically — they
+  inherit the core's two non-negotiable test seams for free:
     - path constants (``_TOKEN_PATH`` …) are read **at call time**, so a test that
       reassigns ``etrade._TOKEN_PATH`` redirects the store too;
     - deletion goes through the package's ``os`` object, so ``mock.patch.object(
       etrade.os, "remove")`` still intercepts it.
+  ``FileBrowserStateStore`` is the **one exception**: the core exposes no standalone
+  browser-state load/save function to delegate to (that I/O is inline inside the
+  Playwright login flow), so this adapter reads/writes ``_BROWSER_STATE_PATH``
+  directly. It still reads the path constant at call time, but its JSON handling is
+  an *independent copy* — if the core's inline browser-state writer changes shape,
+  update this adapter to match.
 * **Secrets never go in a plain DB table.** The DB adapter (future) persists only
   the *non-secret* rows — circuit-breaker state. OAuth secrets and browser state
   stay in a k8s Secret / envelope-encrypted blob. The port split below marks
