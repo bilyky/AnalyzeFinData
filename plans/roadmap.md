@@ -71,3 +71,4 @@ The active experimental backlog, scoring studies, and structural risk-mitigation
     *   *The Momentum Penalty Trap:* High `momentum_score` (z-score >= 1.5) is currently penalized because the system flags it as "overbought breakout chasing."
     *   *The Proposed Fix:* Research and design **Sector-Regime Conditional Penalties** in `aether/scoring.py`. When the overall market breadth is healthy or a specific sector exhibits volume-confirmed breakouts, the system will **dynamically waive or positive-weight** these industry strength and high-momentum parameters instead of applying defensive penalties, allowing AETHER to cleanly catch explosive leaders like `RDW` and `BXC`.
 
+
