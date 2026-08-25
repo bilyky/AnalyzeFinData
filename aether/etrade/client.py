@@ -25,10 +25,12 @@ IMPLEMENTATION: every method **delegates to the proven free functions** in
 role enforcement and extension points; it does NOT re-implement — so all existing
 behaviour, tests and ban-safety guarantees carry through unchanged.
 
-``store`` is built and held (``self.store``) but not yet wired into the interfaces
-above — they still read/write through ``_pkg`` directly. Deliberate: each port
-(tokens / browser_state / reauth) moves over in its own follow-up PR rather than as
-one refactor across these already-tested paths.
+``store`` is wired **one port at a time**, each in its own follow-up PR rather than as
+one refactor across these already-tested paths. Wired so far: the **token read path**
+(``auth.current_token`` and the data-role ``_tokens`` resolver route through
+``store.tokens.load``). Still on ``_pkg`` directly: the token **write/renew** paths
+(``get_tokens``/``keep_alive``/``renew``/``revoke``, which internally save/soft-delete)
+and the browser-state / reauth ports.
 """
 from __future__ import annotations
 
@@ -91,7 +93,7 @@ class _AuthInterface:
     def current_token(self) -> Optional[dict]:
         """Today's cached token (same-day ET guard), or None. Never renews, never
         opens a browser, never writes — safe on the scaled data plane."""
-        return _pkg._load_tokens(self._c.env)
+        return self._c.store.tokens.load(self._c.env)
 
     def probe(self, tokens: dict):
         """Tri-state live probe: True (authorized) / False (401-403) / None (blip)."""
@@ -242,7 +244,7 @@ class ETradeClient:
             return tokens
         if self.role == "auth":
             return _pkg.get_tokens(self.env, allow_browser=self.allow_browser)
-        return _pkg._load_tokens(self.env)
+        return self.store.tokens.load(self.env)
 
     def __repr__(self) -> str:
         return f"<ETradeClient env={self.env!r} role={self.role!r} backend={self.store.backend!r}>"
