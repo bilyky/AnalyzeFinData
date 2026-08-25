@@ -11,9 +11,9 @@ import ai_portfolio_game
 
 class TestScoringRegimeConditionalPenalties(unittest.TestCase):
     def test_contrarian_penalties_applied_on_bearish_neutral_regimes(self):
-        # Case A: Market is Neutral, setup is 0 (standard defensive mode)
+        # Case A: Market is Neutral, no confirmed setup (standard defensive mode)
         fields = {
-            "relative_volume": "Neutral",
+            "rel_vol": "Neutral",
             "ob_os": "Neutral",
             "money_flow": "Neutral",
             "industry_strength": "Strong",  # penalty should be -2.0
@@ -35,7 +35,7 @@ class TestScoringRegimeConditionalPenalties(unittest.TestCase):
     def test_contrarian_penalties_waived_on_bullish_or_setup_breakouts(self):
         # Case B: Market is in a Bull regime (breakout strength mode)
         fields = {
-            "relative_volume": "Neutral",
+            "rel_vol": "Neutral",
             "ob_os": "Neutral",
             "money_flow": "Neutral",
             "industry_strength": "Strong",  # penalty should be 0.0 (waived!)
@@ -54,12 +54,22 @@ class TestScoringRegimeConditionalPenalties(unittest.TestCase):
         # Expected score: 0.0 (ind_strength) + 0.0 (lt_trend) + 1.0 (regime) + 0.3 (momentum) = 1.3
         self.assertEqual(score, 1.3)
 
-        # Case C: Market is Neutral but setup is 1 (confirmed breakout)
+        # Case C: Market is Neutral but a confirmed breakout setup exists.
+        # The dict key populated by powergauge._compute_pgr_fields is 'setup_ok'
+        # (bool), NOT 'setup'. This case exercises the setup-triggered waiver and
+        # would fail against the pre-fix code that read a non-existent 'setup' key.
         fields["market_regime"] = "Neutral"
-        fields["setup"] = 1
+        fields["setup_ok"] = True
         score = scoring.short_score(fields)
         # Expected score: 0.0 (ind_strength) + 0.0 (lt_trend) + 0.0 (regime) + 0.3 (momentum) = 0.3
         self.assertEqual(score, 0.3)
+
+        # Case D (negative gate): Neutral regime with setup_ok=False must NOT waive —
+        # contrarian penalties stay on. Locks the gate against a False/None setup.
+        fields["setup_ok"] = False
+        score = scoring.short_score(fields)
+        # Expected: -2.0 (ind_strength) + -1.5 (lt_trend) + 0.0 (regime) + -0.6 (momentum) = -4.1
+        self.assertEqual(score, -4.1)
 
 
 class TestPGRWaiverRules(unittest.TestCase):

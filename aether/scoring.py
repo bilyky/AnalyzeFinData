@@ -561,12 +561,15 @@ def short_score(pg_fields: dict) -> float:
     score += {'Optimal': 3.0, 'Early': 1.0, 'Neutral': 0.0, 'Wait': -2.0}.get(pg_fields.get('ob_os', ''), 0.0)
     score += {'Strong': 3.0, 'Neutral': 0.0, 'Weak': -2.0}.get(pg_fields.get('money_flow', ''), 0.0)
     # ── R&D #34: Sector-Regime Conditional Overrides ──
-    # If the market is in a Bull regime OR has a confirmed breakout setup (setup == 1),
-    # strong industries and strong trends are indicators of strength (waive penalties).
+    # If the market is in a Bull regime OR has a confirmed breakout setup, strong
+    # industries and strong trends are indicators of strength (waive penalties).
     # Otherwise, apply contrarian defensive penalties to prevent bubble-chasing.
+    # NOTE: the field is 'setup_ok' (bool True/False/None) as populated by
+    # powergauge._compute_pgr_fields — NOT 'setup'. Only a confirmed setup (True)
+    # triggers the waiver; None (indeterminate) must not.
     regime = pg_fields.get('market_regime', 'Neutral')
-    setup = pg_fields.get('setup', 0)
-    is_bullish_breakout = (regime == 'Bull' or setup == 1)
+    setup_ok = pg_fields.get('setup_ok')
+    is_bullish_breakout = (regime == 'Bull' or setup_ok is True)
 
     if is_bullish_breakout:
         # Waive the strong industry and strong trend penalties (set to 0.0 instead of -2.0 / -1.5)
@@ -584,12 +587,14 @@ def short_score(pg_fields: dict) -> float:
     score += pg_fields.get('chart_score', 0.0)        * -0.30
 
     if is_bullish_breakout:
-        # Waive the momentum penalty (set weight to 0.0, or flip to positive if bullish)
+        # In a breakout regime, only POSITIVE momentum is re-weighted: it flips from the
+        # -0.30 contrarian penalty to a +0.15 boost. True downward momentum keeps the
+        # -0.30 penalty (identical to the non-breakout path) — the penalty is not waived.
         mom_val = pg_fields.get('momentum_score', 0.0)
         if mom_val > 0:
             score += mom_val * 0.15  # positive momentum boost
         else:
-            score += mom_val * -0.30  # keep negative penalty on true downward momentum
+            score += mom_val * -0.30  # retain penalty on true downward momentum
     else:
         score += pg_fields.get('momentum_score', 0.0)     * -0.30
     score += pg_fields.get('digit_sum', 0.0)

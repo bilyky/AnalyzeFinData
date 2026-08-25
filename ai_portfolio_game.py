@@ -92,11 +92,16 @@ def check_failure_rules(symbol, pgr, score, z_score, industry) -> tuple[bool, st
             # 1. PGR Match
             if field == "pgr" and condition == "startswith_Be" and str(pgr).startswith("Be"):
                 # ── R&D #13: PGR Waivers ──
-                # A. HighHighScorePGRBypass: Bypass Bearish PGR on high-conviction scores (score >= 10.0)
-                # B. BottomSnipePGRWaiver: Bypass Bearish PGR on confirmed bottom setups
+                # A. HighScorePGRBypass: bypass Bearish PGR on a high-conviction score (>= 10.0)
+                # B. BottomSnipePGRWaiver: bypass Bearish PGR on a confirmed bottom setup.
+                # Test the cheap score gate first; only read the daily-history file
+                # (is_bottom_confirmed) when the score gate did not already waive.
+                if score >= 10.0:
+                    _log.info(f"[R&D #13 PGR Waiver] Bypassed Bearish PGR '{pgr}' for {symbol} (Score: {score:.1f} >= 10.0, high conviction).")
+                    continue
                 bottom_ok, _ = is_bottom_confirmed(symbol)
-                if score >= 10.0 or bottom_ok:
-                    _log.info(f"🛡️ [R&D #13 PGR Waiver] Bypassed Bearish PGR '{pgr}' for {symbol} due to strong conviction (Score: {score:.1f}, Bottom Confirmed: {bottom_ok}).")
+                if bottom_ok:
+                    _log.info(f"[R&D #13 PGR Waiver] Bypassed Bearish PGR '{pgr}' for {symbol} (bottom confirmed).")
                     continue
                 return True, reason
 
@@ -104,35 +109,6 @@ def check_failure_rules(symbol, pgr, score, z_score, industry) -> tuple[bool, st
             if field == "score" and condition == "less_than_5.0" and score < 5.0:
                 return True, reason
 
-            # 3. Z-Score Match
-            if field == "z_score" and condition == "greater_than_2.5" and z_score > 2.5:
-                return True, reason
-    except Exception as e:
-        _log.warning(f"Failed to evaluate failure rules: {e}")
-    return False, "" 
-    try:
-        with open(rules_file, "r", encoding="utf-8") as f:
-            rules = json.load(f)
-        for r in rules:
-            field = r.get("field")
-            condition = r.get("condition")
-            reason = r.get("reason", "Toxic pattern match")
-            
-            # 1. PGR Match
-            if field == "pgr" and condition == "startswith_Be" and str(pgr).startswith("Be"):
-                # ── R&D #13: PGR Waivers ──
-                # A. HighHighScorePGRBypass: Bypass Bearish PGR on high-conviction scores (score >= 10.0)
-                # B. BottomSnipePGRWaiver: Bypass Bearish PGR on confirmed bottom setups
-                bottom_ok, _ = is_bottom_confirmed(symbol)
-                if score >= 10.0 or bottom_ok:
-                    _log.info(f"🛡️ [R&D #13 PGR Waiver] Bypassed Bearish PGR '{pgr}' for {symbol} due to strong conviction (Score: {score:.1f}, Bottom Confirmed: {bottom_ok}).")
-                    continue
-                return True, reason
-                
-            # 2. Score Match
-            if field == "score" and condition == "less_than_5.0" and score < 5.0:
-                return True, reason
-                
             # 3. Z-Score Match
             if field == "z_score" and condition == "greater_than_2.5" and z_score > 2.5:
                 return True, reason
