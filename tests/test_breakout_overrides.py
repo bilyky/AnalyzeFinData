@@ -110,15 +110,36 @@ class TestPGRWaiverRules(unittest.TestCase):
         ai_portfolio_game.is_bottom_confirmed = mock_is_bottom_confirmed
         
         try:
-            # Case A: Bearish PGR with high combined score (score >= 10.0) -> Bypassed (returns False, not blocked)
+            # R&D #13 is DEFINED as the two-factor gate risk_utils.is_elite_breakout_candidate:
+            # BOTH score >= system_bypass_score_floor (8.0) AND s10 >= system_bypass_s10_floor (2.0).
+            # These cases exercise the waiver through the canonical helper, not a lone score>=10.0.
+
+            # Case A: elite on BOTH factors (score>=8 AND s10>=2) -> Bypassed (not blocked).
             is_toxic, reason = ai_portfolio_game.check_failure_rules(
-                symbol="TEST_HIGH", pgr="Bearish", score=10.5, z_score=1.0, industry="Utilities"
+                symbol="TEST_HIGH", pgr="Bearish", score=10.5, z_score=1.0, industry="Utilities", s10=3.0
             )
             self.assertFalse(is_toxic)
-            
-            # Case B: Bearish PGR with low combined score (score < 10.0) -> Blocked (returns True)
+
+            # Case B: low score -> Blocked (returns True) regardless of s10.
             is_toxic, reason = ai_portfolio_game.check_failure_rules(
-                symbol="TEST_LOW", pgr="Bearish", score=4.5, z_score=1.0, industry="Utilities"
+                symbol="TEST_LOW", pgr="Bearish", score=4.5, z_score=1.0, industry="Utilities", s10=3.0
+            )
+            self.assertTrue(is_toxic)
+            self.assertIn("Toxic", reason)
+
+            # Case C (red-green — the whole point of Option 1): strong score but WEAK s10.
+            # The old hardcoded `score >= 10.0` waiver would have bypassed this (toxic=False);
+            # the two-factor gate must NOT waive it (s10 0.5 < 2.0 floor), so it stays blocked.
+            is_toxic, reason = ai_portfolio_game.check_failure_rules(
+                symbol="TEST_STRONG_SCORE_WEAK_MOMENTUM", pgr="Bearish", score=10.5, z_score=1.0,
+                industry="Utilities", s10=0.5
+            )
+            self.assertTrue(is_toxic)
+            self.assertIn("Toxic", reason)
+
+            # Case D: waiver defaults safe — omitting s10 (default 0.0) must NOT waive even a high score.
+            is_toxic, reason = ai_portfolio_game.check_failure_rules(
+                symbol="TEST_NO_S10", pgr="Bearish", score=10.5, z_score=1.0, industry="Utilities"
             )
             self.assertTrue(is_toxic)
             self.assertIn("Toxic", reason)
