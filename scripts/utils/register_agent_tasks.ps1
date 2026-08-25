@@ -120,8 +120,24 @@ $Tasks = @(
     }
 )
 
+
 # Settings: standard reliable settings (wake machine, allow demand run, run missed)
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable   
+
+# Resolve Node and Engine parent directories dynamically to prevent 0x80070002 (File Not Found) in background S4U contexts
+$EngineCmd = Get-Command $Engine -ErrorAction SilentlyContinue
+$NodeCmd = Get-Command "node" -ErrorAction SilentlyContinue
+
+$PathPrefix = ""
+if ($EngineCmd -and $NodeCmd) {
+    $EngineDir = Split-Path -Parent $EngineCmd.Source
+    $NodeDir = Split-Path -Parent $NodeCmd.Source
+    $PathPrefix = "`$env:PATH += ';$EngineDir;$NodeDir'; "
+    Write-Host "Auto-resolved system PATH prefix to: $PathPrefix" -ForegroundColor Green
+} else {
+    Write-Host "Warning: Could not dynamically resolve Engine ($Engine) or Node paths." -ForegroundColor Yellow
+}
+
 
 # Iterate and register each task
 foreach ($T in $Tasks) {
@@ -133,7 +149,7 @@ foreach ($T in $Tasks) {
     if ($T.Script) {
         $ExecCmd = "cd '$RepoRoot'; $($T.Script) >> '$LogFile' 2>&1"
     } else {
-        $ExecCmd = "cd '$RepoRoot'; $Engine $Args -p '$PromptPayload' >> '$LogFile' 2>&1"
+        $ExecCmd = "$PathPrefix`cd '$RepoRoot'; $Engine $Args -p '$PromptPayload' >> '$LogFile' 2>&1"
     }
 
     # Run in a hidden PowerShell window (no visible console) so the scheduled task is non-interactive.
