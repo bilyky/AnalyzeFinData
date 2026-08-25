@@ -1316,7 +1316,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
 
     _touched_sheets = {"Research", "Picks"}
     try:
-        import etrade as _et
+        from aether import etrade as _et
         # Load cached tokens directly to avoid Playwright/MFA interactive prompts
         _cached = _et._load_tokens("production")
         _tok = None

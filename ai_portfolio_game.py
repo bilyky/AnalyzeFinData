@@ -5,7 +5,7 @@ import os
 import pytz
 import re
 import requests
-import etrade
+from aether import etrade
 import rapidapi
 import sys
 import console_safe
