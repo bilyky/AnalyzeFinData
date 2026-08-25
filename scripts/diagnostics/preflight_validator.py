@@ -5,7 +5,9 @@ This utility performs a rapid, 5-second diagnostic sweep of all external API gat
 mailboxes, and session states, verifying system readiness before any cron runs.
 """
 
+import csv
 import datetime
+import io
 import imaplib
 import json
 import os
@@ -261,8 +263,82 @@ def check_active_locks(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
     _log.console("  ✅ LOCKS: No active process or spreadsheet locks detected.")
     return True, []
 
+def check_watchdog_health(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
+    """Validate that the hourly AETHER Watchdog is successfully running and keeping the system warm.
+    
+    Checks both:
+      1. Task Scheduler: The LastResult of the 'AETHER_Watchdog' task must be 0 (success).
+      2. Log Freshness: The watchdog log file must have been written to within the last 75 minutes.
+    """
+    _log.console("  Checking AETHER Watchdog Health & Schedulers...")
+    issues = []
+    
+    if sys.platform == "win32":
+        try:
+            cmd = ["schtasks", "/query", "/tn", "\\AETHER_Agents\\AETHER_Watchdog", "/fo", "CSV", "/v"]
+            res = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=10)
+            if res.returncode == 0 and res.stdout.strip():
+                lines = res.stdout.strip().splitlines()
+                if len(lines) >= 2:
 
-def send_preflight_email(checks, missing_items, active_locks, duration, all_ok):
+                    reader = csv.reader(io.StringIO(res.stdout))
+                    header = next(reader)
+                    row = next(reader)
+                    header = [h.strip() for h in header]
+                    
+                    try:
+                        result_idx = header.index("Last Result")
+                    except ValueError:
+                        try:
+                            result_idx = [i for i, h in enumerate(header) if "result" in h.lower() or "code" in h.lower()][0]
+                        except IndexError:
+                            result_idx = -1
+                            
+                    if result_idx != -1 and len(row) > result_idx:
+                        last_result_str = row[result_idx].strip().strip('"')
+                        try:
+                            if last_result_str.startswith("0x"):
+                                last_result = int(last_result_str, 16)
+                            else:
+                                last_result = int(last_result_str)
+                        except ValueError:
+                            last_result = 0
+                            
+                        if last_result != 0 and last_result != 267009:
+                            issues.append(f"Task Scheduler: 'AETHER_Watchdog' last run failed (Exit Code: {last_result_str} / {hex(last_result)}).")
+            else:
+                issues.append("Task Scheduler: 'AETHER_Watchdog' task is not found or schtasks query failed.")
+        except subprocess.TimeoutExpired:
+            _log.warning("Task Scheduler query timed out during pre-flight check.")
+        except Exception as e:
+            _log.warning(f"Task Scheduler query failed (non-fatal): {e}")
+            
+    log_file = base_dir / "Data" / "logs" / "agent_runs" / "watchdog_agent.log"
+    if log_file.exists():
+        try:
+            mtime = log_file.stat().st_mtime
+            age_seconds = time.time() - mtime
+            age_minutes = age_seconds / 60
+            
+            if age_minutes > 75:
+                last_time = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %I:%M %p")
+                issues.append(f"Log Freshness: 'watchdog_agent.log' is stale. Last run: {last_time} ({age_minutes:.0f} mins ago, should be < 75 mins).")
+        except Exception as e:
+            issues.append(f"Log Freshness: Failed to audit watchdog log modification time: {e}")
+    else:
+        issues.append("Log Freshness: 'watchdog_agent.log' does not exist (Watchdog has never run).")
+        
+    if issues:
+        for iss in issues:
+            _log.console(f"  ❌ Watchdog: {iss}")
+        return False, issues
+        
+    _log.console("  ✅ Watchdog: Active system monitor is running successfully and keeping session warm.")
+    return True, []
+
+
+
+def send_preflight_email(checks, missing_items, active_locks, duration, all_ok, watchdog_issues=None):
     """Compile and dispatch an HTML status briefing email to the user.
 
     `checks` is the single ordered roster of (label, ok, kind) tuples shared with
@@ -324,6 +400,16 @@ def send_preflight_email(checks, missing_items, active_locks, duration, all_ok):
                 </ul>
             </div>
             """
+
+        if watchdog_issues:
+            html += f"""
+            <div style="background-color: rgba(248,81,73,0.1); border: 1px solid #f85149; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 12px; color: #ff7b72;">
+                ⚠️ <b>AETHER Watchdog Diagnostics Failures:</b>
+                <ul style="margin: 5px 0 0 15px; padding: 0;">
+                    {"".join(f"<li>{x}</li>" for x in watchdog_issues)}
+                </ul>
+            </div>
+            """
             
         if all_ok:
             html += """
@@ -364,6 +450,7 @@ def run_preflight_diagnostics() -> bool:
     etrade_ok  = check_etrade_api()
     integrity_ok, missing_items = check_file_and_directory_integrity()
     locks_ok, active_locks = check_active_locks()
+    watchdog_ok, watchdog_issues = check_watchdog_health()
     
     duration = time.time() - start_time
 
@@ -377,6 +464,7 @@ def run_preflight_diagnostics() -> bool:
         ("E*TRADE Brokerage OAuth",     etrade_ok,    "conn"),
         ("File & Directory Integrity",  integrity_ok, "conn"),
         ("Active Process & File Locks", locks_ok,     "lock"),
+        ("AETHER Watchdog Health",      watchdog_ok,  "conn"),
     ]
 
     _log.console("=" * 70)
@@ -391,7 +479,7 @@ def run_preflight_diagnostics() -> bool:
 
     # Send email status if the --email flag is set
     if "--email" in sys.argv:
-        send_preflight_email(checks, missing_items, active_locks, duration, all_ok)
+        send_preflight_email(checks, missing_items, active_locks, duration, all_ok, watchdog_issues)
         
     if all_ok:
         _log.console("☀️ [PRE-FLIGHT SUCCESS] All external API and email gateways are online.")
