@@ -1,39 +1,31 @@
-@echo off
-:: 🛡️ Project AETHER: Unified CLI Wrapper
-:: Enforces local virtual environment and forwards all command-line arguments to server.py
-
-cd /d "%~dp0"
-
-:: If no arguments are passed, display a beautiful help manual
-if "%~1"=="" goto help
-
-:: Pick an interpreter: prefer the project venv (venv_new) if present, else fall
-:: back to Python on PATH (avoids "system cannot find the path specified" when the
-:: venv is absent).
-set "PYEXE=python"
-if exist "%~dp0venv_new\Scripts\python.exe" set "PYEXE=%~dp0venv_new\Scripts\python.exe"
-
-:: Forward all arguments cleanly to the server daemon
-"%PYEXE%" server.py %*
-exit /b %errorlevel%
-
-:help
-echo =======================================================================
-echo  🛡️  PROJECT AETHER: UNIFIED CLI DAEMON WRAPPER
-echo =======================================================================
-echo  Usage:
-echo    aether start         - Starts the dashboard server in the background
-echo    aether stop          - Stops the background dashboard server
-echo    aether restart       - Restarts the background dashboard server
-echo    aether status        - Displays active server PID and port status
-echo    aether upgrade       - Pulls latest GitHub code and restarts server
-echo    aether regen-secret  - Rotates HMAC session keys in config.json
-echo.
-echo  Additional Commands:
-echo    aether serve         - Runs the server in-process (foreground)
-echo    aether dev           - Runs the server in foreground auto-reload mode
-echo    aether etrade-login  - Re-authenticates E*TRADE (add --bootstrap for one-time OTP)
-echo    aether etrade-reauth - Unattended daily E*TRADE re-auth (--scheduled; alerts on SMS)
-echo    aether etrade-status - Prints read-only E*TRADE auth state (--no-probe for local-only)
-echo =======================================================================
-exit /b 0
+@echo off
+:: Project AETHER Launcher — Dynamically resolves PATH environment variables at runtime
+:: to ensure background S4U task scheduler executions always find Node.js and Gemini CLI.
+
+setlocal enabledelayedexpansion
+
+:: 1. Dynamically find Node.js from standard system paths if not already in PATH
+where node.exe >nul 2>&1
+if errorlevel 1 (
+    if exist "C:\Program Files\nodejs\node.exe" (
+        set "PATH=!PATH!;C:\Program Files\nodejs"
+    )
+)
+
+:: 2. Dynamically find global npm/gemini wrapper paths
+where gemini.cmd >nul 2>&1
+if errorlevel 1 (
+    if exist "%APPDATA%\npm\gemini.cmd" (
+        set "PATH=!PATH!;%APPDATA%\npm"
+    )
+)
+
+:: 3. Execute the CLI command passed from Task Scheduler
+cd /d "%~dp0"
+if "%~1"=="" (
+    echo [AETHER] No command arguments specified.
+    exit /b 1
+)
+
+:: Execute the command natively in CMD
+%*
