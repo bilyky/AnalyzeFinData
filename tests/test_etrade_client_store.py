@@ -54,11 +54,13 @@ class TestTokenReadRoutesThroughStore(unittest.TestCase):
     def test_current_token_uses_injected_store(self):
         store = _FakeStore(_STORE_TOKEN)
         client = self._client(store)
-        with mock.patch.object(etrade, "_load_tokens", return_value=_PKG_TOKEN) as m:
+        with mock.patch.object(etrade, "get_tokens") as gt, \
+             mock.patch.object(etrade, "_load_tokens", return_value=_PKG_TOKEN) as m:
             got = client.auth.current_token()
         self.assertEqual(got, _STORE_TOKEN)              # from the store...
         self.assertEqual(store.tokens.load_calls, ["production"])
         m.assert_not_called()                            # ...not the pkg free function
+        gt.assert_not_called()                           # ban-safe: never renews / opens a browser
 
     def test_data_role_tokens_resolution_uses_injected_store(self):
         store = _FakeStore(_STORE_TOKEN)
@@ -76,18 +78,6 @@ class TestTokenReadRoutesThroughStore(unittest.TestCase):
         explicit = {"oauth_token": "explicit", "oauth_token_secret": "s"}
         self.assertEqual(client._tokens(explicit), explicit)
         self.assertEqual(store.tokens.load_calls, [])
-
-
-class TestCurrentTokenIsBanSafe(unittest.TestCase):
-    """The read path must never renew or open a browser (data-plane safety)."""
-
-    def test_current_token_never_calls_get_tokens(self):
-        store = _FakeStore(_STORE_TOKEN)
-        client = ETradeClient("production", role="data", store=store)
-        with mock.patch.object(etrade, "get_tokens") as gt, \
-             mock.patch.object(etrade, "_load_tokens", return_value=_PKG_TOKEN):
-            client.auth.current_token()
-        gt.assert_not_called()
 
 
 class TestDefaultStoreSelection(unittest.TestCase):
