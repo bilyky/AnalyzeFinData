@@ -224,12 +224,12 @@ def revoke_tokens(tokens, env="sandbox") -> bool:
         r = session.get(_REVOKE_URL[env], proxies=_proxies(), verify=False, timeout=10)
         if r.ok:
             trash.soft_delete(_TOKEN_PATH, reason="revoked")   # soft-delete (recoverable)
-            print("Tokens revoked and cache cleared.")
+            _log.console("Tokens revoked and cache cleared.")
             return True
-        print(f"  [Token] Revoke failed: HTTP {r.status_code}")
+        _log.error(f"  [Token] Revoke failed: HTTP {r.status_code}")
         return False
     except Exception as e:
-        print(f"  [Token] Revoke error: {e}")
+        _log.error(f"  [Token] Revoke error: {e}")
         return False
 
 
@@ -414,7 +414,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                 return True
             except PWTimeout:
                 continue
-        print(f"  [Auth] Could not auto-fill {step_name} — complete it manually in the browser.")
+        _log.warning(f"  [Auth] Could not auto-fill {step_name} — complete it manually in the browser.")
         return False
 
     verifier = None
@@ -460,12 +460,12 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
             try:
                 p = os.path.join(_SS, f"etrade_debug_{name}.png")
                 page.screenshot(path=p)
-                print(f"  [Debug] Screenshot: {p}  |  URL: {page.url[:80]}")
+                _log.console(f"  [Debug] Screenshot: {p}  |  URL: {page.url[:80]}")
             except Exception:
                 pass
 
         try:
-            print("Opening E*TRADE authorization page...")
+            _log.console("Opening E*TRADE authorization page...")
             page.goto(auth_url, wait_until="domcontentloaded", timeout=30000)
             _snap("01_loaded")
 
@@ -480,7 +480,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                     try:
                         page.wait_for_selector(sel, timeout=3000)
                         page.press(sel, "Enter")
-                        print("  [Auth] Enter pressed on password field.")
+                        _log.console("  [Auth] Enter pressed on password field.")
                         submitted = True
                         break
                     except Exception:
@@ -490,31 +490,31 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                     # Wait for navigation/load state with grace, without re-submitting and spamming E*TRADE
                     try:
                         page.wait_for_load_state("domcontentloaded", timeout=15000)
-                        print("  [Auth] Submitted login form via Enter.")
+                        _log.console("  [Auth] Submitted login form via Enter.")
                     except Exception:
-                        print("  [Auth] Submission page load completed silently or timed out.")
+                        _log.warning("  [Auth] Submission page load completed silently or timed out.")
                 else:
                     try:
                         page.evaluate("document.querySelector('button').click()")
-                        print("  [Auth] Submitted via JS click.")
+                        _log.console("  [Auth] Submitted via JS click.")
                         page.wait_for_load_state("domcontentloaded", timeout=15000)
                     except Exception as e:
-                        print(f"  [Auth] Submit failed ({e}) — click Log on manually.")
+                        _log.error(f"  [Auth] Submit failed ({e}) — click Log on manually.")
             _snap("03_after_submit")
 
             # Handle MFA / OTP step (sendotpcode page)
             if "sendotpcode" in page.url or "otp" in page.url.lower():
                 _snap("04_otp_page")
-                print("  [Auth] MFA required — clicking 'Send Code'...")
+                _log.console("  [Auth] MFA required — clicking 'Send Code'...")
                 for sel in ["button:has-text('Send Code')", "input[value='Send Code']",
                             "button[type='submit']"]:
                     try:
                         page.click(sel, timeout=5000)
-                        print("  [Auth] SMS code sent to your phone.")
+                        _log.console("  [Auth] SMS code sent to your phone.")
                         break
                     except PWTimeout:
                         continue
-                print("  [Auth] Enter the SMS code in the browser window, then submit.")
+                _log.console("  [Auth] Enter the SMS code in the browser window, then submit.")
                 # Wait up to 2 min for user to leave ALL OTP-related pages
                 _otp_pages = ("sendotpcode", "enterotpcode", "verifyotpcode")
                 for _ in range(24):
@@ -523,7 +523,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                         _snap("05_after_otp")
                         break
                 else:
-                    print("  [Auth] Still on OTP page — complete it manually in the browser.")
+                    _log.warning("  [Auth] Still on OTP page — complete it manually in the browser.")
 
             if not verifier:
                 # Wait for the authorize page to fully load
@@ -548,12 +548,12 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                 # Check agreement checkbox — try role locator, CSS, then JS fallback
                 try:
                     page.get_by_role("checkbox").first.check(timeout=3000)
-                    print("  [Auth] Checked agreement checkbox (role).")
+                    _log.console("  [Auth] Checked agreement checkbox (role).")
                     page.wait_for_timeout(500)
                 except Exception:
                     try:
                         page.locator("input[type='checkbox']").first.check(timeout=2000)
-                        print("  [Auth] Checked agreement checkbox (locator).")
+                        _log.console("  [Auth] Checked agreement checkbox (locator).")
                         page.wait_for_timeout(500)
                     except Exception:
                         try:
@@ -561,7 +561,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                                 "document.querySelector('input[type=\"checkbox\"]')?.click()"
                             )
                             page.wait_for_timeout(500)
-                            print("  [Auth] Checked agreement checkbox (JS).")
+                            _log.console("  [Auth] Checked agreement checkbox (JS).")
                         except Exception:
                             pass
 
@@ -570,7 +570,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                 try:
                     with page.expect_navigation(timeout=15000):
                         page.get_by_role("button", name="Accept").click(timeout=5000)
-                    print("  [Auth] Clicked Accept (role).")
+                    _log.console("  [Auth] Clicked Accept (role).")
                     _snap("07_after_accept")
                     accepted = True
                 except Exception:
@@ -582,7 +582,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                             page.wait_for_selector(sel, timeout=5000)
                             with page.expect_navigation(timeout=15000):
                                 page.click(sel)
-                            print("  [Auth] Clicked Accept.")
+                            _log.console("  [Auth] Clicked Accept.")
                             _snap("07_after_accept")
                             accepted = True
                             break
@@ -600,7 +600,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                         }""")
                         page.wait_for_timeout(3000)
                         if page.url != _url_before:
-                            print("  [Auth] Clicked Accept (JS).")
+                            _log.console("  [Auth] Clicked Accept (JS).")
                             _snap("07_after_accept")
                             accepted = True
                     except Exception:
@@ -608,7 +608,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
 
                 if not accepted:
                     _snap("07_no_accept")
-                    print("  [Auth] Accept button not found — complete it manually in the browser.")
+                    _log.warning("  [Auth] Accept button not found — complete it manually in the browser.")
 
             def _try_read_verifier():
                 """Attempt to extract verifier from the current page."""
@@ -646,7 +646,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
 
             # Poll page for verifier up to 3 minutes
             if not verifier:
-                print("Waiting for E*TRADE verifier code (up to 3 min)...")
+                _log.console("Waiting for E*TRADE verifier code (up to 3 min)...")
                 for _ in range(36):
                     if verifier:
                         break
@@ -659,7 +659,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                     page.wait_for_timeout(5000)
 
         except Exception as e:
-            print(f"  [Auth] Browser interaction error: {e}")
+            _log.error(f"  [Auth] Browser interaction error: {e}")
         finally:
             # Save browser state (trusted-device cookies) before closing.
             # Write via json.dump with utf-8 to avoid Windows cp1252 encoding errors.
@@ -669,9 +669,9 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                     state = ctx.storage_state()   # returns dict — no file I/O by Playwright
                     with open(_BROWSER_STATE_PATH, "w", encoding="utf-8") as _f:
                         json.dump(state, _f, indent=2, ensure_ascii=False)
-                    print("  [Auth] Browser state saved — future logins skip MFA.")
+                    _log.console("  [Auth] Browser state saved — future logins skip MFA.")
                 except Exception as e:
-                    print(f"  [Auth] Could not save browser state: {e}")
+                    _log.warning(f"  [Auth] Could not save browser state: {e}")
             # Persistent context owns its browser — closing the context tears both down.
             try:
                 ctx.close()
@@ -686,9 +686,9 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                 "Failing immediately to prevent background process hang."
             )
 
-        print("\nCould not auto-capture verifier. Open this URL in your browser if it isn't open:")
-        print(f"  {auth_url}")
-        print("Log in, click Accept, then paste the code shown on screen.")
+        _log.warning("\nCould not auto-capture verifier. Open this URL in your browser if it isn't open:")
+        _log.warning(f"  {auth_url}")
+        _log.warning("Log in, click Accept, then paste the code shown on screen.")
         try:
             verifier = input("Verification code: ").strip()
         except EOFError:
@@ -869,11 +869,11 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     if not sys.stdin.isatty():
         raise RuntimeError("E*TRADE: cannot re-authenticate in a headless environment.")
 
-    print("Re-authenticating with browser...")
+    _log.console("Re-authenticating with browser...")
 
     oauth = pyetrade.ETradeOAuth(ck, cs)
     auth_url = oauth.get_request_token()
-    print(f"Auth URL: {auth_url}")
+    _log.console(f"Auth URL: {auth_url}")
 
     verifier_code = _get_tokens_via_playwright(
         auth_url, username, password,
@@ -888,7 +888,7 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     # A successful human re-auth clears the automated-reauth circuit breaker, so scheduled
     # jobs resume normal operation without waiting out any residual cooldown.
     reset_reauth_circuit_breaker(env)
-    print("Tokens saved to cache.")
+    _log.console("Tokens saved to cache.")
     return tokens
 
 
@@ -1122,10 +1122,10 @@ if __name__ == "__main__":
             "Run: python scripts/diagnostics/test_etrade.py production"
         )
 
-    print("\n--- Quote: AAPL ---")
+    _log.console("\n--- Quote: AAPL ---")
     market = get_market(tokens)
-    print(market.get_quote(["AAPL"], resp_format="json"))
+    _log.console(market.get_quote(["AAPL"], resp_format="json"))
 
-    print("\n--- Accounts ---")
+    _log.console("\n--- Accounts ---")
     accts = get_accounts(tokens)
-    print(accts.list_accounts(resp_format="json"))
+    _log.console(accts.list_accounts(resp_format="json"))

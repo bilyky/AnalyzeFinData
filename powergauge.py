@@ -363,7 +363,7 @@ class PowerGauge:
                 if key not in cl:
                     warnings.append(f"checklist_stocks missing key '{key}'")
         if warnings:
-            print(f"  [SCHEMA WARNING] {self.symbol}: " + "; ".join(warnings))
+            _pg_log.warning(f"  [SCHEMA WARNING] {self.symbol}: " + "; ".join(warnings))
 
     def init_from_ohlcv(self, entry: dict):
         """Populate price fields from an Alpha Vantage OHLCV daily entry."""
@@ -395,7 +395,7 @@ class PowerGauge:
                     with open(path, "r") as f:
                         data_jsn = json.load(f)
                 except (json.JSONDecodeError, OSError) as e:
-                    print(f"  [CACHE] {self.symbol}: skipping corrupt cache {path}: {e}")
+                    _pg_log.error(f"  [CACHE] {self.symbol}: skipping corrupt cache {path}: {e}")
                     continue
                 self.prevPG = PowerGauge(self.symbol, prev_date)
                 self.prevPG.init_from_json(data_jsn, check_schema=False)
@@ -605,11 +605,11 @@ def _login_via_browser(headless: bool = False) -> dict:
         page.fill('input[name="password"]', password)
 
         # Wait for Turnstile to enable the submit button (auto-verifies or user clicks widget)
-        print("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
+        _pg_log.console("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
         page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=60000)
         page.click('button[type="submit"]')
 
-        print("Waiting for login to complete (up to 60s)...")
+        _pg_log.console("Waiting for login to complete (up to 60s)...")
         try:
             page.wait_for_function(
                 "window.location.pathname !== '/login'",
@@ -619,12 +619,12 @@ def _login_via_browser(headless: bool = False) -> dict:
             pass
 
         # Navigate to app.chaikinanalytics.com to fully activate the session
-        print("Navigating to app.chaikinanalytics.com to activate the session...")
+        _pg_log.console("Navigating to app.chaikinanalytics.com to activate the session...")
         try:
             page.goto('https://app.chaikinanalytics.com', timeout=30000)
             page.wait_for_timeout(5000)
         except Exception as e:
-            print(f"Warning: Navigation to app.chaikinanalytics.com failed or timed out: {e}")
+            _pg_log.warning(f"Warning: Navigation to app.chaikinanalytics.com failed or timed out: {e}")
 
         browser.close()
 
@@ -635,18 +635,18 @@ def _login_via_browser(headless: bool = False) -> dict:
         )
 
     _save_session_to_file(session_data[0])
-    print(f"Session saved to {SESSION_FILE}")
+    _pg_log.console(f"Session saved to {SESSION_FILE}")
     return session_data[0]
 
 
 def login(interactive=True) -> dict:
     session_data = _load_session_from_file()
     if session_data:
-        print("Loaded session from file, validating...")
+        _pg_log.console("Loaded session from file, validating...")
         if _validate_session(session_data):
-            print("Session is valid.")
+            _pg_log.console("Session is valid.")
             return session_data
-        print("Saved session has expired — re-authenticating via browser.")
+        _pg_log.warning("Saved session has expired — re-authenticating via browser.")
 
     # Run headless if we are non-interactive or stdin is not a tty to prevent hanging
     is_tty = sys.stdin and sys.stdin.isatty()
@@ -655,12 +655,12 @@ def login(interactive=True) -> dict:
     try:
         return _login_via_browser(headless=headless_run)
     except Exception as e:
-        print(f"Browser login failed: {e}")
+        _pg_log.error(f"Browser login failed: {e}")
 
     if not interactive or not sys.stdin or not sys.stdin.isatty():
         return {}
 
-    print(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
+    _pg_log.console(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
     try:
         raw = input("Or paste a JSESSIONID here and press Enter (leave blank to abort): ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -672,7 +672,7 @@ def login(interactive=True) -> dict:
             "uuid": _chaikin_uuid()
         }
         _save_session_to_file(data)
-        print(f"Session saved to {SESSION_FILE}")
+        _pg_log.console(f"Session saved to {SESSION_FILE}")
         return data
     raise EnvironmentError(
         f"No valid session available. Save a JSESSIONID to: {SESSION_FILE}"
@@ -762,10 +762,10 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
                 fresh = ensure_valid_session()
                 if fresh and fresh.get("jsessionid"):
                     return get_symbol_data(symbol, date, prefer_cache=False, session_id=fresh, _allow_reauth=False)
-            print(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
+            _pg_log.console(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
             raise EnvironmentError(f"Session rejected (HTTP {response.status_code}). Update {SESSION_FILE}.")
         else:
-            print(f"Warning: API error for {symbol} (HTTP {response.status_code}) — row will be skipped")
+            _pg_log.warning(f"Warning: API error for {symbol} (HTTP {response.status_code}) — row will be skipped")
             pg.price = -1
     if data_jsn:
         pg.init_from_json(data_jsn)
@@ -793,13 +793,13 @@ def check_from_file(prefer_cache: bool, date=None):
                 continue
             symbol = split_line[-1]
             if not _SYMBOL_RE.match(symbol):
-                print(f"  [SKIP] invalid symbol format: {symbol!r}")
+                _pg_log.warning(f"  [SKIP] invalid symbol format: {symbol!r}")
                 continue
             symbol_line = f"{split_line[0]},{symbol}"
             valid_entries.append((symbol_line, symbol))
 
     unique_syms = list(dict.fromkeys(sym for _, sym in valid_entries))
-    print(f"Fetching {len(unique_syms)} unique symbols ({_FETCH_WORKERS} workers)...")
+    _pg_log.console(f"Fetching {len(unique_syms)} unique symbols ({_FETCH_WORKERS} workers)...")
 
     # ── Phase 2: parallel fetch ──
     pg_results: dict[str, PowerGauge] = {}
@@ -818,11 +818,11 @@ def check_from_file(prefer_cache: bool, date=None):
                 pool.shutdown(wait=False, cancel_futures=True)
                 raise
             except Exception as e:
-                print(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
+                _pg_log.error(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
                 sentinel = PowerGauge(sym, date)
                 sentinel.price = -1
                 pg_results[sym] = sentinel
-    print(f"Fetch complete ({len(unique_syms)} symbols).")
+    _pg_log.console(f"Fetch complete ({len(unique_syms)} symbols).")
 
     # ── Phase 3: serial compute + write ──
     ohlcv_cache: dict = {}
@@ -838,7 +838,7 @@ def check_from_file(prefer_cache: bool, date=None):
                 except FileNotFoundError:
                     ohlcv_cache[symbol] = None
                 except (json.JSONDecodeError, OSError) as e:
-                    print(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
+                    _pg_log.warning(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
                     ohlcv_cache[symbol] = None
             ohlcv_ts = ohlcv_cache[symbol]
 
@@ -873,7 +873,7 @@ def check_from_file(prefer_cache: bool, date=None):
                   f"{f_fields['pgr_delta']},{percentage_delta * (-1)},{percentage_delta_plus}," \
                   f"{power_g.lt_trend},{power_g.money_flow},{power_g.over_bt_sl}"
 
-            print(msg)
+            _pg_log.console(msg)
             fw.write(f"{msg}\n")
 
 
@@ -993,7 +993,7 @@ def _append_ohlcv_entry(symbol: str, date_str: str, power_g: "PowerGauge", ohlcv
             json.dump(ohlcv_full, f)
         os.replace(tmp, path)
     except Exception as e:
-        print(f"  [OHLCV] {symbol}: could not append today's entry: {e}")
+        _pg_log.warning(f"  [OHLCV] {symbol}: could not append today's entry: {e}")
 
 
 def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
@@ -1142,12 +1142,12 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         wb = openpyxl.load_workbook(base_path)
     except Exception as e:
         alt = SRC_XLSX if base_path == XLSX_FILE else XLSX_FILE
-        print(f"  [ERROR] Failed to load {base_path}: {e}")
-        print(f"  [INFO] Attempting to load {alt} instead...")
+        _pg_log.error(f"  [ERROR] Failed to load {base_path}: {e}")
+        _pg_log.console(f"  [INFO] Attempting to load {alt} instead...")
         try:
             wb = openpyxl.load_workbook(alt)
         except Exception:
-            print(f"  [FATAL] Both source and output files missing or corrupt.")
+            _pg_log.error(f"  [FATAL] Both source and output files missing or corrupt.")
             return
     
     ws = wb['Research']
@@ -1167,13 +1167,13 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         if filter_set and symbol.upper() not in filter_set:
             continue
         if not _SYMBOL_RE.match(symbol):
-            print(f"  [SKIP] invalid symbol format: {symbol!r}")
+            _pg_log.warning(f"  [SKIP] invalid symbol format: {symbol!r}")
             continue
         valid_rows.append((symbol, row))
 
     total = len(valid_rows)
     unique_syms = list(dict.fromkeys(s for s, _ in valid_rows))
-    print(f"Fetching {len(unique_syms)} unique symbols ({_FETCH_WORKERS} workers)...")
+    _pg_log.console(f"Fetching {len(unique_syms)} unique symbols ({_FETCH_WORKERS} workers)...")
 
     # ── Phase 2: parallel fetch ───────────────────────────────────────────────
     pg_results: dict[str, PowerGauge] = {}
@@ -1192,11 +1192,11 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
                 pool.shutdown(wait=False, cancel_futures=True)
                 raise
             except Exception as e:
-                print(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
+                _pg_log.error(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
                 sentinel = PowerGauge(sym, date)
                 sentinel.price = -1
                 pg_results[sym] = sentinel
-    print(f"Fetch complete ({len(unique_syms)} symbols).")
+    _pg_log.console(f"Fetch complete ({len(unique_syms)} symbols).")
 
     # ── Phase 3: serial compute + write ──────────────────────────────────────
     updated = 0
@@ -1208,7 +1208,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         power_g = pg_results[symbol]
 
         if power_g.price == -1:
-            print(f"[{n}/{total}] {symbol}: no market data - row skipped (existing values preserved)")
+            _pg_log.warning(f"[{n}/{total}] {symbol}: no market data - row skipped (existing values preserved)")
             skipped += 1
             continue
 
@@ -1221,7 +1221,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
             except FileNotFoundError:
                 ohlcv_cache[symbol] = None
             except (json.JSONDecodeError, OSError) as e:
-                print(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
+                _pg_log.warning(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
                 ohlcv_cache[symbol] = None
         ohlcv_ts = ohlcv_cache[symbol].get('Time Series (Daily)') if ohlcv_cache[symbol] else None
 
@@ -1301,7 +1301,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         })
 
         flag = "OK" if setup_ok else ("--" if setup_ok is False else "??")
-        print(f"[{n}/{total}] {symbol}: pgr={f['pgr']}, price={power_g.price}, "
+        _pg_log.console(f"[{n}/{total}] {symbol}: pgr={f['pgr']}, price={power_g.price}, "
               f"stop={f['stop_price']}, target={f['prev_move_price']}, "
               f"rr={f['risk_ratio']}, setup={flag}, br={f['buying_ratio']}, "
               f"s10={f['short_score']}, l60={f['long_score']}")
@@ -1326,11 +1326,11 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
             _qts  = _et.fetch_quotes(_tok, _syms, "production")
             _update_short_long_scores(wb, _lk, _qts, _pos, ohlcv_cache)
             _touched_sheets.add("Short_Long")
-            print(f"Short_Long sheet synced: {len(_pos)} positions.")
+            _pg_log.console(f"Short_Long sheet synced: {len(_pos)} positions.")
         else:
-            print("[E*TRADE] Short_Long skipped (no valid silent token session available).")
+            _pg_log.warning("[E*TRADE] Short_Long skipped (no valid silent token session available).")
     except Exception as _e:
-        print(f"[E*TRADE] Short_Long skipped: {_e}")
+        _pg_log.warning(f"[E*TRADE] Short_Long skipped: {_e}")
 
     if picks_data:
         _update_replacements_sheet(wb, picks_data, date.date() if hasattr(date, "date") else date)
@@ -1341,7 +1341,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         _fix_comment_shape_ids(XLSX_FILE,
                                original_xlsx=_orig_backup,
                                touched_sheet_names=_touched_sheets)
-        print(f"Research sheet updated ({updated} rows written, {skipped} skipped) -> {XLSX_FILE}")
+        _pg_log.console(f"Research sheet updated ({updated} rows written, {skipped} skipped) -> {XLSX_FILE}")
     except PermissionError:
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
         alt = os.path.join(os.path.dirname(XLSX_FILE), f"investment_pending_{ts}.xlsx")
@@ -1349,6 +1349,6 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         _fix_comment_shape_ids(alt,
                                original_xlsx=_orig_backup,
                                touched_sheet_names=_touched_sheets)
-        print(f"ERROR: {XLSX_FILE} is open in another application.")
-        print(f"Changes saved to: {alt}")
-        print(f"Close Excel and rename/copy that file to state_of_the_day.xlsx")
+        _pg_log.error(f"ERROR: {XLSX_FILE} is open in another application.")
+        _pg_log.error(f"Changes saved to: {alt}")
+        _pg_log.error("Close Excel and rename/copy that file to state_of_the_day.xlsx")
