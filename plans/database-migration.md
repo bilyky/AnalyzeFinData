@@ -83,16 +83,36 @@ We define 5 core relational tables to perfectly map and normalize AETHER's local
 
 ---
 
-## 3. Backward-Compatible "Dual-Bridge" Adapter
+## 3. Backward-Compatible "Dual-Bridge" Adapter & Strangler Fig Migration
 
-To ensure 100% zero-disruption operation:
-1.  **The Adapter Pattern:** We upgrade `database.py` and `data_api.py` into a **Dual-Write/Read Bridge**.
-2.  **Writing:** Whenever the autopilot saves the game state, updates the Research sheet, or appends a trade log:
+To ensure 100% zero-disruption operation and build 100% database stability without breaking active production:
+
+### 1. The Dual-Bridge Pattern
+*   **The Adapter Pattern:** We upgrade `database.py` and `data_api.py` into a **Dual-Write/Read Bridge**.
+*   **Writing:** Whenever the autopilot saves the game state, updates the Research sheet, or appends a trade log:
     *   The bridge **simultaneously writes the data to the SQL database AND updates the local files** (`.xlsx` or `.json` on disk).
     *   *The Benefit:* Your existing spreadsheet files, local log files, and active dashboard frontend (which reads files via FastAPIs) remain 100% updated in real-time.
-3.  **Reading:** 
+*   **Reading:** 
     *   The system always attempts to read from the PostgreSQL database first (0.01-second search speed).
     *   If the database connection fails (network timeout, database offline during hosting migration, etc.), **the system silently catches the exception, falls back to read the local JSON/Excel files, and continues running with zero interruptions!**
+
+### 2. The 4-Step Strangler Fig Migration Blueprint
+We enforce a zero-trust, gradual cutover timeline to systematically eliminate database bugs in background testing before exposing any capital:
+
+1.  **Phase 1: Silent Dual-Write (0% Downstream Risk)**
+    *   Keep `state_of_the_day.xlsx` and raw `.json` files as the primary production sources of truth. 
+    *   Modify your writing scripts to write data silently to **both** the Excel/JSON files *and* the local PostgreSQL database in the background.
+    *   *The Benefit:* If PostgreSQL crashes, has a schema mismatch, or goes offline during initial testing, it is caught in the logs while active trading continues 100% unaffected using local files.
+2.  **Phase 2: Silent Data Auditing & Reconciliation**
+    *   Run the silent dual-write for 1 to 2 weeks.
+    *   Run a daily background script (`scripts/utils/audit_db_sync.py`) that compares the SQL tables against the on-disk Excel/JSON files. 
+    *   *The Benefit:* Verifies that every score, stop, and trade is identical to the penny, flush out and fix 100% of schema/ORM bugs silently *before* the database drives any live decisions.
+3.  **Phase 3: Dual-Read with Auto-Fallback**
+    *   Modify the reading scripts (`workbook_read.py`, etc.) to query PostgreSQL first.
+    *   *The Benefit:* If the PostgreSQL query throws an exception, times out, or fails, the code silently catches it and **instantly falls back to read the on-disk Excel/JSON files in under 0.1 seconds**, ensuring zero downtime.
+4.  **Phase 4: Excel Decommissioning & Pure-Visual Export**
+    *   Only after weeks of 100% green, stable, and fast PostgreSQL performance do we decommissioning local files as the database.
+    *   *The Benefit:* To preserve your desktop user experience, we retain Excel as a **purely visual export layer**—meaning the background watchdog writes SQL records to `state_of_the_day.xlsx` simply so you can open it on your PC and audit your portfolio whenever you want.
 
 ---
 
