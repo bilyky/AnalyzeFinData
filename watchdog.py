@@ -9,7 +9,7 @@ import re
 import ctypes
 import json
 import notify
-import etrade
+from aether import etrade
 import powergauge
 from pathlib import Path
 from aether import trash

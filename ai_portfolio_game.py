@@ -5,7 +5,7 @@ import os
 import pytz
 import re
 import requests
-import etrade
+from aether import etrade
 import rapidapi
 import sys
 import console_safe
@@ -63,7 +63,7 @@ def _load_symbol_today_cache(symbol: str, today_str: str) -> dict:
     _SYMBOL_DAY_CACHE[symbol] = cache
     return cache
 
-def check_failure_rules(symbol, pgr, score, z_score, industry) -> tuple[bool, str]:
+def check_failure_rules(symbol, pgr, score, z_score, industry, s10=0.0) -> tuple[bool, str]:
     """Check if the candidate matches any active toxic rules in Data/failure_dna_rules.json or dynamic filters."""
     rules_file = BASE_DIR / "Data" / "failure_dna_rules.json"
     
@@ -91,34 +91,28 @@ def check_failure_rules(symbol, pgr, score, z_score, industry) -> tuple[bool, st
 
             # 1. PGR Match
             if field == "pgr" and condition == "startswith_Be" and str(pgr).startswith("Be"):
+                # ── R&D #13: PGR Waivers (canonical two-factor elite gate) ──
+                # A. HighScorePGRBypass: bypass Bearish PGR only for an elite breakout
+                #    leader per risk_utils.is_elite_breakout_candidate — BOTH
+                #    score >= CFG.system_bypass_score_floor AND s10 >= CFG.system_bypass_s10_floor
+                #    (single-sourced from CFG; same gate run_daily_ai_management uses for
+                #    the R:R waiver, so both stages agree on "elite" and re-tune together).
+                # B. BottomSnipePGRWaiver: bypass Bearish PGR on a confirmed bottom setup.
+                # Test the cheap in-memory gate first; only read the daily-history file
+                # (is_bottom_confirmed) when the elite gate did not already waive.
+                if risk_utils.is_elite_breakout_candidate(score, s10):
+                    _log.info(f"[R&D #13 PGR Waiver] Bypassed Bearish PGR '{pgr}' for {symbol} (elite breakout: score {score:.1f}, s10 {s10:.1f}).")
+                    continue
+                bottom_ok, _ = is_bottom_confirmed(symbol)
+                if bottom_ok:
+                    _log.info(f"[R&D #13 PGR Waiver] Bypassed Bearish PGR '{pgr}' for {symbol} (bottom confirmed).")
+                    continue
                 return True, reason
 
             # 2. Score Match
             if field == "score" and condition == "less_than_5.0" and score < 5.0:
                 return True, reason
 
-            # 3. Z-Score Match
-            if field == "z_score" and condition == "greater_than_2.5" and z_score > 2.5:
-                return True, reason
-    except Exception as e:
-        _log.warning(f"Failed to evaluate failure rules: {e}")
-    return False, "" 
-    try:
-        with open(rules_file, "r", encoding="utf-8") as f:
-            rules = json.load(f)
-        for r in rules:
-            field = r.get("field")
-            condition = r.get("condition")
-            reason = r.get("reason", "Toxic pattern match")
-            
-            # 1. PGR Match
-            if field == "pgr" and condition == "startswith_Be" and str(pgr).startswith("Be"):
-                return True, reason
-                
-            # 2. Score Match
-            if field == "score" and condition == "less_than_5.0" and score < 5.0:
-                return True, reason
-                
             # 3. Z-Score Match
             if field == "z_score" and condition == "greater_than_2.5" and z_score > 2.5:
                 return True, reason
@@ -466,7 +460,7 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
             # Dynamic Feedback Analyzer Guard Check (Anti-Failure DNA)
             pgr_val = buy.get("pgr", "Neutral")
             score_val = buy.get("total", 0.0)
-            is_toxic, t_reason = check_failure_rules(buy["sym"], pgr_val, score_val, z_score, buy.get("industry", "Unknown"))
+            is_toxic, t_reason = check_failure_rules(buy["sym"], pgr_val, score_val, z_score, buy.get("industry", "Unknown"), s10=buy.get("s10", 0.0))
             if is_toxic:
                 _log.warning(f"AI BUY REJECTED (Feedback Analyzer Rule Match): {buy['sym']} - {t_reason}")
                 continue

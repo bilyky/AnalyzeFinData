@@ -34,7 +34,9 @@ class SmsRequired(Exception):
         self.env = env
 
 
-_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Checkout root. This module lives at <root>/aether/etrade/__init__.py, so climb THREE
+# levels (etrade/ -> aether/ -> root). Was two when this was the single-file aether/etrade.py.
+_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Canonical directory for E*TRADE auth-state files (token, browser state, breaker, locks).
 # Resolved through aether.paths.data_dir() — the ONE place the $AETHER_DATA_DIR-vs-<checkout>/Data
@@ -567,6 +569,11 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
             args=["--disable-blink-features=AutomationControlled"],
+            # Suppress Chrome's default --enable-automation switch: it paints the
+            # "Chrome is being controlled by automated test software" infobar and is a
+            # cheap, well-known Akamai Bot Manager tell that stalls the login POST even
+            # when a human types the credentials. Removing it drops that fingerprint.
+            ignore_default_args=["--enable-automation"],
         )
         # Remove navigator.webdriver flag so E*TRADE doesn't detect automation
         ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -1515,6 +1522,23 @@ def is_market_open_now(tokens, env="production") -> bool | None:
         return True
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Object facade (encapsulation / extensibility)
+# ---------------------------------------------------------------------------
+# Imported at the BOTTOM, after every free function/constant above is defined, so
+# these submodules can `from aether import etrade` and resolve a fully-initialised
+# package. They touch the package only at call time, so there is no circular-import
+# hazard. The proven free-function API above is UNCHANGED and remains the back-compat
+# seam every test patches; ETradeClient is the new front door that delegates to it.
+from aether.etrade.store import (          # noqa: E402
+    make_etrade_store, EtradeStore,
+    TokenStore, BrowserStateStore, ReauthStateStore,
+)
+from aether.etrade.client import (                                 # noqa: E402
+    ETradeClient, ETradeError, RoleNotPermitted,
+)
 
 
 # ---------------------------------------------------------------------------
