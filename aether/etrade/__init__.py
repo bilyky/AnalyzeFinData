@@ -615,15 +615,18 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
             else:
                 user_ok = pass_ok = False   # skip the auto-submit + 30s auto-wait blocks below
                 _snap("02_login_page")
-                _log.console("\n" + "=" * 68)
-                _log.console("  ACTION NEEDED - log in YOURSELF in the browser window:")
-                _log.console("    1. Type your User ID + password and click 'Log on'.")
-                _log.console("       (If the SCRIPT types, Akamai stalls the login; your own")
-                _log.console("        typing on this trusted device passes cleanly.)")
-                _log.console("    2. If asked, complete SMS and tick 'remember this device'.")
-                _log.console("    3. On the 'Authorize application' page, click Accept.")
-                _log.console("  Then return here - the verifier is captured automatically.")
-                _log.console("=" * 68 + "\n")
+                # Human-action prompt that gates a 3-min blocking wait below — must stay
+                # visible even under LOG_LEVEL=WARNING (CONSOLE is suppressed there), so use
+                # warning, not console. See _log.console vs .warning gating in aether/logger.py.
+                _log.warning("\n" + "=" * 68)
+                _log.warning("  ACTION NEEDED - log in YOURSELF in the browser window:")
+                _log.warning("    1. Type your User ID + password and click 'Log on'.")
+                _log.warning("       (If the SCRIPT types, Akamai stalls the login; your own")
+                _log.warning("        typing on this trusted device passes cleanly.)")
+                _log.warning("    2. If asked, complete SMS and tick 'remember this device'.")
+                _log.warning("    3. On the 'Authorize application' page, click Accept.")
+                _log.warning("  Then return here - the verifier is captured automatically.")
+                _log.warning("=" * 68 + "\n")
                 try:
                     page.wait_for_function(_LEFT_LOGIN_PAGE_JS, timeout=180000)  # 3 min for the human
                     _log.console(f"  [Auth] Login processed - page is now: {page.url[:80]}")
@@ -877,9 +880,11 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                 "Failing immediately to prevent background process hang."
             )
 
-        _log.console("\nCould not auto-capture verifier. Open this URL in your browser if it isn't open:")
-        _log.console(f"  {auth_url}")
-        _log.console("Log in, click Accept, then paste the code shown on screen.")
+        # Human-action prompt that gates the blocking input() below — must stay visible even
+        # under LOG_LEVEL=WARNING (CONSOLE is suppressed there), so use warning, not console.
+        _log.warning("\nCould not auto-capture verifier. Open this URL in your browser if it isn't open:")
+        _log.warning("  %s", auth_url)
+        _log.warning("Log in, click Accept, then paste the code shown on screen.")
         try:
             verifier = input("Verification code: ").strip()
         except EOFError:
