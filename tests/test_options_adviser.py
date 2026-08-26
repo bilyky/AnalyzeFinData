@@ -64,6 +64,42 @@ class TestSelectors(unittest.TestCase):
         self.assertEqual(oa.by_delta(self.quotes, -0.25, "PUT").strike, 90)
 
 
+class TestStrikeSelectionMode(unittest.TestCase):
+    """`select='delta'` routes strike choice through by_delta instead of the level anchor."""
+
+    def setUp(self):
+        self.quotes = oa.normalize_chain(RAW)
+
+    def test_delta_mode_covered_call_uses_by_delta(self):
+        pos = _pos()
+        lv = oa.Levels(target=90)                      # level mode would pick the 90 call
+        level_s = oa.build_covered_call(pos, lv, self.quotes, select="level")
+        delta_s = oa.build_covered_call(pos, lv, self.quotes, select="delta")
+        self.assertEqual(level_s.legs[0].strike, 90)
+        self.assertEqual(delta_s.legs[0].strike,
+                         oa.by_delta(self.quotes, oa.CALL_TARGET_DELTA, "CALL").strike)
+        self.assertNotEqual(delta_s.legs[0].strike, level_s.legs[0].strike)
+
+    def test_delta_mode_collar_picks_both_legs_by_delta(self):
+        s = oa.build_collar(_pos(), oa.Levels(stop=100, target=100), self.quotes, select="delta")
+        strikes = {leg.option_type: leg.strike for leg in s.legs}
+        self.assertEqual(strikes["PUT"], oa.by_delta(self.quotes, oa.PUT_TARGET_DELTA, "PUT").strike)
+        self.assertEqual(strikes["CALL"], oa.by_delta(self.quotes, oa.CALL_TARGET_DELTA, "CALL").strike)
+
+    def test_delta_mode_falls_back_without_greeks(self):
+        no_greeks = [oa.OptionQuote(q.option_type, q.strike, q.bid, q.ask, q.last, None, q.expiry)
+                     for q in self.quotes]
+        s = oa.build_covered_call(_pos(), oa.Levels(target=110), no_greeks, select="delta")
+        self.assertEqual(s.legs[0].strike, 110)        # no deltas -> level-anchored fallback
+
+    def test_build_report_threads_select_mode(self):
+        rpt = oa.build_report(_pos(), oa.Levels(stop=100, target=90), self.quotes,
+                              spot=100.0, today=TODAY, select="delta")
+        cc = next(s for s in rpt.strategies if s.kind == "covered_call")
+        self.assertEqual(cc.legs[0].strike,
+                         oa.by_delta(self.quotes, oa.CALL_TARGET_DELTA, "CALL").strike)
+
+
 class TestStrategyEconomics(unittest.TestCase):
     def setUp(self):
         self.quotes = oa.normalize_chain(RAW)
@@ -205,6 +241,19 @@ class TestReportAndRenderers(unittest.TestCase):
         self.assertIn("Tax considerations", html)
         self.assertIn(oa.TAX_DISCLAIMER, html)
 
+    def test_zero_cost_collar_labelled_even_not_debit(self):
+        # A net_cost==0 collar must read "even", not the old misleading "debit $0.00".
+        zero = oa.AdviserReport(
+            position=_pos(), levels=oa.Levels(stop=90, target=110), spot=100.0, expiry=EXPIRY,
+            strategies=[oa.Strategy(name="Collar", kind="collar", net_cost=0.0, legs=[
+                oa.StrategyLeg("buy", "PUT", 90, 1.55, 1, EXPIRY),
+                oa.StrategyLeg("sell", "CALL", 110, 1.55, 1, EXPIRY)])],
+            generated_at=TODAY)
+        txt = oa.render_terminal(zero)
+        self.assertIn("even (zero-cost)", txt)
+        self.assertNotIn("debit $0.00", txt)
+        self.assertIn("even (zero-cost)", oa.render_html(zero))
+
 
 class TestExpirySelection(unittest.TestCase):
     """DTE-aware expiry auto-selection (avoids the degenerate 1-DTE front month)."""
@@ -251,6 +300,14 @@ class TestExpirySelection(unittest.TestCase):
 
     def test_select_empty(self):
         self.assertIsNone(oa.select_expiry([], TODAY))
+
+    def test_select_target_below_min_respects_floor(self):
+        # Invariant guard: a target shorter than the hard floor never yields a sub-floor
+        # expiry — target_dte is clamped up to min_dte.
+        exps = [TODAY + datetime.timedelta(days=n) for n in (10, 32, 40)]
+        picked = oa.select_expiry(exps, TODAY, min_dte=30, target_dte=5)
+        self.assertGreaterEqual((picked - TODAY).days, 30)
+        self.assertEqual(picked, TODAY + datetime.timedelta(days=32))
 
     def test_fetch_chain_auto_selects_and_skips_front(self):
         near = TODAY + datetime.timedelta(days=3)

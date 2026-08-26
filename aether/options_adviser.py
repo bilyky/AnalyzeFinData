@@ -46,10 +46,17 @@ _COLLAR_TIGHT_BAND = 0.10  # call/put band < 10% of spot => flag §1259 construc
 _NEAR_LT_DAYS = 45         # within 45 days of long-term => flag holding-period risk
 # Auto-selected expiry window when the caller doesn't pin one. ~30-45 DTE is the theta
 # sweet spot for these protection/income structures; we take the nearest listed expiry
-# at least _MIN_DTE out, preferring one closest to _TARGET_DTE — so the menu never
+# at least MIN_DTE out, preferring one closest to TARGET_DTE — so the menu never
 # defaults to a degenerate 1-DTE front-month (put/call collapse onto one strike).
-_MIN_DTE = 30
-_TARGET_DTE = 35
+# Public (no underscore): a shared config knob the CLI / other interfaces legitimately
+# read and override, so they no longer reach across a private boundary.
+MIN_DTE = 30
+TARGET_DTE = 35
+# Conventional ~0.30-delta OTM strikes for delta-anchored selection (``--select delta``):
+# selling a ~30-delta call / buying a ~30-delta put is the standard income/protection
+# convention — an alternative to anchoring strikes on the AETHER stop/target levels.
+CALL_TARGET_DELTA = 0.30
+PUT_TARGET_DELTA = -0.30
 
 TAX_DISCLAIMER = (
     "These are general tax *considerations* tied to each structure, not tax advice. "
@@ -237,6 +244,21 @@ def by_delta(quotes: list, target_delta: float, option_type: str) -> Optional[Op
     return min(side, key=lambda q: abs(abs(q.delta) - abs(target_delta)))
 
 
+def _pick(quotes: list, option_type: str, *, level: float, target_delta: float,
+          mode: str) -> Optional[OptionQuote]:
+    """Select a strike by AETHER ``level`` (``mode='level'``) or by conventional
+    ``target_delta`` (``mode='delta'``).
+
+    Delta mode falls back to level anchoring when the chain carries no greeks, so it
+    degrades to a usable strike instead of returning nothing.
+    """
+    if mode == "delta":
+        q = by_delta(quotes, target_delta, option_type)
+        if q is not None:
+            return q
+    return nearest_strike(quotes, level, option_type)
+
+
 # ---------------------------------------------------------------------------
 # Strategy builders  (pure)
 # ---------------------------------------------------------------------------
@@ -245,12 +267,13 @@ def _round(x):
     return None if x is None else round(x, 2)
 
 
-def build_protective_put(pos: Position, levels: Levels, quotes: list) -> Optional[Strategy]:
+def build_protective_put(pos: Position, levels: Levels, quotes: list, *,
+                         select: str = "level") -> Optional[Strategy]:
     contracts = max(pos.contracts, 0)
     if contracts < 1:
         return None
     anchor = levels.stop or pos.price
-    put = nearest_strike(quotes, anchor, "PUT")
+    put = _pick(quotes, "PUT", level=anchor, target_delta=PUT_TARGET_DELTA, mode=select)
     if put is None:
         return None
     prem = put.ask or put.mid
@@ -270,12 +293,13 @@ def build_protective_put(pos: Position, levels: Levels, quotes: list) -> Optiona
     return s
 
 
-def build_covered_call(pos: Position, levels: Levels, quotes: list) -> Optional[Strategy]:
+def build_covered_call(pos: Position, levels: Levels, quotes: list, *,
+                       select: str = "level") -> Optional[Strategy]:
     contracts = max(pos.contracts, 0)
     if contracts < 1:
         return None
     anchor = levels.target or pos.price
-    call = nearest_strike(quotes, anchor, "CALL")
+    call = _pick(quotes, "CALL", level=anchor, target_delta=CALL_TARGET_DELTA, mode=select)
     if call is None:
         return None
     prem = call.bid or call.mid
@@ -296,12 +320,15 @@ def build_covered_call(pos: Position, levels: Levels, quotes: list) -> Optional[
     return s
 
 
-def build_collar(pos: Position, levels: Levels, quotes: list) -> Optional[Strategy]:
+def build_collar(pos: Position, levels: Levels, quotes: list, *,
+                 select: str = "level") -> Optional[Strategy]:
     contracts = max(pos.contracts, 0)
     if contracts < 1:
         return None
-    put = nearest_strike(quotes, levels.stop or pos.price, "PUT")
-    call = nearest_strike(quotes, levels.target or pos.price, "CALL")
+    put = _pick(quotes, "PUT", level=levels.stop or pos.price,
+                target_delta=PUT_TARGET_DELTA, mode=select)
+    call = _pick(quotes, "CALL", level=levels.target or pos.price,
+                 target_delta=CALL_TARGET_DELTA, mode=select)
     if put is None or call is None:
         return None
     put_prem = put.ask or put.mid
@@ -328,13 +355,14 @@ def build_collar(pos: Position, levels: Levels, quotes: list) -> Optional[Strate
 
 
 def build_cash_secured_put(pos: Position, levels: Levels, quotes: list,
-                           contracts: int = 1) -> Optional[Strategy]:
+                           contracts: int = 1, *,
+                           select: str = "level") -> Optional[Strategy]:
     """Sell a put at/below the stop to *add* shares at a discount (or keep premium).
 
     Sized independently of the existing lot (default 1 contract, illustrative)."""
     contracts = max(int(contracts), 1)
     anchor = levels.stop or pos.price
-    put = nearest_strike(quotes, anchor, "PUT")
+    put = _pick(quotes, "PUT", level=anchor, target_delta=PUT_TARGET_DELTA, mode=select)
     if put is None:
         return None
     prem = put.bid or put.mid
@@ -434,13 +462,19 @@ def tax_considerations(strategy: Strategy, pos: Position, spot: float,
 def build_report(position: Position, levels: Levels, quotes: list, spot: float,
                  expiry: Optional[datetime.date] = None,
                  today: Optional[datetime.date] = None,
-                 data_source: str = "offline") -> AdviserReport:
-    """Assemble the full four-strategy menu with tax considerations attached."""
+                 data_source: str = "offline", *,
+                 select: str = "level") -> AdviserReport:
+    """Assemble the full four-strategy menu with tax considerations attached.
+
+    ``select`` sets the strike-anchoring rule for every builder: ``'level'`` (default)
+    anchors on the AETHER stop/target levels; ``'delta'`` picks conventional ~0.30-delta
+    OTM strikes (falling back to level anchoring when the chain carries no greeks).
+    """
     today = today or datetime.date.today()
     builders = (build_collar, build_protective_put, build_covered_call, build_cash_secured_put)
     strategies: list = []
     for b in builders:
-        s = b(position, levels, quotes)
+        s = b(position, levels, quotes, select=select)
         if s is None:
             continue
         s.tax_flags = tax_considerations(s, position, spot, today)
@@ -473,8 +507,8 @@ def normalize_expiries(raw_json: dict) -> list:
 
 
 def select_expiry(expiries: list, today: Optional[datetime.date] = None, *,
-                  min_dte: int = _MIN_DTE,
-                  target_dte: int = _TARGET_DTE) -> Optional[datetime.date]:
+                  min_dte: int = MIN_DTE,
+                  target_dte: int = TARGET_DTE) -> Optional[datetime.date]:
     """Pick the listed expiry nearest the target holding window.
 
     Among expiries at least ``min_dte`` days out, return the one whose DTE is closest to
@@ -482,11 +516,12 @@ def select_expiry(expiries: list, today: Optional[datetime.date] = None, *,
     very short-dated expiries are listed), fall back to the furthest-dated available so
     the caller never lands on a degenerate 1-DTE front-month menu. ``None`` for empty.
 
-    ``min_dte`` is a **hard floor** and wins when it conflicts with ``target_dte`` (a
-    caller wanting a shorter window than the floor must lower ``min_dte`` too — the CLI
-    does this via ``min(_MIN_DTE, --dte)``).
+    ``min_dte`` is a **hard floor**: ``target_dte`` is clamped up to it, so a caller
+    wanting a shorter window than the floor must lower ``min_dte`` too — the CLI does
+    this via ``min(MIN_DTE, --dte)``.
     """
     today = today or datetime.date.today()
+    target_dte = max(target_dte, min_dte)      # min_dte is the floor; can't target below it
     future = [d for d in expiries if (d - today).days >= 0]
     pool = future or list(expiries)
     if not pool:
@@ -500,7 +535,7 @@ def select_expiry(expiries: list, today: Optional[datetime.date] = None, *,
 
 def fetch_chain(symbol: str, client, expiry: Optional[datetime.date] = None,
                 strikes: int = 12, *, today: Optional[datetime.date] = None,
-                min_dte: int = _MIN_DTE, target_dte: int = _TARGET_DTE):
+                min_dte: int = MIN_DTE, target_dte: int = TARGET_DTE):
     """Fetch + normalize a live chain via ``ETradeClient.market``.
 
     Returns ``(quotes, spot, expiry)``. When ``expiry`` is ``None`` the adapter first
@@ -562,6 +597,19 @@ def _fmt(x, money=True):
     return f"${x:,.2f}" if money else f"{x:g}"
 
 
+def _net_label(net_cost: float) -> str:
+    """Credit / debit / even label for a strategy's net cash.
+
+    ``net_cost == 0`` (e.g. a zero-cost collar) reads "even", not the misleading
+    "debit $0.00" the old sign test produced.
+    """
+    if net_cost < 0:
+        return "credit " + _fmt(abs(net_cost))
+    if net_cost > 0:
+        return "debit " + _fmt(net_cost)
+    return "even (zero-cost)"
+
+
 def render_terminal(report: AdviserReport) -> str:
     p = report.position
     lines = []
@@ -589,7 +637,7 @@ def render_terminal(report: AdviserReport) -> str:
             f"{leg.action} {leg.option_type[:1]}{leg.strike:g}@${leg.price:.2f}×{leg.contracts}"
             for leg in s.legs
         )
-        net = ("credit " + _fmt(abs(s.net_cost))) if s.net_cost < 0 else ("debit " + _fmt(s.net_cost))
+        net = _net_label(s.net_cost)
         lines.append(
             f"| {s.name} | {legs} | {net} | {_fmt(s.max_loss)} | {_fmt(s.max_gain)} "
             f"| {_fmt(s.downside_floor)} | {_fmt(s.upside_cap)} |"
@@ -622,8 +670,8 @@ def render_html(report: AdviserReport) -> str:
             f"{leg.action} {leg.option_type} {leg.strike:g} @ ${leg.price:.2f} ×{leg.contracts}"
             for leg in s.legs
         )
-        net = (f"<span style='color:#127a2e'>credit {_fmt(abs(s.net_cost))}</span>"
-               if s.net_cost < 0 else f"<span style='color:#b23'>debit {_fmt(s.net_cost)}</span>")
+        color = "#127a2e" if s.net_cost < 0 else ("#b23" if s.net_cost > 0 else "#555")
+        net = f"<span style='color:{color}'>{_net_label(s.net_cost)}</span>"
         tax = "".join(f"<li>{t}</li>" for t in s.tax_flags)
         rows.append(
             f"<div style='border:1px solid #e0e0e0;border-radius:10px;padding:14px 16px;margin:12px 0'>"

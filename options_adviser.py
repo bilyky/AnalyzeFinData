@@ -100,7 +100,7 @@ def _build(symbol: str, live: bool, args=None):
         except Exception as e:
             _log.warning("Live positions read failed (%s); keeping offline position.", e)
         pinned = None
-        target_dte = oa._TARGET_DTE
+        target_dte = oa.TARGET_DTE
         if args is not None:
             if getattr(args, "expiry", None):
                 pinned = datetime.date.fromisoformat(args.expiry)
@@ -108,7 +108,7 @@ def _build(symbol: str, live: bool, args=None):
                 target_dte = args.dte
         quotes, live_spot, expiry = oa.fetch_chain(
             symbol, client, expiry=pinned, target_dte=target_dte,
-            min_dte=min(oa._MIN_DTE, target_dte))
+            min_dte=min(oa.MIN_DTE, target_dte))
         spot = live_spot or spot or position.price
         source = "live"
     else:
@@ -130,8 +130,9 @@ def _build(symbol: str, live: bool, args=None):
             "adjust field paths.", symbol, source)
         return None, illustrative
     position.price = spot
+    select = getattr(args, "select", "level") if args is not None else "level"
     report = oa.build_report(position, levels, quotes, spot=spot, expiry=expiry,
-                             data_source=source)
+                             data_source=source, select=select)
     return report, illustrative
 
 
@@ -151,6 +152,9 @@ def main(argv=None):
                                      "default auto-picks ~35 DTE (live only)")
     ap.add_argument("--dte", type=int, help="target days-to-expiry for the auto-selected "
                                             "expiry (default 35; live only)")
+    ap.add_argument("--select", choices=("level", "delta"), default="level",
+                    help="strike anchoring: 'level' (AETHER stop/target, default) or "
+                         "'delta' (~0.30-delta OTM strikes)")
     args = ap.parse_args(argv)
 
     report, illustrative = _build(args.symbol, args.live, args)
