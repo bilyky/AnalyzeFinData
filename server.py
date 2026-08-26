@@ -649,7 +649,7 @@ def create_app():
                 try:
                     skill_file = _DIR / ".gemini" / "skills" / "aether-copilot" / "SKILL.md"
                     if skill_file.exists():
-                        skill_context = f"\nActive Copilot Skill Rules:\n{skill_file.read_text(encoding='utf-8')[:3000]}\n"
+                        skill_context = f"\nActive Copilot Skill Rules:\n{skill_file.read_text(encoding='utf-8')[:12000]}\n"
                     
                     ref_dir = _DIR / ".gemini" / "skills" / "aether-copilot" / "references"
                     if ref_dir.exists():
