@@ -5,7 +5,9 @@ This utility performs a rapid, 5-second diagnostic sweep of all external API gat
 mailboxes, and session states, verifying system readiness before any cron runs.
 """
 
+import csv
 import datetime
+import io
 import imaplib
 import json
 import os
@@ -20,6 +22,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
+import notify
 import powergauge
 from aether import etrade
 from aether.config import CFG
@@ -200,6 +203,235 @@ def check_etrade_api() -> bool:
         return False
 
 
+def check_file_and_directory_integrity(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
+    """Verify that all required folders and files exist on disk."""
+    _log.console("  Checking File & Directory Integrity...")
+    missing = []
+
+    required_dirs = [
+        base_dir / "Data",
+        base_dir / "Data" / "Backup",
+        base_dir / "Data" / "Symbol_full"
+    ]
+    required_files = [
+        base_dir / "config.json",
+        base_dir / "Data" / "state_of_the_day.xlsx"
+    ]
+    
+    for d in required_dirs:
+        if not d.exists():
+            missing.append(f"Directory: {d.name}")
+            
+    for f in required_files:
+        if not f.exists():
+            missing.append(f"File: {f.name}")
+            
+    if missing:
+        _log.console(f"  ❌ INTEGRITY: Missed files/dirs: {', '.join(missing)}")
+        return False, missing
+    _log.console("  ✅ INTEGRITY: All required directories and files are present on disk.")
+    return True, []
+
+
+def check_active_locks(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
+    """Check for active or stale file locks that would block execution."""
+    _log.console("  Checking Active Process & File Locks...")
+    locks = []
+
+    pipeline_lock = base_dir / "Data" / "pipeline_run.lock"
+    rapidapi_lock = base_dir / "Data" / "rapidapi.lock"
+    xlsx_file = base_dir / "Data" / "state_of_the_day.xlsx"
+
+    if pipeline_lock.exists():
+        locks.append("Pipeline Active Lock (pipeline_run.lock)")
+
+    if rapidapi_lock.exists():
+        locks.append("RapidAPI Active Lock (rapidapi.lock)")
+
+    # Detect an exclusive lock (e.g. the workbook open in Excel) without mutating
+    # the file: renaming a path to itself raises PermissionError/OSError when the
+    # OS holds a write/delete lock, and is a no-op otherwise.
+    if xlsx_file.exists():
+        try:
+            os.rename(str(xlsx_file), str(xlsx_file))
+        except (PermissionError, OSError):
+            locks.append("Excel File Lock (state_of_the_day.xlsx is open/locked)")
+            
+    if locks:
+        _log.console(f"  ⚠️ LOCKS: Found active/stale locks: {', '.join(locks)}")
+        return False, locks
+    _log.console("  ✅ LOCKS: No active process or spreadsheet locks detected.")
+    return True, []
+
+def check_watchdog_health(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
+    """Validate that the hourly AETHER Watchdog is successfully running and keeping the system warm.
+    
+    Checks both:
+      1. Task Scheduler: The LastResult of the 'AETHER_Watchdog' task must be 0 (success).
+      2. Log Freshness: The watchdog log file must have been written to within the last 75 minutes.
+    """
+    _log.console("  Checking AETHER Watchdog Health & Schedulers...")
+    issues = []
+    
+    if sys.platform == "win32":
+        try:
+            cmd = ["schtasks", "/query", "/tn", "\\AETHER_Agents\\AETHER_Watchdog", "/fo", "CSV", "/v"]
+            res = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=10)
+            if res.returncode == 0 and res.stdout.strip():
+                lines = res.stdout.strip().splitlines()
+                if len(lines) >= 2:
+
+                    reader = csv.reader(io.StringIO(res.stdout))
+                    header = next(reader)
+                    row = next(reader)
+                    header = [h.strip() for h in header]
+                    
+                    try:
+                        result_idx = header.index("Last Result")
+                    except ValueError:
+                        try:
+                            result_idx = [i for i, h in enumerate(header) if "result" in h.lower() or "code" in h.lower()][0]
+                        except IndexError:
+                            result_idx = -1
+                            
+                    if result_idx != -1 and len(row) > result_idx:
+                        last_result_str = row[result_idx].strip().strip('"')
+                        try:
+                            if last_result_str.startswith("0x"):
+                                last_result = int(last_result_str, 16)
+                            else:
+                                last_result = int(last_result_str)
+                        except ValueError:
+                            last_result = 0
+                            
+                        if last_result != 0 and last_result != 267009:
+                            issues.append(f"Task Scheduler: 'AETHER_Watchdog' last run failed (Exit Code: {last_result_str} / {hex(last_result)}).")
+            else:
+                issues.append("Task Scheduler: 'AETHER_Watchdog' task is not found or schtasks query failed.")
+        except subprocess.TimeoutExpired:
+            _log.warning("Task Scheduler query timed out during pre-flight check.")
+        except Exception as e:
+            _log.warning(f"Task Scheduler query failed (non-fatal): {e}")
+            
+    log_file = base_dir / "Data" / "logs" / "agent_runs" / "watchdog_agent.log"
+    if log_file.exists():
+        try:
+            mtime = log_file.stat().st_mtime
+            age_seconds = time.time() - mtime
+            age_minutes = age_seconds / 60
+            
+            if age_minutes > 75:
+                last_time = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %I:%M %p")
+                issues.append(f"Log Freshness: 'watchdog_agent.log' is stale. Last run: {last_time} ({age_minutes:.0f} mins ago, should be < 75 mins).")
+        except Exception as e:
+            issues.append(f"Log Freshness: Failed to audit watchdog log modification time: {e}")
+    else:
+        issues.append("Log Freshness: 'watchdog_agent.log' does not exist (Watchdog has never run).")
+        
+    if issues:
+        for iss in issues:
+            _log.console(f"  ❌ Watchdog: {iss}")
+        return False, issues
+        
+    _log.console("  ✅ Watchdog: Active system monitor is running successfully and keeping session warm.")
+    return True, []
+
+
+
+def send_preflight_email(checks, missing_items, active_locks, duration, all_ok, watchdog_issues=None):
+    """Compile and dispatch an HTML status briefing email to the user.
+
+    `checks` is the single ordered roster of (label, ok, kind) tuples shared with
+    the console summary, so the email table and the console can never drift. `all_ok`
+    is the overall verdict computed by the caller, so the pass/fail decision has
+    exactly one source of truth."""
+    _log.console("  Sending pre-flight status email...")
+    try:
+        today = datetime.date.today().strftime("%Y-%m-%d")
+        subject = f"🔔 AETHER Pre-Flight Status Briefing: {today}"
+
+        def _badge(ok):
+            return '<span style="color: #2ea043; font-weight: bold;">[PASS]</span>' if ok else '<span style="color: #f85149; font-weight: bold;">[FAIL]</span>'
+
+        def _lock_badge(ok):
+            return '<span style="color: #2ea043; font-weight: bold;">[CLEAN]</span>' if ok else '<span style="color: #db6d28; font-weight: bold;">[LOCKED]</span>'
+
+        rows = ""
+        for i, (label, ok, kind) in enumerate(checks, 1):
+            badge = _lock_badge(ok) if kind == "lock" else _badge(ok)
+            rows += (
+                '<tr style="border-bottom: 1px solid #21262d;">'
+                f'<td style="padding: 10px 0; color: #8b949e;">[{i}] {label}</td>'
+                f'<td style="padding: 10px 0; text-align: right;">{badge}</td>'
+                '</tr>'
+            )
+
+        html = f"""
+        <div style="font-family: monospace; background-color: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 8px; padding: 25px; max-width: 650px; margin: 20px auto; box-shadow: 0 4px 6px rgba(0,0,0,0.15);">
+            <h2 style="color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 12px; margin-top: 0; font-size: 18px; font-weight: bold; letter-spacing: 0.5px;">
+                🔔 AETHER Pre-Flight Status Briefing
+            </h2>
+            <p style="font-size: 13px; color: #8b949e; margin-bottom: 20px;">
+                Generated on: {datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")}<br>
+                Check Duration: {duration:.2f}s
+            </p>
+
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
+                {rows}
+            </table>
+        """
+        
+        if missing_items:
+            html += f"""
+            <div style="background-color: rgba(248,81,73,0.1); border: 1px solid #f85149; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 12px; color: #ff7b72;">
+                ⚠️ <b>Missed Required Files/Directories:</b>
+                <ul style="margin: 5px 0 0 15px; padding: 0;">
+                    {"".join(f"<li>{x}</li>" for x in missing_items)}
+                </ul>
+            </div>
+            """
+            
+        if active_locks:
+            html += f"""
+            <div style="background-color: rgba(219,109,40,0.1); border: 1px solid #db6d28; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 12px; color: #f0883e;">
+                ⚠️ <b>Active Process/Workbook Locks:</b>
+                <ul style="margin: 5px 0 0 15px; padding: 0;">
+                    {"".join(f"<li>{x}</li>" for x in active_locks)}
+                </ul>
+            </div>
+            """
+
+        if watchdog_issues:
+            html += f"""
+            <div style="background-color: rgba(248,81,73,0.1); border: 1px solid #f85149; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 12px; color: #ff7b72;">
+                ⚠️ <b>AETHER Watchdog Diagnostics Failures:</b>
+                <ul style="margin: 5px 0 0 15px; padding: 0;">
+                    {"".join(f"<li>{x}</li>" for x in watchdog_issues)}
+                </ul>
+            </div>
+            """
+            
+        if all_ok:
+            html += """
+            <div style="background-color: rgba(46,160,67,0.15); border: 1px solid #2ea043; border-radius: 6px; padding: 15px; text-align: center; color: #56d364; font-size: 13px; font-weight: bold;">
+                ☀️ [SUCCESS] All pre-flight checks passed. System ready for tomorrow's run.
+            </div>
+            """
+        else:
+            html += """
+            <div style="background-color: rgba(248,81,73,0.15); border: 1px solid #f85149; border-radius: 6px; padding: 15px; text-align: center; color: #ff7b72; font-size: 13px; font-weight: bold;">
+                🚨 [ALERT] One or more pre-flight check blocks exist. Action required.
+            </div>
+            """
+            
+        html += "</div>"
+        
+        notify.send_email(subject, html, is_html=True)
+        _log.console("  ✅ Email: Successfully sent pre-flight status email.")
+    except Exception as e:
+        _log.error(f"  ❌ Email: Failed to dispatch status briefing: {e}")
+
+
 def run_preflight_diagnostics() -> bool:
     """Execute all pre-flight diagnostic checks and return True only if every check passes."""
     # Purge browser/NodeJS zombies first so a stale process can't hang a later Playwright launch.
@@ -216,19 +448,39 @@ def run_preflight_diagnostics() -> bool:
     smtp_ok   = check_gmail_smtp()
     chaikin_ok = check_chaikin_api()
     etrade_ok  = check_etrade_api()
+    integrity_ok, missing_items = check_file_and_directory_integrity()
+    locks_ok, active_locks = check_active_locks()
+    watchdog_ok, watchdog_issues = check_watchdog_health()
     
     duration = time.time() - start_time
+
+    # Single source of truth for the check roster: (label, result, kind). "lock"
+    # renders CLEAN/LOCKED, everything else PASS/FAIL. Both the console summary
+    # below and the email table render from this one list, so they cannot drift.
+    checks = [
+        ("Gmail IMAP",                  imap_ok,      "conn"),
+        ("Gmail SMTP Dispatch",         smtp_ok,      "conn"),
+        ("Chaikin PowerGauge API",      chaikin_ok,   "conn"),
+        ("E*TRADE Brokerage OAuth",     etrade_ok,    "conn"),
+        ("File & Directory Integrity",  integrity_ok, "conn"),
+        ("Active Process & File Locks", locks_ok,     "lock"),
+        ("AETHER Watchdog Health",      watchdog_ok,  "conn"),
+    ]
+
     _log.console("=" * 70)
     _log.console(f"PRE-FLIGHT DIAGNOSTIC SUMMARY (Duration: {duration:.2f}s)")
     _log.console("-" * 70)
-    
-    _log.console(f"  [1] Gmail IMAP Inbox     : {'PASS' if imap_ok else 'FAIL'}")
-    _log.console(f"  [2] Gmail SMTP Dispatch  : {'PASS' if smtp_ok else 'FAIL'}")
-    _log.console(f"  [3] Chaikin PowerGauge   : {'PASS' if chaikin_ok else 'FAIL'}")
-    _log.console(f"  [4] E*TRADE OAuth Feed   : {'PASS' if etrade_ok else 'FAIL'}")
+    for i, (label, ok, kind) in enumerate(checks, 1):
+        word = ("CLEAN" if ok else "LOCKED") if kind == "lock" else ("PASS" if ok else "FAIL")
+        _log.console(f"  [{i}] {label:<28}: {word}")
     _log.console("=" * 70)
-    
-    all_ok = imap_ok and smtp_ok and chaikin_ok and etrade_ok
+
+    all_ok = all(ok for _, ok, _ in checks)
+
+    # Send email status if the --email flag is set
+    if "--email" in sys.argv:
+        send_preflight_email(checks, missing_items, active_locks, duration, all_ok, watchdog_issues)
+        
     if all_ok:
         _log.console("☀️ [PRE-FLIGHT SUCCESS] All external API and email gateways are online.")
         _log.console("=" * 70)

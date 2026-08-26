@@ -23,7 +23,7 @@ import instruments
 import risk_utils
 import sell_rules
 import openpyxl
-import etrade
+from aether import etrade
 from workbook_read import (
     get_top_5_picks as _ap_picks,
     get_market_regime as _ap_regime,
@@ -1111,6 +1111,22 @@ def get_system_health() -> dict:
     # Watchdog — check if watchdog.log or similar file was updated today
     watchdog_ok = True  # default optimistic; future: check watchdog log
 
+    # E*TRADE auth state — the shared read-only classifier (probe=False: pure-local, no network,
+    # no mutation, since /api/health is polled frequently). /api/health is UNAUTHENTICATED, so
+    # embed only the non-sensitive posture (state + whether a human must act); the rich blob
+    # (trust marker, breaker counts, token date, and the bootstrap-command hint in `summary`)
+    # stays behind the admin-gated GET /api/etrade/status. Never let a broker read break health.
+    etrade_auth = None
+    try:
+        _st = etrade.auth_status("production", probe=False)
+        etrade_auth = {
+            "state":             _st["state"],
+            "needs_manual_auth": _st["needs_manual_auth"],
+            "can_auto_reauth":   _st["can_auto_reauth"],
+        }
+    except Exception:
+        etrade_auth = None
+
     return {
         "data_fresh":           data_fresh,
         "last_refresh":         last_refresh,
@@ -1119,6 +1135,7 @@ def get_system_health() -> dict:
         "watchdog_ok":          watchdog_ok,
         "server_time":          now.isoformat(timespec="seconds"),
         "server_needs_restart": _server_needs_restart(),
+        "etrade":               etrade_auth,
     }
 
 

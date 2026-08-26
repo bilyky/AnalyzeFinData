@@ -55,6 +55,7 @@ class _EtradeScenarioBase(unittest.TestCase):
             ("_TOKEN_PATH",        "etrade_tokens.json"),
             ("_BROWSER_STATE_PATH", "etrade_browser_state.json"),
             ("_REAUTH_STATE_PATH", "etrade_reauth_state.json"),
+            ("_TRUST_MARKER_PATH", "etrade_profile_trusted.json"),
         ):
             p = mock.patch.object(etrade, const, os.path.join(d, name))
             p.start()

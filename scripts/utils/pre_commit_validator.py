@@ -22,6 +22,17 @@ import sys
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# The BLOCK/PASS messages below use emoji, but a git hook on Windows usually inherits a
+# cp1252 console that cannot encode them -> a legitimate BLOCK would die with
+# UnicodeEncodeError and mask the real reason for the block. Force UTF-8 (replace on
+# failure) so the message always prints. No-op where the stream is already UTF-8 / not a
+# TextIOWrapper.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 # Mapping of @doc-sync keys to their documentation files on disk + description
 DOC_SYNC_SURFACES = {
     "covered-calls": [
@@ -130,6 +141,41 @@ def check_feature_doc_sync() -> bool:
             print(f"   change is truly needed - acknowledge it explicitly:")
             print(f"       AETHER_DOCSYNC_ACK={key} git commit ...")
     return ok
+
+
+def check_wiki_about_sync() -> bool:
+    """Documentation Sentry drift guard (aether-documentation-sentry skill).
+
+    Data/wiki.json is the single source for the About-tab feature cards; the parity invariant
+    is that every `data-wiki="KEY"` card in web/index.html has exactly one wiki.json entry and
+    vice-versa (the drift that produced dead modals / orphaned entries). When either surface is
+    staged, run the real guard suite (tests/test_about_wiki_sync.py) so the drift cannot silently
+    return. Uses `unittest` — the project's available runner (pytest is not installed here).
+
+    Fails CLOSED: a red or unrunnable guard BLOCKS the commit. Skipped (returns True) when no
+    wiki surface is staged, so unrelated commits are not slowed."""
+    staged = _staged_paths()
+    surfaces = {"Data/wiki.json", "web/index.html"}
+    if not (staged & surfaces):
+        return True
+    print("[GIT PRE-COMMIT] Wiki surface staged - running About/wiki drift guard "
+          "(tests/test_about_wiki_sync.py)...")
+    try:
+        res = subprocess.run(
+            [sys.executable, "-m", "unittest", "tests.test_about_wiki_sync"],
+            capture_output=True, text=True, errors="replace", cwd=ROOT_DIR)
+    except Exception as e:
+        print(f"🚨 [GIT PRE-COMMIT] BLOCK - could not run the wiki drift guard: {e}")
+        return False
+    if res.returncode != 0:
+        print("🚨 [GIT PRE-COMMIT] BLOCK - About-tab <-> Data/wiki.json drift detected:")
+        print((res.stderr or res.stdout).strip())
+        print("-" * 70)
+        print("   Action: reconcile web/index.html data-wiki cards with Data/wiki.json "
+              "(aether-documentation-sentry skill) until the guard is green.")
+        return False
+    print("   ✅ Wiki/About parity guard passed.")
+    return True
 
 
 def check_no_inline_imports(file_path: str) -> bool:
@@ -420,6 +466,10 @@ def main():
     if not check_feature_doc_sync():
         success = False
 
+    # Check About-tab <-> Data/wiki.json parity (Documentation Sentry drift guard)
+    if not check_wiki_about_sync():
+        success = False
+
     # Check New Features Test Coverage Hook
     if not check_new_features_tested():
         success = False
@@ -442,7 +492,12 @@ def main():
             # - test_*.py: inline imports inside test methods are legitimate (isolate failures)
             # - powergauge.py: optional try/except imports for Playwright automation
             # - run_history.py: historical backfill parallelized launcher script
-            _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py")
+            # - aether/etrade/store.py: mandatory lazy `_pkg()` import of the parent
+            #   package to break the circular init — it is imported *from* the package
+            #   __init__, so a top-level `from aether import etrade` would hit a
+            #   partially-initialised module. See the module's _pkg() docstring.
+            _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py",
+                             "etrade/store.py")
             if not any(x in fpath for x in _skip_imports):
                 if not check_no_inline_imports(fpath):
                     success = False
@@ -451,9 +506,15 @@ def main():
                 success = False
 
             # Files exempt from print() check (Playwright interactive browser prompts
-            # that intentionally write to the user's terminal, not to the log system)
-            _skip_print = ("etrade.py", "powergauge.py", "run_history.py")
-            if not any(x in fpath for x in _skip_print):
+            # that intentionally write to the user's terminal, not to the log system;
+            # plus the diagnostics/ tests trees, which print by design).
+            # Filenames match by basename; the scripts/ and tests/ trees match by
+            # repo-relative path prefix — NOT substring, so an unrelated path (e.g.
+            # test_etrade.py, .../latests/...) can't accidentally slip the gate.
+            _skip_print_files = ("etrade.py", "powergauge.py", "run_history.py", "real_copilot.py")
+            _skip_print_trees = ("scripts/", "tests/")
+            _rel = os.path.relpath(fpath, ROOT_DIR).replace(os.sep, "/")
+            if not (os.path.basename(fpath) in _skip_print_files or _rel.startswith(_skip_print_trees)):
                 if not check_no_print_statements(fpath):
                     success = False
                 

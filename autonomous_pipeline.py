@@ -1,4 +1,6 @@
 import sys
+import os
+import atexit
 import json
 import console_safe
 import datetime
@@ -13,6 +15,7 @@ from config import CFG
 from run_history import load_symbols
 from pathlib import Path
 from aether_logger import get_logger as _get_logger
+from scripts.diagnostics.preflight_validator import run_preflight_diagnostics
 
 _pipeline_log = _get_logger("pipeline")
 

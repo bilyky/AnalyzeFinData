@@ -45,24 +45,18 @@ Write-Host "----------------------------------------------------------"
 $Tasks = @(
     @{
         Name     = "AETHER_Watchdog"
-        # Two-trigger design:
-        # 1. Hourly during market & pre-market session (6:00 AM PST - 2:00 PM PST)
-        # 2. Every 2 hours during out-of-market hours (2:00 PM PST - 6:00 AM PST)
+        # 24/7 Hourly Trigger Design:
+        # Starts in the past (1/1/2000) to ensure Task Scheduler activates the repetition
+        # loop IMMEDIATELY upon registration, repeating every 1 hour indefinitely (9999 days).
         Triggers  = @(
             $(
-                $T = New-ScheduledTaskTrigger -Daily -At "6:00 AM"
-                $T.Repetition = (New-ScheduledTaskTrigger -Once -At "6:00 AM" -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Hours 8)).Repetition
-                $T
-            ),
-            $(
-                $T = New-ScheduledTaskTrigger -Daily -At "2:00 PM"
-                $T.Repetition = (New-ScheduledTaskTrigger -Once -At "2:00 PM" -RepetitionInterval (New-TimeSpan -Hours 2) -RepetitionDuration (New-TimeSpan -Hours 16)).Repetition
+                $T = New-ScheduledTaskTrigger -Once -At "1/1/2000 12:00 AM" -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 9999)
                 $T
             )
         )
         Prompt   = "Execute the automated skill defined in .claude/commands/watchdog.md"
         Log      = "watchdog_agent.log"
-        Desc     = "Hourly pre-market/market diagnostics and 2-hourly off-market self-healing loop."
+        Desc     = "Hourly diagnostics and self-healing loop running 24/7."
     },
     @{
         Name     = "AETHER_StopMonitor"
@@ -114,11 +108,36 @@ $Tasks = @(
         Prompt   = "Execute the automated R&D skills defined in .claude/commands/pattern-discover.md and .claude/commands/failure-dna.md"
         Log      = "pattern_discovery_agent.log"
         Desc     = "Weekly self-improving R&D loop on Saturdays at 10:00 AM PST."
+    },
+    @{
+        Name     = "AETHER_PreFlight_Audit"
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Daily -At "9:30 PM")
+        )
+        Script   = "venv_new\Scripts\python.exe scripts/diagnostics/preflight_validator.py --email"
+        Log      = "preflight_audit.log"
+        Desc     = "Nightly pre-flight system diagnostics and connection check at 9:30 PM PST."
     }
 )
 
+
 # Settings: standard reliable settings (wake machine, allow demand run, run missed)
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable   
+
+# Resolve Node and Engine parent directories dynamically to prevent 0x80070002 (File Not Found) in background S4U contexts
+$EngineCmd = Get-Command $Engine -ErrorAction SilentlyContinue
+$NodeCmd = Get-Command "node" -ErrorAction SilentlyContinue
+
+$PathPrefix = ""
+if ($EngineCmd -and $NodeCmd) {
+    $EngineDir = Split-Path -Parent $EngineCmd.Source
+    $NodeDir = Split-Path -Parent $NodeCmd.Source
+    $PathPrefix = "`$env:PATH += ';$EngineDir;$NodeDir'; "
+    Write-Host "Auto-resolved system PATH prefix to: $PathPrefix" -ForegroundColor Green
+} else {
+    Write-Host "Warning: Could not dynamically resolve Engine ($Engine) or Node paths." -ForegroundColor Yellow
+}
+
 
 # Iterate and register each task
 foreach ($T in $Tasks) {
@@ -126,10 +145,14 @@ foreach ($T in $Tasks) {
     $PromptPayload = $T.Prompt
     $LogFile = Join-Path $LogDir $T.Log
     
-    # Standard clean execution command via PowerShell to navigate to root and run engine
-    $ExecCmd = "cd '$RepoRoot'; $Engine $Args -p '$PromptPayload' >> '$LogFile' 2>&1"
-    
-    # Action block running invisible background shell
+    # Build the command: cd to repo root, then run either a raw script or the engine+prompt.
+    if ($T.Script) {
+        $ExecCmd = "cd '$RepoRoot'; $($T.Script) >> '$LogFile' 2>&1"
+    } else {
+        $ExecCmd = "$PathPrefix`cd '$RepoRoot'; $Engine $Args -p '$PromptPayload' >> '$LogFile' 2>&1"
+    }
+
+    # Run in a hidden PowerShell window (no visible console) so the scheduled task is non-interactive.
     $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$ExecCmd`""
     
     Write-Host "Registering task: $TaskName..." -ForegroundColor Yellow

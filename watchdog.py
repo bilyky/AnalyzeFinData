@@ -9,7 +9,7 @@ import re
 import ctypes
 import json
 import notify
-import etrade
+from aether import etrade
 import powergauge
 from pathlib import Path
 from aether import trash
@@ -30,7 +30,7 @@ LOG_FILES = [
 ]
 AETHER_JSONL = BASE_DIR / "Data" / "logs" / "aether.jsonl"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
-TASKS = ["AnalyzeFinData_Morning", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_Summary", "AnalyzeFinData_Evening"]
+TASKS = ["AnalyzeFinData_Morning", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_Summary", "AnalyzeFinData_Evening", "AnalyzeFinData_ETrade_Reauth"]
 SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
 
 python_exe = sys.executable
@@ -39,6 +39,10 @@ _TASK_DEFS = {
     "AnalyzeFinData_Evening":  (f"'{python_exe}' '{BASE_DIR / 'daily_task.py'}'",           "daily", "17:00"),
     "AnalyzeFinData_AI_Game":  (f"'{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --run", "daily", "07:00"),
     "AnalyzeFinData_AI_Summary": (f"'{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --summary", "daily", "18:00"),
+    # Unattended daily E*TRADE re-auth at 05:15 — just before the 05:30 Morning pipeline so the
+    # token is fresh for it. Renew-first + trusted-profile-only + once/day: ≤1 browser/day, and
+    # none at all once trust lapses (it latches sms_required and emails/pushes for a human).
+    "AnalyzeFinData_ETrade_Reauth": (f"'{python_exe}' '{BASE_DIR / 'server.py'}' etrade-reauth --scheduled", "daily", "05:15"),
     "Project_AETHER_Watchdog": (f"'{python_exe}' '{BASE_DIR / 'watchdog.py'}'",              "hourly", None),
 }
 
@@ -425,35 +429,31 @@ def run_watchdog():
 
     _log.console(f"[{datetime.datetime.now()}] Project AETHER Healer starting...")
     
-    # 0. E*TRADE Proactive Session Keeper (Prevents Soft Expiry) — RENEW-ONLY.
-    #    Anti-ban rule: automated jobs NEVER open a browser. keep_alive() refreshes a
-    #    still-valid same-day token via pure HTTP and makes zero brokerage calls once the
-    #    token has expired (nightly midnight-ET / weekend gap). A dead token means a HUMAN
-    #    must re-auth from a clean context — we alert, we do NOT auto-launch Playwright
-    #    (that stale-session replay is exactly what trips Akamai and gets the IP banned).
+    # 0. E*TRADE Proactive Session Keeper — idempotent catch-up for the daily 05:15 door.
+    #    scheduled_reauth() renews first (pure HTTP, no browser), and only if that fails AND the
+    #    persistent profile is trusted does it open the ONE allowed automated browser — with a
+    #    once/day + breaker gate, so an hourly watchdog can't hammer it (a missed 05:15 self-heals
+    #    within the hour, then no-ops the rest of the day). It NEVER opens a browser while trust is
+    #    down; it latches 'sms_required' and we alert a human. A token momentarily dead between
+    #    midnight-ET and the 05:15 refresh is normal — we log it, we do NOT fail the run.
     try:
-        tokens = etrade.keep_alive("production")
+        rr = etrade.scheduled_reauth("production")
     except Exception as e:
-        tokens = None
-        _log.error(f"  [Healer] E*TRADE keep_alive raised: {e}", exc_info=True)
+        rr = {"ok": False, "reason": "error"}
+        _log.error(f"  [Healer] E*TRADE scheduled_reauth raised: {e}", exc_info=True)
 
-    if tokens:
-        _log.info("  [Healer] E*TRADE production session is active (renew-only keep-alive).")
-    else:
-        err_msg = ("E*TRADE session is expired/missing. Automated jobs never open a browser "
-                   "(anti-ban). Run 'python scripts/diagnostics/test_etrade.py production' from a "
-                   "clean context to re-authenticate.")
-        _log.error(f"  🛑 [Healer] {err_msg}")
+    if rr.get("ok"):
+        _log.info(f"  [Healer] E*TRADE production session OK ({rr.get('reason')}).")
+    elif rr.get("reason") in ("sms_required", "unseeded", "failed"):
+        # Real human action needed — throttled email + desktop push (once per episode).
+        _log.error(f"  🛑 [Healer] E*TRADE needs manual re-auth (reason: {rr.get('reason')}).")
         try:
-            notify.send_email(
-                subject="🚨 AETHER: E*TRADE session needs MANUAL re-auth",
-                body=f"The AETHER Watchdog keep-alive found no valid E*TRADE session.\n\n{err_msg}",
-                is_html=False
-            )
+            notify.send_reauth_alert("production", rr["reason"])
         except Exception as ne:
-            _log.error(f"  ❌ Failed to send watchdog alert email: {ne}")
-        # Fail the scheduler run (rc != 0) for visibility. No browser was launched.
-        raise RuntimeError(err_msg)
+            _log.error(f"  ❌ Failed to send E*TRADE re-auth alert: {ne}")
+    else:
+        # 'breaker' (cooling) / 'renewed'-miss / transient — normal, not an alarm. Just log.
+        _log.info(f"  [Healer] E*TRADE re-auth deferred (reason: {rr.get('reason')}). No action.")
 
     # 0b. Chaikin Proactive Session Keeper — uses cross-process singleton
     try:
