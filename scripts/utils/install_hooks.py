@@ -57,7 +57,14 @@ def main():
                 
     if crlf_files:
         print(f"❌ [BLOCKED] Windows CRLF line endings detected in text files: {crlf_files}")
-        print("Please configure your editor to use Unix LF, or run 'git add --renormalize .' to normalize.")
+        print("Please configure your editor to use Unix LF, or run 'git add --renormalize .' to normalize.")   
+        sys.exit(1)
+
+    # 4. Run the pre-existing pre_commit_validator.py
+    print("🔄 Running AETHER Pre-Commit Quality Validator...")
+    code, stdout = run_cmd([sys.executable, "scripts/utils/pre_commit_validator.py"])
+    if code != 0:
+        print(stdout)
         sys.exit(1)
 
     print("✅ [AETHER HOOK PASS] All defensive checks passed!")
