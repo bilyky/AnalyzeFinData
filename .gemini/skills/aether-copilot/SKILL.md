@@ -55,6 +55,22 @@ When analyzing setups, exits, or allocations, refer to these specialized guideli
 *   **Bottom Snipers:** See [references/trader_vic.md](references/trader_vic.md) for Victor Sperandeo's "1-2-3 Reversal" and "2B Pattern" price action heuristics.
 
 
+## Qualitative Catalyst & Legacy-Position Option Value
+
+When conducting "Second-Opinion" exit or hold reviews on severely underwater held positions, the agent should weigh these factors. None of them override the ATR hard stop or the capital-preservation mandate; they only decide whether to recommend FLAG-FOR-REVIEW instead of an automatic momentum-based exit:
+
+1.  **Option value vs. marginal cash recovery:**
+    When a legacy asset is already down severely (e.g., `-70%` to `-75%`), momentum-only exit rules can be sub-optimal. If the remaining recoverable cash (e.g., `< 25%` of original capital) is small, the option value of holding the residual stake for a structural business turnaround may be worth more than the negligible cash recovered.
+2.  **Catalyst discovery:**
+    Do not recommend selling a deeply underwater asset without first checking for qualitative, fundamental corporate catalysts (recent mergers, major acquisitions, positive earnings surprises, or key product restructurings) that could serve as a fundamental turning point.
+3.  **Flag, don't override:**
+    A major corporate acquisition or strategic structural shift is a fundamental catalyst that pure charts/momentum models do not capture. When such a catalyst is active and the remaining cash value is marginal, recommend FLAG-FOR-REVIEW rather than an automatic momentum-based exit; surface it for a human decision and never silently override an ATR stop.
+4.  **Target-locked catalyst exit (limit-sells):**
+    Because micro-cap and small-cap turnover rallies are volatile, rapid, and brief (often 1-3 days before profit-taking pulls the price back), do not recommend holding indefinitely. Suggest a target-locked limit-sell at a logical milestone (e.g., `+100%` from the bottom) to capture the catalyst-driven spike.
+5.  **Last-stand support floor:**
+    Keep a hard "last-stand" floor (such as the psychological `$1.00` listing-support level) below which the position is exited to prevent a penny-stock delisting or bankruptcy wipeout.
+
+
 ## 🧠 Permanent Cognitive & Zero-Trust Mandates
 
 To completely eliminate cognitive drift, silent syntax failures, and "AI hallucinations" during multi-layered development sprints, you MUST strictly enforce these four cognitive guards:
