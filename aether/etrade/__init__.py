@@ -189,7 +189,7 @@ def _load_tokens(env):
     if tokens.get("issued_date_et") != _et_today():
         _log.info("Cached tokens are from a previous trading day — re-authenticating...")
         return None
-    age_min = (time.time() - tokens.get("saved_at", 0)) / 60
+    age_min = max(0.0, time.time() - tokens.get("saved_at", 0)) / 60
     _log.info(f"Cached tokens found ({age_min:.0f} min old, issued today ET).")
     return tokens
 
@@ -235,7 +235,7 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
     # E*TRADE rejects renewal if called too soon (< 55 min) and may revoke the session.
     # We set this to 55 minutes so that hourly (60-minute) Watchdog executions can successfully
     # renew the session without drifting into soft-expiry or triggering E*TRADE rate limits.
-    age_min = (time.time() - tokens.get("saved_at", 0)) / 60
+    age_min = max(0.0, time.time() - tokens.get("saved_at", 0)) / 60
     if age_min < 55:
         _log.debug(f"Token {age_min:.0f}m old — reusing without renewal.")
         return tokens

@@ -247,19 +247,42 @@ def purge_stray_tasks():
     """
     do_delete = os.environ.get("AETHER_PURGE_STRAY_TASKS", "").strip() == "1"
     try:
-        # Query all scheduled tasks in LIST format
-        result = subprocess.run(["schtasks", "/query", "/fo", "LIST"], capture_output=True, text=True, errors="replace")
+        # Query all scheduled tasks recursively in LIST format with verbose details
+        result = subprocess.run(["schtasks", "/query", "/fo", "LIST", "/v"], capture_output=True, text=True, errors="replace")
         if result.returncode == 0:
-            # Extract all task names matching the AETHER / AnalyzeFinData prefix
-            # TaskName contains the path (e.g. \AnalyzeFinData_Morning or \AnalyzeFinData_Morning_Test)
-            all_tasks = re.findall(r"TaskName:\s+\\*(AnalyzeFinData_\w+|Project_AETHER_\w+)", result.stdout, re.IGNORECASE)
+            tasks = []
+            current = {}
+            for line in result.stdout.splitlines():
+                if not line.strip():
+                    if current and "taskname" in current:
+                        tasks.append(current)
+                        current = {}
+                    continue
+                if ":" in line:
+                    parts = line.split(":", 1)
+                    k = parts[0].strip().lower()
+                    v = parts[1].strip()
+                    current[k] = v
+            if current and "taskname" in current:
+                tasks.append(current)
+
+            # Filter for AETHER / AnalyzeFinData namespace
+            aether_tasks = [t["taskname"] for t in tasks if "aether" in t["taskname"].lower() or "analyzefindata" in t["taskname"].lower()]
             
-            # Filter and deduplicate
+            # Whitelisted production tasks
+            whitelist = set(TASKS + ["Project_AETHER_Watchdog"])
+            # Add subdirectory tasks
+            sub_tasks = ["AETHER_DailyDriver", "AETHER_PostMarketReporter", "AETHER_PostMarketSync", "AETHER_PreFlight_Audit", "AETHER_RD_Scientist", "AETHER_StopMonitor", "AETHER_Watchdog"]
+            for st in sub_tasks:
+                whitelist.add(f"\\AETHER_Agents\\{st}")
+                whitelist.add(st) # also direct name
+
             stray_tasks = []
-            for t in set(all_tasks):
-                # If it carries our namespace but is not in our official white-list (TASKS or Project_AETHER_Watchdog)
-                if t not in TASKS and t != "Project_AETHER_Watchdog":
-                    stray_tasks.append(t)
+            for name in aether_tasks:
+                # Get the bare name (without folder)
+                bare_name = name.split("\\")[-1]
+                if name not in whitelist and bare_name not in whitelist:
+                    stray_tasks.append(name)
             
             if stray_tasks:
                 if not do_delete:
@@ -268,7 +291,7 @@ def purge_stray_tasks():
                 else:
                     _log.warning(f"[Stray-Task] Purging {len(stray_tasks)} stray task(s) (AETHER_PURGE_STRAY_TASKS=1): {stray_tasks}")
                     for t in stray_tasks:
-                        del_res = subprocess.run(["schtasks", "/delete", "/tn", f"\\{t}", "/f"], capture_output=True, text=True, errors="replace")
+                        del_res = subprocess.run(["schtasks", "/delete", "/tn", t, "/f"], capture_output=True, text=True, errors="replace")
                         if del_res.returncode == 0:
                             _log.info(f"[Stray-Task] Deleted stray task '{t}'.")
                         else:
@@ -380,9 +403,10 @@ def sync_data_folder() -> bool:
             
         dst_path.mkdir(parents=True, exist_ok=True)
         _log.console(f"🔄 Syncing Data folder to: {dst} ...")
-        # Use /E (recursive copy, NO DELETIONS) instead of /MIR to prevent data loss on backup drive
-        cmd = ["robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS"]
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+        # Use /E (recursive copy, NO DELETIONS) instead of /MIR to prevent data loss on backup drive.
+        # Exclude the massive 'Symbol' cache subdirectory (500k+ files) via /XD to avoid network hangs.
+        cmd = ["robocopy", str(src), dst, "/E", "/XD", "Symbol", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS"]
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=120)
         if result.returncode < 8:
             _log.info(f"✅ Data folder successfully synchronized to {dst}.")
             return True
