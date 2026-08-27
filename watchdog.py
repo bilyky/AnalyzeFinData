@@ -268,11 +268,25 @@ def purge_stray_tasks():
 
             # Filter for AETHER / AnalyzeFinData namespace
             aether_tasks = [t["taskname"] for t in tasks if "aether" in t["taskname"].lower() or "analyzefindata" in t["taskname"].lower()]
-            
+
             # Whitelisted production tasks
             whitelist = set(TASKS + ["Project_AETHER_Watchdog"])
-            # Add subdirectory tasks
+
+            # Attempt to parse sub_tasks dynamically from scripts/utils/register_agent_tasks.ps1 (R&D #4)
             sub_tasks = ["AETHER_DailyDriver", "AETHER_PostMarketReporter", "AETHER_PostMarketSync", "AETHER_PreFlight_Audit", "AETHER_RD_Scientist", "AETHER_StopMonitor", "AETHER_Watchdog"]
+            ps1_path = BASE_DIR / "scripts" / "utils" / "register_agent_tasks.ps1"
+            if ps1_path.exists():
+                try:
+                    with open(ps1_path, "r", encoding="utf-8", errors="ignore") as f:
+                        ps1_content = f.read()
+                    import re
+                    discovered = re.findall(r'Name\s*=\s*\"([^\"]+)\"', ps1_content)
+                    if discovered:
+                        # Unify discovered subtasks with our standard fallback list
+                        sub_tasks = list(set(sub_tasks + discovered))
+                except Exception as pe:
+                    _log.warning(f"Failed to dynamically parse register_agent_tasks.ps1 (using fallback): {pe}")
+
             for st in sub_tasks:
                 whitelist.add(f"\\AETHER_Agents\\{st}")
                 whitelist.add(st) # also direct name
@@ -413,6 +427,9 @@ def sync_data_folder() -> bool:
         else:
             _log.error(f"❌ Robocopy sync failed (rc={result.returncode}). Stderr: {result.stderr.strip()}")
             return False
+    except subprocess.TimeoutExpired:
+        _log.warning("⚠️ Data folder sync timed out (120s limit reached). Skipping sync to prevent hanging.")
+        return True # Treat timeout as a safe skip, not a fatal crash of the watchdog
     except Exception as e:
         _log.error(f"❌ Failed to sync Data folder to Z: drive: {e}", exc_info=True)
         return False
