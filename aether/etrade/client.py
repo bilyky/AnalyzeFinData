@@ -95,6 +95,13 @@ class _AuthInterface:
         browser), and only if that fails does it open a browser AT MOST once — and
         only when the profile is trusted and the breaker is clear. Auth-role only —
         the scaled data plane must never trigger a re-auth on the shared credential.
+
+        Unlike ``get_tokens``, this door is deliberately NOT governed by the client's
+        ``allow_browser`` flag — its own trust-marker + circuit-breaker gate decides
+        whether a browser opens, so one can open here even on an ``allow_browser=False``
+        client. That is intentional: this is the sanctioned scheduled door, and gating
+        it on the flag would defeat its purpose.
+
         Returns ``scheduled_reauth``'s JSON-serializable result dict
         ({ok, env, reason, browser_opened, ...})."""
         self._require_auth_role("scheduled_reauth")

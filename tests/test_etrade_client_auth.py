@@ -29,6 +29,9 @@ class TestScheduledReauthOnClient(unittest.TestCase):
 
     def test_blocked_on_data_role_and_never_calls_pkg(self):
         # Ban-safety: the scaled data plane must never trigger a re-auth on the shared credential.
+        # Focused case for this PR's headline method; TestControlPlaneClosedOnDataRole below is the
+        # load-bearing sweep that locks this same guarantee across ALL control methods (intentional
+        # overlap — the explicit case documents scheduled_reauth, the sweep prevents regressions).
         client = ETradeClient("production", role="data")
         with mock.patch.object(etrade, "scheduled_reauth") as m:
             with self.assertRaises(RoleNotPermitted):
