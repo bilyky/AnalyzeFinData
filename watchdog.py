@@ -9,6 +9,7 @@ import re
 import ctypes
 import json
 import notify
+import threading
 from aether import etrade
 import powergauge
 from pathlib import Path
@@ -589,7 +590,6 @@ def maintain_chaikin_session():
 def dispatch_async_backup_sync():
     """Spawn the data folder backup sync in a separate thread to prevent network latency from blocking."""
     _log.info("🚀 Dispatched backup data sync to background thread...")
-    import threading
     t = threading.Thread(target=sync_data_folder, daemon=True)
     t.start()
 
