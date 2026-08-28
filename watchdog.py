@@ -733,8 +733,11 @@ def run_watchdog():
         </html>
         """
         
-        notify.send_email("🛡️ Project AETHER: Autonomous Health & AI Recovery Report", html_report, is_html=True)
-        _log.info("Consolidated Recovery Report emailed successfully!")
+        try:
+            notify.send_email("🛡️ Project AETHER: Autonomous Health & AI Recovery Report", html_report, is_html=True)
+            _log.info("Consolidated Recovery Report emailed successfully!")
+        except Exception as e:
+            _log.error(f"  [Healer] Failed to dispatch consolidated HTML recovery report: {e}")
     else:
         _log.info("✅ System Health Check: All systems nominal.")
 
