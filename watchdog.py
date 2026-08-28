@@ -461,31 +461,33 @@ def kill_ghost_processes():
     except:
         pass
 
-def is_market_hours() -> bool:
-    """Return True if current time is within active US equity market hours (6:30 AM - 1:15 PM PST, weekdays)."""
+def is_market_hours_or_morning_prep() -> bool:
+    """Return True if current time is before or during active US market hours (before 1:15 PM PST, weekdays).
+    This blocks any network syncs in the morning or during active trading to prevent CPU/network waste.
+    """
     try:
         tz_la = pytz.timezone("America/Los_Angeles")
         now_la = datetime.datetime.now(tz_la)
     except Exception:
         now_la = datetime.datetime.now()
-        
+
     # Check weekday (Saturday=5, Sunday=6)
     if now_la.weekday() in (5, 6):
         return False
-        
-    # Check time: 6:30 AM - 1:15 PM Pacific
-    # 6:30 AM = 390 min; 1:15 PM = 795 min
+
+    # Block backups if current time is before 1:15 PM Pacific (13:15, which is 795 minutes)
     current_minutes = now_la.hour * 60 + now_la.minute
-    if 390 <= current_minutes <= 795:
+    if current_minutes <= 795: # Before 1:15 PM Pacific
         return True
     return False
+
 
 def sync_data_folder() -> bool:
     """Sync the local Data folder to the backup Z: drive if available.
     Returns True on success (or skipped if drive is offline), False on error.
     """
-    if is_market_hours():
-        _log.info("⏸️ Active NYSE market hours in progress (6:30 AM - 1:15 PM PST). Skipping Data sync to prevent resource/file locks.")
+    if is_market_hours_or_morning_prep():
+        _log.info("⏸️ Active market preparation or trading hours in progress (before 1:15 PM PST). Skipping Data sync to prevent CPU/network waste.")
         return True # Safe bypass to prevent locking active databases/workbooks during trading
         
     src = BASE_DIR / "Data"
