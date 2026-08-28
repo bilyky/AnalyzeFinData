@@ -160,38 +160,19 @@ def _proxies():
 
 
 def _save_tokens(tokens, env):
-    tokens["env"] = env
-    tokens["saved_at"]      = time.time()
-    tokens["issued_date_et"] = _et_today()
-    os.makedirs(os.path.dirname(_TOKEN_PATH), exist_ok=True)
-    with open(_TOKEN_PATH, "w") as f:
-        json.dump(tokens, f, indent=2)
-    # Log the ABSOLUTE destination: the token path is checkout-relative, so a re-auth run
-    # from the wrong worktree silently saves where prod never reads. Making the target
-    # visible turns that class of mistake into something you can see in one glance.
-    _log.info(f"E*TRADE {env} token saved ({tokens['issued_date_et']}) -> {_TOKEN_PATH}")
-    # A fresh token means the session is healthy again — end any active re-auth alert episode
-    # so the next time a wall appears the throttled email/push fires anew (best-effort).
-    try:
-        notify.clear_reauth_alert(env)
-    except Exception as exc:
-        _log.debug("etrade: clear_reauth_alert best-effort failed: %s", exc)
+    """Shim → ``store.FileTokenStore().save``; the I/O body lives in the store adapter.
+
+    (``FileTokenStore`` is imported at module scope from the bottom store import.)
+    """
+    FileTokenStore().save(tokens, env)
 
 
 def _load_tokens(env):
-    """Return cached tokens if issued today (ET), otherwise None."""
-    if not os.path.exists(_TOKEN_PATH):
-        return None
-    with open(_TOKEN_PATH) as f:
-        tokens = json.load(f)
-    if tokens.get("env") != env:
-        return None
-    if tokens.get("issued_date_et") != _et_today():
-        _log.info("Cached tokens are from a previous trading day — re-authenticating...")
-        return None
-    age_min = max(0.0, time.time() - tokens.get("saved_at", 0)) / 60
-    _log.info(f"Cached tokens found ({age_min:.0f} min old, issued today ET).")
-    return tokens
+    """Return cached tokens if issued today (ET), otherwise None.
+
+    Shim → ``store.FileTokenStore().load``; the I/O body lives in the store adapter.
+    """
+    return FileTokenStore().load(env)
 
 
 def _probe_token_auth(tokens, env="production"):
@@ -339,27 +320,14 @@ def _load_reauth_state(env: str = "production") -> dict:
     """Circuit-breaker state: {consecutive_failures, last_attempt, cooldown_until}.
 
     A missing/corrupt file reads as a fully-open gate (no active cooldown).
+    Shim → ``store.FileReauthStateStore().load``; the I/O body lives in the store adapter.
     """
-    try:
-        with open(_reauth_state_path(env)) as f:
-            s = json.load(f)
-        return {
-            "consecutive_failures": int(s.get("consecutive_failures", 0)),
-            "last_attempt":         float(s.get("last_attempt", 0.0)),
-            "cooldown_until":       float(s.get("cooldown_until", 0.0)),
-        }
-    except (OSError, ValueError, TypeError):
-        return {"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}
+    return FileReauthStateStore().load(env)
 
 
 def _save_reauth_state(state: dict, env: str = "production") -> None:
-    path = _reauth_state_path(env)
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(state, f, indent=2)
-    except OSError:
-        pass
+    """Shim → ``store.FileReauthStateStore().save``; the I/O body lives in the store adapter."""
+    FileReauthStateStore().save(state, env)
 
 
 def _cooldown_remaining_from_state(state: dict) -> float:
@@ -376,8 +344,9 @@ def _reauth_cooldown_remaining(env: str = "production") -> float:
 def reset_reauth_circuit_breaker(env: str = "production") -> None:
     """Clear the breaker. Called automatically on any SUCCESSFUL login (including the
     human `scripts/diagnostics/test_etrade.py` path), so a good re-auth restores normal
-    automated operation. Safe to call by hand to force a retry."""
-    _save_reauth_state({"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}, env)
+    automated operation. Safe to call by hand to force a retry.
+    Shim → ``store.FileReauthStateStore().reset``; the I/O body lives in the store adapter."""
+    FileReauthStateStore().reset(env)
 
 
 def _record_reauth_attempt(env: str = "production") -> None:
@@ -897,15 +866,11 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
 
 
 def _load_tokens_any_date(env) -> dict | None:
-    """Load cached tokens regardless of issue date — for renewal attempts."""
-    if not os.path.exists(_TOKEN_PATH):
-        return None
-    try:
-        with open(_TOKEN_PATH) as f:
-            tokens = json.load(f)
-        return tokens if tokens.get("env") == env else None
-    except Exception:
-        return None
+    """Load cached tokens regardless of issue date — for renewal attempts.
+
+    Shim → ``store.FileTokenStore().load_any_date``; the I/O body lives in the store adapter.
+    """
+    return FileTokenStore().load_any_date(env)
 
 
 def _get_failure_state():
@@ -1543,6 +1508,8 @@ from aether.etrade.client import (  # noqa: E402
 from aether.etrade.store import (  # noqa: E402
     BrowserStateStore,
     EtradeStore,
+    FileReauthStateStore,
+    FileTokenStore,
     ReauthStateStore,
     TokenStore,
     make_etrade_store,
