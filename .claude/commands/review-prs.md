@@ -201,8 +201,9 @@ path — both work when schannel `curl` can't. If `gh` still dials direct and ti
 
 ## 8. gh auth — supply it cleanly, never scrape it
 
-`gh` may be installed but **not on PATH** (Windows: `"C:\Program Files\GitHub CLI\gh.exe"`) and/or
-**not authenticated**. Authenticate via one of:
+`gh` may be installed but **not on PATH**, and/or **not authenticated**. If `gh` isn't found,
+resolve it portably (`command -v gh`, or `Get-Command gh` on PowerShell) and call it by that path —
+don't hardcode an OS path. Authenticate via one of:
 - `gh auth login` (interactive — ask the user to run `! gh auth login`), or
 - `export GH_TOKEN=<PAT>` the user supplies.
 

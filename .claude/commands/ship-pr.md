@@ -103,8 +103,8 @@ jobs:
   interactive store prompt: `winget install --id GitHub.cli -e --source winget
   --accept-source-agreements --accept-package-agreements`.
 - **PATH:** a freshly-installed `gh` may not be on the running tool-host's PATH until it
-  restarts — invoke by full path if `gh: command not found` (e.g. Windows:
-  `"C:\Program Files\GitHub CLI\gh.exe"`).
+  restarts — if `gh: command not found`, resolve its location portably (`command -v gh`, or
+  `Get-Command gh` on PowerShell) and invoke it by that full path. Don't hardcode an OS path.
 - **Auth is interactive:** `gh auth login` needs a browser/prompt a non-interactive shell
   can't drive. Ask the user to run it (`! gh auth login`), or use a PAT they supply via
   `gh auth login --with-token`. Don't hunt for a hidden token.
