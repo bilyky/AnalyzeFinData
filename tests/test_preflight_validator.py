@@ -118,5 +118,106 @@ class TestSendPreflightEmail(unittest.TestCase):
         self.assertIn("[PASS]", body)
 
 
+class TestNewPreflightFeatures(unittest.TestCase):
+    def test_pipeline_lock_self_waiver(self):
+        # Test 1: When lock has OUR own PID, it is waived.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "Data").mkdir()
+            lock_file = base / "Data" / "pipeline_run.lock"
+            lock_file.write_text(str(os.getpid()))
+
+            with mock.patch("os.getpid", return_value=os.getpid()):
+                ok, locks = pf.check_active_locks(base_dir=base)
+                self.assertTrue(ok)
+                self.assertEqual(locks, [])
+
+    def test_pipeline_lock_other_pid_detected(self):
+        # Test 2: When lock has a DIFFERENT PID, it is flagged.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "Data").mkdir()
+            lock_file = base / "Data" / "pipeline_run.lock"
+            lock_file.write_text("999999") # totally different PID
+
+            ok, locks = pf.check_active_locks(base_dir=base)
+            self.assertFalse(ok)
+            self.assertIn("Pipeline Active Lock (pipeline_run.lock)", locks)
+
+    def test_pipeline_lock_corrupt_file_handled(self):
+        # Test 3: When lock file has non-integer or empty contents, it falls back to 0.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "Data").mkdir()
+            lock_file = base / "Data" / "pipeline_run.lock"
+            lock_file.write_text("not_a_pid")
+
+            ok, locks = pf.check_active_locks(base_dir=base)
+            self.assertFalse(ok)
+            self.assertIn("Pipeline Active Lock (pipeline_run.lock)", locks)
+
+    @mock.patch("subprocess.run")
+    def test_check_pipeline_smoke_test_skipped_without_flag(self, mock_run):
+        # Test 4: By default, if --smoke is not in sys.argv, smoke test is skipped.
+        with mock.patch("sys.argv", ["preflight_validator.py"]):
+            ok, issues = pf.check_pipeline_smoke_test()
+            self.assertTrue(ok)
+            self.assertEqual(issues, [])
+            mock_run.assert_not_called()
+
+    @mock.patch("subprocess.run")
+    def test_check_pipeline_smoke_test_run_success(self, mock_run):
+        # Test 5: If --smoke in sys.argv, it runs and passes on 0 exit code.
+        mock_res = mock.Mock()
+        mock_res.returncode = 0
+        mock_run.return_value = mock_res
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "autonomous_pipeline.py").write_text("print('smoke')")
+
+            with mock.patch("sys.argv", ["preflight_validator.py", "--smoke"]):
+                ok, issues = pf.check_pipeline_smoke_test(base_dir=base)
+                self.assertTrue(ok)
+                self.assertEqual(issues, [])
+                mock_run.assert_called_once()
+
+    @mock.patch("subprocess.run")
+    def test_check_pipeline_smoke_test_run_failure(self, mock_run):
+        # Test 6: If --smoke runs and fails, it returns True (advisory) but lists the issue.
+        mock_res = mock.Mock()
+        mock_res.returncode = 1
+        mock_res.stderr = "ImportError"
+        mock_run.return_value = mock_res
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "autonomous_pipeline.py").write_text("raise ValueError")
+
+            with mock.patch("sys.argv", ["preflight_validator.py", "--smoke"]):
+                ok, issues = pf.check_pipeline_smoke_test(base_dir=base)
+                # Advisory: should still return True!
+                self.assertTrue(ok)
+                self.assertTrue(any("Pipeline smoke test failed with Exit Code 1" in x for x in issues))
+
+    @mock.patch("subprocess.run")
+    def test_check_scheduled_tasks_integrity_with_no_duplicates(self, mock_run):
+        # Test 7: Scheduled tasks query with no duplicates passes.
+        mock_res = mock.Mock()
+        mock_res.returncode = 0
+        # Simulated list output with single tasks
+        mock_res.stdout = (
+            "TaskName: \\AETHER_Agents\\AETHER_Watchdog\n"
+            "Task To Run: python watchdog.py\n\n"
+            "TaskName: \\AETHER_Agents\\AETHER_DailyDriver\n"
+            "Task To Run: python daily_task.py\n\n"
+        )
+        mock_run.return_value = mock_res
+
+        ok, issues = pf.check_scheduled_tasks_integrity()
+        self.assertTrue(ok)
+        self.assertEqual(issues, [])
+
+
 if __name__ == "__main__":
     unittest.main()
