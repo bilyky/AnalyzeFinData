@@ -30,14 +30,12 @@ judge the code against that intent — not against itself.
    divergent copy of a defined feature is a multiple-source-of-truth bug even when it compiles and
    its own tests pass.
 
-> **Worked example (PR #27, verified):** R&D #13 "High-Score PGR Bypass" is DEFINED as the
-> two-factor gate `risk_utils.is_elite_breakout_candidate(total_score, short10)` — BOTH
-> `total_score >= CFG.system_bypass_score_floor` (8.0) **and** `short10 >= CFG.system_bypass_s10_floor`
-> (2.0), single-sourced from CFG (see `test_high_score_pgr_bypass`, and `FEATURE_CHECKS` anchors R&D
-> #13 to that exact helper). PR #27's new PGR waiver in `check_failure_rules` instead bypassed on a
-> **hardcoded `score >= 10.0` alone** — no s10 factor, not CFG-sourced, not the canonical helper. A
-> code-only review (checking the waiver's own logic + its own test) passed it; a **definition-first**
-> review catches the divergence immediately. Start from the definition.
+> **Worked example (PR #27, verified):** R&D #13 "High-Score PGR Bypass" is DEFINED as the two-factor
+> gate `risk_utils.is_elite_breakout_candidate(total_score, short10)` (both a score floor AND an s10
+> floor, CFG-sourced; see `test_high_score_pgr_bypass` + the `FEATURE_CHECKS` anchor). PR #27
+> re-implemented it inline as a **hardcoded `score >= 10.0` alone** — no s10, not CFG-sourced, not the
+> canonical helper. A code-only review passed it; a definition-first review catches the divergence.
+> Start from the definition.
 
 Only once the goal is understood do you apply the §3 rubric.
 
@@ -70,6 +68,21 @@ the whole-file context would disprove.
 payload. Check with `git merge-base --is-ancestor <A-sha> <B-sha>`. A stacked PR **inherits every
 blocker of the PR beneath it** — call that out as its own finding and review only its incremental
 commits on their merits.
+
+**Pull the merge gate — and know what "green" means.** The PR's own CI is primary evidence; a defect
+that a code read cannot see (a lint/validator rule the diff trips) is sitting in the failing log.
+Read it, don't assume:
+```bash
+gh pr checks <n> --repo <owner>/<repo>                       # pass/fail per required check
+gh api repos/<owner>/<repo>/commits/<head-sha>/check-runs \
+  --jq '.check_runs[] | "\(.name): \(.status)/\(.conclusion)"'
+gh run view <run-id> --repo <owner>/<repo> --log-failed      # the actual failing lines
+```
+If a required check is red, **the exact failure IS a finding** — quote the offending line. Then read
+*what the CI config runs*: a green gate proves only what it exercises. If it byte-compiles + lints but
+skips the test suite, "CI green" is not "code tested" — say so precisely rather than implying coverage
+the gate never ran. When you can, reproduce the gate locally (run the same validator/linter against
+the change set the way CI does) so your verdict matches what the merge button will do.
 
 ## 3. The fixed rubric — review from ALL these perspectives
 
@@ -108,6 +121,16 @@ For each PR, look for and address every one of these (this is the standing revie
   emoji in production logs, bot co-author trailers, docstrings that lie about the code.
 - **Packaging honesty** — does the title/commit message match the payload? A "move one import"
   commit that rewrites 15 files is unreviewable and unrevertable; call for a split.
+  - **Churn with no semantics** is its own smell: a large `+N/−N` whose *normalized* diff is tiny
+    means a whole-file **line-ending / encoding / whitespace reflow** (LF↔CRLF, BOM, tab↔space) is
+    hiding the real change and will collide with the next PR that touches the file. Detect it — diff
+    `git show <head>:<path>` against `git show origin/main:<path>` and compare CR/byte counts (a
+    symmetric `+N/−N` with CR-count flipping 0↔N is the fingerprint) — and call for a re-commit as a
+    clean minimal diff (plus a `.gitattributes eol` rule if the repo lacks one).
+- **Re-review discipline (fixes regress).** On a follow-up push, re-verify each prior finding is
+  *actually* resolved AND review the new delta on its own merits — a fix routinely introduces a fresh
+  blocker (e.g. a cleanup that adds a banned inline import, or re-flows line endings). "Addressed your
+  comments" is a claim to verify, not a state to assume.
 - **Confidence** — are you sure? List assumptions and anything **not** verified.
 - **Is this PR/change ready for PROD?** — the capstone question every review must answer explicitly,
   not leave implied by the severity list. Separate two axes and state both:
@@ -122,7 +145,9 @@ For each PR, look for and address every one of these (this is the standing revie
     says, not that what it says is the right risk. State the verdict as: **prod-ready**,
     **prod-ready pending author sign-off on <the risk decision>**, or **not prod-ready: <blocker>**.
 
-House format (see the existing `reviews/PR-*.md` as templates):
+## 4. House format
+
+Use the existing `reviews/PR-*.md` as templates:
 
 1. **Verdict** line — `Request changes` / `Approve` / `Comment` + one-sentence gist, AND an
    explicit **prod-readiness** call phrased per the §3 "ready for PROD?" bullet (code-quality gate
@@ -143,8 +168,10 @@ Use `gh pr comment` — it works on **any** PR including self-authored, unlike
 ```bash
 gh pr comment <n> --repo <owner>/<repo> --body-file reviews/PR-<n>-<slug>.md
 ```
-`reviews/post_reviews.sh` wraps this for the whole set with a public-repo PII guard — run it once
-`gh` is authenticated.
+Post **one PR at a time by hand** — it's the safest default, since it forces the §6 PII check on each
+body before it goes public. Only batch the loop behind a script if that script runs the §6 guard per
+file (see below); a blind `for f in reviews/*.md` that mis-maps a filename to the wrong PR number, or
+skips the PII scrub, is worse than posting by hand.
 
 ## 6. PII guard before posting to a PUBLIC repo
 
@@ -154,26 +181,23 @@ Posting them verbatim to a public repo re-leaks exactly the PII the review calls
 gh repo view <owner>/<repo> --json visibility --jq '.visibility'
 ```
 If `PUBLIC`, scrub those strings (mask to `10.0.0.x` / `<user>` / `<account-id>`) first, or keep the
-findings but replace the literal evidence with a masked form. `post_reviews.sh` aborts on a PUBLIC
-repo unless `FORCE=1`.
+findings but replace the literal evidence with a masked form. If you wrap posting in a script, it MUST
+run this visibility check and abort on `PUBLIC` unless an explicit override is set — never post a
+batch to a public repo without the per-file scrub.
 
-## 7. Network reality — the schannel revocation trap (verified 2026-08-17)
+## 7. Network reality — don't trust a naive `curl` "unreachable"
 
-Behind the Intel corporate proxy, **the GitHub API is reachable — a naive `curl` test lies.**
+Behind a revocation-blocking corporate proxy, **the GitHub API is reachable even when `curl` says it
+isn't.** Windows `curl` uses schannel, which does an online cert-revocation check; when the proxy
+can't reach the revocation responder, `curl https://api.github.com/...` fails with
+`CRYPT_E_REVOCATION_OFFLINE` — a TLS-handshake failure, *not* a block. Prove reachability by skipping
+just that check: `curl -sS -m 15 --ssl-no-revoke -x <proxy> https://api.github.com/zen` returns a
+quote → the host is up.
 
-- Windows `curl` uses **schannel**, which does an online cert-revocation check. Behind the proxy the
-  revocation responder is unreachable, so `curl https://api.github.com/...` fails with
-  `CRYPT_E_REVOCATION_OFFLINE` — a **TLS-handshake** failure, not a routing/block. This earlier led
-  to a wrong "api.github.com is unreachable" conclusion. It is not.
-- Isolate it by disabling just the revocation check:
-  ```bash
-  curl -sS -m 15 --ssl-no-revoke -x http://proxy-us.intel.com:912/ https://api.github.com/zen
-  ```
-  This returns a zen quote → the host is reachable; only schannel's revocation step was failing.
-- **`gh` is a Go binary using Go's crypto/tls, which does not do online revocation by default** — so
-  `gh` reaches the API through the proxy even though schannel `curl` can't. `gh pr comment` works
-  from this network **once `gh` is authenticated.**
-- `git ls-remote origin` also works (git's own proxy path) — use it to verify PR/branch state.
+Practical consequence: **use `gh` and `git`, not `curl`, for GitHub.** `gh` (Go `crypto/tls`, no
+online revocation) reaches the API through the proxy, and `git ls-remote origin` uses git's own proxy
+path — both work when schannel `curl` can't. If `gh` still dials direct and times out, set
+`HTTPS_PROXY`/`HTTP_PROXY` to the same proxy `git` uses, then retry.
 
 ## 8. gh auth — supply it cleanly, never scrape it
 
@@ -183,20 +207,20 @@ Behind the Intel corporate proxy, **the GitHub API is reachable — a naive `cur
 - `export GH_TOKEN=<PAT>` the user supplies.
 
 > ⚠️ **Security boundary (hard rule):** NEVER scrape/extract the push token embedded in the `origin`
-> remote URL (`git remote -v` may expose a `ghp_…` PAT) to authenticate the API. The Claude Code
-> security classifier blocks this, correctly. If you notice such a token, advise **rotating** it and
-> moving to a credential helper — do not print or reuse its value.
+> remote URL (`git remote -v` may expose a `ghp_…` PAT) to authenticate the API — your agent
+> runtime's security policy should block this, and correctly so. If you notice such a token, advise
+> **rotating** it and moving to a credential helper — do not print or reuse its value.
 
 ## 9. Verification checklist
 
-- **Goal read FIRST (§0)** — each change judged against the authoritative R&D definition, not its
-  own internal consistency; divergence from the canonical gate/helper is a finding.
-- Every finding cites branch-verified `file:line` + quoted code; assumptions labeled in §5 notes.
-- **Tests audited (§3)** — no fully-mocked/valueless tests; same-contract cases flagged for
-  combining; branch suite **actually run** with the real `Ran N … OK` count reported, hygiene noted.
-- **Prod-readiness answered explicitly (§3 capstone)** — both gates stated; a risk-changing PR is
-  never waved through on green tests alone.
-- No unmasked PII in any file that will hit a public channel.
-- Reviews posted as **comments** (confirmed: `gh pr comment`, not `--request-changes`).
-- Reachability proven with the `--ssl-no-revoke` isolation test before claiming the API is up/down.
-- Push token never scraped; if seen, rotation advised.
+Confirm each before finishing — the full rule lives in the cited section:
+- **§0** goal read first; each change judged against the R&D definition, and divergence from the
+  canonical gate/helper is itself a finding.
+- **§2 / §4** every finding cites branch-verified `file:line` + quoted code; assumptions labeled.
+- **§3** tests audited — none fully-mocked/valueless, same-contract cases flagged, branch suite
+  **actually run** with the real `Ran N … OK` reported.
+- **§3 capstone** prod-readiness stated (both gates); no risk-changing PR waved through on green tests.
+- **§6** no unmasked PII in anything hitting a public channel.
+- **§5** posted as **comments** (`gh pr comment`, not `--request-changes`).
+- **§7 / §8** reachability proven with `--ssl-no-revoke` before claiming the API up/down; push token
+  never scraped (rotation advised if seen).

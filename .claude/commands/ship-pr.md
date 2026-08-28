@@ -93,8 +93,9 @@ jobs:
   `https://github.com/<owner>/<repo>/pull/new/<branch>` and paste the title/body.
 
 > ⚠️ **Security boundary:** do NOT scrape a push token out of the `origin` remote URL (or
-> any credential store) to hit the GitHub API — the Claude Code security classifier blocks
-> this, correctly. Use the Actions `GITHUB_TOKEN` (Auto-PR) or interactive `gh auth login`.
+> any credential store) to hit the GitHub API — your agent runtime's security policy should
+> block this, and correctly so. Use the Actions `GITHUB_TOKEN` (Auto-PR) or interactive
+> `gh auth login`.
 
 ## 4. gh CLI setup notes
 
