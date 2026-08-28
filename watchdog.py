@@ -279,7 +279,6 @@ def purge_stray_tasks():
                 try:
                     with open(ps1_path, "r", encoding="utf-8", errors="ignore") as f:
                         ps1_content = f.read()
-                    import re
                     discovered = re.findall(r'Name\s*=\s*\"([^\"]+)\"', ps1_content)
                     if discovered:
                         # Unify discovered subtasks with our standard fallback list
