@@ -53,6 +53,8 @@ OUT_FILE = BASE_DIR / "Data" / "intc_options_replay_study.json"
 VOL_WINDOW = op.DEFAULT_VOL_WINDOW   # trailing days for realized vol (entry-anchored)
 DTE_TARGET = 35                      # aim for the ~35-DTE expiry the adviser prefers
 DTE_MIN = 30                         # ... but accept the first bar >= this many calendar days out
+DTE_MAX = 50                         # ... and NO farther: a data gap must not hand back a far bar
+                                     #     we'd then mis-price/label as a ~35-DTE structure
 WARMUP = VOL_WINDOW + 5              # bars needed before the first entry (vol lookback)
 SAMPLE_EVERY = 5                     # sample an entry every N trading days (weekly; limits overlap)
 LOT_SHARES = 100                     # illustrative covered lot (1 contract)
@@ -72,18 +74,21 @@ _PROTECTION = {"collar": "hard floor", "protective_put": "hard floor",
 
 
 def _load(path):
-    """Return (dates, highs, lows, closes) as parallel lists, split-safe for INTC.
+    """Return (dates, highs, lows, closes) as parallel lists, SPLIT-ADJUSTED.
 
     Skips the provisional vol=0 synthetic append (flat OHLC) so it never becomes an entry or a
-    settlement price. Raw (unadjusted) bars — valid for INTC (no split in the modern range); for a
-    split-prone symbol switch to risk_utils._load_ohlcv_series (which back-adjusts).
+    settlement price, then back-adjusts OHLC onto one continuous (current) price scale via
+    risk_utils._split_adjust_ohlcv. Without this, a raw split bar (e.g. INTC's 2000-07-31 2:1:
+    close 129.10 -> 66.75, ~-48%) is read as a ~-48% overnight crash — poisoning realized vol for
+    a month and settling any straddling entry across a phantom halving. `opens` are loaded solely
+    to CONFIRM a split (the adjuster's crash guard); they are not otherwise used.
     """
     try:
         with open(path, encoding="utf-8") as f:
             ts = json.load(f).get("Time Series (Daily)", {})
     except Exception:
         return None
-    dates, highs, lows, closes = [], [], [], []
+    dates, opens, highs, lows, closes = [], [], [], [], []
     for d in sorted(ts.keys()):
         b = ts[d]
         if b.get("provisional"):
@@ -93,10 +98,14 @@ def _load(path):
         except (KeyError, ValueError):
             continue
         dates.append(d)
+        opens.append(float(b.get("1. open", 0) or 0))   # 0 = "can't confirm a split here" (no-op)
         highs.append(hi)
         lows.append(lo)
         closes.append(cl)
-    return (dates, highs, lows, closes) if len(closes) > WARMUP + 5 else None
+    if len(closes) <= WARMUP + 5:
+        return None
+    highs, lows, closes = risk_utils._split_adjust_ohlcv(opens, highs, lows, closes)
+    return (dates, highs, lows, closes)
 
 
 def _levels_at(i, highs, lows, closes):
@@ -109,12 +118,19 @@ def _levels_at(i, highs, lows, closes):
 
 
 def _expiry_index(i, dates):
-    """First bar index j > i whose date is >= i's date + DTE_MIN calendar days, else None."""
+    """First bar index j > i whose date is in [d0+DTE_MIN, d0+DTE_MAX] calendar days, else None.
+
+    The upper bound matters: if the FIRST bar at/after the floor is beyond DTE_MAX (a trading gap —
+    holidays, or the cache's sparse early era), returning it would price a far expiry while the
+    study still calls it the adviser's ~35-DTE structure. Skip that entry instead.
+    """
     d0 = datetime.date.fromisoformat(dates[i])
     floor = d0 + datetime.timedelta(days=DTE_MIN)
+    ceil = d0 + datetime.timedelta(days=DTE_MAX)
     for j in range(i + 1, len(dates)):
-        if datetime.date.fromisoformat(dates[j]) >= floor:
-            return j
+        dj = datetime.date.fromisoformat(dates[j])
+        if dj >= floor:
+            return j if dj <= ceil else None
     return None
 
 
