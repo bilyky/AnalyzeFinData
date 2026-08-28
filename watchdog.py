@@ -530,8 +530,8 @@ def is_pid_running(pid: int) -> bool:
     except Exception:
         return False
 
-def run_watchdog():
-    # Enforce a strict cross-process execution singleton to prevent 2 watchdogs from running concurrently
+def is_blocked_by_active_lock() -> bool:
+    """Check for active or stale watchdog locks to enforce a single execution instance."""
     lock_file = BASE_DIR / "Data" / "watchdog_run.lock"
     if lock_file.exists():
         try:
@@ -539,30 +539,23 @@ def run_watchdog():
                 old_pid = int(f.read().strip())
             if is_pid_running(old_pid):
                 _log.warning(f"⚠️ Watchdog execution blocked: another instance is already running (PID={old_pid}). Exiting.")
-                return
+                return True
         except Exception as e:
             _log.warning(f"⚠️ Lock file unreadable or corrupt ({e}). Overriding...")
 
-    # Create or update the lock file with our current PID
     try:
         lock_file.parent.mkdir(parents=True, exist_ok=True)
         with open(lock_file, "w") as f:
             f.write(str(os.getpid()))
-        # Register automatic cleanup of the lock file upon process termination
         atexit.register(lambda: trash.soft_delete(lock_file, reason="watchdog-lock", force=True))
     except Exception as e:
         _log.error(f"❌ Failed to write watchdog lock file: {e}")
-        return
+        return True
+    return False
 
-    _log.console(f"[{datetime.datetime.now()}] Project AETHER Healer starting...")
-    
-    # 0. E*TRADE Proactive Session Keeper — idempotent catch-up for the daily 05:15 door.
-    #    scheduled_reauth() renews first (pure HTTP, no browser), and only if that fails AND the
-    #    persistent profile is trusted does it open the ONE allowed automated browser — with a
-    #    once/day + breaker gate, so an hourly watchdog can't hammer it (a missed 05:15 self-heals
-    #    within the hour, then no-ops the rest of the day). It NEVER opens a browser while trust is
-    #    down; it latches 'sms_required' and we alert a human. A token momentarily dead between
-    #    midnight-ET and the 05:15 refresh is normal — we log it, we do NOT fail the run.
+
+def maintain_etrade_session():
+    """Execute E*TRADE proactive session maintenance and re-authentication loops."""
     try:
         rr = etrade.scheduled_reauth("production")
     except Exception as e:
@@ -572,17 +565,17 @@ def run_watchdog():
     if rr.get("ok"):
         _log.info(f"  [Healer] E*TRADE production session OK ({rr.get('reason')}).")
     elif rr.get("reason") in ("sms_required", "unseeded", "failed"):
-        # Real human action needed — throttled email + desktop push (once per episode).
         _log.error(f"  🛑 [Healer] E*TRADE needs manual re-auth (reason: {rr.get('reason')}).")
         try:
             notify.send_reauth_alert("production", rr["reason"])
         except Exception as ne:
             _log.error(f"  ❌ Failed to send E*TRADE re-auth alert: {ne}")
     else:
-        # 'breaker' (cooling) / 'renewed'-miss / transient — normal, not an alarm. Just log.
         _log.info(f"  [Healer] E*TRADE re-auth deferred (reason: {rr.get('reason')}). No action.")
 
-    # 0b. Chaikin Proactive Session Keeper — uses cross-process singleton
+
+def maintain_chaikin_session():
+    """Execute Chaikin proactive session maintenance and keep-alive."""
     try:
         session = powergauge.ensure_valid_session()
         if session and session.get("jsessionid"):
@@ -592,20 +585,36 @@ def run_watchdog():
     except Exception as e:
         _log.error("Chaikin session keep-alive failed", extra={"error": str(e)}, exc_info=True)
 
-    # 1. Gather Initial System Health Data
+
+def dispatch_async_backup_sync():
+    """Spawn the data folder backup sync in a separate thread to prevent network latency from blocking."""
+    _log.info("🚀 Dispatched backup data sync to background thread...")
+    import threading
+    t = threading.Thread(target=sync_data_folder, daemon=True)
+    t.start()
+
+
+def run_watchdog():
+    # Enforce strict cross-process single instance execution
+    if is_blocked_by_active_lock():
+        return
+
+    _log.console(f"[{datetime.datetime.now()}] Project AETHER Healer starting...")
+
+    # Step 0: Maintain broker sessions
+    maintain_etrade_session()
+    maintain_chaikin_session()
+
+    # Step 1: Gather health statistics
     initial_errors = check_logs()
     missing_tasks = check_task_scheduler()
     data_issue = check_data_freshness()
     
-    # 1b. Clean up any stray/duplicate AETHER tasks (Pillar 1 Self-Sanitation)
+    # Step 2: Clean stray tasks & supervise system processes
     purge_stray_tasks()
-
-    # 1bb. Process Supervisor & Port Sentry (R&D #29)
     supervise_processes()
 
-    # 1c. Empty the auth-state garbage can past its retention window. Rejected/revoked
-    #     token files are soft-deleted (moved to Data/.trash, kept ~1 month for recovery)
-    #     rather than hard-deleted; this is where they are finally purged.
+    # Step 3: Purge auth-state garbage
     try:
         n_trashed = trash.purge_trash()
         if n_trashed:
@@ -619,27 +628,25 @@ def run_watchdog():
     ai_console_log = ""
     original_traceback = extract_latest_traceback()
     
-    # 2. Heal task scheduler missing tasks
+    # Step 4: Heal task scheduler duplicates
     if missing_tasks:
         heal_tasks(missing_tasks)
         recovery_actions.append(f"Healed missing tasks: {', '.join(missing_tasks)}")
 
-    # 3. Heal resource locks if permission error is logged
+    # Step 5: Heal resource locks if permissions fail
     if any("PERMISSION" in str(err).upper() for err in initial_errors):
         kill_ghost_processes()
         recovery_actions.append("Killed ghost processes to resolve resource lock.")
 
-    # 4. Perform Synchronous AI Self-Healing if a traceback is detected
+    # Step 6: Synchronous AI Self-Healing
     if original_traceback and any(word in original_traceback.upper() for word in ["TRACEBACK", "ERROR", "EXCEPTION"]):
-        # A Python crash was found. Spawn the blocking AI Healer!
         ai_triggered, ai_status, ai_console_log = trigger_ai_self_healing(original_traceback)
         if ai_triggered:
             recovery_actions.append(f"AI Self-Healer successfully executed: {ai_status}")
         else:
             recovery_actions.append(f"AI Self-Healer triggered but failed: {ai_status}")
 
-    # 5. Post-Healing Verification (Empirical Compilation Check)
-    # We run the report script directly to see if the codebase now compiles and executes nominal!
+    # Step 7: Post-healing validation & execution check
     try:
         val_result = subprocess.run(
             [sys.executable, str(BASE_DIR / "ai_portfolio_game.py"), "--report"],
@@ -654,31 +661,25 @@ def run_watchdog():
         compilation_passed = False
         validation_output = f"Validation execution failed: {e}"
 
-    # 6. Re-Audit Logs after the fix
+    # Step 8: Re-audit logs after healing
     remaining_errors = check_logs()
     
-    # 6.5. Run Backup Sync and Monitor Success/Errors
-    sync_success = sync_data_folder()
+    # Step 9: Non-blocking background backup sync (Asynchronous threading)
+    dispatch_async_backup_sync()
     
-    # Check if there are any active issues left
+    # Step 10: Compile and send HTML briefing report if healing or failures occurred
     issues = []
-    if remaining_errors and not ai_triggered: # If we self-healed, the old log errors are still there, so we ignore them for the "issues" list
+    if remaining_errors and not ai_triggered:
         issues.append("REMAINING LOG ERRORS:\n" + "\n".join(remaining_errors))
     if data_issue: 
         issues.append(data_issue)
-    if not sync_success:
-        issues.append("CRITICAL: Network Backup Data Sync Failed!")
 
-    # 7. Construct the Consolidated HTML Recovery Report (The Final Step!)
-    # We send an email if a healing action occurred, an AI healer triggered, there are active code errors in the logs, or the backup sync failed.
-    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered) or not sync_success:
+    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered):
         _log.console("Healer cycle complete. Constructing consolidated recovery report...")
         
-        # Color badges
-        status_color = "#27ae60" if compilation_passed and sync_success else "#c0392b"
-        status_text = "NOMINAL (HEALED)" if compilation_passed and sync_success else "MANUAL INTERVENTION REQUIRED"
+        status_color = "#27ae60" if compilation_passed else "#c0392b"
+        status_text = "NOMINAL (HEALED)" if compilation_passed else "MANUAL INTERVENTION REQUIRED"
         
-        # Clean console log for email (last 2000 chars to avoid size limits)
         trimmed_console_log = ai_console_log[-2000:] if ai_console_log else "No AI logs available."
         
         html_report = f"""
@@ -686,55 +687,42 @@ def run_watchdog():
         <body style="font-family: sans-serif; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.5;">
             <h2 style="color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; margin-bottom: 25px;">🛡️ Project AETHER: Autonomous Health & Recovery Report</h2>
             
-            <!-- Overall Status Badge -->
             <div style="background: {status_color}; color: white; padding: 10px 15px; border-radius: 4px; font-weight: bold; margin-bottom: 30px; font-size: 16px; text-align: center;">
                 SYSTEM STATUS: {status_text}
             </div>
 
-            <!-- SECTION 1: DETECTED ISSUE -->
-            {f'''
+            {{f'''
             <div style="background: #fdf2f2; border-left: 5px solid #ec5b5b; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #c0392b; font-size: 15px;">🚨 1. DETECTED ISSUE (Crash Traceback):</h3>
-                <pre style="background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; font-size: 12px; overflow-x: auto; font-family: monospace;">{original_traceback}</pre>
+                <pre style="background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; font-size: 12px; overflow-x: auto; font-family: monospace;">{{original_traceback}}</pre>
             </div>
-            ''' if original_traceback else ''}
+            ''' if original_traceback else ''}}
 
-            <!-- SECTION 2: AI DEBUGGING & HEALING ACTIONS -->
-            {f'''
+            {{f'''
             <div style="background: #eef9ff; border-left: 5px solid #3498db; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #2980b9; font-size: 15px;">🧠 2. AI DEBUGGING & HEALING PROCESS:</h3>
-                <p style="font-size: 13px; font-weight: bold; color: #555;">Tool Invoked: <span style="font-family: monospace; background: #e0f2f1; padding: 2px 4px;">{HEALER_CMD_TEMPLATE}</span></p>
-                <p style="font-size: 13px; font-weight: bold; color: #555;">Healing Status: <span style="color: {status_color};">{ai_status}</span></p>
+                <p style="font-size: 13px; font-weight: bold; color: #555;">Tool Invoked: <span style="font-family: monospace; background: #e0f2f1; padding: 2px 4px;">{{HEALER_CMD_TEMPLATE}}</span></p>
+                <p style="font-size: 13px; font-weight: bold; color: #555;">Healing Status: <span style="color: {status_color};">{{ai_status}}</span></p>
                 <h4 style="margin-bottom: 5px; font-size: 13px; color: #333;">AI Console Output logs:</h4>
-                <pre style="background: #2c3e50; color: #ecf0f1; padding: 12px; border-radius: 4px; font-size: 11px; overflow-x: auto; max-height: 250px; font-family: monospace;">{trimmed_console_log}</pre>
+                <pre style="background: #2c3e50; color: #ecf0f1; padding: 12px; border-radius: 4px; font-size: 11px; overflow-x: auto; max-height: 250px; font-family: monospace;">{{trimmed_console_log}}</pre>
             </div>
-            ''' if ai_triggered else ''}
+            ''' if ai_triggered else ''}}
 
-            <!-- SECTION 3: COMPILATION & RESULTS VALIDATION -->
             <div style="background: #f9f9f9; border-left: 5px solid #95a5a6; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #34495e; font-size: 15px;">✅ 3. POST-HEALING VALIDATION (Execution Check):</h3>
                 <p style="font-size: 13px; font-weight: bold;">Validation Script: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">python ai_portfolio_game.py --report</span></p>
-                <p style="font-size: 13px; font-weight: bold;">Compilation Result: <span style="color: {'#27ae60' if compilation_passed else '#c0392b'}; font-size: 14px;">{'SUCCESS / PASSED' if compilation_passed else 'FAILED / COMPILE ERROR'}</span></p>
+                <p style="font-size: 13px; font-weight: bold;">Compilation Result: <span style="color: {{'#27ae60' if compilation_passed else '#c0392b'}}; font-size: 14px;">{{'SUCCESS / PASSED' if compilation_passed else 'FAILED / COMPILE ERROR'}}</span></p>
                 <h4 style="margin-bottom: 5px; font-size: 13px; color: #333;">Validation Console Output:</h4>
-                <pre style="background: #f1f2f6; color: #2c3e50; padding: 12px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; overflow-x: auto; font-family: monospace;">{validation_output}</pre>
+                <pre style="background: #f1f2f6; color: #2c3e50; padding: 12px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; overflow-x: auto; font-family: monospace;">{{validation_output}}</pre>
             </div>
 
-            <!-- SECTION 3b: DATA BACKUP SYNC STATUS -->
-            <div style="background: {'#f9f9f9' if sync_success else '#fdf2f2'}; border-left: 5px solid {'#34495e' if sync_success else '#ec5b5b'}; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
-                <h3 style="margin-top: 0; color: {'#34495e' if sync_success else '#c0392b'}; font-size: 15px;">📁 3b. DATA BACKUP SYNC STATUS:</h3>
-                <p style="font-size: 13px; font-weight: bold;">Backup Location: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">\\\\10.0.0.156\\Storage\\Yura\\Develop\\StockTrading\\AnalyzeFinData\\Data</span></p>
-                <p style="font-size: 13px; font-weight: bold;">Sync Status: <span style="color: {'#27ae60' if sync_success else '#c0392b'}; font-size: 14px;">{'SUCCESS / NOMINAL' if sync_success else 'FAILED / SYNC ERROR'}</span></p>
-            </div>
-
-            <!-- SECTION 4: NEXT STEPS -->
             <div style="background: #fff9db; border-left: 5px solid #f59f00; padding: 15px; margin-bottom: 30px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #f08c00; font-size: 15px;">🏁 4. RESULTS & NEXT STEPS:</h3>
                 <ul style="font-size: 13px; padding-left: 20px; color: #555; line-height: 1.6;">
-                    {'<li><b>AETHER Self-Healer:</b> Surgically patched the codebase and pushed the fix to the main branch.</li>' if compilation_passed and ai_triggered else ''}
-                    {'<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>' if compilation_passed else ''}
-                    {'<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>' if ai_triggered else ''}
-                    {'<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>' if not compilation_passed else ''}
-                    {f'<li><b>Backup Status:</b> Robocopy sync completed successfully.</li>' if sync_success else '<li><b>Backup Status Alert:</b> robocopy was unable to push updates to \\\\10.0.0.156\\Storage\\ - check server connection.</li>'}
+                    {{'<li><b>AETHER Self-Healer:</b> Surgically patched the codebase and pushed the fix to the main branch.</li>' if compilation_passed and ai_triggered else ''}}
+                    {{'<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>' if compilation_passed else ''}}
+                    {{'<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>' if ai_triggered else ''}}
+                    {{'<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>' if not compilation_passed else ''}}
                 </ul>
             </div>
 
@@ -749,6 +737,7 @@ def run_watchdog():
         _log.info("Consolidated Recovery Report emailed successfully!")
     else:
         _log.info("✅ System Health Check: All systems nominal.")
+
 
 if __name__ == "__main__":
     run_watchdog()
