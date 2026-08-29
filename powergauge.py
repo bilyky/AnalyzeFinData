@@ -594,7 +594,7 @@ def _login_via_browser(headless: bool = False) -> dict:
             channel='chrome',
             args=['--disable-blink-features=AutomationControlled'],
         )
-        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        user_agent = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{browser.version} Safari/537.36"
         context = browser.new_context(user_agent=user_agent)
         page = context.new_page()
         try:
@@ -665,9 +665,10 @@ def login(interactive=True) -> dict:
         if not interactive or not sys.stdin or not sys.stdin.isatty():
             try:
                 from aether.notify import send_email
+                session_abs_path = os.path.abspath(SESSION_FILE)
                 send_email(
                     subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
-                    body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to C:\\Develop\\StockTrading\\AnalyzeFinData\\Data\\session.json.\n4. Re-run the daily pipeline."
+                    body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
                 )
             except Exception as mail_err:
                 print(f"Failed to send Turnstile block alert email: {mail_err}")
