@@ -10,8 +10,8 @@ so both runtimes enforce ONE set of checks, defined and tested in one place.
 
 Requires ``"tools": { "enableHooks": true }`` in ``.gemini/settings.json`` to
 activate. Known Gemini CLI limitation (google-gemini/gemini-cli#15712): AfterAgent
-may NOT fire on a text-only final response (no tool calls) — exactly the case the
-claim-check most wants to catch — so treat this as advisory, not a hard guarantee.
+may NOT fire on a text-only final response (no tool calls) - exactly the case the
+claim-check most wants to catch - so treat this as advisory, not a hard guarantee.
 """
 import importlib.util
 import json
@@ -35,7 +35,7 @@ def main():
         raw = sys.stdin.read().strip()
         payload = json.loads(raw) if raw else {}
         result = _load_core().decide_gemini(payload)
-    except Exception as e:  # fail open — never block the agent on a hook bug
+    except Exception as e:  # fail open - never block the agent on a hook bug
         sys.stderr.write(f"response_verifier: {e}\n")
         result = {"decision": "allow"}
     print(json.dumps(result))

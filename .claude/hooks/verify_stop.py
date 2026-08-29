@@ -14,7 +14,7 @@ FAILS OPEN: any error allows the stop. Fires at most once per turn (no loop).
 
 Wiring (this script is not auto-activated by being in the repo): add a Stop hook to
 either project ``.claude/settings.json`` or your global ``~/.claude/settings.json``
-pointing at this file — see ``.claude/hooks/README.md``. If you already run a global
+pointing at this file - see ``.claude/hooks/README.md``. If you already run a global
 standalone stop gate, replace it (or don't also wire this one) to avoid a double
 reminder per turn.
 """

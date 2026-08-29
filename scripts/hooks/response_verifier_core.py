@@ -11,7 +11,7 @@ grew up separately (a reminder-injector on Claude, a content-scanner on Gemini);
 this core unifies the *detection* so there is one place to fix and test, while each
 adapter keeps its own runtime semantics.
 
-Why the split of concerns matters — "block" means different things per runtime:
+Why the split of concerns matters - "block" means different things per runtime:
 
   * Claude **Stop**: block == re-prompt the agent with feedback (a nudge). Injecting
     a once-per-turn verification reminder is cheap and safe, so the Claude adapter
@@ -58,7 +58,7 @@ REMINDER = (
 # Unambiguous "I elided real code" / "fill this in later" markers. Matched
 # case-INSENSITIVELY and ONLY inside fenced code blocks, so prose that *quotes* a
 # marker (a code review discussing a TODO, this very docstring) never trips it.
-# NOTE: bare ``TODO:`` is deliberately NOT here — a review/answer legitimately quotes
+# NOTE: bare ``TODO:`` is deliberately NOT here - a review/answer legitimately quotes
 # it constantly; the branch's version false-positived on ordinary review text.
 ELISION_MARKERS = (
     "... rest of code",
@@ -78,7 +78,7 @@ ELISION_MARKERS = (
 )
 
 # Systems-health assertions that require live evidence. Each is only a violation when
-# NO diagnostic tool ran this turn (see ``ran_diagnostic``) — evidenced claims pass.
+# NO diagnostic tool ran this turn (see ``ran_diagnostic``) - evidenced claims pass.
 HEALTH_CLAIMS = (
     "all systems nominal",
     "all systems operational",
@@ -200,7 +200,7 @@ def _extract_text(obj: dict) -> str:
 
 def last_assistant_text(transcript_path) -> str:
     """Best-effort extraction of the final assistant message text from a JSONL
-    transcript (Claude Code format). Returns '' on any problem — so a runtime whose
+    transcript (Claude Code format). Returns '' on any problem - so a runtime whose
     payload lacks the response text still gets the reminder (just no content check).
     Never raises."""
     if not transcript_path:
@@ -233,7 +233,7 @@ def last_assistant_text(transcript_path) -> str:
 def decide_gemini(payload) -> dict:
     """Gemini **AfterAgent**: deny ONLY on a concrete content violation.
 
-    (deny == retry the turn, so we must not deny just to nudge — that would loop.)
+    (deny == retry the turn, so we must not deny just to nudge - that would loop.)
     """
     if not isinstance(payload, dict):
         return {"decision": "allow"}
