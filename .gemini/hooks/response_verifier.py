@@ -1,60 +1,46 @@
-import sys
+#!/usr/bin/env python
+"""Gemini CLI **AfterAgent** hook -> generic response verifier.
+
+Thin adapter: read the AfterAgent JSON payload from stdin, delegate the decision to
+the shared, runtime-agnostic core (``scripts/hooks/response_verifier_core.py``), and
+print the single decision JSON to stdout. Fails OPEN on any error.
+
+The core is shared with the Claude Code Stop hook (``.claude/hooks/verify_stop.py``)
+so both runtimes enforce ONE set of checks, defined and tested in one place.
+
+Requires ``"tools": { "enableHooks": true }`` in ``.gemini/settings.json`` to
+activate. Known Gemini CLI limitation (google-gemini/gemini-cli#15712): AfterAgent
+may NOT fire on a text-only final response (no tool calls) — exactly the case the
+claim-check most wants to catch — so treat this as advisory, not a hard guarantee.
+"""
+import importlib.util
 import json
+import os
+import sys
+
+
+def _load_core():
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.normpath(
+        os.path.join(here, "..", "..", "scripts", "hooks", "response_verifier_core.py")
+    )
+    spec = importlib.util.spec_from_file_location("response_verifier_core", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
 
 def main():
     try:
-        # Read the JSON payload from standard input (stdin)
-        input_data = sys.stdin.read().strip()
-        if not input_data:
-            print(json.dumps({"decision": "allow"}))
-            sys.exit(0)
-            
-        payload = json.loads(input_data)
-        response_text = payload.get("prompt_response", "")
-        
-        # 1. Enforce that there are no lazy code placeholder or TODO strings in our output
-        lazy_placeholders = ["// ... rest of code", "# ... rest of code", "TODO:", "placeholder code"]
-        found_placeholders = [p for p in lazy_placeholders if p in response_text]
-        
-        if found_placeholders:
-            result = {
-                "decision": "deny",
-                "reason": (
-                    f"Your response contains unfinished code placeholders or TODO markers: {found_placeholders}. "
-                    "You are strictly prohibited from writing partial code or draft placeholders. Please rewrite "
-                    "your response with fully completed, production-ready, and syntactically correct code blocks!"
-                ),
-                "systemMessage": "🚨 Response blocked by physical post-response validator (lazy code detected)."
-            }
-            print(json.dumps(result))
-            sys.exit(0)
-            
-        # 2. Enforce that we do not make unsubstantiated 'all nominal' claims without executing audits first
-        unsubstantiated_claims = ["all systems nominal", "E*TRADE is online", "everything is green"]
-        # If the response makes these claims, but does NOT contain actual log trace evidence (such as '2026-08-28' or log timestamps)
-        if any(claim in response_text.lower() for claim in unsubstantiated_claims) and "2026-08" not in response_text:
-            result = {
-                "decision": "deny",
-                "reason": (
-                    "Your response claims that all systems are nominal or online, but you did not execute "
-                    "a direct, unmocked diagnostic check in this turn to prove this fact on the screen. "
-                    "Please run the centralized pre-flight validator or look at the raw log files FIRST "
-                    "before making any factual claims about system health!"
-                ),
-                "systemMessage": "🚨 Response blocked by physical post-response validator (unsubstantiated claim)."
-            }
-            print(json.dumps(result))
-            sys.exit(0)
+        raw = sys.stdin.read().strip()
+        payload = json.loads(raw) if raw else {}
+        result = _load_core().decide_gemini(payload)
+    except Exception as e:  # fail open — never block the agent on a hook bug
+        sys.stderr.write(f"response_verifier: {e}\n")
+        result = {"decision": "allow"}
+    print(json.dumps(result))
 
-        # Allow the response through if all checks pass
-        print(json.dumps({"decision": "allow"}))
-        sys.exit(0)
-        
-    except Exception as e:
-        # If any parsing or script error occurs, fail-safe and log to stderr
-        sys.stderr.write(f"Response verifier error: {e}\n")
-        print(json.dumps({"decision": "allow"}))
-        sys.exit(0)
 
 if __name__ == "__main__":
     main()
+    sys.exit(0)

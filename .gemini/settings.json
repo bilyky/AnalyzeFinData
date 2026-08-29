@@ -1,4 +1,7 @@
 {
+  "tools": {
+    "enableHooks": true
+  },
   "hooks": {
     "AfterAgent": [
       {
