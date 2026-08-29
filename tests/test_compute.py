@@ -220,6 +220,19 @@ class TestSymbolValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             get_symbol_data("../../../etc", date.today(), False, "fake")
 
+    def test_get_symbol_data_handles_network_exception(self):
+        from unittest import mock
+        import requests
+        with mock.patch("powergauge._get_http_session") as mock_get_session,              mock.patch("powergauge.ensure_valid_session") as mock_ensure:
+            mock_ensure.return_value = {"jsessionid": "fake"}
+            mock_session = mock.MagicMock()
+            mock_session.get.side_effect = requests.exceptions.RequestException("Simulated network failure")
+            mock_get_session.return_value = mock_session
+
+            # Since requests exceptions propagate, verifying it raises RequestException
+            with self.assertRaises(requests.exceptions.RequestException):
+                get_symbol_data("AAPL", date.today(), False)
+
 
 if __name__ == "__main__":
     unittest.main()
