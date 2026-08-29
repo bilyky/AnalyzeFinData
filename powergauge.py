@@ -1317,17 +1317,21 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     _touched_sheets = {"Research", "Picks"}
     try:
         from aether import etrade as _et
-        # Load cached tokens directly to avoid Playwright/MFA interactive prompts
-        _cached = _et._load_tokens("production")
+        # Read the cached token and renew it directly (pure HTTP, no Playwright/MFA
+        # browser) via the auth-role client: current_token() is the read-only cache
+        # accessor and renew() is the same renew_tokens refresh the free fns did — one
+        # sanctioned door, no new auth path, and role="auth" is required to renew.
+        _client = _et.ETradeClient("production", role="auth")
+        _cached = _client.auth.current_token()
         _tok = None
         if _cached:
-            _tok = _et.renew_tokens(_cached, "production")
-            
+            _tok = _client.auth.renew(_cached)
+
         if _tok:
             _lk   = {p["symbol"]: p for p in picks_data}
-            _pos  = _et.fetch_positions(_tok, "production")
+            _pos  = _client.accounts.positions(_tok)
             _syms = list({p["symbol"] for p in _pos})
-            _qts  = _et.fetch_quotes(_tok, _syms, "production")
+            _qts  = _client.market.quotes(_syms, _tok)
             _update_short_long_scores(wb, _lk, _qts, _pos, ohlcv_cache)
             _touched_sheets.add("Short_Long")
             print(f"Short_Long sheet synced: {len(_pos)} positions.")
