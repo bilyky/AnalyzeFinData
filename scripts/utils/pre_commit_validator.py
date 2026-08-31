@@ -33,25 +33,32 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-# Mapping of @doc-sync keys to their documentation files on disk + description
+# Mapping of @doc-sync keys to their documentation files on disk + description.
+# Keys MUST match the anchor charset [A-Za-z0-9_]+ (underscores, not hyphens) so an
+# `@doc-sync-start: <key>` marker resolves to its surface — a hyphen in a key silently
+# never matches, leaving the anchor dead. tests/test_doc_sync.py enforces this and that
+# every live anchor key is registered here.
 DOC_SYNC_SURFACES = {
-    "covered-calls": [
+    "covered_calls": [
         ("plans/roadmap.md", "Shorthand bullet in R&D Roadmap"),
     ],
-    "unwinding-guard": [
+    "unwinding_guard": [
         ("plans/roadmap.md", "Shorthand bullet in R&D Roadmap"),
     ],
-    "scarcity-core": [
+    "scarcity_core": [
         ("plans/dynamic-scarcity-cap.md", "Full System Design specification"),
     ],
-    "trader-vic": [
+    "trader_vic": [
         ("plans/dynamic-scarcity-cap.md", "Full System Design specification"),
     ],
-    "preflight-checks": [
+    "preflight_checks": [
         ("plans/roadmap.md", "Shorthand bullet in R&D Roadmap"),
     ],
-    "circuit-breaker": [
+    "circuit_breaker": [
         ("plans/circuit-breaker.md", "Full System Design specification"),
+    ],
+    "chaikin_api": [
+        ("plans/chaikin_api.md", "Chaikin /api/* contract + new->legacy adapter"),
     ],
 }
 

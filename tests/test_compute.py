@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import scoring
 from powergauge import (
     PowerGauge, _pgr_str, _buying_ratio, _compute_pgr_fields, _SYMBOL_RE,
-    get_symbol_data,
+    get_symbol_data, ensure_valid_session,
 )
 from tests.conftest import make_ohlcv
 
@@ -242,19 +242,29 @@ class TestSymbolValidation(unittest.TestCase):
         mock_jwt.return_value = "new_jsessionid"
         mock_validate.return_value = False
         
-        # Mock HTTP session to prevent any live network requests during tests
+        # Mock HTTP session to prevent any live network requests during tests.
+        # status_code 403 makes the (unmocked) _probe_session return "invalid",
+        # reproducing the expired-session path this test exercises.
         mock_session = mock.MagicMock()
         mock_response = mock.MagicMock()
         mock_response.ok = False
+        mock_response.status_code = 403
         mock_session.get.return_value = mock_response
         mock_get_session.return_value = mock_session
         
         session = {"jsessionid": "old_jsessionid", "jwttoken": "valid_jwt"}
-        with mock.patch("powergauge._load_session_from_file", return_value=session), \
+        # Exercise ensure_valid_session directly — it owns the "don't cache an invalid
+        # JWT refresh" behavior. (Driving it through get_symbol_data would also fire the
+        # data fetch, which hits the same /api/suggestions URL and can't share one mock
+        # response with the liveness probe.) Reset the TTL cache so the probe actually runs.
+        with mock.patch("powergauge._session_valid_until", 0.0), \
+             mock.patch("powergauge._load_session_from_file", return_value=session), \
              mock.patch("powergauge._save_session_to_file") as mock_save, \
+             mock.patch("powergauge._chaikin_renewer") as mock_renewer, \
              mock.patch("powergauge.login", return_value={}):
-            res = get_symbol_data("AAPL", date.today(), False)
-            # Verify that save was never called because the session validation failed
+            mock_renewer.ensure.return_value = {}
+            ensure_valid_session()
+            # Save must never be called: the JWT-exchanged session failed validation.
             mock_save.assert_not_called()
 
 

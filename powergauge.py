@@ -83,12 +83,7 @@ from patterns import (
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
 _CHAIKIN_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
-# Chaikin Analytics app-level API key — set via config or env var.
-try:
-    from config import CFG
-    _CHAIKIN_API_KEY = CFG.chaikin_api_key or os.environ.get("CHAIKIN_API_KEY") or ""
-except Exception:
-    _CHAIKIN_API_KEY = os.environ.get("CHAIKIN_API_KEY") or ""
+# _CHAIKIN_API_KEY is defined once, below, in the "Chaikin API" constants block.
 
 
 def _pgr_str(v: int) -> str:
@@ -128,9 +123,19 @@ def ensure_valid_session() -> dict:
     # Fast path: TTL cache avoids HTTP validation probe on every call
     if session and time.monotonic() < _session_valid_until:
         return session
-    if session and _validate_session(session):
+    status = _probe_session(session) if session else "invalid"
+    if status == "valid":
         _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
         return session
+    if status == "unreachable":
+        # Network/proxy fault or transient upstream 5xx — do NOT re-auth. Keep the
+        # existing token; a proxy blip must not destroy a good session or spin up a
+        # doomed headless browser (see _probe_session's 3-state contract). This runs
+        # before the JWT/browser refresh because both make network calls that would
+        # also fail when Chaikin is unreachable.
+        _pg_log.warning("Chaikin unreachable (network/proxy/5xx) — keeping existing session, skipping re-auth.")
+        return session or {}
+    # status == "invalid": genuinely expired/rejected — try the cheap refresh path first.
     # API-based JWT Token Refresh (Bypasses Browser/Turnstile completely in 0.2 seconds!)
     if session and session.get("jwttoken"):
         try:
@@ -233,14 +238,62 @@ def _build_cache_index():
 
 
 SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
-_PROXY_URL = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
-_PROXIES = {"http": _PROXY_URL, "https": _PROXY_URL} if _PROXY_URL else {}
 
 _http_session: requests.Session | None = None
+_resolved_proxy: str | None = None   # process-level memo: "" (direct) or a proxy URL
+_DIRECT_TOKENS = {"", "direct", "none", "off", "no"}
+
+
+def _proxy_reachable(proxy_url: str) -> bool:
+    """Quick TCP check that a proxy host:port accepts connections (~1.5s cap).
+
+    Lets 'auto' mode pick the Intel/E*TRADE proxy only when we are actually on that
+    network, and fall back to a direct connection everywhere else.
+    """
+    try:
+        import socket
+        from urllib.parse import urlparse
+        u = urlparse(proxy_url if "://" in proxy_url else "http://" + proxy_url)
+        host, port = u.hostname, (u.port or 911)
+        if not host:
+            return False
+        with socket.create_connection((host, port), timeout=1.5):
+            return True
+    except Exception:
+        return False
+
+
+def _resolve_proxy() -> str:
+    """Resolve the Chaikin proxy at call time (NOT import time), memoized per process.
+
+    Returns a proxy URL to use, or "" for a direct connection. Honors CFG.chaikin_proxy:
+    an explicit URL is used verbatim; "" / "direct" force direct; "auto" (default) uses
+    CFG.etrade_proxy only when that host is reachable — so the same build works on and
+    off the Intel network. Override with env CHAIKIN_PROXY or config chaikin.proxy.
+    """
+    global _resolved_proxy
+    if _resolved_proxy is not None:
+        return _resolved_proxy
+    mode, candidate = "auto", ""
+    try:
+        from config import CFG
+        mode = (CFG.chaikin_proxy or "").strip()
+        candidate = (CFG.etrade_proxy or "").strip()
+    except Exception:
+        pass
+    if mode.lower() == "auto":
+        resolved = candidate if (candidate and _proxy_reachable(candidate)) else ""
+    elif mode.lower() in _DIRECT_TOKENS:
+        resolved = ""
+    else:
+        resolved = mode   # explicit proxy URL
+    _resolved_proxy = resolved
+    _pg_log.info(f"Chaikin proxy resolved: {resolved or '(direct)'}")
+    return resolved
 
 
 def _get_http_session() -> requests.Session:
-    """Return a shared Session with retry logic and proxy pre-configured."""
+    """Return a shared Session with retry logic and the configured proxy applied."""
     global _http_session
     if _http_session is None:
         _http_session = requests.Session()
@@ -249,8 +302,13 @@ def _get_http_session() -> requests.Session:
         _http_session.mount("https://", adapter)
         _http_session.mount("http://", adapter)
         _http_session.verify = False
-        if _PROXIES:
-            _http_session.proxies.update(_PROXIES)
+        proxy = _resolve_proxy()
+        if proxy:
+            _http_session.proxies.update({"http": proxy, "https": proxy})
+        else:
+            # Explicit direct: ignore any stray HTTPS_PROXY/HTTP_PROXY the E*TRADE client
+            # may have exported into the environment, so off-Intel runs stay direct.
+            _http_session.trust_env = False
     return _http_session
 
 
@@ -260,14 +318,17 @@ XLSX_BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
 
 # ── Chaikin API ───────────────────────────────────────────────────────────────
-# Loaded dynamically from central config (config.json / env vars)
+# OMNI (/api/*) app key. This is NOT a secret: it ships verbatim inside the public
+# members.chaikinanalytics.com JS bundle ($rootScope.config.apiKey) and every
+# browser sends it as `x-api-key` on every /api/* call. We keep it as a default so
+# the client works out of the box on and off the Intel network; config.json
+# (chaikin.api_key) or env CHAIKIN_API_KEY still override it.
+_CHAIKIN_OMNI_PUBLIC_KEY = "76J!7fb?jhEtz/hd7i6rHPKklawGZb5VLReDQXa0?4-jGCqQFi74xYCsb0H-hqUC"
 try:
     from config import CFG
-    _CHAIKIN_API_KEY = CFG.chaikin_api_key or os.environ.get("CHAIKIN_API_KEY") or ""
-    _CHAIKIN_UID = CFG.chaikin_uid or os.environ.get("CHAIKIN_UID") or ""
+    _CHAIKIN_API_KEY = CFG.chaikin_api_key or os.environ.get("CHAIKIN_API_KEY") or _CHAIKIN_OMNI_PUBLIC_KEY
 except Exception:
-    _CHAIKIN_API_KEY = os.environ.get("CHAIKIN_API_KEY") or ""
-    _CHAIKIN_UID = os.environ.get("CHAIKIN_UID") or ""
+    _CHAIKIN_API_KEY = os.environ.get("CHAIKIN_API_KEY") or _CHAIKIN_OMNI_PUBLIC_KEY
 # Concurrent workers for parallel symbol fetch in check_from_xls.
 _FETCH_WORKERS = int(os.environ.get("CHAIKIN_WORKERS", "10"))
 
@@ -561,10 +622,19 @@ def _save_session_to_file(session_data: dict):
         json.dump(session_data, f, indent=2)
 
 
-def _validate_session(session_data: dict) -> bool:
+def _probe_session(session_data: dict) -> str:
+    """Probe the Chaikin session, returning 'valid' | 'invalid' | 'unreachable'.
+
+    'unreachable' means a network/proxy fault (or a transient 5xx like Cloudflare's
+    503) — NOT proof the token is bad. Callers must keep the existing session and
+    skip re-auth in that case, so a proxy blip never nukes a good token or spins up
+    a doomed headless browser. Only a real 401/403 (or a missing id) is 'invalid'.
+    """
     if not session_data or not session_data.get("jsessionid"):
-        return False
-    test_url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid={_CHAIKIN_UID}&symbol=AAPL&components=pgr"
+        return "invalid"
+    # New Fastify backend: /api/suggestions/{symbol} is a live, cheap liveness probe
+    # (the legacy /CPTRestSecure/* path now 503s for everyone — see chaikin migration).
+    test_url = "https://members-backend.chaikinanalytics.com/api/suggestions/AAPL"
     headers = {
         'jsessionid': session_data['jsessionid'],
         'x-session-id': session_data['jsessionid'],
@@ -576,9 +646,21 @@ def _validate_session(session_data: dict) -> bool:
     }
     try:
         r = _get_http_session().get(test_url, headers=headers, timeout=(5, 15))
-        return r.status_code == 200
     except (requests.Timeout, requests.ConnectionError, requests.RequestException):
-        return False
+        return "unreachable"
+    if r.status_code == 200:
+        return "valid"
+    if r.status_code in (401, 403):
+        return "invalid"
+    if r.status_code >= 500:
+        # Upstream/edge transient (e.g. CF 503) — session may well be fine.
+        return "unreachable"
+    return "invalid"
+
+
+def _validate_session(session_data: dict) -> bool:
+    """Back-compat boolean wrapper: True only when the session is confirmed valid."""
+    return _probe_session(session_data) == "valid"
 
 
 def _jwt_to_session_id(jwt_token: str) -> str:
@@ -691,8 +773,14 @@ def login(interactive=True) -> dict:
     session_data = _load_session_from_file()
     if session_data:
         print("Loaded session from file, validating...")
-        if _validate_session(session_data):
+        status = _probe_session(session_data)
+        if status == "valid":
             print("Session is valid.")
+            return session_data
+        if status == "unreachable":
+            # Can't reach Chaikin (network/proxy/5xx) — the session may well be fine.
+            # Don't discard it and don't launch a browser that also can't reach the site.
+            print("Chaikin unreachable (network/proxy/5xx) — keeping existing session; skipping browser re-auth.")
             return session_data
         print("Saved session has expired — re-authenticating via browser.")
 
@@ -729,15 +817,124 @@ def login(interactive=True) -> dict:
     )
 
 
+# ── New /api/* → legacy getSymbolData schema adapter ───────────────────────────
+# Chaikin migrated the data API to /api/suggestions/{symbol}. Its response shape is
+# a flat 107-field dict; the rest of this module (init_from_json, _check_schema, the
+# on-disk cache, find_prev_pf) still speaks the legacy {pgr[7], metaInfo[1],
+# checklist_stocks{}} schema. This adapter converts new→legacy so nothing downstream
+# — including the cache format — has to change.
+
+# @doc-sync-start: chaikin_api
+# Contract + field mapping documented in plans/chaikin_api.md. If you change the
+# endpoint, the header contract, the 7->5 rating maps, or this adapter's shape, update
+# that surface in the same commit (enforced by
+# scripts/utils/pre_commit_validator.py :: check_feature_doc_sync).
+#
+# New pgrRating is a 7-level scale (1=Very Bearish … 7=Very Bullish, with Neutral -/+/
+# granularity); the legacy code expects the old 5-level rating (1=Be- … 5=Bu+). Both
+# name- and integer-based lookups collapse the Neutral -/·/+ band to old 3 (the old
+# model had no +/- granularity). 0 = unrated (e.g. leveraged/inverse ETFs, no PGR).
+_RATING_INT7_TO_OLD5 = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: 4, 7: 5}
+_RATING_NAME_TO_OLD5 = {
+    "very bearish": 1, "bearish": 2,
+    "neutral -": 3, "neutral": 3, "neutral +": 3,
+    "bullish": 4, "very bullish": 5,
+}
+# signalInfo dict → legacy 12-char binary string, fixed order (display-only field).
+_SIGNAL_KEYS = ("overBoughtSell", "overSoldBuy", "breakdownSell", "breakoutBuy",
+                "reversalBuy", "reversalSell", "moneyFlowBuy", "moneyFlowSell",
+                "relStrengthBuy", "relStrengthSell", "relStrengthBreakout",
+                "relStrengthBreakdown")
+
+
+def _pgr_rating_old5(int_rating, name) -> int:
+    """Resolve the legacy 1-5 PGR rating from the new integer (1-7) or rating name."""
+    if isinstance(int_rating, int) and int_rating > 0:
+        v = _RATING_INT7_TO_OLD5.get(int_rating, 5 if int_rating > 7 else 0)
+        if v:
+            return v
+    return _RATING_NAME_TO_OLD5.get(str(name or "").strip().lower(), 0)
+
+
+def _adapt_suggestions_to_legacy(data: dict, symbol: str) -> dict:
+    """Map a new /api/suggestions/{symbol} `data` object to the legacy getSymbolData bundle.
+
+    Returns {status, pgr[7], metaInfo[1], checklist_stocks{}}. An unknown ticker still
+    returns HTTP 200 but with an empty checklistData and null name — surfaced here as
+    status='invalid symbol' so the caller sets price=-1 (matching the old API behavior).
+    """
+    if not isinstance(data, dict) or (not data.get("name") and not (data.get("checklistData") or {})):
+        return {"status": "invalid symbol"}
+    cl = data.get("checklistData") or {}
+    raw5 = _pgr_rating_old5(data.get("rawPgrRating"), data.get("ratingName"))
+    _corr_int = data.get("correctedPgrRating")
+    if _corr_int is None:
+        _corr_int = data.get("pgrRating")
+    corr5 = _pgr_rating_old5(_corr_int, cl.get("pgr") or data.get("ratingName"))
+
+    si = data.get("signalInfo") or {}
+    signals = "".join("1" if (si.get(k) or 0) else "0" for k in _SIGNAL_KEYS) if si else "000000000000"
+
+    last = _to_float(data.get("lastPrice"), None) if data.get("lastPrice") is not None else None
+    pct = data.get("days1ChangePct")
+    if pct is None:
+        pct = data.get("latestChangePct")
+    chg = data.get("days1Change")
+    industry_name = data.get("industry") or data.get("sector") or data.get("name") or ""
+    is_etf = bool(data.get("isEtf"))
+
+    pgr_list = [
+        {"PGR Value": raw5},
+        {"Financials": []},
+        {"Earnings": []},
+        {"Technicals": []},
+        {"Experts": []},
+        {"Corrected PGR Value": corr5},
+        {"is_etf_symbol": is_etf, "technical_rank": data.get("technicalRank") or 0},
+    ]
+    meta = {
+        "symbol": symbol,
+        "Last": last,
+        "Percentage ": pct,
+        "Change": chg,
+        "signals": signals,
+        "industry_name": industry_name,
+        "etf_group_name": (data.get("name") or "") if is_etf else "",
+        "name": data.get("name") or "",
+        "marketCap": data.get("marketCap"),
+        "is_etf_symbol": is_etf,
+        "raw_PGR": data.get("rawPgr"),
+    }
+    checklist = {
+        "symbol": symbol,
+        "industry": cl.get("industry"),
+        "ltTrend": cl.get("ltTrend"),
+        "moneyFlow": cl.get("moneyFlow"),
+        "overboughtOversold": cl.get("OBOS"),
+        "relativeStrength": cl.get("relativeStrength"),
+        "pgr": cl.get("pgr") or data.get("ratingName"),
+        "rawPgrRating": raw5,
+        "pgrRating": corr5,
+        "lastPrice": str(last) if last is not None else None,
+        "changePercentage": str(pct) if pct is not None else None,
+        "change": str(chg) if chg is not None else None,
+        "stockStatus": cl.get("status"),
+    }
+    return {"status": "ok", "pgr": pgr_list, "metaInfo": [meta], "checklist_stocks": checklist}
+# @doc-sync-end: chaikin_api
+
+
 def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _allow_reauth: bool = True) -> PowerGauge:
     if not _SYMBOL_RE.match(symbol):
         raise ValueError(f"Invalid symbol format: {symbol!r}")
 
     session_data = ensure_valid_session()
 
-    industry_url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getChecklistStocks?symbol={symbol}"
-    url = f"https://members-backend.chaikinanalytics.com/CPTRestSecure/app/portfolio/getSymbolData?uid={_CHAIKIN_UID}&symbol={symbol}&components=pgr,metaInfo,EPSData,fundamentalData,technical"
-    
+    # New Fastify backend: a single GET returns the full symbol bundle (PGR + checklist
+    # + meta); the legacy getSymbolData/getChecklistStocks pair (and its ?components=…)
+    # is gone. _adapt_suggestions_to_legacy() reshapes the response to the old schema.
+    url = f"https://members-backend.chaikinanalytics.com/api/suggestions/{symbol}"
+
     headers = {
         'jsessionid': session_data.get('jsessionid', ''),
         'x-session-id': session_data.get('jsessionid', ''),
@@ -749,7 +946,6 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
     }
     pg = PowerGauge(symbol, date)
     data_jsn = {}
-    ind_data_jsn = {}
 
     if date and prefer_cache:
         _base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
@@ -761,14 +957,11 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
                 data_jsn = json.load(f)
 
     if not data_jsn:
-        ind_responce = _get_http_session().get(industry_url, headers=headers, timeout=(5, 20))
-        if ind_responce.ok:
-            ind_data_jsn = ind_responce.json()
         response = _get_http_session().get(url, headers=headers, timeout=(5, 20))
         if response.ok:
-            data_jsn = response.json()
-            if ind_data_jsn:
-                data_jsn["checklist_stocks"] = ind_data_jsn
+            raw_jsn = response.json()
+            new_data = raw_jsn.get("data") if isinstance(raw_jsn, dict) else None
+            data_jsn = _adapt_suggestions_to_legacy(new_data, symbol)
             # --- Closing Price Override (Pre-Save Reconciliation) ---
             # Overwrite the Chaikin price fields with the official, settled close from Symbol_full.
             # This guarantees that Chaikin (pg), RapidAPI (Symbol_full), and E*TRADE (live) are 100% synchronized!
