@@ -1,0 +1,20 @@
+{
+  "tools": {
+    "enableHooks": true
+  },
+  "hooks": {
+    "AfterAgent": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "response-verifier",
+            "type": "command",
+            "command": "python .gemini/hooks/response_verifier.py",
+            "timeout": 15000
+          }
+        ]
+      }
+    ]
+  }
+}
