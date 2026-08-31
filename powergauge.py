@@ -318,9 +318,10 @@ XLSX_BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
 
 # ── Chaikin API ───────────────────────────────────────────────────────────────
-# OMNI (/api/*) app key. This is NOT a secret: it ships verbatim inside the public
-# members.chaikinanalytics.com JS bundle ($rootScope.config.apiKey) and every
-# browser sends it as `x-api-key` on every /api/* call.
+# OMNI (/api/*) app key. It is sent as `x-api-key` (alongside `x-app-id: omni`) on
+# every /api/* call. It is *reportedly* the OMNI web client key that ships in the
+# members.chaikinanalytics.com JS bundle as $rootScope.config.apiKey — i.e. plausibly
+# a public client-side key — but that has NOT been verified here.
 #
 # It is intentionally NOT hardcoded here. This repo is public and the value's
 # public-vs-secret status is unverified, so we ship no default in source. Supply it via
