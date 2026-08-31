@@ -43,6 +43,7 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 *   **Fibonacci Retracement Score (`scoring.py`):** Maps the current price against key retracement levels (23.6%, 38.2%, 50.0%, 61.8%) computed from historical high-low channels.
 *   **RSI Divergence Engine (`scoring.py`):** Detects classic bullish and bearish divergences between price and RSI(14) to identify short-term momentum exhaustion and trend exhaustion.
 *   **AI Sell Evaluation Engine (`sell_eval.py` & `prompts/sell_evaluation.md`):** A hybrid qualitative reasoning module that combines an LLM's fundamental analysis of company-specific risks (earnings outlook, structural headwinds, competitive decay) with technical charts to deliver a clear `SELL`, `REDUCE`, or `HOLD` second opinion on active reviews.
+*   **15-Day Sprint Barbell Protocol (Asymmetric Growth):** A dual-bucket portfolio architecture allocating 80% to strict, defensive capital-preservation rules (The Shield) and 20% to concentrated, high-velocity strike plays (The Spear). Spear setups bypass momentum ceilings but demand a strict pre-execution qualitative catalyst scan (unresolved asymmetric events) and are governed by a 5-7 day Time-Velocity Stop and ITM Options to prevent IV crush.
 
 ### B. Advanced Pattern Recognition Suite (`patterns.py`)
 *   **Candlestick Pattern Engine:** Tracks and aggregates **17 distinct Japanese candlestick patterns** over a 5-day lookback window.
