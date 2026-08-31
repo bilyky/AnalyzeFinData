@@ -46,6 +46,12 @@ python ai_portfolio_game.py
 
 ---
 
+## Authentication & Data Mechanics
+When troubleshooting connections or executing data pulls, strictly adhere to the following verified architectural constraints:
+1. **Chaikin API Key is Mandatory:** The new Fastify Chaikin API (`/api/suggestions`) explicitly requires the `x-api-key` header (configured in `config.json` under the `chaikin` block). If it is missing, the server misleadingly returns `403 SESSION_EXPIRED`.
+2. **CAPTCHA & Browser Fallback Hierarchy:** Cloudflare Turnstile's risk-scoring is dynamic; it may pass a headless browser seamlessly or it may demand human interaction. The correct execution order handles this dynamically: 1) Try the automated API JWT refresh first. 2) If that fails, attempt `headless=True` Playwright. 3) If Turnstile presents an interactive challenge, fallback to `headless=False` (interactive browser) so the user can click the CAPTCHA box. 4) Only as an absolute last resort, demand manual token extraction to `Data/session.json`.
+3. **Automated Renewals use JWT:** Once a manual session is saved, the system automatically bypasses the browser/CAPTCHA entirely using the **0.2-second API-based JWT Token Refresh** (`_jwt_to_session_id`). This is the primary automated renewal path.
+
 ## References
 
 When analyzing setups, exits, or allocations, refer to these specialized guideline files:
