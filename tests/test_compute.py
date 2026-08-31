@@ -8,6 +8,8 @@ import os
 import sys
 import unittest
 from datetime import date, timedelta
+from unittest import mock
+import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -219,6 +221,41 @@ class TestSymbolValidation(unittest.TestCase):
     def test_get_symbol_data_raises_on_bad_symbol(self):
         with self.assertRaises(ValueError):
             get_symbol_data("../../../etc", date.today(), False, "fake")
+
+    def test_get_symbol_data_handles_network_exception(self):
+        with mock.patch("powergauge._get_http_session") as mock_get_session, \
+             mock.patch("powergauge.ensure_valid_session") as mock_ensure:
+            mock_ensure.return_value = {"jsessionid": "fake"}
+            mock_session = mock.MagicMock()
+            mock_session.get.side_effect = requests.exceptions.RequestException("Simulated network failure")
+            mock_get_session.return_value = mock_session
+
+            # Since requests exceptions propagate, verifying it raises RequestException
+            with self.assertRaises(requests.exceptions.RequestException):
+                get_symbol_data("AAPL", date.today(), False)
+
+    @mock.patch("powergauge._jwt_to_session_id")
+    @mock.patch("powergauge._validate_session")
+    @mock.patch("powergauge._get_http_session")
+    def test_jwt_refresh_not_cached_if_invalid(self, mock_get_session, mock_validate, mock_jwt):
+        # Force validate to return False, so session should NOT be saved or cached
+        mock_jwt.return_value = "new_jsessionid"
+        mock_validate.return_value = False
+        
+        # Mock HTTP session to prevent any live network requests during tests
+        mock_session = mock.MagicMock()
+        mock_response = mock.MagicMock()
+        mock_response.ok = False
+        mock_session.get.return_value = mock_response
+        mock_get_session.return_value = mock_session
+        
+        session = {"jsessionid": "old_jsessionid", "jwttoken": "valid_jwt"}
+        with mock.patch("powergauge._load_session_from_file", return_value=session), \
+             mock.patch("powergauge._save_session_to_file") as mock_save, \
+             mock.patch("powergauge.login", return_value={}):
+            res = get_symbol_data("AAPL", date.today(), False)
+            # Verify that save was never called because the session validation failed
+            mock_save.assert_not_called()
 
 
 if __name__ == "__main__":

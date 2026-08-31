@@ -7,6 +7,11 @@ import os
 import time
 import urllib3
 import pytz
+try:
+    from playwright_stealth import Stealth
+except ImportError:
+    Stealth = None
+from aether.notify import send_email
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
@@ -76,6 +81,7 @@ from patterns import (
 )
 
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
+_CHAIKIN_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
 # Chaikin Analytics app-level API key — set via config or env var.
 try:
@@ -125,11 +131,46 @@ def ensure_valid_session() -> dict:
     if session and _validate_session(session):
         _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
         return session
-    # Expired — delegate to the cross-process singleton
-    new_session = _chaikin_renewer.ensure(current_token=session)
-    if new_session and new_session.get("jsessionid"):
-        _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
-    return new_session or session or {}
+    # API-based JWT Token Refresh (Bypasses Browser/Turnstile completely in 0.2 seconds!)
+    if session and session.get("jwttoken"):
+        try:
+            new_sid = _jwt_to_session_id(session["jwttoken"])
+            if new_sid:
+                # Mutation Hygiene: Copy dict before modifying to prevent in-place corruption
+                test_session = session.copy()
+                test_session["jsessionid"] = new_sid
+                if _validate_session(test_session):
+                    _save_session_to_file(test_session)
+                    _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
+                    _pg_log.info("Successfully refreshed Chaikin session using saved JWT token (API bypass).")
+                    return test_session
+                else:
+                    _pg_log.warning("JWT exchanged session ID failed active validation check.")
+        except Exception as e:
+            # Security Best Practice: Sanitize and redact raw JWT token from exception logs to prevent exposure
+            err_msg = str(e)
+            if "jwtToken=" in err_msg:
+                err_msg = re.sub(r"jwtToken=[^&\s]+", "jwtToken=REDACTED", err_msg)
+            _pg_log.warning(f"Failed to refresh session using JWT token (will fall back to browser): {err_msg}")
+
+    # Expired — delegate to the cross-process singleton (protected by try-except to send email outside of lock duration)
+    try:
+        new_session = _chaikin_renewer.ensure(current_token=session)
+        if new_session and new_session.get("jsessionid"):
+            _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
+        return new_session or session or {}
+    except EnvironmentError as e:
+        # We are now OUTSIDE the cross-process lock! We can safely send the email alert
+        # without adding any 30s SMTP latency to other waiting background tasks.
+        try:
+            session_abs_path = os.path.abspath(SESSION_FILE)
+            send_email(
+                subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
+                body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
+            )
+        except Exception as mail_err:
+            _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
+        raise
 
 
 # Pre-built index of symbol → sorted list of cached JSON paths.
@@ -531,7 +572,7 @@ def _validate_session(session_data: dict) -> bool:
         'jwttoken': session_data.get('jwttoken', ''),
         'x-api-key': _CHAIKIN_API_KEY,
         'x-app-id': 'omni',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+        'User-Agent': _CHAIKIN_UA
     }
     try:
         r = _get_http_session().get(test_url, headers=headers, timeout=(5, 15))
@@ -594,8 +635,15 @@ def _login_via_browser(headless: bool = False) -> dict:
             channel='chrome',
             args=['--disable-blink-features=AutomationControlled'],
         )
-        context = browser.new_context()
+        global _CHAIKIN_UA
+        _CHAIKIN_UA = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{browser.version} Safari/537.36"
+        context = browser.new_context(user_agent=_CHAIKIN_UA)
         page = context.new_page()
+        if Stealth is not None:
+            try:
+                Stealth().apply_stealth_sync(page)
+            except Exception as e:
+                _pg_log.warning(f"Failed to apply playwright-stealth: {e}")
         page.on('request', on_request)
 
         page.goto('https://members.chaikinanalytics.com/login', wait_until='domcontentloaded', timeout=60000)
@@ -656,6 +704,8 @@ def login(interactive=True) -> dict:
         return _login_via_browser(headless=headless_run)
     except Exception as e:
         print(f"Browser login failed: {e}")
+        if not interactive or not sys.stdin or not sys.stdin.isatty():
+            raise EnvironmentError(f"Chaikin browser login failed: {e}") from e
 
     if not interactive or not sys.stdin or not sys.stdin.isatty():
         return {}
@@ -695,7 +745,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
         'jwttoken': session_data.get('jwttoken', ''),
         'x-api-key': _CHAIKIN_API_KEY,
         'x-app-id': 'omni',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+        'User-Agent': _CHAIKIN_UA
     }
     pg = PowerGauge(symbol, date)
     data_jsn = {}
@@ -759,6 +809,8 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
         elif response.status_code in (401, 403):
             if _allow_reauth:
                 _pg_log.warning(f"HTTP {response.status_code} for {symbol} — triggering session renewal...")
+                global _session_valid_until
+                _session_valid_until = 0.0
                 fresh = ensure_valid_session()
                 if fresh and fresh.get("jsessionid"):
                     return get_symbol_data(symbol, date, prefer_cache=False, session_id=fresh, _allow_reauth=False)
@@ -779,7 +831,18 @@ def check_from_file(prefer_cache: bool, date=None):
     elif isinstance(date, datetime.datetime):
         date = date.date()
     _build_cache_index()
-    session_id = login()
+    try:
+        session_id = login()
+    except EnvironmentError as e:
+        try:
+            session_abs_path = os.path.abspath(SESSION_FILE)
+            send_email(
+                subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
+                body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
+            )
+        except Exception as mail_err:
+            _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
+        raise
     _pg_log.debug("Session loaded", extra={"jsid_prefix": str(session_id)[:12] + "..."})
     syms_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "symbols_to_check.txt")
     csv_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", f"symbols_to_check_{date}.csv")
@@ -1133,7 +1196,18 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     import openpyxl
     _build_cache_index()
     _orig_backup = _backup_xlsx(XLSX_FILE)
-    session_id = login()
+    try:
+        session_id = login()
+    except EnvironmentError as e:
+        try:
+            session_abs_path = os.path.abspath(SESSION_FILE)
+            send_email(
+                subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
+                body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
+            )
+        except Exception as mail_err:
+            _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
+        raise
     _pg_log.debug("Session loaded", extra={"jsid_prefix": str(session_id)[:12] + "..."})
 
     # A full run (symbols=None) rebuilds from the ROOT source of truth. A targeted
