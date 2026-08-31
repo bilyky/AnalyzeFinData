@@ -320,15 +320,22 @@ OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Sy
 # ── Chaikin API ───────────────────────────────────────────────────────────────
 # OMNI (/api/*) app key. This is NOT a secret: it ships verbatim inside the public
 # members.chaikinanalytics.com JS bundle ($rootScope.config.apiKey) and every
-# browser sends it as `x-api-key` on every /api/* call. We keep it as a default so
-# the client works out of the box on and off the Intel network; config.json
-# (chaikin.api_key) or env CHAIKIN_API_KEY still override it.
-_CHAIKIN_OMNI_PUBLIC_KEY = "76J!7fb?jhEtz/hd7i6rHPKklawGZb5VLReDQXa0?4-jGCqQFi74xYCsb0H-hqUC"
+# browser sends it as `x-api-key` on every /api/* call.
+#
+# It is intentionally NOT hardcoded here. This repo is public and the value's
+# public-vs-secret status is unverified, so we ship no default in source. Supply it via
+# either `chaikin.api_key` in config.json or the CHAIKIN_API_KEY environment variable.
+# To obtain the live value, read the `x-api-key` request header from a logged-in OMNI
+# session (DevTools → Network → any members-backend.chaikinanalytics.com/api/* call), or
+# pull `$rootScope.config.apiKey` from the OMNI web JS bundle. With an empty key the API
+# returns HTTP 403 {"code":"SESSION_EXPIRED","message":"Missing required headers"} — the
+# message is misleading (it's the missing key, not an expired token), so the session
+# probe/fetch will report unreachable/invalid until the key is configured.
 try:
     from config import CFG
-    _CHAIKIN_API_KEY = CFG.chaikin_api_key or os.environ.get("CHAIKIN_API_KEY") or _CHAIKIN_OMNI_PUBLIC_KEY
+    _CHAIKIN_API_KEY = CFG.chaikin_api_key or os.environ.get("CHAIKIN_API_KEY") or ""
 except Exception:
-    _CHAIKIN_API_KEY = os.environ.get("CHAIKIN_API_KEY") or _CHAIKIN_OMNI_PUBLIC_KEY
+    _CHAIKIN_API_KEY = os.environ.get("CHAIKIN_API_KEY") or ""
 # Concurrent workers for parallel symbol fetch in check_from_xls.
 _FETCH_WORKERS = int(os.environ.get("CHAIKIN_WORKERS", "10"))
 
@@ -992,8 +999,14 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
             symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol", symbol)
             os.makedirs(symbol_dir, exist_ok=True)
             cache_date = date if date else datetime.date.today()
+            # Safeguard: only persist a genuine "ok" payload. A 200 that the adapter
+            # classified as "invalid symbol" (or any non-ok status) is a transient/degraded
+            # response — caching it would poison the disk cache and re-serve the symbol as
+            # invalid on later cache-preferred reads.
+            if data_jsn.get("status") != "ok":
+                _pg_log.info(f"[Cache Guard] {symbol}: response status={data_jsn.get('status')!r} (not 'ok'); skipping permanent disk-caching.")
             # Safeguard: Do NOT write/save today's temporary intraday price as today's permanent closing cache if NYSE is currently open!
-            if cache_date == datetime.date.today() and is_nyse_market_open():
+            elif cache_date == datetime.date.today() and is_nyse_market_open():
                 _pg_log.info(f"⚡ [Intraday Volatile] Today is an active trading day and NYSE is open. Skipping permanent disk-caching for {symbol} to force EOD sync.")
             else:
                 with open(os.path.join(symbol_dir, f"{symbol}_{cache_date}.json"), "w") as fw:

@@ -35,7 +35,7 @@ Every data call sends these header **names** (values are not reproduced here):
 | `jwttoken` | `session.json["jwttoken"]` (durable session token, JWT) |
 | `jsessionid` **and** `x-session-id` | `session.json["jsessionid"]` (same value in both) |
 | `uuid` | `session.json["uuid"]` (account email) |
-| `x-api-key` | `_CHAIKIN_API_KEY` — the public OMNI client key, embedded in the OMNI JS bundle (**not a secret**); defaulted in `powergauge.py` as `_CHAIKIN_OMNI_PUBLIC_KEY`, overridable via `CFG.chaikin_api_key` / `CHAIKIN_API_KEY` |
+| `x-api-key` | `_CHAIKIN_API_KEY` — the OMNI client key. **No default is shipped in source** (public repo; the value's secret-vs-public status is unverified). Supply it via `CFG.chaikin_api_key` (config.json) or the `CHAIKIN_API_KEY` env var; the header block comment in `powergauge.py` documents how to read the live value from a logged-in OMNI session |
 | `x-app-id` | `omni` |
 
 No cookie is required (a replay with no cookie returns 200). `beaconStreetJwtToken`
@@ -43,8 +43,9 @@ is unused by the data API.
 
 **Common failure:** an empty `x-api-key` returns `403 {"code":"SESSION_EXPIRED",
 "message":"Missing required headers"}` — misleading; it is the missing key, not an
-expired token. The code defaults the public OMNI key so this cannot happen when
-config/env are unset.
+expired token. Because no key is defaulted in source, an unconfigured deployment
+(no `CFG.chaikin_api_key`, no `CHAIKIN_API_KEY`) hits exactly this 403 and the
+session probe reports `unreachable`/`invalid` until the key is set.
 
 ## Credential model
 
@@ -85,7 +86,10 @@ name.
 
 An unknown ticker still returns HTTP 200 but with an empty `checklistData` and null
 `name`. The adapter surfaces this as `{"status": "invalid symbol"}`, and the caller
-sets `price = -1` — matching the old API's behavior.
+sets `price = -1` — matching the old API's behavior. A non-`"ok"` bundle is **never
+written to the on-disk cache** (cache-write guard in `get_symbol_data`), so a
+transient degraded 200 cannot poison a symbol's cache and re-serve it as invalid on
+later cache-preferred reads.
 
 ## Tests
 

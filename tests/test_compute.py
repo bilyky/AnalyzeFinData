@@ -267,6 +267,49 @@ class TestSymbolValidation(unittest.TestCase):
             # Save must never be called: the JWT-exchanged session failed validation.
             mock_save.assert_not_called()
 
+    def test_invalid_symbol_bundle_not_cached(self):
+        # PR #48 review (Finding 2): a 200 the adapter classifies as "invalid symbol"
+        # must NOT be persisted. Caching a transient/degraded response poisons the disk
+        # cache and re-serves the symbol as invalid on later cache-preferred reads.
+        resp = mock.MagicMock()
+        resp.ok = True
+        resp.status_code = 200
+        resp.json.return_value = {"data": {}}  # empty data → adapter → {"status": "invalid symbol"}
+        http = mock.MagicMock()
+        http.get.return_value = resp
+        with mock.patch("powergauge.ensure_valid_session",
+                        return_value={"jsessionid": "x", "jwttoken": "y"}), \
+             mock.patch("powergauge._get_http_session", return_value=http), \
+             mock.patch("powergauge.is_nyse_market_open", return_value=False), \
+             mock.patch("powergauge.os.makedirs"), \
+             mock.patch("powergauge.json.dump") as mock_dump, \
+             mock.patch.object(PowerGauge, "find_prev_pf", lambda self: None):
+            pg = get_symbol_data("ZZZZ", date.today(), False)
+        self.assertEqual(pg.price, -1)   # adapter classified it invalid
+        mock_dump.assert_not_called()    # ...and nothing was written to the cache
+
+    def test_ok_bundle_is_cached_when_market_closed(self):
+        # GREEN counterpart to the guard: a genuine "ok" payload IS persisted when the
+        # NYSE is closed (so the guard rejects non-ok, not everything).
+        ok_bundle = {"status": "ok", "pgr": [], "metaInfo": [{}], "checklist_stocks": {}}
+        resp = mock.MagicMock()
+        resp.ok = True
+        resp.status_code = 200
+        resp.json.return_value = {"data": {"name": "Zeta", "checklistData": {"pgr": "N"}}}
+        http = mock.MagicMock()
+        http.get.return_value = resp
+        with mock.patch("powergauge._adapt_suggestions_to_legacy", return_value=ok_bundle), \
+             mock.patch("powergauge.ensure_valid_session", return_value={"jsessionid": "x"}), \
+             mock.patch("powergauge._get_http_session", return_value=http), \
+             mock.patch("powergauge.is_nyse_market_open", return_value=False), \
+             mock.patch("powergauge.os.makedirs"), \
+             mock.patch("builtins.open", mock.mock_open()), \
+             mock.patch("powergauge.json.dump") as mock_dump, \
+             mock.patch.object(PowerGauge, "init_from_json", lambda self, dj, **k: None), \
+             mock.patch.object(PowerGauge, "find_prev_pf", lambda self: None):
+            get_symbol_data("ZZZZ", date.today(), False)
+        mock_dump.assert_called_once()   # ok payload reaches the cache writer
+
 
 if __name__ == "__main__":
     unittest.main()
