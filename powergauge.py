@@ -81,6 +81,7 @@ from patterns import (
 )
 
 PGR_STR = ["", "Be-", "Be", "N", "Bu", "Bu+", ""]
+_CHAIKIN_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
 # Chaikin Analytics app-level API key — set via config or env var.
 try:
@@ -136,10 +137,13 @@ def ensure_valid_session() -> dict:
             new_sid = _jwt_to_session_id(session["jwttoken"])
             if new_sid:
                 session["jsessionid"] = new_sid
-                _save_session_to_file(session)
-                _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
-                _pg_log.info("Successfully refreshed Chaikin session using saved JWT token (API bypass).")
-                return session
+                if _validate_session(session):
+                    _save_session_to_file(session)
+                    _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
+                    _pg_log.info("Successfully refreshed Chaikin session using saved JWT token (API bypass).")
+                    return session
+                else:
+                    _pg_log.warning("JWT exchanged session ID failed active validation check.")
         except Exception as e:
             _pg_log.warning(f"Failed to refresh session using JWT token (will fall back to browser): {e}")
     # Expired — delegate to the cross-process singleton
@@ -548,7 +552,7 @@ def _validate_session(session_data: dict) -> bool:
         'jwttoken': session_data.get('jwttoken', ''),
         'x-api-key': _CHAIKIN_API_KEY,
         'x-app-id': 'omni',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+        'User-Agent': _CHAIKIN_UA
     }
     try:
         r = _get_http_session().get(test_url, headers=headers, timeout=(5, 15))
@@ -611,8 +615,9 @@ def _login_via_browser(headless: bool = False) -> dict:
             channel='chrome',
             args=['--disable-blink-features=AutomationControlled'],
         )
-        user_agent = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{browser.version} Safari/537.36"
-        context = browser.new_context(user_agent=user_agent)
+        global _CHAIKIN_UA
+        _CHAIKIN_UA = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{browser.version} Safari/537.36"
+        context = browser.new_context(user_agent=_CHAIKIN_UA)
         page = context.new_page()
         if Stealth is not None:
             try:
@@ -687,7 +692,7 @@ def login(interactive=True) -> dict:
                     body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
                 )
             except Exception as mail_err:
-                print(f"Failed to send Turnstile block alert email: {mail_err}")
+                _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
             raise EnvironmentError(f"Chaikin browser login failed: {e}") from e
 
     if not interactive or not sys.stdin or not sys.stdin.isatty():
@@ -728,7 +733,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
         'jwttoken': session_data.get('jwttoken', ''),
         'x-api-key': _CHAIKIN_API_KEY,
         'x-app-id': 'omni',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+        'User-Agent': _CHAIKIN_UA
     }
     pg = PowerGauge(symbol, date)
     data_jsn = {}
@@ -792,6 +797,8 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
         elif response.status_code in (401, 403):
             if _allow_reauth:
                 _pg_log.warning(f"HTTP {response.status_code} for {symbol} — triggering session renewal...")
+                global _session_valid_until
+                _session_valid_until = 0.0
                 fresh = ensure_valid_session()
                 if fresh and fresh.get("jsessionid"):
                     return get_symbol_data(symbol, date, prefer_cache=False, session_id=fresh, _allow_reauth=False)
