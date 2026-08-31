@@ -136,21 +136,42 @@ def ensure_valid_session() -> dict:
         try:
             new_sid = _jwt_to_session_id(session["jwttoken"])
             if new_sid:
-                session["jsessionid"] = new_sid
-                if _validate_session(session):
-                    _save_session_to_file(session)
+                # Mutation Hygiene: Copy dict before modifying to prevent in-place corruption
+                test_session = session.copy()
+                test_session["jsessionid"] = new_sid
+                if _validate_session(test_session):
+                    _save_session_to_file(test_session)
                     _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
                     _pg_log.info("Successfully refreshed Chaikin session using saved JWT token (API bypass).")
-                    return session
+                    return test_session
                 else:
                     _pg_log.warning("JWT exchanged session ID failed active validation check.")
         except Exception as e:
-            _pg_log.warning(f"Failed to refresh session using JWT token (will fall back to browser): {e}")
-    # Expired — delegate to the cross-process singleton
-    new_session = _chaikin_renewer.ensure(current_token=session)
-    if new_session and new_session.get("jsessionid"):
-        _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
-    return new_session or session or {}
+            # Security Best Practice: Sanitize and redact raw JWT token from exception logs to prevent exposure
+            err_msg = str(e)
+            if "jwtToken=" in err_msg:
+                import re
+                err_msg = re.sub(r"jwtToken=[^&\s]+", "jwtToken=REDACTED", err_msg)
+            _pg_log.warning(f"Failed to refresh session using JWT token (will fall back to browser): {err_msg}")
+
+    # Expired — delegate to the cross-process singleton (protected by try-except to send email outside of lock duration)
+    try:
+        new_session = _chaikin_renewer.ensure(current_token=session)
+        if new_session and new_session.get("jsessionid"):
+            _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
+        return new_session or session or {}
+    except EnvironmentError as e:
+        # We are now OUTSIDE the cross-process lock! We can safely send the email alert
+        # without adding any 30s SMTP latency to other waiting background tasks.
+        try:
+            session_abs_path = os.path.abspath(SESSION_FILE)
+            send_email(
+                subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
+                body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
+            )
+        except Exception as mail_err:
+            _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
+        raise
 
 
 # Pre-built index of symbol → sorted list of cached JSON paths.
@@ -685,14 +706,6 @@ def login(interactive=True) -> dict:
     except Exception as e:
         print(f"Browser login failed: {e}")
         if not interactive or not sys.stdin or not sys.stdin.isatty():
-            try:
-                session_abs_path = os.path.abspath(SESSION_FILE)
-                send_email(
-                    subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
-                    body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
-                )
-            except Exception as mail_err:
-                _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
             raise EnvironmentError(f"Chaikin browser login failed: {e}") from e
 
     if not interactive or not sys.stdin or not sys.stdin.isatty():
