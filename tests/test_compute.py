@@ -8,6 +8,8 @@ import os
 import sys
 import unittest
 from datetime import date, timedelta
+from unittest import mock
+import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -221,8 +223,6 @@ class TestSymbolValidation(unittest.TestCase):
             get_symbol_data("../../../etc", date.today(), False, "fake")
 
     def test_get_symbol_data_handles_network_exception(self):
-        from unittest import mock
-        import requests
         with mock.patch("powergauge._get_http_session") as mock_get_session,              mock.patch("powergauge.ensure_valid_session") as mock_ensure:
             mock_ensure.return_value = {"jsessionid": "fake"}
             mock_session = mock.MagicMock()

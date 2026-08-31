@@ -7,6 +7,11 @@ import os
 import time
 import urllib3
 import pytz
+try:
+    from playwright_stealth import Stealth
+except ImportError:
+    Stealth = None
+from aether.notify import send_email
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
@@ -597,11 +602,11 @@ def _login_via_browser(headless: bool = False) -> dict:
         user_agent = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{browser.version} Safari/537.36"
         context = browser.new_context(user_agent=user_agent)
         page = context.new_page()
-        try:
-            from playwright_stealth import Stealth
-            Stealth().apply_stealth_sync(page)
-        except Exception as e:
-            _pg_log.warning(f"Failed to apply playwright-stealth: {e}")
+        if Stealth is not None:
+            try:
+                Stealth().apply_stealth_sync(page)
+            except Exception as e:
+                _pg_log.warning(f"Failed to apply playwright-stealth: {e}")
         page.on('request', on_request)
 
         page.goto('https://members.chaikinanalytics.com/login', wait_until='domcontentloaded', timeout=60000)
@@ -664,7 +669,6 @@ def login(interactive=True) -> dict:
         print(f"Browser login failed: {e}")
         if not interactive or not sys.stdin or not sys.stdin.isatty():
             try:
-                from aether.notify import send_email
                 session_abs_path = os.path.abspath(SESSION_FILE)
                 send_email(
                     subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
