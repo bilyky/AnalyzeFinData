@@ -38,7 +38,9 @@ def main():
     except Exception as e:  # fail open - never block the agent on a hook bug
         sys.stderr.write(f"response_verifier: {e}\n")
         result = {"decision": "allow"}
-    print(json.dumps(result))
+    # Only the final decision JSON may hit stdout (the hook protocol channel); write it
+    # raw rather than via the banned print()/_log.console() - stdout here is not logging.
+    sys.stdout.write(json.dumps(result) + "\n")
 
 
 if __name__ == "__main__":

@@ -45,7 +45,9 @@ def main():
     except Exception:
         return  # any error -> allow stop
     if result is not None:
-        print(json.dumps(result))
+        # A hook's stdout is a machine-readable protocol channel (the decision JSON),
+        # not human logging - so write raw, not via the banned print()/_log.console().
+        sys.stdout.write(json.dumps(result) + "\n")
 
 
 if __name__ == "__main__":
