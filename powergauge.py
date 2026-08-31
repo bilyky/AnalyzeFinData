@@ -130,6 +130,18 @@ def ensure_valid_session() -> dict:
     if session and _validate_session(session):
         _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
         return session
+    # API-based JWT Token Refresh (Bypasses Browser/Turnstile completely in 0.2 seconds!)
+    if session and session.get("jwttoken"):
+        try:
+            new_sid = _jwt_to_session_id(session["jwttoken"])
+            if new_sid:
+                session["jsessionid"] = new_sid
+                _save_session_to_file(session)
+                _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
+                _pg_log.info("Successfully refreshed Chaikin session using saved JWT token (API bypass).")
+                return session
+        except Exception as e:
+            _pg_log.warning(f"Failed to refresh session using JWT token (will fall back to browser): {e}")
     # Expired — delegate to the cross-process singleton
     new_session = _chaikin_renewer.ensure(current_token=session)
     if new_session and new_session.get("jsessionid"):
