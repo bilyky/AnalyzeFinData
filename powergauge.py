@@ -150,7 +150,6 @@ def ensure_valid_session() -> dict:
             # Security Best Practice: Sanitize and redact raw JWT token from exception logs to prevent exposure
             err_msg = str(e)
             if "jwtToken=" in err_msg:
-                import re
                 err_msg = re.sub(r"jwtToken=[^&\s]+", "jwtToken=REDACTED", err_msg)
             _pg_log.warning(f"Failed to refresh session using JWT token (will fall back to browser): {err_msg}")
 
@@ -832,7 +831,18 @@ def check_from_file(prefer_cache: bool, date=None):
     elif isinstance(date, datetime.datetime):
         date = date.date()
     _build_cache_index()
-    session_id = login()
+    try:
+        session_id = login()
+    except EnvironmentError as e:
+        try:
+            session_abs_path = os.path.abspath(SESSION_FILE)
+            send_email(
+                subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
+                body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
+            )
+        except Exception as mail_err:
+            _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
+        raise
     _pg_log.debug("Session loaded", extra={"jsid_prefix": str(session_id)[:12] + "..."})
     syms_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "symbols_to_check.txt")
     csv_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", f"symbols_to_check_{date}.csv")
@@ -1186,7 +1196,18 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     import openpyxl
     _build_cache_index()
     _orig_backup = _backup_xlsx(XLSX_FILE)
-    session_id = login()
+    try:
+        session_id = login()
+    except EnvironmentError as e:
+        try:
+            session_abs_path = os.path.abspath(SESSION_FILE)
+            send_email(
+                subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
+                body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
+            )
+        except Exception as mail_err:
+            _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
+        raise
     _pg_log.debug("Session loaded", extra={"jsid_prefix": str(session_id)[:12] + "..."})
 
     # A full run (symbols=None) rebuilds from the ROOT source of truth. A targeted
