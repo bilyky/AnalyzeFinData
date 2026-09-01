@@ -1,45 +1,42 @@
-# The AETHER "15-Day Sprint" Strategy: The Barbell & Catalyst Protocol
+# The AETHER Generalizable Barbell Strategy: Risk-Budgeted Growth
 
 ## Objective
-To mathematically bridge the gap to our $20,000 portfolio goal in the remaining 15 days without recklessly "gaming" the risk sliders. We must transition from a symmetric, index-hugging portfolio to an asymmetric, catalyst-driven strike force while preserving the initial $10,000 capital base.
+To deploy an asymmetric growth strategy that operates identically on a $10,000 account or a $10,000,000 account over any time horizon. This protocol completely abandons arbitrary calendar deadlines and fixed dollar targets, replacing them with strict, mathematically generalizable risk budgets and expectancy targets.
 
-## Core Philosophy: The Taleb Barbell (Modular Architecture)
-We will abandon the linear "7 equal slots" approach. Instead, we divide the portfolio into two extremes (The Barbell) controlled by a **Modular Strategy Profile** (e.g., `profiles/sprint_barbell.json`), ensuring we do not pollute the core Python engine with hardcoded 15-day rules.
-1. **The Shield (80% of Capital):** Ultra-safe, capital-preservation trades. These adhere to all current strict rules (2.5-Sigma guard, 2.0:1 R:R, strict ATR stops). 
-2. **The Spear (20% of Capital + Generated Profit):** Hyper-concentrated, asymmetric risk designed for exponential upside. This bucket is allowed to break standard technical rules *only if* it passes the Qualitative Homework Gate.
+## Core Philosophy: The Horizon-Agnostic Barbell
+We implement a dual-bucket portfolio architecture via a **Modular Strategy Profile** (`profiles/barbell_growth.json`). This ensures the logic is reusable and does not hardcode constraints into the execution engine.
+1. **The Shield (80% Risk Budget):** Core capital-preservation trades. These adhere to all baseline AETHER rules (2.5-Sigma Bubble Guard, SPY-RSP Breadth gating, ATR-sized position scaling, and strict downside stops).
+2. **The Spear (20% Risk Budget):** Asymmetric, catalyst-driven strike plays. The Spear is **hard-capped at 20% of total equity** (rebalanced) to prevent martingale creep. It must survive rigorous, dual-factor structural validation before entry. 
 
-## The New Dynamic Rules (Enterprise-Grade & Red-Team Hardened)
+## The Generalizable Rules
 
-### 1. The Pre-Execution "Homework" Tribunal (RVOL-Confirmed Catalyst Gate)
-Technical indicators (S10/L60) are lagging, but raw LLM analysis is prone to hallucination. To put a stock in the "Spear" bucket, it must pass a dual-factor gate *before* execution.
-* **The Rule:** The LLM scans external intel/news for a specific, **unresolved** asymmetric event. 
-* **The Verification:** If the LLM proposes a catalyst, the core engine must mathematically verify institutional participation via **Relative Volume (RVOL)**. If RVOL > 2.0 (volume is 200% above average), institutions agree with the LLM, and the trade is authorized. If RVOL is average, the LLM is hallucinating, and the trade is vetoed.
+### 1. The Pre-Execution Catalyst Gate (Dual-Factor Confirmation)
+The Spear relies on external intelligence, but it must mathematically confirm that intelligence before risking capital.
+* **The Rule:** The LLM proposes an unresolved event (e.g., upcoming PDUFA date, earnings shock). The Python engine then executes a strict dual-factor validation:
+  1. **Volume (Attention):** RVOL > 2.0 (Institutional attention).
+  2. **Price Structure (Direction):** The stock must simultaneously print a confirmed higher-low reversal bar or hold above VWAP/prior close. 
+* **The Rationale:** RVOL without structure is a knife-catch. Volume AND Price must both mathematically agree with the LLM's bullish thesis.
 
-### 2. Time-Velocity Stops (The 7-Day Rule)
-Capital trapped in a sideways stock is dead money.
-* **The Rule:** If a stock does not achieve a **+5% gain within 7 trading days** of acquisition, it is automatically sold at market.
-* **The Rationale:** Seven days allows the stock to break out, mathematically retest its breakout support level, and continue higher without triggering our time stop, while still enforcing extreme capital velocity.
+### 2. Event-Relative Exits & Vol-Scaled Stops
+Fixed-day time stops (e.g., 7 days) are arbitrary calendar artifacts that ignore market structure.
+* **The Rule:** Exits are tied to the instrument and the event. 
+  1. **Time-Stop:** The trade is exited if the specific catalyst date passes without the expected structural move.
+  2. **Downside Stop:** The position is governed by a hard ATR/vol-scaled downside stop from Day 1 to bound the left tail.
 
-### 3. The "House Money" Asymmetric Leverage (3x LETFs)
-To achieve exponential returns without the engineering nightmare and IV-crush risk of an Options API, we will use existing equity infrastructure.
-* **The Rule:** We authorize the system to buy **3x Leveraged ETFs (LETFs)** (e.g., TQQQ, UPRO, SOXL) on our top Catalyst-approved "Spear" setups using *only* house money.
-* **The Rationale:** We capture 300% asymmetric leverage using our 100% battle-tested stock execution engine. Zero new API code required, zero expiration risk, and maximum upside, all while capping our maximum possible loss at our profit margin.
+### 3. Pyramiding on Confirmed Retests (Not Touches)
+* **The Rule:** Enter with an initial ATR-scaled scout position. The system will *only* execute an add-on order (Scale-In) when the asset pulls back to a moving average AND **prints a confirmed close back above the MA** (a successful hold).
+* **The Rationale:** Scaling in on an unconfirmed "touch" of a moving average is catching a falling knife. We only average up when the market structurally confirms the recovery.
 
-### 4. Dynamic Pullback Pyramiding (Scaling In)
-We stop buying full allocations on Day 1, and we do not scale-in on gap-ups (which ruins our cost basis).
-* **The Rule:** Buy 33% of the target position initially. We execute a secondary "scale-in" buy order (the remaining 66%) **only on a pullback retest** to the nearest moving average (e.g., the 10-SMA or 20-SMA), simultaneously moving the initial stop-loss to breakeven.
+### 4. Correlation Caps
+* **The Rule:** The Spear bucket enforces a strict correlation cap (e.g., maximum of one broad-beta tech play). 
+* **The Rationale:** Holding three highly correlated assets is a disguised, uncapped bet on market direction, which violates the Barbell's core premise of many uncorrelated, small bets.
 
-### 5. Active Cash Sweeps (No Dead Money)
-If no catalysts are found, the 20% Spear bucket cannot sit idle.
-* **The Rule:** Any unallocated Spear cash is automatically swept into liquid yield-bearing ETFs (e.g., SGOV) or high-momentum proxies (e.g., IBIT) to earn yield every single day. The moment a valid catalyst appears, the proxy is instantly liquidated to fund the Spear.
+### 5. Discovery Engine Cadence (No Daily Overfitting)
+* **The Rule:** The daily execution loop evaluates trades based on frozen parameters. When the market surfaces a new phenomenon, the loop nominates it as a *candidate signal* for the Saturday R&D queue. 
+* **The Rationale:** We do not tune momentum floors on a rolling 7-day P&L (which guarantees whipsawing and curve-fitting). Parameters are derived once monthly against the full 500-symbol universe. The daily loop generates hypotheses; the monthly pipeline validates them.
 
-### 6. The Iterative 7-Day Retrospective (Daily Calibration)
-No static rule set survives a shifting market regime. To ensure the Barbell strategy remains adaptive, we must institute a mandatory, daily calibration loop.
-* **The Rule:** Every single day, before the market opens, we will conduct an interactive AI-guided review of the past 7 days of execution data.
-* **The Rationale:** This allows us to instantly adjust our pullback levels, volume thresholds, or momentum floors for the very next session based on empirical feedback.
-
-## Implementation Phases
-1. **Phase 1:** Build the Modular Strategy Profile framework (`profiles/barbell.json`) to decouple sprint logic from the core engine.
-2. **Phase 2:** Inject the 7-Day Time-Velocity Stop and Pullback Pyramiding into `ai_portfolio_game.py` (triggered only by the Barbell profile).
-3. **Phase 3:** Build the dual-factor `pre_execution_homework()` function (LLM Event + RVOL > 2.0).
-4. **Phase 4:** Authorize the 3x LETF whitelist and build the Active Cash Sweep logic.
+## Implementation Roadmap
+* **Phase 1:** Build the `profiles/barbell_growth.json` structure to separate risk parameters from `ai_portfolio_game.py`.
+* **Phase 2:** Implement the Dual-Factor Catalyst Gate (RVOL + Structure) into the Spear entry logic.
+* **Phase 3:** Integrate Event-Relative exits and Confirmed-Retest Pyramiding.
+* **Phase 4:** Expand the Saturday Discovery Engine to accept candidate signals from daily anomalous market behavior.
