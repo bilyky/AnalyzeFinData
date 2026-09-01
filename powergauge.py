@@ -312,7 +312,8 @@ def _get_http_session() -> requests.Session:
     return _http_session
 
 
-SRC_XLSX  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state_of_the_day.xlsx")
+LOCAL_SRC_XLSX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state_of_the_day.xlsx")
+SRC_XLSX  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state_of_the_day_src.xlsx")
 XLSX_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "state_of_the_day.xlsx")
 XLSX_BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Backup")
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
@@ -1402,7 +1403,21 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         date = date.date()
     import openpyxl
     _build_cache_index()
-    _orig_backup = _backup_xlsx(XLSX_FILE)
+
+    # Dynamic Source Update: If the untracked manual input file exists, copy it over the tracked source
+    import shutil
+    import os
+    if os.path.exists(LOCAL_SRC_XLSX):
+        try:
+            shutil.copy2(LOCAL_SRC_XLSX, SRC_XLSX)
+            print(f"  [INFO] Copied manual inputs from {LOCAL_SRC_XLSX} to tracked source {SRC_XLSX}")
+        except Exception as e:
+            print(f"  [WARNING] Failed to copy local manual inputs (may be locked by Excel). Using existing {SRC_XLSX}. Error: {e}")
+
+    # Backup BOTH the output destination and the tracked source file before modifying anything
+    _orig_backup = _backup_xlsx(XLSX_FILE, label="output")
+    _src_backup = _backup_xlsx(SRC_XLSX, label="source_manual")
+
     try:
         session_id = login()
     except EnvironmentError as e:
