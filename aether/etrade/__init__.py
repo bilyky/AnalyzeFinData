@@ -7,6 +7,7 @@ import time
 from zoneinfo import ZoneInfo
 
 import pyetrade
+import pyotp
 import pytz
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
@@ -430,15 +431,26 @@ def _scheduled_headless() -> bool:
 # OAuth — automated via Playwright
 # ---------------------------------------------------------------------------
 
-def _login_headless(ck: str, cs: str, username: str, password: str, env: str, headless: bool = False) -> dict | None:
-    """Fully automatic Playwright login using saved browser state (trusted-device cookies).
-    No human interaction required — MFA is skipped by the saved cookies.
-    Returns token dict on success, None on failure.
+def _login_headless(ck: str, cs: str, username: str, password: str, env: str,
+                    headless: bool = False, totp_secret: str | None = None) -> dict | None:
+    """Fully automatic Playwright login. Returns token dict on success, None on failure.
+
+    Two mints share this one choke point:
+      * TOTP path (totp_secret set) — a headless Firefox login that self-completes MFA with a
+        software VIP code (no SMS wall, no persistent-profile device-trust needed). Reboot-proof.
+      * legacy path (no totp_secret) — the persistent-Chrome device-trust flow, kept for the
+        supervised human bootstrap and any env without a TOTP secret.
 
     This is the SINGLE choke point for the automated browser path: the anti-ban circuit
     breaker is enforced here, so no retry loop or second caller can bypass it. The human
     interactive login in get_tokens() does NOT pass through here and is never blocked.
+
+    totp_secret defaults to None → read CFG.etrade_totp_secret, so every caller automatically
+    takes the TOTP path once a secret is configured, with no call-site change.
     """
+    if totp_secret is None:
+        totp_secret = getattr(CFG, "etrade_totp_secret", "") or ""
+
     remaining = _reauth_cooldown_remaining(env)
     if remaining > 0:
         failures = _load_reauth_state(env)["consecutive_failures"]
@@ -456,10 +468,15 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str, he
     try:
         oauth = pyetrade.ETradeOAuth(ck, cs)
         auth_url = oauth.get_request_token()
-        verifier_code = _get_tokens_via_playwright(
-            auth_url, username, password,
-            headless=headless,
-        )
+        if totp_secret:
+            verifier_code = _get_verifier_via_totp(
+                auth_url, username, password, totp_secret, headless=headless,
+            )
+        else:
+            verifier_code = _get_tokens_via_playwright(
+                auth_url, username, password,
+                headless=headless,
+            )
         if verifier_code:
             tokens = oauth.get_access_token(verifier_code)
             _save_tokens(tokens, env)
@@ -475,6 +492,119 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str, he
     except Exception as e:
         _log.debug(f"_login_headless: {e}")
     return None
+
+
+def _get_verifier_via_totp(auth_url, username, password, totp_secret, headless=True):
+    """Headless Firefox login that self-completes MFA with a software TOTP code.
+
+    Ports the proven wetrade (mason-krause/wetrade) technique — a throwaway Firefox context,
+    E*TRADE's own login selectors, and the six-digit VIP code typed into the DEDICATED
+    #securityCode field (NOT appended to the password). No SMS wall, no persistent device-trust
+    profile, no device-print handshake to stall on. Every wait is BOUNDED so a hang fails fast
+    instead of blocking the daily door (the exact failure mode of the cold-Chrome path).
+
+    Returns the OAuth verifier string (to exchange for an access token) or None. Never prints
+    the code or the verifier. Honors HTTPS_PROXY/HTTP_PROXY the same way the Chrome path does
+    (unset on the clean-egress host → direct).
+    """
+    _LOGIN_URL = "https://us.etrade.com/etx/pxy/login"
+    _USER_SEL = "input#USER, input[name='USER'], input[name='username']"
+    _PASS_SEL = "input#password, input#PASSWORD, input[name='PASSWORD'], input[type='password']"
+    _SECCODE_RADIO = "[for='useSecurityCode']"
+    _SECCODE_SEL = "input#securityCode, input[name='securityCode']"
+    _SUBMIT_SEL = "#mfaLogonButton, button:has-text('Log on'), input[value='Log on']"
+    _ACCEPT_SEL = "input[value='Accept'], button:has-text('Accept'), [value='Accept']"
+
+    proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+    pw_proxy = {"server": proxy_url} if proxy_url else None
+
+    def _snap(page, name):
+        try:
+            p = os.path.join(_DATA_DIR, f"etrade_totp_{name}.png")
+            page.screenshot(path=p)
+            _log.info("  [TOTP] Screenshot: %s | URL: %s", p, page.url[:80])
+        except Exception:
+            pass
+
+    with sync_playwright() as p:
+        browser = p.firefox.launch(headless=headless, proxy=pw_proxy)
+        try:
+            context = browser.new_context()
+            # Hide the automation flag — a cheap, well-known bot tell.
+            context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => false})")
+            page = context.new_page()
+
+            _log.info("  [TOTP] Opening E*TRADE login…")
+            page.goto(_LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
+            _snap(page, "01_login")
+
+            # Credentials — click then type with human-like delay (matches wetrade).
+            page.wait_for_selector(_USER_SEL, timeout=15000)
+            page.click(_USER_SEL)
+            page.keyboard.type(username, delay=120)
+            page.click(_PASS_SEL)
+            page.keyboard.type(password, delay=120)
+            page.wait_for_timeout(400)
+
+            # Software-TOTP MFA: pick the security-code method, type the current 6-digit code
+            # into its DEDICATED field, then submit. No SMS is ever requested.
+            try:
+                page.click(_SECCODE_RADIO, timeout=6000)
+                page.wait_for_selector(_SECCODE_SEL, timeout=6000)
+                page.click(_SECCODE_SEL)
+                page.keyboard.type(pyotp.TOTP(totp_secret).now(), delay=120)
+                page.wait_for_timeout(300)
+            except PWTimeout:
+                # No security-code control on this render — device already trusted / no MFA
+                # prompt. Proceed to submit; the login may complete without a code.
+                _log.info("  [TOTP] Security-code field not shown — submitting without a code.")
+
+            page.click(_SUBMIT_SEL, timeout=8000)
+            _snap(page, "02_submitted")
+
+            # Leave the login page (bounded — a stall fails fast instead of hanging).
+            try:
+                page.wait_for_function(_LEFT_LOGIN_PAGE_JS, timeout=20000)
+            except PWTimeout:
+                _log.warning("  [TOTP] Still on the login page after 20s — inspecting state.")
+                _snap(page, "02b_stalled")
+
+            # Occasional post-login interstitial ("Continue"/consent) before the authorize page.
+            for sel in ("button:has-text('Continue')", "input[value='Continue']"):
+                try:
+                    page.click(sel, timeout=2500)
+                    break
+                except PWTimeout:
+                    continue
+
+            # OAuth authorize page → Accept → the verifier lives in an input's value.
+            page.goto(auth_url, wait_until="domcontentloaded", timeout=30000)
+            _snap(page, "03_authorize")
+            page.click(_ACCEPT_SEL, timeout=10000)
+            page.wait_for_timeout(600)
+            _snap(page, "04_accept")
+
+            verifier = None
+            try:
+                raw = page.locator("input").first.get_attribute("value", timeout=6000)
+                if raw and raw.strip():
+                    verifier = raw.strip()
+            except Exception:
+                pass
+            if not verifier and "oauth_verifier=" in page.url:
+                verifier = page.url.split("oauth_verifier=")[1].split("&")[0]
+
+            if verifier:
+                _log.info("  [TOTP] Verifier captured: [captured]")
+            else:
+                _log.warning("  [TOTP] No verifier found on the Accept page.")
+            return verifier
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
 
 
 def _get_tokens_via_playwright(auth_url, username, password, headless=False):
@@ -1314,7 +1444,12 @@ def scheduled_reauth(env: str = "production") -> dict:
     # AND the breaker is clear — the SAME gate the read-only auth_status reports, via the shared
     # _dead_token_gate (trust lapse 'sms_required'/'unseeded' -> no browser, awaiting a human;
     # cooling -> 'breaker'). reason=None means both gates are open.
-    trust = _profile_trust_state(env)
+    #
+    # TOTP override: a configured software-TOTP secret self-completes MFA on every cold run, so
+    # there is no SMS wall and no persistent device-trust to lapse — the trust marker is moot.
+    # Treat a TOTP-configured env as 'trusted' so the door isn't blocked on 'unseeded'. The
+    # breaker gate below still applies (ban-safety unchanged).
+    trust = "trusted" if (getattr(CFG, "etrade_totp_secret", "") or "") else _profile_trust_state(env)
     gate_reason, _needs_manual, _can_auto = _dead_token_gate(
         trust, _reauth_cooldown_remaining(env) > 0)
     if gate_reason is not None:
