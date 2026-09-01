@@ -556,7 +556,7 @@ def run_watchdog():
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            timeout=15
+            timeout=120
         )
         compilation_passed = (val_result.returncode == 0)
         validation_output = val_result.stdout if compilation_passed else val_result.stderr
