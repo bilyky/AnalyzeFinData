@@ -47,7 +47,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Decouple and exempt legacy, utility, and test files cleanly using cross-platform forward-slashes
 "aether/ai_client.py" = ["S110"]              # Optional AI provider fallback passes
-"aether/etrade.py" = ["T201", "E402", "S110"]  # Print statements, inline imports, and exception passes allowed for headless Playwright login
+"aether/etrade/**" = ["T201", "E402", "S110"]  # Print statements, inline imports, and exception passes allowed for headless Playwright login (module is now a package)
 "aether/notify.py" = ["S110"]                  # Email dispatch retry passes
 "aether/scoring.py" = ["S110", "B007"]          # Optional cache read passes; unused monthly loops
 "aether/workbook_write.py" = ["S110", "B007", "B023"] # Lazy VML XML hacks, XML loop mappings, and cell cell-write function variable bindings
