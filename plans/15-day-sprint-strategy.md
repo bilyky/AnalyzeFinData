@@ -35,6 +35,11 @@ Fixed-day time stops (e.g., 7 days) are arbitrary calendar artifacts that ignore
 * **The Rule:** The daily execution loop evaluates trades based on frozen parameters. When the market surfaces a new phenomenon, the loop nominates it as a *candidate signal* for the Saturday R&D queue. 
 * **The Rationale:** We do not tune momentum floors on a rolling 7-day P&L (which guarantees whipsawing and curve-fitting). Parameters are derived once monthly against the full 500-symbol universe. The daily loop generates hypotheses; the monthly pipeline validates them.
 
+### 6. Anti-Toxic DNA & Gap Defense (The URA Lesson)
+Technical stop-losses are illusions against overnight fundamental gap-downs. To protect the Spear bucket from catastrophic slippage:
+* **The Rule:** The system must strictly enforce the `failure_dna_rules.json` feedback loop. Any asset carrying a Bearish (`Be` or `Be-`) PGR rating is mathematically toxic and is instantly vetoed, regardless of momentum scores or breakout patterns. 
+* **The Rationale:** Buying momentum on fundamentally broken assets guarantees exposure to "dead cat bounces" and violent gap-downs. Furthermore, the true mathematical defense against an overnight gap is **Defined Risk** (e.g., Options or Leveraged ETFs). By using these instruments, the absolute maximum loss is bounded at the premium paid, completely neutralizing pre-market gap slippage.
+
 ## Implementation Roadmap
 * **Phase 1:** Build the `profiles/barbell_growth.json` structure to separate risk parameters from `ai_portfolio_game.py`.
 * **Phase 2:** Implement the Dual-Factor Catalyst Gate (RVOL + Structure) into the Spear entry logic.
