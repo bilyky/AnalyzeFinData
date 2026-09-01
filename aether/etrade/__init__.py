@@ -585,15 +585,26 @@ def _get_verifier_via_totp(auth_url, username, password, totp_secret, headless=T
             page.wait_for_timeout(600)
             _snap(page, "04_accept")
 
+            # Extract the verifier the same disciplined way the Chrome path does: prefer the
+            # known verifier inputs, and VALIDATE the value looks like an E*TRADE OAuth PIN
+            # (^[A-Z0-9]{4,10}$) so we never grab a stray hidden/CSRF input's value.
             verifier = None
-            try:
-                raw = page.locator("input").first.get_attribute("value", timeout=6000)
-                if raw and raw.strip():
-                    verifier = raw.strip()
-            except Exception:
-                pass
+            for sel in ("input[readonly]", "input#oauth_pin",
+                        "input[name='oauth_verifier']", "input"):
+                try:
+                    for el in page.locator(sel).all():
+                        raw = (el.get_attribute("value", timeout=2000) or "").strip()
+                        if _re.match(r"^[A-Z0-9]{4,10}$", raw):
+                            verifier = raw
+                            break
+                except Exception:
+                    continue
+                if verifier:
+                    break
             if not verifier and "oauth_verifier=" in page.url:
-                verifier = page.url.split("oauth_verifier=")[1].split("&")[0]
+                cand = page.url.split("oauth_verifier=")[1].split("&")[0].strip()
+                if _re.match(r"^[A-Z0-9]{4,10}$", cand):
+                    verifier = cand
 
             if verifier:
                 _log.info("  [TOTP] Verifier captured: [captured]")

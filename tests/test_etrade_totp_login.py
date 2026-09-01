@@ -29,8 +29,11 @@ def _fake_firefox(verifier="VERIF123", accept_url="https://us.etrade.com/oauth/a
     Returns (patch_target, browser, context, page)."""
     page = mock.MagicMock()
     page.url = accept_url
-    # verifier scrape: page.locator("input").first.get_attribute("value", ...) -> verifier
-    page.locator.return_value.first.get_attribute.return_value = verifier
+    # verifier scrape: the getter iterates page.locator(sel).all() and reads each element's
+    # value, keeping the first that matches ^[A-Z0-9]{4,10}$. Model one matching input.
+    _el = mock.MagicMock()
+    _el.get_attribute.return_value = verifier
+    page.locator.return_value.all.return_value = [_el]
     context = mock.MagicMock()
     context.new_page.return_value = page
     browser = mock.MagicMock()
@@ -61,9 +64,26 @@ class TestGetVerifierViaTotp(unittest.TestCase):
         self.assertNotIn("pw654321", typed)
         browser.close.assert_called()                      # context always torn down
 
+    def test_skips_stray_input_and_picks_valid_verifier(self):
+        # Finding-3 guard: the Accept page can carry hidden/CSRF inputs whose value is NOT an
+        # OAuth PIN. The getter must skip anything that fails ^[A-Z0-9]{4,10}$ and take the real one.
+        fake, browser, ctx, page = _fake_firefox()
+        stray = mock.MagicMock()
+        stray.get_attribute.return_value = "csrf-token_not-a-pin=="   # fails the PIN pattern
+        good = mock.MagicMock()
+        good.get_attribute.return_value = "XY12Z9"                    # valid PIN
+        page.locator.return_value.all.return_value = [stray, good]
+        with mock.patch.object(etrade, "sync_playwright", fake), \
+             mock.patch("pyotp.TOTP") as m_totp:
+            m_totp.return_value.now.return_value = "222222"
+            out = etrade._get_verifier_via_totp(
+                "http://authorize", "user", "pw", "SECRET", headless=True)
+        self.assertEqual(out, "XY12Z9")
+        browser.close.assert_called()
+
     def test_returns_none_when_no_verifier_present(self):
         fake, browser, ctx, page = _fake_firefox()
-        page.locator.return_value.first.get_attribute.return_value = None
+        page.locator.return_value.all.return_value = []    # no input carries a verifier value
         page.url = "https://us.etrade.com/oauth/accept"    # no oauth_verifier= in the URL either
         with mock.patch.object(etrade, "sync_playwright", fake), \
              mock.patch("pyotp.TOTP") as m_totp:
