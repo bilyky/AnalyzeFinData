@@ -1402,7 +1402,9 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         date = date.date()
     import openpyxl
     _build_cache_index()
+    # Backup BOTH the output destination and the root source file before modifying anything
     _orig_backup = _backup_xlsx(XLSX_FILE)
+    _src_backup = _backup_xlsx(SRC_XLSX)
     try:
         session_id = login()
     except EnvironmentError as e:
