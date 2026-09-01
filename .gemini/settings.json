@@ -13,6 +13,13 @@
             "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .gemini/hooks/protect-excel.ps1",
             "timeout": 5000,
             "description": "Intercepts run_shell_command to strictly block any attempts to kill or touch excel.exe."
+          },
+          {
+            "name": "block-git-no-verify",
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .gemini/hooks/block-git-no-verify.ps1",
+            "timeout": 5000,
+            "description": "Intercepts run_shell_command to strictly block git commit --no-verify."
           }
         ]
       }
