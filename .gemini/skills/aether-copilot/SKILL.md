@@ -46,6 +46,24 @@ python ai_portfolio_game.py
 
 ---
 
+## Authentication & Data Mechanics
+When troubleshooting connections or executing data pulls, strictly adhere to the following verified architectural constraints:
+1. **Chaikin API Key is Mandatory:** The new Fastify Chaikin API (`/api/suggestions`) explicitly requires the `x-api-key` header (configured in `config.json` under the `chaikin` block). If it is missing, the server misleadingly returns `403 SESSION_EXPIRED`.
+2. **CAPTCHA & Browser Fallback Hierarchy:** Cloudflare Turnstile's risk-scoring is dynamic; it may pass a headless browser seamlessly or it may demand human interaction. The correct execution order handles this dynamically: 1) Try the automated API JWT refresh first. 2) If that fails, attempt `headless=True` Playwright. 3) If Turnstile presents an interactive challenge, fallback to `headless=False` (interactive browser) so the user can click the CAPTCHA box. 4) Only as an absolute last resort, demand manual token extraction to `Data/session.json`.
+3. **Automated Renewals use JWT:** Once a manual session is saved, the system automatically bypasses the browser/CAPTCHA entirely using the **0.2-second API-based JWT Token Refresh** (`_jwt_to_session_id`). This is the primary automated renewal path.
+
+## Safe Source Control Mandates (Zero-Destruction Rule)
+Because `state_of_the_day.xlsx` is tracked by git but functions as an active manual input file, global destructive git commands are strictly banned in the PROD workspace.
+1. **Never use `git reset --hard`:** This command will permanently destroy the user's uncommitted manual Excel watchlists. 
+2. **Never use `git clean -fd`:** This command will wipe out local diagnostic scripts, `.bak` files, and session states.
+3. **Use Surgical Cleaning Only:** To clean a branch safely, use `git reset --soft origin/main`, followed by `git restore --staged <files>`, and finally `git checkout <specific_py_files>`. **Never checkout or restore `state_of_the_day.xlsx`.**
+4. **Never Bypass Pre-Commits:** You are explicitly forbidden from using `git commit --no-verify` or `-n`. You must let `pre_commit_validator.py` run and fix the underlying issues (like `MEMORY.md` parity) if the commit fails.
+
+## Headless Execution & Hook Engineering
+1. **The CP1252 Encoding Trap:** When writing `.ps1` scripts or Gemini hooks (e.g., `BeforeTool`), you are **strictly forbidden** from using Unicode characters, emojis, or non-ASCII characters. The headless Windows Task Scheduler executes background PowerShell instances in the legacy `CP1252` code page, not `UTF-8`. Unicode characters (like a lock emoji) will mangle the string terminator, throw a `ParserError`, and completely paralyze the Gemini CLI engine in production. Use strictly ASCII text for all system messages and logs.
+
+---
+
 ## References
 
 When analyzing setups, exits, or allocations, refer to these specialized guideline files:
