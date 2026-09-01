@@ -29,6 +29,15 @@ def _fake_firefox(verifier="VERIF123", accept_url="https://us.etrade.com/oauth/a
     Returns (patch_target, browser, context, page)."""
     page = mock.MagicMock()
     page.url = accept_url
+    # Credential fills go through _fill_verified, which types then VERIFIES via input_value()
+    # and, if the keystrokes didn't stick, sets the field with fill() and re-reads. Model that
+    # contract: fill(v) stores v, input_value() echoes the last stored value (shared across the
+    # user/password/security-code fields, which is fine — each verifies in turn).
+    _first = page.locator.return_value.first
+    _store = {"val": ""}
+    _first.fill.side_effect = lambda v, *a, **k: _store.__setitem__("val", v)
+    _first.input_value.side_effect = lambda *a, **k: _store["val"]
+    _first.is_checked.return_value = True          # already ticked → skip .check()
     # verifier scrape: the getter iterates page.locator(sel).all() and reads each element's
     # value, keeping the first that matches ^[A-Z0-9]{4,10}$. Model one matching input.
     _el = mock.MagicMock()

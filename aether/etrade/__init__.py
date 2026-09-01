@@ -510,7 +510,6 @@ def _get_verifier_via_totp(auth_url, username, password, totp_secret, headless=T
     _LOGIN_URL = "https://us.etrade.com/etx/pxy/login"
     _USER_SEL = "input#USER, input[name='USER'], input[name='username']"
     _PASS_SEL = "input#password, input#PASSWORD, input[name='PASSWORD'], input[type='password']"
-    _SECCODE_RADIO = "[for='useSecurityCode']"
     _SECCODE_SEL = "input#securityCode, input[name='securityCode']"
     _SUBMIT_SEL = "#mfaLogonButton, button:has-text('Log on'), input[value='Log on']"
     _ACCEPT_SEL = "input[value='Accept'], button:has-text('Accept'), [value='Accept']"
@@ -526,6 +525,46 @@ def _get_verifier_via_totp(auth_url, username, password, totp_secret, headless=T
         except Exception:
             pass
 
+    def _fill_verified(page, sel, value, label):
+        """Type into a field that renders from a skeleton then HYDRATES a moment later.
+
+        The cold-mint failure was keystrokes dropped into a not-yet-interactive input →
+        an empty-form submit → E*TRADE's "unable to process your request". Guard it: click
+        the locator (Playwright auto-waits true actionability, so the click lands only once
+        the widget is live), type with a human delay, then VERIFY the value stuck — and if it
+        didn't, set it directly via fill() and re-verify. Returns True iff the field holds the
+        value. Never logs the value itself.
+        """
+        loc = page.locator(sel).first
+        try:
+            loc.wait_for(state="visible", timeout=20000)
+        except Exception:
+            _log.warning("  [TOTP] %s field never became visible.", label)
+            return False
+        got = ""
+        for _ in range(3):
+            try:
+                loc.click(timeout=8000)
+                loc.fill("")
+                page.keyboard.type(value, delay=90)
+                got = (loc.input_value(timeout=4000) or "").strip()
+            except Exception as e:
+                _log.debug("  [TOTP] %s type attempt: %s", label, e)
+                got = ""
+            if got == value:
+                return True
+            # Keystrokes dropped (field hydrating) — set directly and re-verify.
+            try:
+                loc.fill(value)
+                got = (loc.input_value(timeout=4000) or "").strip()
+                if got == value:
+                    return True
+            except Exception:
+                pass
+            page.wait_for_timeout(700)
+        _log.warning("  [TOTP] %s field did not retain input after retries.", label)
+        return False
+
     with sync_playwright() as p:
         browser = p.firefox.launch(headless=headless, proxy=pw_proxy)
         try:
@@ -539,23 +578,32 @@ def _get_verifier_via_totp(auth_url, username, password, totp_secret, headless=T
             page.goto(_LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
             _snap(page, "01_login")
 
-            # Credentials — click then type with human-like delay (matches wetrade).
-            page.wait_for_selector(_USER_SEL, timeout=15000)
-            page.click(_USER_SEL)
-            page.keyboard.type(username, delay=120)
-            page.click(_PASS_SEL)
-            page.keyboard.type(password, delay=120)
-            page.wait_for_timeout(400)
+            # Credentials — type into the HYDRATED fields and verify each value stuck
+            # (the login widget renders a skeleton first; typing too early is silently lost).
+            if not _fill_verified(page, _USER_SEL, username, "user"):
+                _snap(page, "01b_user_empty")
+                return None
+            if not _fill_verified(page, _PASS_SEL, password, "password"):
+                _snap(page, "01c_pass_empty")
+                return None
 
-            # Software-TOTP MFA: pick the security-code method, type the current 6-digit code
-            # into its DEDICATED field, then submit. No SMS is ever requested.
+            # Software-TOTP MFA: tick the security-code CHECKBOX (id #useSecurityCode — the
+            # label [for=…] alone doesn't always toggle it), type the current 6-digit code into
+            # its DEDICATED field, then submit. No SMS is ever requested.
             try:
-                page.click(_SECCODE_RADIO, timeout=6000)
+                box = page.locator(
+                    "input#useSecurityCode, input[name='useSecurityCode'], "
+                    "[for='useSecurityCode']").first
+                box.wait_for(state="visible", timeout=6000)
+                try:
+                    if not box.is_checked():
+                        box.check(timeout=4000)
+                except Exception:
+                    box.click(timeout=4000)   # label/non-checkbox fallback
                 page.wait_for_selector(_SECCODE_SEL, timeout=6000)
-                page.click(_SECCODE_SEL)
-                page.keyboard.type(pyotp.TOTP(totp_secret).now(), delay=120)
+                _fill_verified(page, _SECCODE_SEL, pyotp.TOTP(totp_secret).now(), "security-code")
                 page.wait_for_timeout(300)
-            except PWTimeout:
+            except Exception:
                 # No security-code control on this render — device already trusted / no MFA
                 # prompt. Proceed to submit; the login may complete without a code.
                 _log.info("  [TOTP] Security-code field not shown — submitting without a code.")
