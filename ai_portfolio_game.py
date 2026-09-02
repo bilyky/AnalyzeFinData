@@ -1781,6 +1781,21 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
             # Filter by strategy profile threshold OR mathematically confirmed bottom
             if (setup in ('1', 'OK', 1)) and price > 0:
+                # Zero-Trust Freshness Gate (CLAUDE.md Rule of Zero-Trust / Temporal Zero-Trust):
+                # Never OPEN a new position on stale or missing OHLCV. Every downstream risk level —
+                # the ATR stop assigned in _execute_buys, swing support, and is_bottom_confirmed just
+                # below — is derived from this cache, so acting on a stale bar is the real "buying
+                # blind" (empty workbook S/R is not — that still gets a live ATR stop). Attempt one
+                # self-heal, then reject if the cache is still not fresh. Held positions are pre-healed
+                # above (line ~1437); this extends the identical discipline to buy candidates, which
+                # were previously ungated. Validated over the live cache: a meaningful fraction of
+                # symbols are stale on any given day, and their ATR stops would be computed off old bars.
+                if _cache_stale(sym, max_stale_days=10):
+                    _heal_symbol_cache(sym)
+                    if _cache_stale(sym, max_stale_days=10):
+                        _log.warning(f"🛑 AI BUY REJECTED (Zero-Trust Freshness): {sym} - OHLCV cache is stale/missing; refusing to derive risk levels from untrustworthy data.")
+                        continue
+
                 bottom_ok, bottom_msg = is_bottom_confirmed(sym)
 
                 # Catastrophic Gap Guard (The CNXC Trap):
@@ -1833,6 +1848,20 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         else:
                             _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
                             continue
+                else:
+                    # Empty workbook S/R — synthesize the risk thesis for TRANSPARENCY, not as a gate.
+                    # The freshness gate above already proved the cache is trustworthy, and _execute_buys
+                    # assigns a live ATR stop, so this row is not "buying blind". Derive stop/target from
+                    # the SAME split-adjusted, provenance-reporting resolvers the UI and backtests use and
+                    # log the thesis. We deliberately DO NOT hard-gate on this synthesized R:R: the nearest
+                    # confirmed resistance is structurally the smallest possible upside while support can be
+                    # far below, so a uniform R:R>=2 reject would gut the fresh pipeline (validated live —
+                    # most fresh names score R:R<2 on synthesized levels). The R:R / target-gain quality
+                    # screen stays scoped to explicit workbook levels; freshness is the real safety gate.
+                    excl = instruments.is_excluded(sym)
+                    _sd = risk_utils.resolve_stop_detailed(price, symbol=sym, exclude_swing=excl)
+                    _td = risk_utils.resolve_target_detailed(price, symbol=sym, exclude_swing=excl)
+                    _log.info(f"[Synthesized Risk Thesis] {sym} @ ${price}: stop ${_sd.get('stop')} ({_sd.get('source')}) / target ${_td.get('target')} ({_td.get('source')}) — workbook S/R empty; live ATR stop applied at execution.")
 
                 if total_score >= rules["min_score_threshold"] or bottom_ok:
                     bottom_desc = f" (Bottom Confirmed: {bottom_msg})" if bottom_ok else ""

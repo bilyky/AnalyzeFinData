@@ -272,12 +272,13 @@ class TestCoreSatelliteAllocation(unittest.TestCase):
 
 
 class TestAfterHoursOrderQueuing(unittest.TestCase):
+    @mock.patch("ai_portfolio_game._cache_stale", return_value=False)  # isolate the buy-loop from OHLCV freshness
     @mock.patch("ai_portfolio_game.is_market_hours", return_value=False)
     @mock.patch("ai_portfolio_game.get_live_prices")
     @mock.patch("ai_portfolio_game.load_game")
     @mock.patch("ai_portfolio_game.save_game")
     @mock.patch("ai_portfolio_game.openpyxl.load_workbook")  # patch at point-of-use
-    def test_after_hours_orders_are_queued(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
+    def test_after_hours_orders_are_queued(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours, mock_cache_stale):
         wb = research_workbook(
             [1, None, None, "TSLA", "Technology", None, "Bu", None, None, None, 400.0, None, None, None, None, None, None, None, None, None, "1", None, None, 0.65, 5.0, 5.0]
         )
@@ -309,12 +310,13 @@ class TestMissingWorkbookSRFallsThrough(unittest.TestCase):
     A prior over-broad "Structural Data Integrity Gate" rejected these before
     the ATR fallback could apply; this pins the intended behavior."""
 
+    @mock.patch("ai_portfolio_game._cache_stale", return_value=False)  # isolate the buy-loop from OHLCV freshness
     @mock.patch("ai_portfolio_game.is_market_hours", return_value=False)
     @mock.patch("ai_portfolio_game.get_live_prices")
     @mock.patch("ai_portfolio_game.load_game")
     @mock.patch("ai_portfolio_game.save_game")
     @mock.patch("ai_portfolio_game.openpyxl.load_workbook")  # patch at point-of-use
-    def test_empty_workbook_sr_is_not_rejected(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
+    def test_empty_workbook_sr_is_not_rejected(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours, mock_cache_stale):
         # row[9]=None (stop) and row[11]=None (target) → empty workbook S/R.
         wb = research_workbook(
             [1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 200.0, None, None, None, None, None, None, None, None, None, "1", None, None, 0.65, 5.0, 5.0]
@@ -331,6 +333,41 @@ class TestMissingWorkbookSRFallsThrough(unittest.TestCase):
         self.assertEqual(len(state["queued_orders"]), 1)
         self.assertEqual(state["queued_orders"][0]["symbol"], "CDW")
         self.assertEqual(state["queued_orders"][0]["type"], "BUY")
+
+
+class TestZeroTrustFreshnessGate(unittest.TestCase):
+    """Zero-Trust freshness gate: a buy candidate whose OHLCV cache is stale/missing
+    must be rejected — NEVER opened on untrustworthy data — after one self-heal attempt.
+    Every downstream risk level (ATR stop, swing support, bottom confirmation) is derived
+    from that cache, so a stale bar is the real 'buying blind'. This is the safety the
+    empty-workbook-S/R path (which still gets a live ATR stop) is NOT — see
+    TestMissingWorkbookSRFallsThrough for the complementary allow-path."""
+
+    @mock.patch("ai_portfolio_game._heal_symbol_cache", return_value=False)  # heal attempt fails to refresh
+    @mock.patch("ai_portfolio_game._cache_stale", return_value=True)         # cache is stale before AND after heal
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=False)
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
+    def test_stale_cache_buy_is_rejected_after_failed_heal(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours, mock_cache_stale, mock_heal):
+        # Same CDW row as the allow-path test — the ONLY difference is freshness.
+        wb = research_workbook(
+            [1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 200.0, None, None, None, None, None, None, None, None, None, "1", None, None, 0.65, 5.0, 5.0]
+        )
+        mock_load_wb.return_value = wb
+
+        state = {"balance": 5000.0, "equity": 10000.0, "positions": {}, "queued_orders": []}
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"CDW": 200.0}
+
+        game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+
+        # Rejected at the freshness gate: not queued and not bought.
+        self.assertEqual(len(state["queued_orders"]), 0)
+        self.assertNotIn("CDW", state["positions"])
+        # And a self-heal was attempted before giving up (heal-then-reject contract).
+        mock_heal.assert_called_with("CDW")
 
 
 class TestMarketHolidayChecks(unittest.TestCase):
