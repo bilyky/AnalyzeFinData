@@ -417,8 +417,7 @@ def sync_data_folder() -> bool:
         dst_path.mkdir(parents=True, exist_ok=True)
         _log.console(f"🔄 Syncing Data folder to: {dst} ...")
         # Use /E (recursive copy, NO DELETIONS) instead of /MIR to prevent data loss on backup drive.
-        # Exclude the massive 'Symbol' cache subdirectory (500k+ files) via /XD to avoid network hangs.
-        cmd = ["robocopy", str(src), dst, "/E", "/XD", "Symbol", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS"]
+        cmd = ["robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS"]
         result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=120)
         if result.returncode < 8:
             _log.info(f"✅ Data folder successfully synchronized to {dst}.")
@@ -427,8 +426,8 @@ def sync_data_folder() -> bool:
             _log.error(f"❌ Robocopy sync failed (rc={result.returncode}). Stderr: {result.stderr.strip()}")
             return False
     except subprocess.TimeoutExpired:
-        _log.warning("⚠️ Data folder sync timed out (120s limit reached). Skipping sync to prevent hanging.")
-        return True # Treat timeout as a safe skip, not a fatal crash of the watchdog
+        _log.warning("⚠️ Data folder sync timed out (120s limit reached). This is an incomplete backup.")
+        return False # Treat timeout as a failure, not a success, per mandatory backup policy
     except Exception as e:
         _log.error(f"❌ Failed to sync Data folder to Z: drive: {e}", exc_info=True)
         return False
@@ -556,7 +555,7 @@ def run_watchdog():
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            timeout=15
+            timeout=120
         )
         compilation_passed = (val_result.returncode == 0)
         validation_output = val_result.stdout if compilation_passed else val_result.stderr

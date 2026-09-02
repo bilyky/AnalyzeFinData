@@ -228,6 +228,8 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
             r = session.get(_RENEW_URL[env], proxies=_proxies(), verify=False, timeout=10)
             if r.ok:
                 tokens["saved_at"] = time.time()
+                # A successful renewal across midnight officially promotes the token to the new day
+                tokens["issued_date_et"] = _et_today()
                 _save_tokens(tokens, env)
                 return tokens
             _log.warning(f"Renew failed: HTTP {r.status_code} — {r.text[:120]}")
@@ -972,14 +974,14 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
         stale = _load_tokens_any_date(env)
         if stale:
             _log.info("Attempting renewal of previous-day E*TRADE tokens...")
-            # Attempt renewal unless the broker explicitly rejects the token (401/403);
-            # a transient probe failure (None) should not block the renewal attempt.
-            if _probe_token_auth(stale, env) is not False:
-                renewed = renew_tokens(stale, env)
-                if renewed:
-                    _log.info("Previous-day token renewed successfully.")
-                    check_etrade_cookie_freshness()
-                    return renewed
+            # We explicitly bypass the data probe here. The broker will ALWAYS reject a data
+            # probe (401/403) on a yesterday token, which would falsely kill the token before
+            # we can renew it across midnight. We blindly fire the pure HTTP renewal instead.
+            renewed = renew_tokens(stale, env)
+            if renewed:
+                _log.info("Previous-day token renewed successfully.")
+                check_etrade_cookie_freshness()
+                return renewed
 
     # Silent renewal exhausted — try headless Playwright with saved browser state.
     # Uses the same cross-process file lock as renew_tokens() to guarantee only ONE
