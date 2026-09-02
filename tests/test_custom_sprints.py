@@ -370,6 +370,65 @@ class TestZeroTrustFreshnessGate(unittest.TestCase):
         # one attempt, no retry loop on the buy path).
         mock_heal.assert_called_once_with("CDW")
 
+    @mock.patch("ai_portfolio_game._heal_symbol_cache", return_value=True)             # heal REFRESHES the cache
+    @mock.patch("ai_portfolio_game._cache_stale", side_effect=[True, False, False, False])  # stale, then fresh after heal
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=False)
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
+    def test_stale_cache_heals_then_buys(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours, mock_cache_stale, mock_heal):
+        # Complement to the reject test: cache is stale at the first check but the self-heal
+        # succeeds, so the buy MUST proceed (queued after-hours), not reject. Guards against a
+        # regression where a successful heal is still treated as a rejection.
+        wb = research_workbook(
+            [1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 200.0, None, None, None, None, None, None, None, None, None, "1", None, None, 0.65, 5.0, 5.0]
+        )
+        mock_load_wb.return_value = wb
+
+        state = {"balance": 5000.0, "equity": 10000.0, "positions": {}, "queued_orders": []}
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"CDW": 200.0}
+
+        game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+
+        # Healed once, then the buy proceeded to the (after-hours) queue.
+        mock_heal.assert_called_once_with("CDW")
+        self.assertEqual(len(state["queued_orders"]), 1)
+        self.assertEqual(state["queued_orders"][0]["symbol"], "CDW")
+        self.assertEqual(state["queued_orders"][0]["type"], "BUY")
+
+    @mock.patch("ai_portfolio_game.circuit_breaker.enforce_circuit_breaker")           # keep the breaker from pre-clearing the queue
+    @mock.patch("ai_portfolio_game._heal_symbol_cache", return_value=False)            # heal cannot refresh
+    @mock.patch("ai_portfolio_game._cache_stale", return_value=True)                   # stale at execution time
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=True)
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
+    def test_queued_buy_skipped_when_stale_at_execution(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours, mock_cache_stale, mock_heal, mock_breaker):
+        # Execution-time gate: a BUY queued earlier now executes against a stale cache. It must be
+        # SKIPPED (dropped), never filled — its ATR stop would be derived from untrustworthy bars.
+        # Benign, non-qualifying workbook row (empty setup) so nothing new is screened.
+        wb = research_workbook(
+            [1, None, None, "ZZZZ", "Technology", None, "Bu", None, None, None, None, None, None, None, None, None, None, None, None, None, "", None, None, 0.0, 0.0, 0.0]
+        )
+        mock_load_wb.return_value = wb
+
+        state = {
+            "balance": 5000.0, "equity": 10000.0, "positions": {},
+            "queued_orders": [{"symbol": "CDW", "type": "BUY", "reason": "prior-session queue"}],
+            "history": [],
+        }
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"CDW": 200.0, "SPY": 500.0}
+
+        game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+
+        # The stale queued BUY was skipped, never filled, and a heal was attempted for it.
+        self.assertNotIn("CDW", state["positions"])
+        mock_heal.assert_any_call("CDW")
+
 
 class TestMarketHolidayChecks(unittest.TestCase):
     @mock.patch("ai_portfolio_game.etrade.get_tokens", return_value=None)
