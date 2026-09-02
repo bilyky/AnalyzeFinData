@@ -301,6 +301,38 @@ class TestAfterHoursOrderQueuing(unittest.TestCase):
         self.assertNotIn("TSLA", state["positions"])
 
 
+class TestMissingWorkbookSRFallsThrough(unittest.TestCase):
+    """Regression guard: a candidate whose workbook Support/Resistance columns
+    (row[9] stop / row[11] target) are empty must NOT be rejected in the buy
+    loop. Such a setup is not "buying blind" — the execution path assigns a
+    downstream ATR-based stop — so it is intentionally allowed to fall through.
+    A prior over-broad "Structural Data Integrity Gate" rejected these before
+    the ATR fallback could apply; this pins the intended behavior."""
+
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=False)
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")  # patch at point-of-use
+    def test_empty_workbook_sr_is_not_rejected(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
+        # row[9]=None (stop) and row[11]=None (target) → empty workbook S/R.
+        wb = research_workbook(
+            [1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 200.0, None, None, None, None, None, None, None, None, None, "1", None, None, 0.65, 5.0, 5.0]
+        )
+        mock_load_wb.return_value = wb
+
+        state = {"balance": 5000.0, "equity": 10000.0, "positions": {}, "queued_orders": []}
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"CDW": 200.0}
+
+        game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+
+        # Not rejected at the integrity gate: it reached the (after-hours) buy queue.
+        self.assertEqual(len(state["queued_orders"]), 1)
+        self.assertEqual(state["queued_orders"][0]["symbol"], "CDW")
+        self.assertEqual(state["queued_orders"][0]["type"], "BUY")
+
+
 class TestMarketHolidayChecks(unittest.TestCase):
     @mock.patch("ai_portfolio_game.etrade.get_tokens", return_value=None)
     @mock.patch("ai_portfolio_game.datetime.datetime")
