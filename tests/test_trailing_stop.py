@@ -181,7 +181,7 @@ class TestAntiFragileFlexibility(unittest.TestCase):
 
         # Mock workbook sheet with ultra-conviction candidate AAPL
         wb = research_workbook(
-            [1, None, None, "AAPL", "Technology", None, "Bu", None, None, None, 144.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1])  # Score = 11.1
+            [1, None, None, "AAPL", "Technology", None, "Bu", None, None, 130.0, 144.0, 170.0, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1])  # Score = 11.1
         mock_load_wb.return_value = wb
 
         # Mock ATR calculation
@@ -226,7 +226,7 @@ class TestAntiFragileFlexibility(unittest.TestCase):
         mock_get_prices.return_value = {"P1": 1000.0, "P2": 1000.0, "P3": 1000.0, "P4": 1000.0, "P5": 1000.0, "CDW": 100.0, "SPY": 500.0}
 
         wb = research_workbook(
-            [1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 100.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1])  # Score = 11.1
+            [1, None, None, "CDW", "Technology", None, "Bu", None, None, 90.0, 100.0, 120.0, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1])  # Score = 11.1
         mock_load_wb.return_value = wb
 
         with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00), \
@@ -272,7 +272,7 @@ class TestAntiFragileFlexibility(unittest.TestCase):
         }
 
         wb = research_workbook(
-            [1, None, None, "CDW", "Technology", None, "Bu", None, None, None, 100.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1])  # Score = 11.1
+            [1, None, None, "CDW", "Technology", None, "Bu", None, None, 90.0, 100.0, 120.0, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 6.0, 5.1])  # Score = 11.1
         mock_load_wb.return_value = wb
 
         with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00), \

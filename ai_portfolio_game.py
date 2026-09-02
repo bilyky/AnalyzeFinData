@@ -1805,9 +1805,11 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 target_val = _to_float(row[11], 0.0)
                 pgr_val = str(row[6] or "Neutral")
 
-                # Structural Data Integrity Gate: Never waive or execute if Support/Resistance data is missing
-                if stop_val <= 0 or target_val <= 0:
-                    _log.warning(f"🛑 AI BUY REJECTED (Data Integrity): {sym} - Missing valid Support/Resistance limits (Target: {target_val}, Stop: {stop_val}).")
+                # Structural Data Integrity Gate: We must have a valid Target to compute upside.
+                # We DO NOT reject if stop_val is missing, because the system will automatically 
+                # generate an ATR-based fallback stop downstream.
+                if target_val <= 0:
+                    _log.warning(f"🛑 AI BUY REJECTED (Data Integrity): {sym} - Missing valid Resistance target.")
                     continue
 
                 is_elite_breakout = risk_utils.is_elite_breakout_candidate(total_score, short10)
@@ -1819,12 +1821,14 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
                 min_rr = CFG.system_default_min_rr
                 if rr_ratio < min_rr:
-                        if is_elite_breakout:
-                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived {min_rr}:1 R:R limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, R:R: {rr_ratio}:1).")
-                        else:
+                    if is_elite_breakout:
+                        _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived {min_rr}:1 R:R limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, R:R: {rr_ratio}:1).")
+                    else:
+                        # Allow missing stop_val to bypass the R:R gate because it will get an ATR stop later
+                        if stop_val > 0:
                             _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required {min_rr}:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
                             continue
-                        
+
                 if target_gain_pct < 5.0:
                     if is_elite_breakout:
                         _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 5.0% target upside limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, Target Gain: {target_gain_pct}%).")

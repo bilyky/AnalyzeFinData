@@ -279,7 +279,7 @@ class TestAfterHoursOrderQueuing(unittest.TestCase):
     @mock.patch("ai_portfolio_game.openpyxl.load_workbook")  # patch at point-of-use
     def test_after_hours_orders_are_queued(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
         wb = research_workbook(
-            [1, None, None, "TSLA", "Technology", None, "Bu", None, None, None, 400.0, None, None, None, None, None, None, None, None, None, "1", None, None, 0.65, 5.0, 5.0]
+            [1, None, None, "TSLA", "Technology", None, "Bu", None, None, 350.0, 400.0, 500.0, None, None, None, None, None, None, None, None, "1", None, None, 0.65, 5.0, 5.0]
         )
         mock_load_wb.return_value = wb
         
@@ -440,6 +440,10 @@ class TestPersistentProfileModes(unittest.TestCase):
         """The R/R gate formula used in run_daily_ai_management workbook-scan loop."""
         def _gate(price, stop, target):
             # Mirrors the exact logic at ai_portfolio_game.py lines ~1244-1255
+            # Data Integrity Gate
+            if target <= 0:
+                return False
+                
             upside   = target - price
             downside = price - stop
             rr       = round(upside / downside, 2) if downside > 0 else 0.0
@@ -451,6 +455,7 @@ class TestPersistentProfileModes(unittest.TestCase):
             (100, 99.5, 102, False, "gain=2% → reject"),
             (100,  98,  106, True,  "R/R=3.0, gain=6% → accept"),
             (100,  95,  111, True,  "R/R=2.2, gain=11% → accept"),
+            (100,  95,  0.0, False, "missing target data → reject"),
         ]
         for price, stop, target, expected, label in cases:
             with self.subTest(label=label):
