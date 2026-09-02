@@ -1805,32 +1805,34 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 target_val = _to_float(row[11], 0.0)
                 pgr_val = str(row[6] or "Neutral")
 
-                # Structural Data Integrity Gate: Never waive or execute if Support/Resistance data is missing
-                if stop_val <= 0 or target_val <= 0:
-                    _log.warning(f"🛑 AI BUY REJECTED (Data Integrity): {sym} - Missing valid Support/Resistance limits (Target: {target_val}, Stop: {stop_val}).")
-                    continue
-
                 is_elite_breakout = risk_utils.is_elite_breakout_candidate(total_score, short10)
 
-                upside = target_val - price
-                downside = price - stop_val
-                rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
-                target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
+                # The R:R and target-gain gates apply ONLY when the workbook carries explicit
+                # Support/Resistance levels (row[9]/row[11]). A row with empty workbook S/R is NOT
+                # "buying blind": the execution path assigns a downstream ATR-based stop, so such a
+                # setup is intentionally allowed to fall through to the ATR fallback rather than be
+                # rejected here. Do NOT re-add a hard reject on missing workbook S/R — it preempts
+                # that ATR stop and rejects entries the system was designed to make.
+                if stop_val > 0 and target_val > 0:
+                    upside = target_val - price
+                    downside = price - stop_val
+                    rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
+                    target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
 
-                min_rr = CFG.system_default_min_rr
-                if rr_ratio < min_rr:
+                    min_rr = CFG.system_default_min_rr
+                    if rr_ratio < min_rr:
                         if is_elite_breakout:
                             _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived {min_rr}:1 R:R limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, R:R: {rr_ratio}:1).")
                         else:
                             _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required {min_rr}:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
                             continue
-                        
-                if target_gain_pct < 5.0:
-                    if is_elite_breakout:
-                        _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 5.0% target upside limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, Target Gain: {target_gain_pct}%).")
-                    else:
-                        _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
-                        continue
+
+                    if target_gain_pct < 5.0:
+                        if is_elite_breakout:
+                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 5.0% target upside limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, Target Gain: {target_gain_pct}%).")
+                        else:
+                            _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
+                            continue
 
                 if total_score >= rules["min_score_threshold"] or bottom_ok:
                     bottom_desc = f" (Bottom Confirmed: {bottom_msg})" if bottom_ok else ""
