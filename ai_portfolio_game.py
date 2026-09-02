@@ -1788,12 +1788,20 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 # blind" (empty workbook S/R is not — that still gets a live ATR stop). Attempt one
                 # self-heal, then reject if the cache is still not fresh. Held positions are pre-healed
                 # above (line ~1437); this extends the identical discipline to buy candidates, which
-                # were previously ungated. Validated over the live cache: a meaningful fraction of
-                # symbols are stale on any given day, and their ATR stops would be computed off old bars.
+                # were previously ungated. NOTE: this gate sits at the top of the qualifying-candidate
+                # block, so it applies to EVERY buy candidate — those with explicit workbook S/R just
+                # as much as the empty-S/R rows handled below — not only the empty-S/R case. Validated
+                # over the live cache: a meaningful fraction of symbols are stale on any given day, and
+                # their ATR stops would be computed off old bars.
                 if _cache_stale(sym, max_stale_days=10):
-                    _heal_symbol_cache(sym)
+                    _healed = _heal_symbol_cache(sym)  # bool: True only on a real refresh
                     if _cache_stale(sym, max_stale_days=10):
-                        _log.warning(f"🛑 AI BUY REJECTED (Zero-Trust Freshness): {sym} - OHLCV cache is stale/missing; refusing to derive risk levels from untrustworthy data.")
+                        # Distinguish missing vs N-days-stale in the reject line; the precise heal
+                        # outcome (healed / lock-deferred / failed / 0-updates) is on the preceding
+                        # [Self-Healer] log line, so lock-deferral is separable from genuine failure.
+                        _age = risk_utils.ohlcv_age_days(sym)
+                        _age_desc = "missing" if _age is None else f"{_age}d stale"
+                        _log.warning(f"🛑 AI BUY REJECTED (Zero-Trust Freshness): {sym} - OHLCV cache {_age_desc}, self-heal did not refresh it (healed={_healed}; see preceding [Self-Healer] line for lock-deferral vs failure); refusing to derive risk levels from untrustworthy data.")
                         continue
 
                 bottom_ok, bottom_msg = is_bottom_confirmed(sym)
@@ -1859,8 +1867,13 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     # most fresh names score R:R<2 on synthesized levels). The R:R / target-gain quality
                     # screen stays scoped to explicit workbook levels; freshness is the real safety gate.
                     excl = instruments.is_excluded(sym)
-                    _sd = risk_utils.resolve_stop_detailed(price, symbol=sym, exclude_swing=excl)
-                    _td = risk_utils.resolve_target_detailed(price, symbol=sym, exclude_swing=excl)
+                    # Load the (freshness-gated) split-adjusted series ONCE and feed both resolvers,
+                    # instead of letting each reload + re-adjust the same cache is_bottom_confirmed
+                    # already read above. Freshness is guaranteed by the gate, so the resolvers'
+                    # internal staleness check is redundant here and passing the series skips it.
+                    _hi, _lo, _cl, _ = risk_utils._load_ohlcv_series(sym)
+                    _sd = risk_utils.resolve_stop_detailed(price, highs=_hi, lows=_lo, closes=_cl, exclude_swing=excl)
+                    _td = risk_utils.resolve_target_detailed(price, highs=_hi, lows=_lo, closes=_cl, exclude_swing=excl)
                     _log.info(f"[Synthesized Risk Thesis] {sym} @ ${price}: stop ${_sd.get('stop')} ({_sd.get('source')}) / target ${_td.get('target')} ({_td.get('source')}) — workbook S/R empty; live ATR stop applied at execution.")
 
                 if total_score >= rules["min_score_threshold"] or bottom_ok:

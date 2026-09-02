@@ -366,8 +366,9 @@ class TestZeroTrustFreshnessGate(unittest.TestCase):
         # Rejected at the freshness gate: not queued and not bought.
         self.assertEqual(len(state["queued_orders"]), 0)
         self.assertNotIn("CDW", state["positions"])
-        # And a self-heal was attempted before giving up (heal-then-reject contract).
-        mock_heal.assert_called_with("CDW")
+        # And exactly one self-heal was attempted before giving up (heal-then-reject contract:
+        # one attempt, no retry loop on the buy path).
+        mock_heal.assert_called_once_with("CDW")
 
 
 class TestMarketHolidayChecks(unittest.TestCase):
