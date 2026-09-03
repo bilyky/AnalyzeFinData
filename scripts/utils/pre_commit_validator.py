@@ -168,8 +168,13 @@ def check_wiki_about_sync() -> bool:
     print("[GIT PRE-COMMIT] Wiki surface staged - running About/wiki drift guard "
           "(tests/test_about_wiki_sync.py)...")
     try:
+        # Run the parity test as a STANDALONE SCRIPT, not `-m unittest tests.test_about_wiki_sync`.
+        # The dotted form imports the tests PACKAGE first (tests/__init__.py → aether.etrade →
+        # pyetrade), which is absent in the CI validator environment — so the guard failed CLOSED on
+        # an ImportError instead of on real drift, blocking every wiki-touching commit. Executed as
+        # __main__ the file imports only json/os/re/unittest, so the guard runs anywhere.
         res = subprocess.run(
-            [sys.executable, "-m", "unittest", "tests.test_about_wiki_sync"],
+            [sys.executable, os.path.join(ROOT_DIR, "tests", "test_about_wiki_sync.py")],
             capture_output=True, text=True, errors="replace", cwd=ROOT_DIR)
     except Exception as e:
         print(f"🚨 [GIT PRE-COMMIT] BLOCK - could not run the wiki drift guard: {e}")
