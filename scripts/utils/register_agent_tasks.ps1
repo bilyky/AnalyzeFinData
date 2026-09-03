@@ -145,15 +145,15 @@ foreach ($T in $Tasks) {
     $PromptPayload = $T.Prompt
     $LogFile = Join-Path $LogDir $T.Log
     
-    # Build the command: cd to repo root, then run either a raw script or the engine+prompt.
+    $Launcher = Join-Path $RepoRoot "aether.cmd"
+    # Build the scheduled task action: raw scripts execute via PowerShell; AI agent tasks run via the robust aether.cmd launcher
     if ($T.Script) {
         $ExecCmd = "cd '$RepoRoot'; $($T.Script) >> '$LogFile' 2>&1"
+        $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$ExecCmd`""
     } else {
-        $ExecCmd = "$PathPrefix`cd '$RepoRoot'; $Engine $Args -p '$PromptPayload' >> '$LogFile' 2>&1"
+        # Using cmd.exe /c to launch our central environment-healing batch file
+        $Action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"`"$Launcher`" $Engine $Args -p `"$PromptPayload`" >> `"$LogFile`" 2>&1`""
     }
-
-    # Run in a hidden PowerShell window (no visible console) so the scheduled task is non-interactive.
-    $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$ExecCmd`""
     
     Write-Host "Registering task: $TaskName..." -ForegroundColor Yellow
     Write-Host "  Trigger:     $($T.Desc)"
