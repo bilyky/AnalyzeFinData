@@ -7,14 +7,19 @@ out-of-the-money (OTM) Covered Call selection, and position-assignment lifecycle
 
 import datetime
 import math
-from pathlib import Path
 
 from aether_logger import get_logger as _get_logger
 
 
 _log = _get_logger("options")
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+# Flat pricing placeholders shared by BOTH pricing legs — the write side
+# (select_covered_call defaults) and the buy-to-close side (unwind_option_liability_if_held).
+# Single-sourced here so the two legs always price against the same model.
+# TODO(R&D #26): replace with a backtested per-symbol realized-vol proxy + the current
+# risk-free rate before this path is relied on for real capital decisions.
+FLAT_SIGMA = 0.30
+FLAT_RATE = 0.04
 
 
 def norm_cdf(x: float) -> float:
@@ -41,7 +46,7 @@ def calculate_black_scholes_call(S: float, K: float, T: float, r: float, sigma: 
     return max(0.01, round(call_price, 2))
 
 
-def select_covered_call(symbol: str, current_price: float, atr: float, volatility: float = 0.30, interest_rate: float = 0.04) -> dict:
+def select_covered_call(symbol: str, current_price: float, atr: float, volatility: float = FLAT_SIGMA, interest_rate: float = FLAT_RATE) -> dict:
     """Select the optimal weekly out-of-the-money (OTM) Covered Call to write.
     
     Targets a Strike Price of approximately 1.5x ATR above the current price (safely OTM)
@@ -136,17 +141,31 @@ def resolve_expiring_options(state: dict, today_str: str, prices: dict):
             else:
                 # Scenario B: Stock is called away at the Strike. The premium was already booked at
                 # OPTION_WRITE, so this event's pnl is the realized stock capital gain ONLY.
-                pnl_stock_usd = round((strike - pos["cost"]) * qty, 2)
-                revenue_usd = round(strike * qty, 2)
+                #
+                # Only the COVERED quantity is called away. If the position grew beyond the written
+                # call's coverage after the call was written (e.g. a later pyramiding scale-in raised
+                # pos["qty"] past written_call["qty"]), the uncovered remainder must stay an open
+                # position — never silently deleted with the covered shares (that would leak capital).
+                held_qty = pos.get("qty", qty)
+                called_qty = min(qty, held_qty)
+                pnl_stock_usd = round((strike - pos["cost"]) * called_qty, 2)
+                revenue_usd = round(strike * called_qty, 2)
+                remaining_qty = held_qty - called_qty
 
-                _log.info(f"[Option Assignment] Stock {sym} called away at Strike ${strike:.2f} (Price: ${current_px:.2f}).")
+                _log.info(f"[Option Assignment] {called_qty} share(s) of {sym} called away at Strike ${strike:.2f} (Price: ${current_px:.2f}).")
                 _log.info(f"   Realized stock capital gain: ${pnl_stock_usd:+.2f} | Premium (booked at write): ${premium_usd:+.2f}")
 
                 # Add stock sale revenue to your cash balance
                 state["balance"] += revenue_usd
 
-                # Delete the underlying position from holdings
-                del state["positions"][sym]
+                if remaining_qty > 0:
+                    # Uncovered shares survive as an open position; the liability is discharged.
+                    pos["qty"] = remaining_qty
+                    pos.pop("written_call", None)
+                    _log.info(f"   {remaining_qty} uncovered share(s) of {sym} remain held (cost ${pos['cost']:.2f}).")
+                else:
+                    # Entire position was covered and is now called away.
+                    del state["positions"][sym]
 
                 # Record assignment sale in history ledger
                 tx = {
@@ -155,9 +174,9 @@ def resolve_expiring_options(state: dict, today_str: str, prices: dict):
                     "type": "OPTION_ASSIGNMENT",
                     "symbol": sym,
                     "price": strike,
-                    "qty": qty,
+                    "qty": called_qty,
                     "pnl": pnl_stock_usd,
-                    "details": f"Stock called away at Strike ${strike:.2f} (Realized stock gain ${pnl_stock_usd:+.2f}; ${premium_usd:.2f} premium booked at write)"
+                    "details": f"{called_qty} share(s) called away at Strike ${strike:.2f} (Realized stock gain ${pnl_stock_usd:+.2f}; ${premium_usd:.2f} premium booked at write)"
                 }
                 state.setdefault("history", []).append(tx)
 
@@ -193,9 +212,13 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
         sym_idx = header_norm.index("symbol")
     except ValueError:
         sym_idx = 3
+        _log.warning("[Option Write] Research sheet has no 'Symbol' header; falling back to column index 3 (may bind the wrong field).")
     atr_idx = next((i for i, h in enumerate(header_norm) if h == "atr"), None)
     if atr_idx is None:
-        atr_idx = next((i for i, h in enumerate(header_norm) if "atr" in h), 23)
+        atr_idx = next((i for i, h in enumerate(header_norm) if "atr" in h), None)
+    if atr_idx is None:
+        atr_idx = 23
+        _log.warning("[Option Write] Research sheet has no 'ATR' header; falling back to column index 23 (may bind the wrong field).")
 
     atr_map = {}
     for row in ws_research.iter_rows(min_row=2, values_only=True):
@@ -275,10 +298,10 @@ def unwind_option_liability_if_held(sym: str, pos: dict, state: dict, current_pr
 
     T_rem = days_rem / 365.0
 
-    # NOTE: sigma=0.30 / r=0.04 are flat placeholders (not per-symbol IV / live rate). This BTC
-    # cost debits the live balance, so the constants should be replaced with a backtested
-    # realized-vol proxy + current risk-free rate before this path is relied on. See PR review #3.
-    btc_price = calculate_black_scholes_call(current_price, strike, T_rem, r=0.04, sigma=0.30)
+    # Price the buy-to-close with the SAME flat placeholders the write side used, so BTC prices
+    # against the model it sold at. These are not per-symbol IV / live rate; the debit hits the
+    # live balance — see the FLAT_SIGMA / FLAT_RATE note at module top (R&D #26 follow-up).
+    btc_price = calculate_black_scholes_call(current_price, strike, T_rem, r=FLAT_RATE, sigma=FLAT_SIGMA)
     btc_usd = round(btc_price * qty, 2)
 
     _log.warning(f"[Option Buy-To-Close] {sym} hit stop-loss/rotation; buying back short Call @ ${btc_price:.2f} before sale to avoid a naked call (cost ${btc_usd:.2f}).")

@@ -124,6 +124,39 @@ class TestCoveredCallOptions(unittest.TestCase):
         # pnl is the realized stock capital gain only ((115-100)*10 = $150); premium was booked at write.
         self.assertEqual(mock_state["history"][0]["pnl"], 150.0)
 
+    def test_assignment_partial_when_position_pyramided(self):
+        """Assignment calls away only the COVERED qty; shares added after the call was written
+        (e.g. a pyramiding scale-in) must survive as an open position, not vanish.
+
+        Regression guard for the capital leak where `del positions[sym]` destroyed the whole
+        position while crediting only `written_call['qty']` shares.
+        """
+        mock_state = {
+            "balance": 0.0,
+            "positions": {
+                # Call written on 10 shares last week; position later pyramided to 15.
+                "AAPL": {
+                    "qty": 15, "cost": 100.0, "stop_loss": 105.0,
+                    "written_call": {"strike": 115.0, "premium": 1.50, "expiration_date": "2026-08-14", "qty": 10},
+                }
+            },
+            "history": [],
+        }
+
+        options.resolve_expiring_options(mock_state, today_str="2026-08-14", prices={"AAPL": 118.0})
+
+        # Only the 10 covered shares are called away at $115 -> $1,150 credited (not silently lost).
+        self.assertEqual(mock_state["balance"], 1150.0)
+        # The 5 uncovered shares remain an open position at the original cost basis; liability cleared.
+        self.assertIn("AAPL", mock_state["positions"])
+        self.assertEqual(mock_state["positions"]["AAPL"]["qty"], 5)
+        self.assertEqual(mock_state["positions"]["AAPL"]["cost"], 100.0)
+        self.assertNotIn("written_call", mock_state["positions"]["AAPL"])
+        # Ledger records only the called-away qty and the covered-share capital gain.
+        self.assertEqual(mock_state["history"][-1]["type"], "OPTION_ASSIGNMENT")
+        self.assertEqual(mock_state["history"][-1]["qty"], 10)
+        self.assertEqual(mock_state["history"][-1]["pnl"], 150.0)
+
     def test_missing_quote_defers_settlement(self):
         """No live quote on the settlement day must DEFER (keep the liability), not settle on cost basis.
 
