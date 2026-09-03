@@ -518,6 +518,11 @@ def _get_verifier_via_totp(auth_url, username, password, totp_secret, headless=T
     pw_proxy = {"server": proxy_url} if proxy_url else None
 
     def _snap(page, name):
+        # OFF by default: a submitted login page holds the live TOTP code and username in its
+        # fields, so the always-on daily door must not leave credential-bearing PNGs on disk.
+        # Opt in with AETHER_ETRADE_TOTP_DEBUG=1 only when hand-debugging a mint.
+        if not os.environ.get("AETHER_ETRADE_TOTP_DEBUG"):
+            return
         try:
             p = os.path.join(_DATA_DIR, f"etrade_totp_{name}.png")
             page.screenshot(path=p)

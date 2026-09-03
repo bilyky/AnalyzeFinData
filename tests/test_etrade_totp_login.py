@@ -23,20 +23,28 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from aether import etrade
 
 
-def _fake_firefox(verifier="VERIF123", accept_url="https://us.etrade.com/oauth/accept"):
+def _fake_firefox(verifier="VERIF123", accept_url="https://us.etrade.com/oauth/accept",
+                  keystrokes_stick=True):
     """A minimal Playwright(Firefox) double modeling only the seams `_get_verifier_via_totp`
     touches. page.url is a real string; the input-value scrape returns `verifier`.
-    Returns (patch_target, browser, context, page)."""
+    Returns (patch_target, browser, context, page).
+
+    `_fill_verified` clears the field (fill("")), TYPES via page.keyboard.type, verifies with
+    input_value(), and only if the keystrokes didn't stick sets the value directly with fill(v).
+    A shared `_store` echoes whatever last wrote to the field:
+      * keystrokes_stick=True  → keyboard.type writes the store (the happy path: typing works,
+        so the fill() recovery is NOT exercised — this is the realistic default);
+      * keystrokes_stick=False → keyboard.type is a no-op (hydration race drops the keystrokes),
+        so ONLY the fill() recovery can make input_value() match — pins the recovery branch."""
     page = mock.MagicMock()
     page.url = accept_url
-    # Credential fills go through _fill_verified, which types then VERIFIES via input_value()
-    # and, if the keystrokes didn't stick, sets the field with fill() and re-reads. Model that
-    # contract: fill(v) stores v, input_value() echoes the last stored value (shared across the
-    # user/password/security-code fields, which is fine — each verifies in turn).
     _first = page.locator.return_value.first
     _store = {"val": ""}
     _first.fill.side_effect = lambda v, *a, **k: _store.__setitem__("val", v)
     _first.input_value.side_effect = lambda *a, **k: _store["val"]
+    if keystrokes_stick:
+        page.keyboard.type.side_effect = lambda v, *a, **k: _store.__setitem__("val", v)
+    # else: page.keyboard.type stays a no-op MagicMock — keystrokes are dropped.
     _first.is_checked.return_value = True          # already ticked → skip .check()
     # verifier scrape: the getter iterates page.locator(sel).all() and reads each element's
     # value, keeping the first that matches ^[A-Z0-9]{4,10}$. Model one matching input.
@@ -101,6 +109,43 @@ class TestGetVerifierViaTotp(unittest.TestCase):
                 "http://authorize", "user", "pw", "SECRET", headless=True)
         self.assertIsNone(out)
         browser.close.assert_called()
+
+    def test_fill_recovers_when_keystrokes_are_dropped(self):
+        # The core cold-mint fix: E*TRADE renders a skeleton then HYDRATES, so keystrokes typed
+        # into the not-yet-interactive input are silently dropped → empty-form submit → "unable
+        # to process". _fill_verified must notice input_value() didn't take and RECOVER via fill().
+        # Model dropped keystrokes (keyboard.type is a no-op) so only the fill() recovery can make
+        # the fields retain their values — red-green: delete the recovery and this returns None.
+        fake, browser, ctx, page = _fake_firefox(verifier="RCV42", keystrokes_stick=False)
+        _first = page.locator.return_value.first
+        with mock.patch.object(etrade, "sync_playwright", fake), \
+             mock.patch("pyotp.TOTP") as m_totp:
+            m_totp.return_value.now.return_value = "654321"
+            out = etrade._get_verifier_via_totp(
+                "http://authorize", "user", "pw", "SECRET", headless=True)
+        self.assertEqual(out, "RCV42")                     # got to Accept only via fill() recovery
+        filled = [c.args[0] for c in _first.fill.call_args_list]
+        self.assertIn("user", filled)                      # each field recovered by direct fill()
+        self.assertIn("pw", filled)
+        self.assertIn("654321", filled)
+
+    def test_returns_none_when_a_field_never_retains_input(self):
+        # If a field stays empty even after the fill() recovery (never hydrates / not actionable),
+        # _fill_verified returns False and the getter BAILS at the user field — it must not blunder
+        # on to submit an empty form. Model a permanently-dead field: nothing ever sticks.
+        fake, browser, ctx, page = _fake_firefox(keystrokes_stick=False)
+        _first = page.locator.return_value.first
+        _first.fill.side_effect = None                     # fill() no longer writes the store…
+        _first.input_value.side_effect = None
+        _first.input_value.return_value = ""               # …so the field reads empty forever
+        with mock.patch.object(etrade, "sync_playwright", fake), \
+             mock.patch("pyotp.TOTP") as m_totp:
+            m_totp.return_value.now.return_value = "111111"
+            out = etrade._get_verifier_via_totp(
+                "http://authorize", "user", "pw", "SECRET", headless=True)
+        self.assertIsNone(out)                             # bailed before submitting
+        page.click.assert_not_called()                     # never reached submit / Accept
+        browser.close.assert_called()                      # context still torn down
 
 
 class TestLoginHeadlessTotpRouting(unittest.TestCase):
