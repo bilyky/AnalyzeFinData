@@ -1017,9 +1017,10 @@ def is_market_hours():
             
         # 4. Dynamic Live Verification (Clock API + SPY Ticker)
         try:
-            tokens = etrade.get_tokens("production")
+            _et = etrade.ETradeClient("production", role="auth")
+            tokens = _et.auth.get_tokens()
             if tokens:
-                is_open = etrade.is_market_open_now(tokens, "production")
+                is_open = _et.market.is_open_now(tokens)
                 if is_open is not None:
                     if not is_open:
                         _log.console("  [AETHER] Dynamic Market Checks confirm market is CLOSED (Holiday/Weekend).")
@@ -1098,12 +1099,13 @@ def get_live_prices(symbols):
 
         # Call the hardened get_tokens() which is safe and has an active headless safety gate.
         # This ensures we always actively attempt to re-authenticate when tokens expire.
-        tokens = etrade.get_tokens("production")
+        _et = etrade.ETradeClient("production", role="auth")
+        tokens = _et.auth.get_tokens()
         if not tokens:
             _log.warning("  [AETHER] E*TRADE authentication failed. Attempting Google Finance live fallback.")
             return get_google_prices_fallback(symbols)
-            
-        quotes = etrade.fetch_quotes(tokens, symbols, env="production")
+
+        quotes = _et.market.quotes(symbols, tokens)
 
         # Fill only the gaps from Google — keep the E*TRADE quotes we already have.
         # Surface dead/delisted/misaligned tickers loudly instead of discarding

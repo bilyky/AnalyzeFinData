@@ -707,14 +707,15 @@ def read_accounts() -> dict:
             try:
                 acct_list = []
                 raw_positions = []
-                tokens = etrade.get_tokens(env)
+                _et = etrade.ETradeClient(env, role="auth")
+                tokens = _et.auth.get_tokens()
                 if tokens:
-                    accts_api = etrade.get_accounts(tokens, env)
+                    accts_api = _et.accounts.raw_accounts(tokens)
                     resp = accts_api.list_accounts(resp_format="json")
                     acct_list = resp.get("AccountListResponse", {}).get("Accounts", {}).get("Account", [])
                     if isinstance(acct_list, dict):
                         acct_list = [acct_list]
-                    raw_positions = etrade.fetch_positions(tokens, env)
+                    raw_positions = _et.accounts.positions(tokens)
 
                 for acct in acct_list:
                     desc = acct.get("accountDesc", "Brokerage")
@@ -1435,9 +1436,10 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
     # ── 1. Live price ─────────────────────────────────────────────────────────
     price = None
     try:
-        tokens = etrade.get_tokens("production")
+        _et = etrade.ETradeClient("production", role="auth")
+        tokens = _et.auth.get_tokens()
         if tokens:
-            quotes = etrade.fetch_quotes(tokens, [sym], env="production")
+            quotes = _et.market.quotes([sym], tokens)
             price = quotes.get(sym)
     except Exception:
         pass
