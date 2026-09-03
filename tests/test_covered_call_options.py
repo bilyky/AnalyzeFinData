@@ -10,15 +10,16 @@ import unittest
 from aether import options
 
 
-# Fake Research worksheet: Symbol at index 3, ATR at index 10 (NOT the old magic index 23),
-# so the tests fail if column resolution reverts to a hardcoded position.
-_HEADER = [None, None, None, "Symbol", None, None, None, None, None, None, "ATR"]
+# Fake Research worksheet: Symbol at index 3, ATR at index 10, L60 at index 11 (none at the old
+# magic indices 23/25), so the tests fail if column resolution reverts to a hardcoded position.
+_HEADER = [None, None, None, "Symbol", None, None, None, None, None, None, "ATR", "L60"]
 
 
-def _research_row(sym, atr):
-    row = [None] * 11
+def _research_row(sym, atr, l60=0.0):
+    row = [None] * 12
     row[3] = sym
     row[10] = atr
+    row[11] = l60
     return row
 
 
@@ -246,6 +247,91 @@ class TestCoveredCallOptions(unittest.TestCase):
         self.assertLess(state["balance"], 1000.0)  # BTC cost debited
         self.assertEqual(state["history"][-1]["type"], "OPTION_BUY_TO_CLOSE")
         self.assertLess(state["history"][-1]["pnl"], 0.0)
+
+    def test_execute_weekly_pass_skips_high_conviction_flower(self):
+        """A risk-locked winner whose L60 is at/above the CFG ceiling is a high-conviction flower:
+        its upside must be protected (no call written). A control winner below the ceiling still
+        gets a call (R&D #26 follow-up, Item 1)."""
+        from aether.config import CFG
+        ceiling = CFG.system_covered_call_l60_ceiling
+        state = {
+            "balance": 0.0,
+            "positions": {
+                "NVDA": {"qty": 10, "cost": 100.0, "stop_loss": 100.0},  # winner, risk-locked
+                "MSFT": {"qty": 10, "cost": 100.0, "stop_loss": 100.0},  # winner, risk-locked
+            },
+            "history": [],
+        }
+        prices = {"NVDA": 110.0, "MSFT": 110.0}
+        # NVDA is a high-conviction flower (L60 >= ceiling) -> skipped; MSFT below -> written.
+        ws = _FakeWS(_HEADER, [
+            _research_row("NVDA", 4.0, l60=ceiling + 1.0),
+            _research_row("MSFT", 4.0, l60=ceiling - 2.0),
+        ])
+
+        written = options.execute_weekly_covered_call_pass(state, "2026-08-17", prices, ws)
+
+        symbols_written = {tx["symbol"] for tx in written}
+        self.assertEqual(symbols_written, {"MSFT"})
+        self.assertNotIn("written_call", state["positions"]["NVDA"])  # flower upside protected
+        self.assertIn("written_call", state["positions"]["MSFT"])
+
+    def test_atr_implied_vol_calm_vs_volatile(self):
+        """The per-symbol ATR-IV proxy sits below the flat 0.30 for a calm name and above it for a
+        volatile one, and clamps to [IV_FLOOR, IV_CEILING] at the extremes."""
+        calm = options.atr_implied_vol(atr=2.5, price=110.0)      # ~0.24
+        volatile = options.atr_implied_vol(atr=8.0, price=110.0)  # proxy > ceiling -> clamped
+        self.assertLess(calm, options.FLAT_SIGMA)
+        self.assertGreater(volatile, options.FLAT_SIGMA)
+        # Clamps: a near-zero ATR floors, a huge ATR ceilings.
+        self.assertEqual(options.atr_implied_vol(atr=0.3, price=110.0), options.IV_FLOOR)
+        self.assertEqual(options.atr_implied_vol(atr=20.0, price=110.0), options.IV_CEILING)
+        # Missing/zero inputs fall back to the flat placeholder.
+        self.assertEqual(options.atr_implied_vol(atr=0.0, price=110.0), options.FLAT_SIGMA)
+
+    def test_write_books_premium_at_per_symbol_sigma(self):
+        """A calm name books LESS premium than the old flat 0.30 would, the stored sigma matches
+        the ATR proxy, and the ledger invariant (sum pnl == balance) still holds."""
+        state = {
+            "balance": 0.0,
+            "positions": {"KO": {"qty": 10, "cost": 100.0, "stop_loss": 100.0}},  # calm winner
+            "history": [],
+        }
+        px, atr = 110.0, 2.5
+        prices = {"KO": px}
+        ws = _FakeWS(_HEADER, [_research_row("KO", atr)])
+
+        options.execute_weekly_covered_call_pass(state, "2026-08-17", prices, ws)
+
+        wc = state["positions"]["KO"]["written_call"]
+        expected_sigma = options.atr_implied_vol(atr, px)
+        self.assertAlmostEqual(wc["sigma"], expected_sigma)
+        self.assertLess(expected_sigma, options.FLAT_SIGMA)
+        # Booked premium equals BSM at the per-symbol sigma, and is strictly less than the flat-0.30
+        # premium for the same contract (the over-credit the study flagged, now corrected).
+        flat_opt = options.select_covered_call("KO", px, atr, volatility=options.FLAT_SIGMA)
+        proxy_opt = options.select_covered_call("KO", px, atr, volatility=expected_sigma)
+        self.assertAlmostEqual(wc["premium"], proxy_opt["premium_price"])
+        self.assertLess(proxy_opt["premium_price"], flat_opt["premium_price"])
+        self.assertAlmostEqual(sum(t["pnl"] for t in state["history"]), state["balance"])
+
+    def test_unwind_uses_stored_sigma(self):
+        """Buy-to-close prices at the sigma stored on the written_call (not FLAT_SIGMA), so there is
+        no write-at-proxy / BTC-at-flat asymmetry."""
+        state = {"balance": 1000.0, "positions": {}, "history": []}
+        stored_sigma = 0.20
+        pos = {"qty": 10, "cost": 100.0,
+               "written_call": {"strike": 115.0, "premium": 1.50, "expiration_date": "2026-08-24",
+                                "qty": 10, "sigma": stored_sigma}}
+
+        options.unwind_option_liability_if_held("KO", pos, state, current_price=112.0, today_str="2026-08-17")
+
+        # Expected BTC = BSM at the STORED sigma over the 7 remaining days -> matches the ledger debit,
+        # and differs from what the flat 0.30 would have charged.
+        expected_btc = options.calculate_black_scholes_call(112.0, 115.0, 7.0/365.0, r=options.FLAT_RATE, sigma=stored_sigma)
+        flat_btc = options.calculate_black_scholes_call(112.0, 115.0, 7.0/365.0, r=options.FLAT_RATE, sigma=options.FLAT_SIGMA)
+        self.assertAlmostEqual(state["history"][-1]["pnl"], -round(expected_btc * 10, 2))
+        self.assertNotAlmostEqual(expected_btc, flat_btc)
 
     def test_unwind_malformed_call_clears_without_btc(self):
         """A written_call missing strike/qty is cleared without touching the balance."""

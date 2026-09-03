@@ -9,18 +9,40 @@ import datetime
 import math
 
 from aether import instruments
+from aether.config import CFG
 from aether_logger import get_logger as _get_logger
 
 
 _log = _get_logger("options")
 
-# Flat pricing placeholders shared by BOTH pricing legs — the write side
-# (select_covered_call defaults) and the buy-to-close side (unwind_option_liability_if_held).
-# Single-sourced here so the two legs always price against the same model.
-# TODO(R&D #26): replace with a backtested per-symbol realized-vol proxy + the current
-# risk-free rate before this path is relied on for real capital decisions.
+# Flat pricing placeholders — the documented FALLBACK when a per-symbol vol proxy can't be
+# computed (missing/zero ATR or price). FLAT_RATE is the shared risk-free rate for both legs.
 FLAT_SIGMA = 0.30
 FLAT_RATE = 0.04
+
+# Per-symbol implied-vol proxy (R&D #26 follow-up, Item 2 — SHIPPED).
+# The write side now prices each premium at sigma = clamp((ATR/price)*sqrt(252)*IV_ATR_K,
+# IV_FLOOR, IV_CEILING) instead of the flat 0.30, and stores that sigma on the written_call so
+# buy-to-close prices against the same model it sold at. A flat 0.30 over-credited calm blue
+# chips ~3x on weekly premium dollars and under-credited volatile names to ~1/3, biasing the
+# booked ledger. Constants calibrated by scripts/backtesting/covered_call_iv_study.py
+# (557 symbols): K = median(realized_vol / ATR-proxy) = 0.67; floor/ceiling = 5th/95th pct of
+# per-symbol realized vol. Re-run that study monthly after the OHLCV top-up.
+TRADING_DAYS = 252
+IV_ATR_K = 0.67
+IV_FLOOR = 0.18
+IV_CEILING = 0.64
+
+
+def atr_implied_vol(atr: float, price: float) -> float:
+    """Per-symbol annualized vol proxy from ATR, clamped to [IV_FLOOR, IV_CEILING].
+
+    Falls back to FLAT_SIGMA when ATR or price is missing/non-positive.
+    """
+    if not atr or not price or atr <= 0 or price <= 0:
+        return FLAT_SIGMA
+    proxy = (atr / price) * math.sqrt(TRADING_DAYS) * IV_ATR_K
+    return max(IV_FLOOR, min(IV_CEILING, proxy))
 
 
 def norm_cdf(x: float) -> float:
@@ -220,12 +242,22 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
     if atr_idx is None:
         atr_idx = 23
         _log.warning("[Option Write] Research sheet has no 'ATR' header; falling back to column index 23 (may bind the wrong field).")
+    # L60 (60-day conviction score) gates the flower exclusion below — high-conviction winners
+    # are excluded from call-writing so their upside is not capped (R&D #26 follow-up, Item 1).
+    l60_idx = next((i for i, h in enumerate(header_norm) if h == "l60"), None)
+    if l60_idx is None:
+        l60_idx = 25
+        _log.warning("[Option Write] Research sheet has no 'L60' header; falling back to column index 25 (may bind the wrong field).")
 
-    atr_map = {}
+    atr_map, l60_map = {}, {}
     for row in ws_research.iter_rows(min_row=2, values_only=True):
         sym = str(row[sym_idx] or "").strip().upper() if sym_idx < len(row) else ""
         if sym:
             atr_map[sym] = (row[atr_idx] if atr_idx < len(row) else None) or 0.0
+            try:
+                l60_map[sym] = float(row[l60_idx]) if l60_idx < len(row) and row[l60_idx] is not None else 0.0
+            except (TypeError, ValueError):
+                l60_map[sym] = 0.0
 
     for sym, pos in state.get("positions", {}).items():
         current_px = prices.get(sym, pos["cost"])
@@ -236,13 +268,23 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
         # decay dynamics make the flat-IV Black-Scholes premium meaningless, and the Aug-8 roadmap
         # already carves this cohort out of the long framework (instruments.is_excluded).
         is_optionable = not instruments.is_excluded(sym)
+        # Flower exclusion: do NOT cap the upside of high-conviction winners. Capping a strong
+        # flower with a covered call costs 5-10x the premium edge of a mid-conviction name
+        # (scripts/backtesting/covered_call_winner_study.py: the >50%-momentum cohort loses
+        # -0.488%/write vs -0.046% in the 0-25% middle). Above the CFG L60 ceiling the position
+        # is left uncapped — the code form of CLAUDE.md's "a win that dumps a flower is a mistake".
+        l60 = l60_map.get(sym, 0.0)
+        is_high_conviction = l60 >= CFG.system_covered_call_l60_ceiling
 
-        # Only write Covered Calls on risk-locked winners (downside already capped at breakeven).
-        if is_winner and is_risk_locked and not has_active_call and is_optionable:
+        # Only write Covered Calls on risk-locked winners (downside already capped at breakeven),
+        # excluding high-conviction flowers whose upside we protect.
+        if is_winner and is_risk_locked and not has_active_call and is_optionable and not is_high_conviction:
             atr = atr_map.get(sym, current_px * 0.04) # fallback to 4% ATR
 
-            # Select optimal OTM Covered Call
-            opt = select_covered_call(sym, current_px, atr)
+            # Price the premium at the per-symbol ATR-implied vol (not the flat 0.30), and carry
+            # that sigma onto the written_call so buy-to-close prices against the same model.
+            sigma = atr_implied_vol(atr, current_px)
+            opt = select_covered_call(sym, current_px, atr, volatility=sigma)
             strike = opt["strike"]
             premium_price = opt["premium_price"]
             premium_usd = round(premium_price * pos["qty"], 2)
@@ -252,12 +294,13 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
             # 1. Collect cash premium immediately!
             state["balance"] += premium_usd
             
-            # 2. Attach the option liability to the position
+            # 2. Attach the option liability to the position (store sigma for symmetric BTC pricing)
             pos["written_call"] = {
                 "strike": strike,
                 "premium": premium_price,
                 "expiration_date": next_friday_str,
-                "qty": pos["qty"]
+                "qty": pos["qty"],
+                "sigma": sigma
             }
             
             # 3. Record the transaction
@@ -273,7 +316,9 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
             }
             state.setdefault("history", []).append(tx)
             new_options.append(tx)
-            
+        elif is_winner and is_risk_locked and not has_active_call and is_optionable and is_high_conviction:
+            _log.info(f"[Option Write] Skipping {sym}: high-conviction flower (L60 {l60:.1f} >= ceiling {CFG.system_covered_call_l60_ceiling:.1f}); leaving upside uncapped.")
+
     return new_options
 
 
@@ -303,10 +348,12 @@ def unwind_option_liability_if_held(sym: str, pos: dict, state: dict, current_pr
 
     T_rem = days_rem / 365.0
 
-    # Price the buy-to-close with the SAME flat placeholders the write side used, so BTC prices
-    # against the model it sold at. These are not per-symbol IV / live rate; the debit hits the
-    # live balance — see the FLAT_SIGMA / FLAT_RATE note at module top (R&D #26 follow-up).
-    btc_price = calculate_black_scholes_call(current_price, strike, T_rem, r=FLAT_RATE, sigma=FLAT_SIGMA)
+    # Price the buy-to-close at the SAME per-symbol sigma the write side sold at (stored on the
+    # written_call), so there is no write-at-proxy / BTC-at-flat asymmetry. Falls back to
+    # FLAT_SIGMA for legacy positions written before the sigma was persisted. The debit hits the
+    # live balance; FLAT_RATE is the shared risk-free rate (R&D #26 follow-up, Item 2).
+    sigma = written_call.get("sigma") or FLAT_SIGMA
+    btc_price = calculate_black_scholes_call(current_price, strike, T_rem, r=FLAT_RATE, sigma=sigma)
     btc_usd = round(btc_price * qty, 2)
 
     _log.warning(f"[Option Buy-To-Close] {sym} hit stop-loss/rotation; buying back short Call @ ${btc_price:.2f} before sale to avoid a naked call (cost ${btc_usd:.2f}).")
