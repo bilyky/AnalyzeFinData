@@ -1391,14 +1391,15 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
     _log.console("Replacements sheet written: %d pairs.", n_pairs)
 
 
-def backup_xlsx(xlsx_path: str) -> str | None:
+def backup_xlsx(xlsx_path: str, label: str = "investment") -> str | None:
     """Copy xlsx to a timestamped backup in Backup/{year}/. Returns backup path or None."""
     if not os.path.exists(xlsx_path):
         return None
     now = datetime.datetime.now()
     ts  = now.strftime("%Y-%m-%d_%H%M%S")
+    base_name = os.path.splitext(os.path.basename(xlsx_path))[0]
     dst = os.path.join(os.path.dirname(xlsx_path), "Backup",
-                       str(now.year), f"investment_{ts}.xlsx")
+                       str(now.year), f"{base_name}_{label}_{ts}.xlsx")
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copy2(xlsx_path, dst)
     _log.console("Backup saved to %s", dst)
