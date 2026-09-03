@@ -1,6 +1,10 @@
+import json
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
+
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -95,11 +99,17 @@ class TestCandlestickScore(unittest.TestCase):
     Two kinds:
       - the empty-data guard scoring.py relies on (no bars => neutral 0.0);
       - a golden/invariant test on a fixture that actually FIRES patterns, so it
-        exercises the real compute path (parse -> 17 signals -> weight -> /5.0
+        exercises the real compute path (parse -> 17 signals -> weight -> divisor
         clamp -> round), not a short-circuit. It pins three real properties:
         the score is non-zero (patterns fired), bounded to [-2, +2], and
         SIGN-ANTISYMMETRIC under a price mirror (mirroring O/H/L/C about an axis
         negates the score) — the core directional contract of the bull/bear tally.
+
+    The weights + saturation divisor are now BACKTEST-CALIBRATED and loaded at import
+    from Data/candlestick_pattern_study.json, so their ambient values depend on whether
+    Data/ is synced (CI has no Data/ -> unit-weight fallback; production loads the
+    calibrated table). The golden test therefore PINS known weights explicitly via mock
+    so its expected value is deterministic across both environments.
     """
 
     @staticmethod
@@ -130,8 +140,15 @@ class TestCandlestickScore(unittest.TestCase):
         self.assertEqual(patterns.candlestick_score({}, "2026-04-15"), 0.0)
 
     def test_fires_bounded_and_sign_antisymmetric(self):
-        up = patterns.candlestick_score(self._engulfing_series(False), "2026-04-15")
-        dn = patterns.candlestick_score(self._engulfing_series(mirror=True), "2026-04-15")
+        # This fixture fires engulfing + double_trouble (both bearish on the up-series).
+        # Pin their weights + the divisor so the golden is deterministic regardless of
+        # which study table is ambient: raw = -(1.5 + 1.6) = -3.1, /5.0*2 = -1.24.
+        known = dict(patterns.CANDLESTICK_WEIGHTS)
+        known.update({"engulfing": 1.5, "double_trouble": 1.6})
+        with mock.patch.object(patterns, "CANDLESTICK_WEIGHTS", known), \
+             mock.patch.object(patterns, "_SATURATION_DIVISOR", 5.0):
+            up = patterns.candlestick_score(self._engulfing_series(False), "2026-04-15")
+            dn = patterns.candlestick_score(self._engulfing_series(mirror=True), "2026-04-15")
         # patterns actually fired (compute path ran, not a guard short-circuit)
         self.assertNotEqual(up, 0.0)
         # bounded contract scoring.py depends on
@@ -140,8 +157,62 @@ class TestCandlestickScore(unittest.TestCase):
             self.assertLessEqual(s, 2.0)
         # mirroring price negates the score: the bull/bear tally is directionally symmetric
         self.assertAlmostEqual(up, -dn, places=2)
-        # golden values pin the full weight/normalization pipeline against silent drift
+        # golden value pins the full weight/normalization pipeline against silent drift
         self.assertAlmostEqual(up, -1.24, places=2)
+
+
+class TestCandlestickCalibrationLoader(unittest.TestCase):
+    """Red-green tests for _load_candlestick_calibration (the study-JSON wiring).
+
+    The loader is the seam that turns the backtest study into live weights. It must:
+      - parse per-pattern weights + saturation_divisor from a well-formed study JSON;
+      - ALWAYS return all 17 pattern keys, unit-defaulting any the study omits;
+      - degrade gracefully to unit weights + the hand-set divisor when the file is
+        missing or malformed (the CI / unsynced-Data case) rather than raising at import.
+    """
+
+    def test_loads_weights_and_divisor_from_json(self):
+        study = {
+            "saturation_divisor": 2.15,
+            "weights": {"star": 0.56, "harami_strict": 0.5, "tweezers": 2.0},
+        }
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
+            json.dump(study, f)
+            path = f.name
+        try:
+            weights, divisor = patterns._load_candlestick_calibration(path)
+        finally:
+            os.unlink(path)
+        self.assertAlmostEqual(divisor, 2.15)
+        self.assertAlmostEqual(weights["star"], 0.56)
+        self.assertAlmostEqual(weights["harami_strict"], 0.5)
+        self.assertAlmostEqual(weights["tweezers"], 2.0)
+        # all 17 pattern keys present; anything the study omits unit-defaults
+        self.assertEqual(set(weights.keys()), set(patterns._PATTERN_NAMES))
+        self.assertAlmostEqual(weights["engulfing"], 1.0)
+
+    def test_missing_file_falls_back_to_unit_weights(self):
+        weights, divisor = patterns._load_candlestick_calibration(
+            os.path.join(tempfile.gettempdir(), "no_such_candlestick_study.json")
+        )
+        self.assertAlmostEqual(divisor, patterns._DEFAULT_SATURATION_DIVISOR)
+        self.assertEqual(set(weights.keys()), set(patterns._PATTERN_NAMES))
+        self.assertTrue(all(v == 1.0 for v in weights.values()))
+
+    def test_malformed_json_falls_back(self):
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
+            f.write("{ not valid json ")
+            path = f.name
+        try:
+            weights, divisor = patterns._load_candlestick_calibration(path)
+        finally:
+            os.unlink(path)
+        self.assertAlmostEqual(divisor, patterns._DEFAULT_SATURATION_DIVISOR)
+        self.assertTrue(all(v == 1.0 for v in weights.values()))
 
 
 if __name__ == "__main__":
