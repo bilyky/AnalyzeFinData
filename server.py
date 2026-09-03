@@ -40,6 +40,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from config import CFG
+from external_intel import dedup_rd_topics
 import data_api
 import uvicorn
 import ai_portfolio_game
@@ -196,24 +197,8 @@ def create_app():
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
                 records = json.load(f)
-            
-            seen_rd = set()
-            unique_rd = []
-            for r in records:
-                intel = r.get("intel") or {}
-                rd_topics_list = intel.get("rd_topics", [])
-                if isinstance(rd_topics_list, str):
-                    rd_topics_list = [rd_topics_list]
-                if isinstance(rd_topics_list, list):
-                    for topic in rd_topics_list:
-                        if isinstance(topic, str):
-                            topic_clean = topic.strip()
-                            if topic_clean:
-                                topic_norm = topic_clean.lower().rstrip(".").strip()
-                                if topic_norm not in seen_rd:
-                                    seen_rd.add(topic_norm)
-                                    unique_rd.append(topic_clean)
-            return {"ideas": unique_rd}
+            raw = ((r.get("intel") or {}).get("rd_topics", []) for r in records)
+            return {"ideas": dedup_rd_topics(raw)}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to read intel ideas cache: {e}")
 

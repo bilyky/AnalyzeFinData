@@ -137,8 +137,8 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
         # Structural intel: aggregate catalysts, missing symbols, R&D across all emails.
         # Catalysts older than 15 days are historical filler, not action signals — drop them.
         _cutoff = (datetime.date.today() - datetime.timedelta(days=15)).isoformat()
-        all_catalysts, all_missing, all_rd = [], [], []
-        seen_rd = set()
+        all_catalysts, all_missing = [], []
+        raw_rd = []
         for i in intel_ideas:
             if not isinstance(i, dict):
                 continue
@@ -163,18 +163,10 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
                 elif isinstance(missing_syms, dict):
                     all_missing.append(missing_syms)
                 
-                rd_topics_list = iv.get("rd_topics", [])
-                if isinstance(rd_topics_list, str):
-                    rd_topics_list = [rd_topics_list]
-                if isinstance(rd_topics_list, list):
-                    for r in rd_topics_list:
-                        if isinstance(r, str):
-                            r_clean = r.strip()
-                            if r_clean:
-                                r_norm = r_clean.lower().rstrip(".").strip()
-                                if r_norm not in seen_rd:
-                                    seen_rd.add(r_norm)
-                                    all_rd.append(r_clean)
+                raw_rd.append(iv.get("rd_topics", []))
+
+        # Single source of truth for R&D dedup (shared with /api/intel-ideas).
+        all_rd = external_intel.dedup_rd_topics(raw_rd)
 
         structural = ""
         if all_catalysts:

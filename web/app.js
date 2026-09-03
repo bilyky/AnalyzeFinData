@@ -1749,39 +1749,46 @@ function loadTab(tab) {
     else if (tab === "about") { loadRoadmap(); loadIntelIdeas(); }
 }
 
-function _esc(str) {
-    if (!str) return "";
-    return str.replace(/&/g, "&amp;")
-              .replace(/</g, "&lt;")
-              .replace(/>/g, "&gt;")
-              .replace(/"/g, "&quot;")
-              .replace(/'/g, "&#039;");
+function _muted(el, msg) {
+    // Render a dimmed status line as text (no HTML), matching the tab's idiom.
+    const span = document.createElement("span");
+    span.className = "text-slate-500";
+    span.textContent = msg;
+    el.replaceChildren(span);
 }
 
 async function loadIntelIdeas() {
     const el = $("intel-ideas-dynamic-content");
     if (!el) return;
-    el.innerHTML = '<span class="text-slate-500">Loading AI qualitative research ideas...</span>';
+    _muted(el, "Loading AI qualitative research ideas...");
     try {
         const d = await api("/api/intel-ideas");
         if (d.error) {
-            el.textContent = "Error loading research ideas: " + d.error;
+            _muted(el, "Error loading research ideas: " + d.error);
             return;
         }
         if (!d.ideas || d.ideas.length === 0) {
-            el.innerHTML = '<span class="text-slate-500">No AI qualitative research ideas in backlog.</span>';
+            _muted(el, "No AI qualitative research ideas in backlog.");
             return;
         }
-        
-        let html = '<ul class="list-disc pl-4 space-y-2 mt-2">';
+        // Build the list via DOM + textContent — no innerHTML, so idea text can never
+        // be interpreted as markup (matches the .textContent idiom used across app.js).
+        const ul = document.createElement("ul");
+        ul.className = "list-disc pl-4 space-y-2 mt-2";
         d.ideas.forEach((idea, idx) => {
-            html += `<li class="text-slate-300 hover:text-slate-100 transition"><b class="text-sky-400 font-semibold">Prompt #${idx+1}:</b> ${_esc(idea)}</li>`;
+            const li = document.createElement("li");
+            li.className = "text-slate-300 hover:text-slate-100 transition";
+            const b = document.createElement("b");
+            b.className = "text-sky-400 font-semibold";
+            b.textContent = `Prompt #${idx + 1}: `;
+            li.appendChild(b);
+            li.appendChild(document.createTextNode(idea));
+            ul.appendChild(li);
         });
-        html += '</ul>';
-        el.innerHTML = html;
+        el.replaceChildren(ul);
     } catch (e) {
         console.warn("Failed to load AI research ideas:", e);
-        el.innerHTML = '<span class="text-slate-500">Failed to load AI research ideas (offline fallback).</span>';
+        _muted(el, "Failed to load AI research ideas (offline fallback).");
     }
 }
 
