@@ -8,6 +8,7 @@ out-of-the-money (OTM) Covered Call selection, and position-assignment lifecycle
 import datetime
 import math
 
+from aether import instruments
 from aether_logger import get_logger as _get_logger
 
 
@@ -231,9 +232,13 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
         is_winner = (current_px > pos["cost"])
         is_risk_locked = (pos.get("stop_loss", 0.0) >= pos["cost"])
         has_active_call = "written_call" in pos
-        
+        # Never write on leveraged / inverse / crypto instruments: their realized vol and daily
+        # decay dynamics make the flat-IV Black-Scholes premium meaningless, and the Aug-8 roadmap
+        # already carves this cohort out of the long framework (instruments.is_excluded).
+        is_optionable = not instruments.is_excluded(sym)
+
         # Only write Covered Calls on risk-locked winners (downside already capped at breakeven).
-        if is_winner and is_risk_locked and not has_active_call:
+        if is_winner and is_risk_locked and not has_active_call and is_optionable:
             atr = atr_map.get(sym, current_px * 0.04) # fallback to 4% ATR
 
             # Select optimal OTM Covered Call

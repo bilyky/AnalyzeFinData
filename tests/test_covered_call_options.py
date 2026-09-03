@@ -212,6 +212,28 @@ class TestCoveredCallOptions(unittest.TestCase):
         # Ledger invariant: total booked pnl equals the net cash the premium put on the balance.
         self.assertAlmostEqual(sum(t["pnl"] for t in state["history"]), state["balance"])
 
+    def test_execute_weekly_pass_skips_excluded_instruments(self):
+        """A leveraged/inverse/crypto instrument must NOT get a Covered Call written even when it is
+        a risk-locked winner: flat-IV Black-Scholes is meaningless for that cohort (Aug-8 exclusion)."""
+        state = {
+            "balance": 0.0,
+            "positions": {
+                # SQQQ is a leveraged-inverse ETF -> instruments.is_excluded(SQQQ) is True.
+                "SQQQ": {"qty": 10, "cost": 100.0, "stop_loss": 100.0},  # winner + risk-locked, but excluded
+                "AAPL": {"qty": 10, "cost": 100.0, "stop_loss": 100.0},  # normal control -> should write
+            },
+            "history": [],
+        }
+        prices = {"SQQQ": 110.0, "AAPL": 110.0}
+        ws = _FakeWS(_HEADER, [_research_row("SQQQ", 4.0), _research_row("AAPL", 4.0)])
+
+        written = options.execute_weekly_covered_call_pass(state, "2026-08-17", prices, ws)
+
+        symbols_written = {tx["symbol"] for tx in written}
+        self.assertEqual(symbols_written, {"AAPL"})
+        self.assertNotIn("written_call", state["positions"]["SQQQ"])
+        self.assertIn("written_call", state["positions"]["AAPL"])
+
     def test_unwind_buys_back_short_call(self):
         """Buy-to-close debits the balance by the BS fair value and clears the liability."""
         state = {"balance": 1000.0, "positions": {}, "history": []}
