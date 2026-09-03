@@ -390,5 +390,18 @@
       "Rotations: Chooses the single highest-scoring, non-overlapping bullish setup (s10 >= 2.5).",
       "Zero-Risk: Operational read-only advisory (no automated orders are placed on your brokerage)."
     ]
+  },
+  "covered_call_engine": {
+    "title": "Covered-Call Income Engine (R&D #26)",
+    "summary": "A weekly writer that sells covered calls against risk-locked winners and books the premium to the ledger as real cash. Each option is priced with a per-symbol ATR-implied volatility, and high-conviction 'flower' winners are deliberately left uncapped so their upside stays protected.",
+    "body": "The covered-call engine (aether/options.py) runs a weekly pass over open positions and writes a one-week out-of-the-money call against each risk-locked, optionable winner that has no active call, crediting the Black-Scholes-Merton premium to the ledger. If the position is still held near expiry the call is bought back (unwound) at fair value; if price closes above the strike the stock is called away at the strike. Two backtest-gated refinements (Jul-18 optimizer discipline) sit on top of the base writer. First, each premium is priced at a per-symbol implied volatility derived from the symbol's own ATR rather than a single flat 0.30 across the universe — a flat vol over-credited calm blue chips and under-credited volatile names, biasing the booked ledger. Second, winners with a strong long-term trend (Long60 at or above the configured ceiling) are excluded from writing entirely, so the engine never caps the upside of a high-conviction 'flower' — the same capital-protection instinct as Flower Protection and the ATR trailing stop.",
+    "config": [
+      "Eligibility: writes only against risk-locked, optionable winners that have no active call.",
+      "Volatility: sigma = clamp((ATR/price) x sqrt(252) x 0.67, 0.18, 0.64), calibrated by scripts/backtesting/covered_call_iv_study.py; falls back to a flat 0.30 when ATR or price is unavailable.",
+      "Flower Protection: winners with Long60 >= 6.0 (config cc_l60_ceiling / env AETHER_CC_L60_CEILING) are never written against, leaving their upside uncapped.",
+      "Pricing: European Black-Scholes-Merton, 7-day weekly expiry, risk-free rate 0.04; strike = max(1.05 x price, price + 1.5 x ATR) rounded to a $1 / $2.50 / $5 ladder by price tier.",
+      "Symmetry: the sold volatility is stored on the written call and reused at buy-to-close, so writes and unwinds price against the same model."
+    ],
+    "origin": "Project AETHER R&D #26 (Option Trading & Volatility Patterns). Base weekly writer plus two backtest-gated refinements (per-symbol ATR-implied vol; high-conviction flower exclusion) shipped September 2026 on the covered-call follow-up (PR #60)."
   }
 }
