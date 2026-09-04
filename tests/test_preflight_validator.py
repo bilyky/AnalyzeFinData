@@ -132,13 +132,16 @@ class TestNewPreflightFeatures(unittest.TestCase):
                 self.assertTrue(ok)
                 self.assertEqual(locks, [])
 
-    def test_pipeline_lock_other_pid_detected(self):
+    @mock.patch("preflight_validator.subprocess.run")
+    def test_pipeline_lock_other_pid_detected(self, mock_run):
         # Test 2: When lock has a DIFFERENT PID, it is flagged.
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             (base / "Data").mkdir()
             lock_file = base / "Data" / "pipeline_run.lock"
             lock_file.write_text("999999") # totally different PID
+
+            mock_run.return_value = mock.Mock(stdout="999999")
 
             ok, locks = pf.check_active_locks(base_dir=base)
             self.assertFalse(ok)

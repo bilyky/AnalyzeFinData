@@ -15,9 +15,12 @@ class TestAIOverrideGate(unittest.TestCase):
         game._HEAL_ATTEMPTED.clear()
         self.ai_eval_patcher = mock.patch("ai_client.evaluate", return_value="")
         self.mock_ai_eval = self.ai_eval_patcher.start()
+        self.heal_patcher = mock.patch("ai_portfolio_game._heal_symbol_cache", return_value=False)
+        self.mock_heal = self.heal_patcher.start()
 
     def tearDown(self):
         self.ai_eval_patcher.stop()
+        self.heal_patcher.stop()
 
     @mock.patch("ai_portfolio_game.is_market_hours", return_value=True)
     @mock.patch("ai_portfolio_game.get_live_prices")

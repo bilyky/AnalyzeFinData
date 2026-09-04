@@ -945,6 +945,7 @@ def is_bottom_confirmed(symbol):
 def update_excel_log(state, new_transactions):
     if not AI_PERF_XLSX.exists():
         return
+    wb = None
     try:
         wb = openpyxl.load_workbook(AI_PERF_XLSX)
         today = str(datetime.date.today())
@@ -958,6 +959,12 @@ def update_excel_log(state, new_transactions):
         wb.save(AI_PERF_XLSX)
     except Exception as e:
         _log.info(f"Failed to update Excel log: {e}")
+    finally:
+        if wb:
+            try:
+                wb.close()
+            except Exception:
+                pass
 
 def get_live_google_price(symbol):
     """Scrape the latest price from Google Finance as a fallback when E*TRADE is unavailable."""
@@ -1152,6 +1159,7 @@ def send_daily_summary(return_html=False):
 
     # Standardize fallback to workbook close prices if E*TRADE renewal fails (e.g. on weekends)
     if not live_prices or any(sym not in live_prices for sym in positions):
+        wb = None
         try:
             wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
             # Use Short_Long sheet if available, as it contains all active portfolio holdings and current prices
@@ -1172,6 +1180,12 @@ def send_daily_summary(return_html=False):
                             live_prices[sym] = row[10] or positions[sym]["cost"]
         except Exception as e:
             _log.warning(f"Workbook fallback failed inside summary: {e}")
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
 
     # Final safety fallback to cost basis if both API and workbook are empty
     for sym in positions:
@@ -2050,6 +2064,11 @@ def run_daily_ai_management(force=False, manual_profile=None):
     except Exception as e:
         _log.exception(f"run_daily_ai_management failed: {e}")
     finally:
+        if "wb" in locals() and wb:
+            try:
+                wb.close()
+            except Exception:
+                pass
         if state is not None:
             save_game(state)
             update_excel_log(state, new_transactions)

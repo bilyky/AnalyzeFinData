@@ -59,6 +59,9 @@ def calculate_black_scholes_call(S: float, K: float, T: float, r: float, sigma: 
     r: Risk-free interest rate (annualized)
     sigma: Volatility (annualized, e.g. 0.30 for 30%)
     """
+    if S <= 0.0 or K <= 0.0:
+        return 0.0
+        
     if T <= 0.0 or sigma <= 0.0:
         return max(0.0, S - K)
         
