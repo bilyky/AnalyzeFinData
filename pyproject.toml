@@ -59,28 +59,27 @@ ignore = [
     "F841",   # unused-variable (14)
     "B007",   # unused-loop-control-variable (3)
     "B905",   # zip-without-explicit-strict (5)
-    "T201",   # print (11 outside per-file-ignores) — migrate to logger, then remove
     "S110",   # try-except-pass (2 outside per-file-ignores)
 ]
 
 [tool.ruff.lint.per-file-ignores]
 # Decouple and exempt legacy, utility, and test files cleanly using cross-platform forward-slashes
 "aether/ai_client.py" = ["S110"]              # Optional AI provider fallback passes
-"aether/etrade.py" = ["T201", "E402", "S110"]  # Print statements, inline imports, and exception passes allowed for headless Playwright login
+"aether/etrade.py" = ["E402", "S110"]          # Inline imports and exception passes allowed for headless Playwright login
 "aether/notify.py" = ["S110"]                  # Email dispatch retry passes
 "aether/scoring.py" = ["S110", "B007"]          # Optional cache read passes; unused monthly loops
 "aether/workbook_write.py" = ["S110", "B007", "B023"] # Lazy VML XML hacks, XML loop mappings, and cell cell-write function variable bindings
-"etrade.py" = ["T201", "E402", "S110"]         # Root wrapper file inherits E*TRADE exemptions
-"powergauge.py" = ["T201", "E402", "S110"]     # Playwright manual login utility requires prints/inline imports
-"run_history.py" = ["T201", "E402", "S110"]    # Parallelized history backfill launcher script
+"etrade.py" = ["E402", "S110"]                 # Root wrapper file inherits E*TRADE exemptions
+"powergauge.py" = ["E402", "S110"]             # Playwright manual login utility requires inline imports
+"run_history.py" = ["E402", "S110"]            # Parallelized history backfill launcher script
 "scoring.py" = ["S110", "B007"]                 # Wrapper file inherits scoring exemptions
 "workbook_write.py" = ["S110", "B007", "B023"]  # Wrapper file inherits workbook exemptions
-"verify_data_contiguity.py" = ["T201", "E722", "E402"] # Terminal auditing script is built on console prints and requires custom path injection
+"verify_data_contiguity.py" = ["E722", "E402"] # Terminal auditing script requires custom path injection
 "scripts/utils/repair_pg_history.py" = ["T201"] # Repair terminal script
 "tests/*" = ["T201", "E402", "S110", "F401", "B007", "E741", "B905", "I"] # Tests require prints, inline imports, exception-pass, isort exemptions, and optional unused/ambiguous variables
-"daily_task.py" = ["T201", "S110"]             # Command-line diagnostics uses standard print; sync exception passes
-"watchdog.py" = ["T201", "S110", "E722"]       # Watchdog terminal prompts, administration CTypes checks, and shell subprocess passes
-"server.py" = ["T201", "S110"]                 # Local FastAPI server logging and news fallback passes
+"daily_task.py" = ["S110"]                     # Sync exception passes
+"watchdog.py" = ["S110", "E722"]               # Administration CTypes checks and shell subprocess passes
+"server.py" = ["S110"]                         # Local FastAPI server news fallback passes
 "scripts/*" = ["T201", "E402", "S110", "E722", "B007", "E741"] # Exempt legacy research study and terminal utilities from prints/inline-imports/try-pass blocks
 "ai_portfolio_game.py" = ["E402", "S110", "B015"] # Exclude inline shutil imports, Excel date checking try-passes, and target diagnostic evaluations
 "autonomous_pipeline.py" = ["E402", "E722", "S110"] # Exclude setup-prompt wrappers, Windows Task kill subprocess passes, and system lock cleanups

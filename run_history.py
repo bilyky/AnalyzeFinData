@@ -27,6 +27,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import powergauge
+from aether.logger import get_logger
+
+_log = get_logger("run_history")
 
 US_HOLIDAYS_2026 = {
     datetime.date(2026, 1, 1),   # New Year's Day
@@ -99,25 +102,25 @@ def days_missing(symbols: list[str], day: datetime.date) -> list[str]:
 def main():
     n_days = int(sys.argv[1]) if len(sys.argv) > 1 else 14
 
-    print(f"Loading symbols from Research sheet...")
+    _log.console(f"Loading symbols from Research sheet...")
     symbols = load_symbols()
-    print(f"  {len(symbols)} symbols")
+    _log.console(f"  {len(symbols)} symbols")
 
     days = trading_days(n_days)
-    print(f"Trading days to check: {days[-1]} -> {days[0]} ({len(days)} days)\n")
+    _log.console(f"Trading days to check: {days[-1]} -> {days[0]} ({len(days)} days)\n")
 
     session_id = powergauge.login()
     sid_str = session_id.get('jsessionid', '') if isinstance(session_id, dict) else str(session_id)
-    print(f"Session: {sid_str[:8]}...\n")
+    _log.console(f"Session: {sid_str[:8]}...\n")
 
     for day in reversed(days):   # oldest first so prevPG chain builds forward
         missing = days_missing(symbols, day)
         if not missing:
-            print(f"{day}: all {len(symbols)} symbols cached — skip")
+            _log.console(f"{day}: all {len(symbols)} symbols cached — skip")
             continue
 
         total = len(missing)
-        print(f"{day}: fetching {total}/{len(symbols)} symbols in parallel...")
+        _log.console(f"{day}: fetching {total}/{len(symbols)} symbols in parallel...")
         ok = 0
         skip = 0
         errors = 0
@@ -137,7 +140,7 @@ def main():
             for future in as_completed(future_to_sym):
                 symbol = future_to_sym[future]
                 done += 1
-                print(f"  [{done}/{total}] {symbol:<8}", end='\r', flush=True)
+                _log.console(f"  [{done}/{total}] {symbol:<8}")
                 try:
                     pg = future.result()
                     if pg.price == -1:
@@ -145,13 +148,13 @@ def main():
                     else:
                         ok += 1
                 except Exception as e:
-                    print(f"\n  {symbol}: ERROR {e}")
+                    _log.error(f"\n  {symbol}: ERROR {e}")
                     errors += 1
 
-        print(f"  done: {ok} fetched, {skip} no-data, {errors} errors          \n")
+        _log.console(f"  done: {ok} fetched, {skip} no-data, {errors} errors          \n")
 
-    print("History backfill complete.")
-    print("Run check_from_xls to update the Research sheet with today's data.")
+    _log.console("History backfill complete.")
+    _log.console("Run check_from_xls to update the Research sheet with today's data.")
 
 
 if __name__ == "__main__":

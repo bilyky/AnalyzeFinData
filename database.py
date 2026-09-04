@@ -9,6 +9,8 @@ DATABASE_URL environment variable:
 import json
 import sqlalchemy as db
 
+from aether.logger import get_logger
+
 try:
     from config import CFG as _CFG
     _DB_URL = _CFG.database_url
@@ -17,13 +19,16 @@ except Exception:
     _DB_URL = os.environ.get("DATABASE_URL", "")
 
 
+_log = get_logger("database")
+
+
 def connect_to_db():
     if not _DB_URL:
         raise RuntimeError("DATABASE_URL environment variable is not set.")
     engine = db.create_engine(_DB_URL)
     conn = engine.connect()
     output = conn.execute("SELECT * FROM test_table")
-    print(output.fetchall())
+    _log.console(str(output.fetchall()))
     conn.close()
 
 
@@ -59,7 +64,7 @@ def update_daily_ohlcv(symbol: str):
                         {"sym": symbol, "d": date, "o": ss[0], "h": ss[1],
                          "l": ss[2], "c": ss[3], "v": ss[4]}
                     )
-                    print(f"Inserted {symbol} {date}")
+                    _log.console(f"Inserted {symbol} {date}")
                 elif float(output[0][3]) != float(ss[0]):
                     conn.execute(
                         "UPDATE public.daily_ohlcv "
@@ -68,9 +73,9 @@ def update_daily_ohlcv(symbol: str):
                         {"o": ss[0], "h": ss[1], "l": ss[2], "c": ss[3],
                          "v": ss[4], "d": date, "s": symbol.upper()}
                     )
-                    print(f"Updated {symbol} {date}")
+                    _log.console(f"Updated {symbol} {date}")
     except Exception as ex:
-        print(ex)
+        _log.error(f"update_daily_ohlcv({symbol}) failed: {ex}")
     finally:
         conn.close()
 
