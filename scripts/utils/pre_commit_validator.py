@@ -508,8 +508,10 @@ def main():
             #   package to break the circular init — it is imported *from* the package
             #   __init__, so a top-level `from aether import etrade` would hit a
             #   partially-initialised module. See the module's _pkg() docstring.
+            # - database.py: optional `try: from config import CFG / except:` fallback to
+            #   the DATABASE_URL env var when the config module is absent (legacy connector).
             _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py",
-                             "etrade/store.py")
+                             "etrade/store.py", "database.py")
             if not any(x in fpath for x in _skip_imports):
                 if not check_no_inline_imports(fpath):
                     success = False
@@ -517,16 +519,16 @@ def main():
             if not check_no_silent_exceptions(fpath):
                 success = False
 
-            # Files exempt from print() check (Playwright interactive browser prompts
-            # that intentionally write to the user's terminal, not to the log system;
-            # plus the diagnostics/ tests trees, which print by design).
-            # Filenames match by basename; the scripts/ and tests/ trees match by
-            # repo-relative path prefix — NOT substring, so an unrelated path (e.g.
-            # test_etrade.py, .../latests/...) can't accidentally slip the gate.
-            _skip_print_files = ("powergauge.py", "run_history.py", "real_copilot.py")
+            # Print() is banned in production code — user-facing terminal output goes
+            # through the logger's CONSOLE level (_log.console(), stderr, excluded from
+            # the log files), which reaches the terminal without cluttering aether.log.
+            # Only the scripts/ and tests/ trees are exempt (diagnostics/one-off tooling
+            # that prints by design). Match by repo-relative path PREFIX — NOT substring,
+            # so an unrelated path (e.g. .../latests/..., .../myscripts/...) can't slip
+            # the gate.
             _skip_print_trees = ("scripts/", "tests/")
             _rel = os.path.relpath(fpath, ROOT_DIR).replace(os.sep, "/")
-            if not (os.path.basename(fpath) in _skip_print_files or _rel.startswith(_skip_print_trees)):
+            if not _rel.startswith(_skip_print_trees):
                 if not check_no_print_statements(fpath):
                     success = False
                 
