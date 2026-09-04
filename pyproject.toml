@@ -42,6 +42,25 @@ ignore = [
     "E702",   # Multiple statements on one line (semicolon) — permits standard shorthand assignments (e.g. 'a = 1; b = 2')
     "B008",   # Do not perform function call in argument defaults — required for FastAPI's Body(...) and Header(...) dependency injection
     "B904",   # Raise exceptions with raise ... from — utility exception chaining recommendation
+
+    # --- TEMPORARY: parked to make `ruff check` green as a BLOCKING gate today ---
+    # These 305 pre-existing violations are parked so the CI gate can start blocking on
+    # everything else (notably E402 no-inline-imports and E722 no-bare-except, both at 0).
+    # Each is tightened rule-by-rule and removed from this block per the R&D "Enable Ruff
+    # Enforcement" roadmap item (CLAUDE.md). Do NOT add new codes here — fix the violation.
+    "I001",   # unsorted-imports (176) — auto-fixable; deferred to avoid 113-file reorder churn
+    "E401",   # multiple-imports-on-one-line (25) — auto-fixable
+    "E703",   # useless-semicolon (1) — auto-fixable
+    "E712",   # true-false-comparison (4)
+    "E731",   # lambda-assignment (1)
+    "F401",   # unused-import (34) — auto-fixable
+    "F541",   # f-string-missing-placeholders (28) — auto-fixable
+    "F811",   # redefined-while-unused (1) — auto-fixable
+    "F841",   # unused-variable (14)
+    "B007",   # unused-loop-control-variable (3)
+    "B905",   # zip-without-explicit-strict (5)
+    "T201",   # print (11 outside per-file-ignores) — migrate to logger, then remove
+    "S110",   # try-except-pass (2 outside per-file-ignores)
 ]
 
 [tool.ruff.lint.per-file-ignores]
