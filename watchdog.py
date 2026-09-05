@@ -238,6 +238,93 @@ def check_task_scheduler():
             missing.append(task)
     return missing
 
+def check_port_8888_sentry():
+    """Verify if multiple processes are trying to bind to port 8888 (the Web UI port)
+    and automatically terminate any duplicate server.py processes.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        # Run netstat to find listening processes on port 8888
+        res = subprocess.run(["cmd.exe", "/c", "netstat -ano | findstr :8888"], capture_output=True, text=True, errors="ignore")
+        pids = set()
+        for line in res.stdout.splitlines():
+            if "listening" in line.lower():
+                parts = line.strip().split()
+                if parts:
+                    pid = parts[-1]
+                    if pid.isdigit() and int(pid) > 0:
+                        pids.add(int(pid))
+        
+        if len(pids) > 1:
+            _log.warning(f"⚠️ Port Sentry: Multiple processes ({pids}) binding to port 8888!")
+            server_processes = []
+            for pid in pids:
+                cmd = ["powershell.exe", "-NoProfile", "-Command", f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' | Select-Object CreationDate, CommandLine | ConvertTo-Json"]
+                proc_res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
+                if proc_res.returncode == 0 and proc_res.stdout.strip():
+                    try:
+                        proc_data = json.loads(proc_res.stdout)
+                        cmdline = proc_data.get("CommandLine") or ""
+                        if "server.py" in cmdline.lower():
+                            creation_date = proc_data.get("CreationDate") or ""
+                            server_processes.append((pid, creation_date))
+                    except Exception:
+                        pass
+            
+            if len(server_processes) > 1:
+                # Sort by creation date ascending (oldest first). Keep the newest (last index) and terminate the rest.
+                server_processes.sort(key=lambda x: x[1])
+                to_terminate = server_processes[:-1]
+                for pid, cdate in to_terminate:
+                    _log.warning(f"🧹 Port Sentry: Terminating duplicate older server.py process (PID={pid}, Created={cdate})")
+                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+    except Exception as e:
+        _log.warning(f"Port Sentry check failed (non-fatal): {e}")
+
+
+def clean_orphaned_containers():
+    """Identify and force-terminate orphaned powershell.exe and conhost.exe processes
+    older than 30 minutes with zero active children.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        # Run PowerShell to find and kill orphaned conhost.exe and powershell.exe
+        ps_cmd = (
+            "$now = Get-Date; "
+            "Get-CimInstance Win32_Process -Filter \"Name = 'powershell.exe' or Name = 'conhost.exe'\" | "
+            "ForEach-Object { "
+            "  $pid = $_.ProcessId; "
+            "  $children = Get-CimInstance Win32_Process -Filter \"ParentProcessId = $pid\"; "
+            "  $child_count = if ($children) { @($children).Count } else { 0 }; "
+            "  if ($child_count -eq 0) { "
+            "    $age_min = ($now - $_.CreationDate).TotalMinutes; "
+            "    if ($age_min -gt 30) { "
+            "      Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue; "
+            "      Write-Output \"Purged orphaned process PID=$pid (Age: [int]$age_min min)\"; "
+            "    } "
+            "  } "
+            "}"
+        )
+        cmd = ["powershell.exe", "-NoProfile", "-Command", ps_cmd]
+        res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
+        for line in res.stdout.splitlines():
+            if line.strip():
+                _log.info(f"🧹 Process Sentry: {line.strip()}")
+    except Exception as e:
+        _log.warning(f"Orphaned process cleanup failed (non-fatal): {e}")
+
+
+def supervise_processes():
+    """R&D #29: Autonomous Process Supervisor & Port Sentry.
+    Detects and cleans up port 8888 socket duplicates and orphaned console host processes.
+    """
+    _log.console("🔍 Running Autonomous Process Supervisor & Port Sentry (R&D #29)...")
+    check_port_8888_sentry()
+    clean_orphaned_containers()
+
+
 def purge_stray_tasks():
     """Detect Task Scheduler entries in our namespace that are not in the TASKS white-list.
 
@@ -511,6 +598,9 @@ def run_watchdog():
     
     # 1b. Clean up any stray/duplicate AETHER tasks (Pillar 1 Self-Sanitation)
     purge_stray_tasks()
+
+    # 1bb. Process Supervisor & Port Sentry (R&D #29)
+    supervise_processes()
 
     # 1c. Empty the auth-state garbage can past its retention window. Rejected/revoked
     #     token files are soft-deleted (moved to Data/.trash, kept ~1 month for recovery)
