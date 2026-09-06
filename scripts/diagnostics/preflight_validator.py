@@ -475,7 +475,6 @@ def send_preflight_email(checks, missing_items, active_locks, duration, all_ok, 
             if ok == "WAIVED":
                 return '<span style="color: #db6d28; font-weight: bold;">[WAIVED]</span>'
             return '<span style="color: #2ea043; font-weight: bold;">[PASS]</span>' if ok else '<span style="color: #f85149; font-weight: bold;">[FAIL]</span>'
-
         def _lock_badge(ok):
             return '<span style="color: #2ea043; font-weight: bold;">[CLEAN]</span>' if ok else '<span style="color: #db6d28; font-weight: bold;">[LOCKED]</span>'
 
