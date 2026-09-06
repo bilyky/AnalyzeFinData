@@ -76,15 +76,35 @@ def main():
         print(f"Error: Git hooks directory not found at {HOOKS_DIR}")
         sys.exit(1)
 
-    # Write pre-commit hook
+    # 1. Back up and write pre-commit hook
     pre_commit_path = os.path.join(HOOKS_DIR, "pre-commit")
+    if os.path.exists(pre_commit_path):
+        backup_path = pre_commit_path + ".bak"
+        try:
+            if os.path.exists(backup_path):
+                os.remove(backup_path)
+            os.rename(pre_commit_path, backup_path)
+            print(f"⚠️ Warning: Existing pre-commit hook backed up to {backup_path}")
+        except Exception as e:
+            print(f"Warning: Could not back up existing pre-commit hook: {e}")
+
     with open(pre_commit_path, "w", encoding="utf-8") as f:
         f.write(PRE_COMMIT_CONTENT)
     make_executable(pre_commit_path)
     print(f"Installed Git pre-commit hook at {pre_commit_path}")
 
-    # Write pre-push hook
+    # 2. Back up and write pre-push hook
     pre_push_path = os.path.join(HOOKS_DIR, "pre-push")
+    if os.path.exists(pre_push_path):
+        backup_path = pre_push_path + ".bak"
+        try:
+            if os.path.exists(backup_path):
+                os.remove(backup_path)
+            os.rename(pre_push_path, backup_path)
+            print(f"⚠️ Warning: Existing pre-push hook backed up to {backup_path}")
+        except Exception as e:
+            print(f"Warning: Could not back up existing pre-push hook: {e}")
+
     with open(pre_push_path, "w", encoding="utf-8") as f:
         f.write(PRE_PUSH_CONTENT)
     make_executable(pre_push_path)
