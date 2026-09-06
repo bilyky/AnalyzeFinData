@@ -470,10 +470,31 @@ def get_staged_python_files() -> list:
         print(f"Warning: Failed to fetch staged files via git: {e}. Falling back to empty list.")
         return []
 
+def check_no_direct_main_commit() -> bool:
+    """Verify that we are not committing directly to the stable main/master production branches."""
+    try:
+        import subprocess
+        res = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True, errors="replace")
+        branch = res.stdout.strip()
+        if branch in ("main", "master"):
+            if os.environ.get("AETHER_ALLOW_DIRECT_MAIN_COMMIT") != "1":
+                print(f"🚨 [GIT PRE-COMMIT] BLOCK - Direct commits to the stable '{branch}' branch are strictly forbidden.")
+                print(f"   Please checkout a dedicated feature/PR branch (e.g. `git checkout -b feat/my-fix`) to stage your changes.")
+                print(f"   To override this lock for emergency administrative force-resets only, run: ")
+                print(f"       $env:AETHER_ALLOW_DIRECT_MAIN_COMMIT=1 (PowerShell) or SET AETHER_ALLOW_DIRECT_MAIN_COMMIT=1 (CMD)")
+                return False
+    except Exception as e:
+        print(f"⚠️ Warning: could not verify current git branch: {e}")
+    return True
+
 def main():
     print("Running Project AETHER Pre-Commit Quality Checks...")
 
     success = True
+
+    # Block direct commits to production branches by default (Branch-Safety Lock)
+    if not check_no_direct_main_commit():
+        success = False
 
     # Check R&D Roadmap Synchronicity
     if not check_rd_roadmap_sync():
