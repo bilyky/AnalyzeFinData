@@ -69,3 +69,26 @@ jobs:
           fi
           git reset --soft "$BASE"
           python scripts/utils/pre_commit_validator.py
+
+  # Ruff runs in its OWN job so `quality-gate` stays deliberately dependency-free.
+  # ruff is a single self-contained binary (no transitive deps), pinned for a
+  # reproducible gate — a floating version could turn CI red with no code change.
+  # It enforces the whole-repo rule set in pyproject.toml (notably E402 no-inline-imports
+  # and E722 no-bare-except). The 305 pre-existing violations are parked in the
+  # pyproject `ignore` block and tightened per the "Enable Ruff Enforcement" R&D item.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install Ruff (pinned)
+        run: pip install ruff==0.16.1
+
+      - name: Ruff check (config in pyproject.toml)
+        run: ruff check .

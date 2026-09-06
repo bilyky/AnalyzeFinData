@@ -11,6 +11,7 @@ powergauge.py.
 import os
 import re
 import shutil
+import time
 import zipfile
 import datetime
 from io import BytesIO
@@ -1391,8 +1392,17 @@ def update_replacements_sheet(wb, picks_data: list, run_date=None):
     _log.console("Replacements sheet written: %d pairs.", n_pairs)
 
 
-def backup_xlsx(xlsx_path: str) -> str | None:
-    """Copy xlsx to a timestamped backup in Backup/{year}/. Returns backup path or None."""
+def backup_xlsx(xlsx_path: str, max_retries: int = 3, retry_delay: float = 1.0) -> str | None:
+    """Copy xlsx to a timestamped backup in Backup/{year}/. Returns backup path or None.
+
+    Fail-soft on a locked workbook (open in Excel): retries up to ``max_retries`` times,
+    sleeping ``retry_delay`` seconds between attempts. If the lock persists, returns
+    ``None`` rather than a stale prior-run backup — callers pass the result to
+    ``fix_comment_shape_ids(original_xlsx=...)``, which skips comment/formula recovery
+    when it is ``None``. This function NEVER returns a file that is not a fresh copy of
+    THIS ``xlsx_path``, so a caller can trust a non-None result as a verified backup of
+    the current state.
+    """
     if not os.path.exists(xlsx_path):
         return None
     now = datetime.datetime.now()
@@ -1400,6 +1410,19 @@ def backup_xlsx(xlsx_path: str) -> str | None:
     dst = os.path.join(os.path.dirname(xlsx_path), "Backup",
                        str(now.year), f"investment_{ts}.xlsx")
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    shutil.copy2(xlsx_path, dst)
-    _log.console("Backup saved to %s", dst)
-    return dst
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            shutil.copy2(xlsx_path, dst)
+            _log.console("Backup saved to %s", dst)
+            return dst
+        except (PermissionError, OSError) as e:
+            _log.warning("Backup attempt %d/%d failed for %s (locked?): %s",
+                         attempt, max_retries, xlsx_path, e)
+            if attempt < max_retries:
+                time.sleep(retry_delay)
+
+    _log.error("Could not back up %s after %d attempts; returning None so comment "
+               "recovery is skipped rather than restored from a stale backup.",
+               xlsx_path, max_retries)
+    return None
