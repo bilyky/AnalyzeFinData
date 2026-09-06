@@ -104,3 +104,8 @@ To maintain an adaptive, self-correcting quantitative trading desk, Project AETH
 *   **Phase 4: Dynamic Rejection Rules:** The retrospective analyzer automatically writes these toxic patterns to `Data/failure_dna_rules.json` and outputs a rich, human-readable summary in `Data/retrospective_report.txt`.
 *   **Phase 5: The Autopilot Rejection Guard:** During the daily buy cycle (`_execute_buys` in `ai_portfolio_game.py`), the buy-loop must run `check_failure_rules()` on all prospective candidates, immediately rejecting any stock matching our dynamically generated toxic rules on autopilot!
 
+### 🚨 Strict Ban on Direct Commits/Pushes to Production Branches (The Branch-Safety Lock)
+To prevent accidental direct commits, merges, or pushes to the stable `main` production branch:
+*   **The Mandate:** You are **strictly and absolutely forbidden** from executing any staging (`git add`), committing (`git commit`), or pushing (`git push`) commands on the `main` or `master` branch in any repository **unless the user has explicitly written the exact phrase "main/master direct push" in that exact current turn**.
+*   **The Verification Pass:** Before executing any git write or push operation, you **MUST** run a direct, unmocked shell command (such as `git branch --show-current`) in that exact turn to print the active branch on screen. If the current branch is `main` or `master`, and the user has not written the exact words "main/master direct push", you **MUST** immediately halt, print a branch-safety block, and ask the user which feature or Pull Request branch they would like you to switch to. There are absolutely no exceptions to this safety lock.
+
