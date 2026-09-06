@@ -936,22 +936,6 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
     if not _SYMBOL_RE.match(symbol):
         raise ValueError(f"Invalid symbol format: {symbol!r}")
 
-    session_data = ensure_valid_session()
-
-    # New Fastify backend: a single GET returns the full symbol bundle (PGR + checklist
-    # + meta); the legacy getSymbolData/getChecklistStocks pair (and its ?components=…)
-    # is gone. _adapt_suggestions_to_legacy() reshapes the response to the old schema.
-    url = f"https://members-backend.chaikinanalytics.com/api/suggestions/{symbol}"
-
-    headers = {
-        'jsessionid': session_data.get('jsessionid', ''),
-        'x-session-id': session_data.get('jsessionid', ''),
-        'uuid': session_data.get('uuid') or _chaikin_uuid(),
-        'jwttoken': session_data.get('jwttoken', ''),
-        'x-api-key': _CHAIKIN_API_KEY,
-        'x-app-id': 'omni',
-        'User-Agent': _CHAIKIN_UA
-    }
     pg = PowerGauge(symbol, date)
     data_jsn = {}
 
@@ -965,6 +949,22 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
                 data_jsn = json.load(f)
 
     if not data_jsn:
+        session_data = ensure_valid_session()
+
+        # New Fastify backend: a single GET returns the full symbol bundle (PGR + checklist
+        # + meta); the legacy getSymbolData/getChecklistStocks pair (and its ?components=…)
+        # is gone. _adapt_suggestions_to_legacy() reshapes the response to the old schema.
+        url = f"https://members-backend.chaikinanalytics.com/api/suggestions/{symbol}"
+
+        headers = {
+            'jsessionid': session_data.get('jsessionid', ''),
+            'x-session-id': session_data.get('jsessionid', ''),
+            'uuid': session_data.get('uuid') or _chaikin_uuid(),
+            'jwttoken': session_data.get('jwttoken', ''),
+            'x-api-key': _CHAIKIN_API_KEY,
+            'x-app-id': 'omni',
+            'User-Agent': _CHAIKIN_UA
+        }
         response = _get_http_session().get(url, headers=headers, timeout=(5, 20))
         if response.ok:
             raw_jsn = response.json()
