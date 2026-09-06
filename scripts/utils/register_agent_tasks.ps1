@@ -54,7 +54,7 @@ $Tasks = @(
                 $T
             )
         )
-        Prompt   = "Execute the automated skill defined in .claude/commands/watchdog.md"
+        Script   = "venv_new\Scripts\python.exe watchdog.py"
         Log      = "watchdog_agent.log"
         Desc     = "Hourly diagnostics and self-healing loop running 24/7."
     },
@@ -68,7 +68,7 @@ $Tasks = @(
                 $T
             )
         )
-        Prompt   = "Execute the automated skill defined in .claude/commands/intraday-monitor.md"
+        Script   = "venv_new\Scripts\python.exe scripts/utils/intraday_monitor.py"
         Log      = "intraday_monitor_agent.log"
         Desc     = "Real-time risk monitor checking open positions against stop levels every 30 mins."
     },

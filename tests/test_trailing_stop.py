@@ -37,6 +37,8 @@ _COMMON_PATCHES = [
     mock.patch("ai_portfolio_game.save_game"),
     mock.patch("ai_portfolio_game.openpyxl.load_workbook"),
     mock.patch("circuit_breaker.enforce_circuit_breaker"),
+    mock.patch("ai_portfolio_game._cache_stale", return_value=False),
+    mock.patch("ai_portfolio_game._heal_symbol_cache", return_value=False),
 ]
 
 
@@ -48,7 +50,7 @@ class TestTrailingStopRatcheting(unittest.TestCase):
     def _run(self, state, price, atr=4.0):
         patches = [p.start() for p in _COMMON_PATCHES]
         try:
-            _mkt, _prices, _load, _save, _wb, _cb = patches
+            _mkt, _prices, _load, _save, _wb, _cb, _stale, _heal = patches
             _prices.return_value = {"ULTA": price, "SPY": 500.0}
             _load.return_value = state
             _wb.return_value = _make_wb("ULTA", price)

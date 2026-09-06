@@ -527,6 +527,18 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
         # (launch_persistent_context returns the context and owns the browser).
         os.makedirs(_CHROME_PROFILE_DIR, exist_ok=True)
         _log.info("  [Auth] Using persistent Chrome profile: %s", _CHROME_PROFILE_DIR)
+
+        # Defensively clean up any stale Chrome lock file (SingletonLock) before launching.
+        # This completely prevents BrowserType.launch_persistent_context from crashing with
+        # exitCode=21 (RESULT_CODE_PROFILE_IN_USE) on Windows if a previous session crashed.
+        lock_file = os.path.join(_CHROME_PROFILE_DIR, "SingletonLock")
+        if os.path.exists(lock_file):
+            try:
+                os.remove(lock_file)
+                _log.info("  [Auth] Removed stale Chrome SingletonLock file to prevent profile-in-use errors.")
+            except Exception as le:
+                _log.warning("  [Auth] Could not remove stale SingletonLock (might be locked by an active process): %s", le)
+
         ctx = p.chromium.launch_persistent_context(
             _CHROME_PROFILE_DIR,
             headless=headless,

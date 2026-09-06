@@ -132,13 +132,16 @@ class TestNewPreflightFeatures(unittest.TestCase):
                 self.assertTrue(ok)
                 self.assertEqual(locks, [])
 
-    def test_pipeline_lock_other_pid_detected(self):
+    @mock.patch("preflight_validator.subprocess.run")
+    def test_pipeline_lock_other_pid_detected(self, mock_run):
         # Test 2: When lock has a DIFFERENT PID, it is flagged.
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             (base / "Data").mkdir()
             lock_file = base / "Data" / "pipeline_run.lock"
             lock_file.write_text("999999") # totally different PID
+
+            mock_run.return_value = mock.Mock(stdout="999999")
 
             ok, locks = pf.check_active_locks(base_dir=base)
             self.assertFalse(ok)
@@ -217,6 +220,47 @@ class TestNewPreflightFeatures(unittest.TestCase):
         ok, issues = pf.check_scheduled_tasks_integrity()
         self.assertTrue(ok)
         self.assertEqual(issues, [])
+
+class TestPreflightEtradeWaiver(unittest.TestCase):
+    @mock.patch("aether.etrade.get_tokens")
+    @mock.patch("datetime.datetime")
+    def test_etrade_check_waived_on_weekend(self, mock_datetime, mock_get_tokens):
+        # Mock datetime to a Saturday (weekday 5)
+        mock_dt = mock.Mock()
+        mock_dt.weekday.return_value = 5
+        mock_datetime.now.return_value = mock_dt
+
+        # Mock E*TRADE token retrieval to fail (None)
+        mock_get_tokens.return_value = None
+
+        # Execute check — it should return "WAIVED" on weekends
+        res = pf.check_etrade_api()
+        self.assertEqual(res, "WAIVED")
+
+    @mock.patch("aether.etrade.get_tokens")
+    @mock.patch("datetime.datetime")
+    def test_etrade_check_fails_on_weekday(self, mock_datetime, mock_get_tokens):
+        # Mock datetime to a Wednesday (weekday 2)
+        mock_dt = mock.Mock()
+        mock_dt.weekday.return_value = 2
+        mock_datetime.now.return_value = mock_dt
+
+        # Mock E*TRADE token retrieval to fail (None)
+        mock_get_tokens.return_value = None
+
+        # Execute check — it should return False on weekdays
+        res = pf.check_etrade_api()
+        self.assertFalse(res)
+
+    @mock.patch("aether.etrade.get_tokens")
+    @mock.patch("datetime.datetime")
+    def test_etrade_check_passes_on_tokens_success(self, mock_datetime, mock_get_tokens):
+        # Mock E*TRADE token retrieval to succeed (valid dict)
+        mock_get_tokens.return_value = {"oauth_token": "valid"}
+
+        # Execute check — it should return True on success
+        res = pf.check_etrade_api()
+        self.assertTrue(res)
 
 
 if __name__ == "__main__":

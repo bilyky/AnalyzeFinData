@@ -54,8 +54,8 @@ SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 # Placeholders: {prompt} (inline text) or {prompt_file} (safe text file path, highly recommended for Windows).
 _CLAUDE_EXE = os.path.expandvars(r"%USERPROFILE%\.gnai\claude\claude.exe")
 _DEFAULT_HEALER = (
-    f'"{_CLAUDE_EXE}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep"'
-    ' --approval-mode acceptEdits'
+    f'"{_CLAUDE_EXE}" --allowedTools "Read,Glob,Grep"'
+    ' --approval-mode plan'
     ' -p "{prompt_file}"'
 )
 HEALER_CMD_TEMPLATE = os.environ.get("AETHER_HEALER_CMD", _DEFAULT_HEALER)
@@ -109,7 +109,7 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
     try:
         with open(AETHER_JSONL, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
-        for line in lines[-200:]:  # recent enough window for structured log
+        for line in reversed(lines):  # Scan backwards to handle high volume log files efficiently
             line = line.strip()
             if not line:
                 continue
@@ -117,9 +117,24 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            
+            ts_str = entry.get("ts", "")
+            # Since the log is chronological, if we encounter an entry older than 2 hours,
+            # we can stop scanning backwards.
+            if ts_str:
+                parsed_t = None
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+                    try:
+                        parsed_t = datetime.datetime.strptime(ts_str[:19], fmt)
+                        break
+                    except ValueError:
+                        continue
+                if parsed_t and (now - parsed_t).total_seconds() > 7200:
+                    break
+
             if entry.get("level", "").upper() != "ERROR":
                 continue
-            if not _within_window(entry.get("ts", ""), now):
+            if not _within_window(ts_str, now):
                 continue
             module = entry.get("module", "")
             msg = entry.get("msg", "")
@@ -130,6 +145,8 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
                 # Include just the last line of the traceback
                 detail += f" | {exc.strip().splitlines()[-1]}"
             errors.append(f"[{module}] {msg}{detail}")
+        
+        errors.reverse()  # Restore chronological order
     except Exception as e:
         _log.warning("Failed to scan structured log", extra={"error": str(e)})
     return errors
@@ -190,6 +207,7 @@ def trigger_ai_self_healing(traceback):
             prompt_file=str(SELF_HEAL_PROMPT_FILE)
         )
         _log.console(f"🚀 [AETHER BRAIN] Dispatching self-healing command (prompt written to file)")
+        
         result = subprocess.run(
             cmd,
             shell=True,
@@ -590,6 +608,12 @@ def run_watchdog():
         # Clean console log for email (last 2000 chars to avoid size limits)
         trimmed_console_log = ai_console_log[-2000:] if ai_console_log else "No AI logs available."
         
+        backup_status_li = (
+            '<li><b>Backup Status:</b> Robocopy sync completed successfully.</li>'
+            if sync_success else
+            '<li><b>Backup Status Alert:</b> robocopy was unable to push updates to \\\\10.0.0.156\\Storage\\ - check server connection.</li>'
+        )
+        
         html_report = f"""
         <html>
         <body style="font-family: sans-serif; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.5;">
@@ -643,7 +667,7 @@ def run_watchdog():
                     {'<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>' if compilation_passed else ''}
                     {'<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>' if ai_triggered else ''}
                     {'<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>' if not compilation_passed else ''}
-                    {f'<li><b>Backup Status:</b> Robocopy sync completed successfully.</li>' if sync_success else '<li><b>Backup Status Alert:</b> robocopy was unable to push updates to \\\\10.0.0.156\\Storage\\ - check server connection.</li>'}
+                    {backup_status_li}
                 </ul>
             </div>
 

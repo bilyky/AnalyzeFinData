@@ -65,6 +65,7 @@ def verify_data_freshness():
     return True, f"Data is fresh ({mtime.strftime('%Y-%m-%d %H:%M')})"
 
 def validate_sheets():
+    wb = None
     try:
         wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
         required_sheets = ["Research", "Picks", "Replacements"]
@@ -79,6 +80,12 @@ def validate_sheets():
         return True, "All required sheets validated and rendered."
     except Exception as e:
         return False, f"Validation error: {e}"
+    finally:
+        if wb:
+            try:
+                wb.close()
+            except Exception:
+                pass
 
 
 def check_earnings(symbol):

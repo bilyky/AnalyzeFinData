@@ -94,3 +94,7 @@ ignore = [
 # Organize imports cleanly at top-of-file
 force-single-line = false
 lines-after-imports = 2
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
