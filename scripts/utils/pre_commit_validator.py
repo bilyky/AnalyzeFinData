@@ -473,7 +473,6 @@ def get_staged_python_files() -> list:
 def check_no_direct_main_commit() -> bool:
     """Verify that we are not committing directly to the stable main/master production branches."""
     try:
-        import subprocess
         res = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True, errors="replace")
         branch = res.stdout.strip()
         if branch in ("main", "master"):
