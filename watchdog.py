@@ -54,8 +54,8 @@ SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 # Placeholders: {prompt} (inline text) or {prompt_file} (safe text file path, highly recommended for Windows).
 _CLAUDE_EXE = os.path.expandvars(r"%USERPROFILE%\.gnai\claude\claude.exe")
 _DEFAULT_HEALER = (
-    f'"{_CLAUDE_EXE}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep"'
-    ' --approval-mode acceptEdits'
+    f'"{_CLAUDE_EXE}" --allowedTools "Read,Glob,Grep"'
+    ' --approval-mode plan'
     ' -p "{prompt_file}"'
 )
 HEALER_CMD_TEMPLATE = os.environ.get("AETHER_HEALER_CMD", _DEFAULT_HEALER)
