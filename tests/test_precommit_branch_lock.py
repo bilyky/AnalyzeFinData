@@ -21,7 +21,7 @@ class TestBranchSafetyLock(unittest.TestCase):
         mock_run.return_value = mock_res
 
         # Test block: without env override, it should return False (blocked!)
-        with mock.patch.dict("os.environ", {}):
+        with mock.patch.dict("os.environ", {}, clear=True):
             ok = pcval.check_no_direct_main_commit()
             self.assertFalse(ok)
 
@@ -34,7 +34,7 @@ class TestBranchSafetyLock(unittest.TestCase):
         mock_run.return_value = mock_res
 
         # Test block: without env override, it should return False (blocked!)
-        with mock.patch.dict("os.environ", {}):
+        with mock.patch.dict("os.environ", {}, clear=True):
             ok = pcval.check_no_direct_main_commit()
             self.assertFalse(ok)
 
@@ -47,7 +47,7 @@ class TestBranchSafetyLock(unittest.TestCase):
         mock_run.return_value = mock_res
 
         # On feature branches, it should return True (allowed!)
-        with mock.patch.dict("os.environ", {}):
+        with mock.patch.dict("os.environ", {}, clear=True):
             ok = pcval.check_no_direct_main_commit()
             self.assertTrue(ok)
 
