@@ -208,16 +208,10 @@ def trigger_ai_self_healing(traceback):
         )
         _log.console(f"🚀 [AETHER BRAIN] Dispatching self-healing command (prompt written to file)")
         
-        # Ensure the self-healing AI agent is authorized to commit on main (solving 🟠 #4 self-conflict)
-        heal_env = os.environ.copy()
-        heal_env["AETHER_ALLOW_DIRECT_MAIN_COMMIT"] = "1"
-        heal_env["AETHER_ALLOW_DIRECT_MAIN_PUSH"] = "1"
-
         result = subprocess.run(
             cmd,
             shell=True,
             cwd=str(BASE_DIR),
-            env=heal_env,
             capture_output=True,
             text=True,
             timeout=300,
