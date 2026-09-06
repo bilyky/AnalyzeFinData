@@ -311,7 +311,8 @@ def check_watchdog_health(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
                         except ValueError:
                             last_result = 0
                             
-                        if last_result != 0 and last_result != 267009:
+                        # Allow 0 (success), 267009 (SCHED_S_TASK_RUNNING), and 267011 (SCHED_S_TASK_HAS_NOT_RUN) as valid
+                        if last_result not in (0, 267009, 267011):
                             issues.append(f"Task Scheduler: 'AETHER_Watchdog' last run failed (Exit Code: {last_result_str} / {hex(last_result)}).")
             else:
                 issues.append("Task Scheduler: 'AETHER_Watchdog' task is not found or schtasks query failed.")
