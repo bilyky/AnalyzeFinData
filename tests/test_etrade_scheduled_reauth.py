@@ -68,8 +68,10 @@ class TestOtpWallDetection(unittest.TestCase):
         # SmsRequired — it clicks Send Code and enters the wait loop (wait_for_timeout fires),
         # then falls through to the normal verifier-capture path (which, in this no-TTY test env,
         # ends in the manual-entry fallback — any non-SmsRequired outcome is fine here).
+        # We explicitly mock 'builtins.input' to prevent the test runner from hanging on manual TTY prompts.
         fake, ctx, page = _fake_playwright()
-        with mock.patch.object(etrade, "sync_playwright", fake):
+        with mock.patch.object(etrade, "sync_playwright", fake), \
+             mock.patch("builtins.input", return_value="12345"):
             try:
                 etrade._get_tokens_via_playwright("http://auth", "user", "pw", headless=False)
             except etrade.SmsRequired:
