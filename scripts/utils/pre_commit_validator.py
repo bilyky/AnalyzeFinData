@@ -191,7 +191,13 @@ def check_wiki_about_sync() -> bool:
 
 
 def check_no_inline_imports(file_path: str) -> bool:
-    """Use ast to detect any import statement not at module scope (col_offset > 0)."""
+    """Use ast to detect any import statement not at module scope (col_offset > 0).
+
+    A module-level ``try/except``-guarded import (a direct child of a top-level
+    ``try`` block or one of its handlers) is a legitimate optional-dependency /
+    fallback pattern, not a lazy inline import, so it is allowed. Imports nested
+    inside a function or class are still flagged.
+    """
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             source = f.read()
@@ -200,9 +206,23 @@ def check_no_inline_imports(file_path: str) -> bool:
         except SyntaxError:
             return True  # py_compile will catch syntax errors separately
         rel = os.path.relpath(file_path, ROOT_DIR)
+
+        # Allowlist: imports that are direct children of a module-level `try`
+        # block (its body/orelse/finalbody or any handler body). These are
+        # guarded fallback imports at module scope, not lazy inline imports.
+        guarded = set()
+        for stmt in tree.body:
+            if isinstance(stmt, ast.Try):
+                blocks = [stmt.body, stmt.orelse, stmt.finalbody]
+                blocks += [h.body for h in stmt.handlers]
+                for block in blocks:
+                    for child in block:
+                        if isinstance(child, (ast.Import, ast.ImportFrom)):
+                            guarded.add(child)
+
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
-                if node.col_offset > 0:
+                if node.col_offset > 0 and node not in guarded:
                     print(f"[GIT PRE-COMMIT] Inline import in {rel} at line {node.lineno}")
                     print("   Action required: Move all imports to the top of the file.")
                     return False
@@ -508,10 +528,8 @@ def main():
             #   package to break the circular init — it is imported *from* the package
             #   __init__, so a top-level `from aether import etrade` would hit a
             #   partially-initialised module. See the module's _pkg() docstring.
-            # - database.py: optional `try: from config import CFG / except:` fallback to
-            #   the DATABASE_URL env var when the config module is absent (legacy connector).
             _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py",
-                             "etrade/store.py", "database.py")
+                             "etrade/store.py")
             if not any(x in fpath for x in _skip_imports):
                 if not check_no_inline_imports(fpath):
                     success = False

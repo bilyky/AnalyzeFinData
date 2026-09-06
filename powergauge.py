@@ -1432,7 +1432,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         try:
             wb = openpyxl.load_workbook(alt)
         except Exception:
-            _pg_log.error(f"  [FATAL] Both source and output files missing or corrupt.")
+            _pg_log.error("  [FATAL] Both source and output files missing or corrupt.")
             return
     
     ws = wb['Research']

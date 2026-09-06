@@ -7,6 +7,8 @@ DATABASE_URL environment variable:
     DATABASE_URL=postgresql://user:pass@host:port/dbname
 """
 import json
+import os
+
 import sqlalchemy as db
 
 from aether.logger import get_logger
@@ -15,7 +17,6 @@ try:
     from config import CFG as _CFG
     _DB_URL = _CFG.database_url
 except Exception:
-    import os
     _DB_URL = os.environ.get("DATABASE_URL", "")
 
 

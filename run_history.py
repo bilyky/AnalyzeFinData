@@ -102,7 +102,7 @@ def days_missing(symbols: list[str], day: datetime.date) -> list[str]:
 def main():
     n_days = int(sys.argv[1]) if len(sys.argv) > 1 else 14
 
-    _log.console(f"Loading symbols from Research sheet...")
+    _log.console("Loading symbols from Research sheet...")
     symbols = load_symbols()
     _log.console(f"  {len(symbols)} symbols")
 
@@ -140,7 +140,10 @@ def main():
             for future in as_completed(future_to_sym):
                 symbol = future_to_sym[future]
                 done += 1
-                _log.console(f"  [{done}/{total}] {symbol:<8}")
+                # Progress is now line-per-message (the logger appends a newline
+                # and a level prefix), so throttle to avoid one line per symbol.
+                if done % 25 == 0 or done == total:
+                    _log.console(f"  [{done}/{total}] symbols processed")
                 try:
                     pg = future.result()
                     if pg.price == -1:
@@ -148,10 +151,10 @@ def main():
                     else:
                         ok += 1
                 except Exception as e:
-                    _log.error(f"\n  {symbol}: ERROR {e}")
+                    _log.error(f"  {symbol}: ERROR {e}")
                     errors += 1
 
-        _log.console(f"  done: {ok} fetched, {skip} no-data, {errors} errors          \n")
+        _log.console(f"  done: {ok} fetched, {skip} no-data, {errors} errors")
 
     _log.console("History backfill complete.")
     _log.console("Run check_from_xls to update the Research sheet with today's data.")

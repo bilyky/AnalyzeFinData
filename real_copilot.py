@@ -143,7 +143,7 @@ def run_real_copilot_audit():
     # 6. Send the Email
     subject = f"🛡️ AETHER Shadow Copilot: {len(sell_tickets)} Sells, {len(buy_tickets)} Buys Triggered"
     notify.send_email(subject, html, is_html=True)
-    _log.console(f"[Shadow Copilot] Audit complete. Actionable report dispatched to inbox!")
+    _log.console("[Shadow Copilot] Audit complete. Actionable report dispatched to inbox!")
 
 if __name__ == "__main__":
     run_real_copilot_audit()
