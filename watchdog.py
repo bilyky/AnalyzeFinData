@@ -435,12 +435,14 @@ def sync_data_folder() -> bool:
         dst_path.mkdir(parents=True, exist_ok=True)
         _log.console(f"🔄 Syncing Data folder to: {dst} ...")
         # Use /E (recursive copy, NO DELETIONS) instead of /MIR to prevent data loss on backup drive.
-        # Exclude local chrome profile and heavy symbol caches to prevent remote timeout and locking conflicts.
+        # Exclude only the live chrome profile: robocopy locks/fails on its open files
+        # (Default/Crashpad/GPUPersistentCache). The Symbol/Symbol_full caches stay in the
+        # backup — the raised 600s timeout (PR #64) absorbs their volume.
         cmd = [
             "robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS",
-            "/XD", "etrade_chrome_profile", "Symbol", "Symbol_full"
+            "/XD", "etrade_chrome_profile"
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=600)
         if result.returncode < 8:
             _log.info(f"✅ Data folder successfully synchronized to {dst}.")
             return True
@@ -448,7 +450,7 @@ def sync_data_folder() -> bool:
             _log.error(f"❌ Robocopy sync failed (rc={result.returncode}). Stderr: {result.stderr.strip()}")
             return False
     except subprocess.TimeoutExpired:
-        _log.warning("⚠️ Data folder sync timed out (120s limit reached). This is an incomplete backup.")
+        _log.warning("⚠️ Data folder sync timed out (600s limit reached). This is an incomplete backup.")
         return False # Treat timeout as a failure, not a success, per mandatory backup policy
     except Exception as e:
         _log.error(f"❌ Failed to sync Data folder to Z: drive: {e}", exc_info=True)
@@ -588,35 +590,24 @@ def run_watchdog():
     # 6. Re-Audit Logs after the fix
     remaining_errors = check_logs()
     
-    # 6.5. Run Backup Sync and Monitor Success/Errors
-    sync_success = sync_data_folder()
-    
     # Check if there are any active issues left
     issues = []
     if remaining_errors and not ai_triggered: # If we self-healed, the old log errors are still there, so we ignore them for the "issues" list
         issues.append("REMAINING LOG ERRORS:\n" + "\n".join(remaining_errors))
     if data_issue: 
         issues.append(data_issue)
-    if not sync_success:
-        issues.append("CRITICAL: Network Backup Data Sync Failed!")
 
     # 7. Construct the Consolidated HTML Recovery Report (The Final Step!)
-    # We send an email if a healing action occurred, an AI healer triggered, there are active code errors in the logs, or the backup sync failed.
-    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered) or not sync_success:
+    # We send an email if a healing action occurred, an AI healer triggered, or there are active code errors in the logs.
+    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered):
         _log.console("Healer cycle complete. Constructing consolidated recovery report...")
         
         # Color badges
-        status_color = "#27ae60" if compilation_passed and sync_success else "#c0392b"
-        status_text = "NOMINAL (HEALED)" if compilation_passed and sync_success else "MANUAL INTERVENTION REQUIRED"
+        status_color = "#27ae60" if compilation_passed else "#c0392b"
+        status_text = "NOMINAL (HEALED)" if compilation_passed else "MANUAL INTERVENTION REQUIRED"
         
         # Clean console log for email (last 2000 chars to avoid size limits)
         trimmed_console_log = ai_console_log[-2000:] if ai_console_log else "No AI logs available."
-        
-        backup_status_li = (
-            '<li><b>Backup Status:</b> Robocopy sync completed successfully.</li>'
-            if sync_success else
-            '<li><b>Backup Status Alert:</b> robocopy was unable to push updates to \\\\10.0.0.156\\Storage\\ - check server connection.</li>'
-        )
         
         html_report = f"""
         <html>
@@ -656,13 +647,6 @@ def run_watchdog():
                 <pre style="background: #f1f2f6; color: #2c3e50; padding: 12px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; overflow-x: auto; font-family: monospace;">{validation_output}</pre>
             </div>
 
-            <!-- SECTION 3b: DATA BACKUP SYNC STATUS -->
-            <div style="background: {'#f9f9f9' if sync_success else '#fdf2f2'}; border-left: 5px solid {'#34495e' if sync_success else '#ec5b5b'}; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
-                <h3 style="margin-top: 0; color: {'#34495e' if sync_success else '#c0392b'}; font-size: 15px;">📁 3b. DATA BACKUP SYNC STATUS:</h3>
-                <p style="font-size: 13px; font-weight: bold;">Backup Location: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">\\\\10.0.0.156\\Storage\\Yura\\Develop\\StockTrading\\AnalyzeFinData\\Data</span></p>
-                <p style="font-size: 13px; font-weight: bold;">Sync Status: <span style="color: {'#27ae60' if sync_success else '#c0392b'}; font-size: 14px;">{'SUCCESS / NOMINAL' if sync_success else 'FAILED / SYNC ERROR'}</span></p>
-            </div>
-
             <!-- SECTION 4: NEXT STEPS -->
             <div style="background: #fff9db; border-left: 5px solid #f59f00; padding: 15px; margin-bottom: 30px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #f08c00; font-size: 15px;">🏁 4. RESULTS & NEXT STEPS:</h3>
@@ -671,7 +655,6 @@ def run_watchdog():
                     {'<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>' if compilation_passed else ''}
                     {'<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>' if ai_triggered else ''}
                     {'<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>' if not compilation_passed else ''}
-                    {backup_status_li}
                 </ul>
             </div>
 
