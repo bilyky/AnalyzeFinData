@@ -100,6 +100,15 @@ $Tasks = @(
         Desc     = "Nightly post-market data sync to refresh Chaikin ratings and backfill price caches at 1:30 PM PST."
     },
     @{
+        Name     = "AETHER_Data_Backup"
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Daily -At "3:00 PM")
+        )
+        Script   = "venv_new\Scripts\python.exe -c `"import watchdog; watchdog.sync_data_folder()`""
+        Log      = "data_backup_agent.log"
+        Desc     = "Robocopy synchronization of the local Data folder to the network Storage drive at 3:00 PM PST."
+    },
+    @{
         Name     = "AETHER_RD_Scientist"
         # Saturdays at 10:00 AM
         Triggers  = @(
