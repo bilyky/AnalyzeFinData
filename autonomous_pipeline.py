@@ -367,9 +367,10 @@ def main():
             old_pid = 0
             
         if old_pid > 0:
-            # Check if the process is actively running
+            # Check if the process is actively running AND is a python process
+            # (Windows recycles PIDs rapidly; we must not false-positive on Chrome/svchost)
             res = subprocess.run(["tasklist", "/FI", f"PID eq {old_pid}", "/FO", "CSV"], capture_output=True, text=True, errors="replace")
-            if str(old_pid) in res.stdout:
+            if str(old_pid) in res.stdout and "python" in res.stdout.lower():
                 log(f"🛑 [Overlap Guard] Active pipeline process (PID {old_pid}) is already running! Exiting immediately to prevent race conditions or duplicate dispatches.")
                 sys.exit(0)
                 
