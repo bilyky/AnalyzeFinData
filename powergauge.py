@@ -114,6 +114,10 @@ _chaikin_renewer = _TokenRenewer(
 )
 
 
+import threading
+
+_jwt_auth_lock = threading.Lock()
+
 def ensure_valid_session() -> dict:
     """Return a valid Chaikin session, refreshing headlessly if expired.
     Uses TokenRenewer for cross-process safety — see aether/token_renewer.py.
@@ -135,28 +139,38 @@ def ensure_valid_session() -> dict:
         # also fail when Chaikin is unreachable.
         _pg_log.warning("Chaikin unreachable (network/proxy/5xx) — keeping existing session, skipping re-auth.")
         return session or {}
+        
     # status == "invalid": genuinely expired/rejected — try the cheap refresh path first.
     # API-based JWT Token Refresh (Bypasses Browser/Turnstile completely in 0.2 seconds!)
     if session and session.get("jwttoken"):
-        try:
-            new_sid = _jwt_to_session_id(session["jwttoken"])
-            if new_sid:
-                # Mutation Hygiene: Copy dict before modifying to prevent in-place corruption
-                test_session = session.copy()
-                test_session["jsessionid"] = new_sid
-                if _validate_session(test_session):
-                    _save_session_to_file(test_session)
+        with _jwt_auth_lock:
+            # Check if another thread successfully renewed the session while we were waiting for the lock
+            latest_session = _load_session_from_file()
+            if latest_session and latest_session.get("jsessionid") != session.get("jsessionid"):
+                if _probe_session(latest_session) == "valid":
                     _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
-                    _pg_log.info("Successfully refreshed Chaikin session using saved JWT token (API bypass).")
-                    return test_session
-                else:
-                    _pg_log.warning("JWT exchanged session ID failed active validation check.")
-        except Exception as e:
-            # Security Best Practice: Sanitize and redact raw JWT token from exception logs to prevent exposure
-            err_msg = str(e)
-            if "jwtToken=" in err_msg:
-                err_msg = re.sub(r"jwtToken=[^&\s]+", "jwtToken=REDACTED", err_msg)
-            _pg_log.warning(f"Failed to refresh session using JWT token (will fall back to browser): {err_msg}")
+                    _pg_log.info("Another thread already renewed Chaikin session. Reusing cached session.")
+                    return latest_session
+
+            try:
+                new_sid = _jwt_to_session_id(session["jwttoken"])
+                if new_sid:
+                    # Mutation Hygiene: Copy dict before modifying to prevent in-place corruption
+                    test_session = session.copy()
+                    test_session["jsessionid"] = new_sid
+                    if _validate_session(test_session):
+                        _save_session_to_file(test_session)
+                        _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
+                        _pg_log.info("Successfully refreshed Chaikin session using saved JWT token (API bypass).")
+                        return test_session
+                    else:
+                        _pg_log.warning("JWT exchanged session ID failed active validation check.")
+            except Exception as e:
+                # Security Best Practice: Sanitize and redact raw JWT token from exception logs to prevent exposure
+                err_msg = str(e)
+                if "jwtToken=" in err_msg:
+                    err_msg = re.sub(r"jwtToken=[^&\s]+", "jwtToken=REDACTED", err_msg)
+                _pg_log.warning(f"Failed to refresh session using JWT token (will fall back to browser): {err_msg}")
 
     # Expired — delegate to the cross-process singleton (protected by try-except to send email outside of lock duration)
     try:
