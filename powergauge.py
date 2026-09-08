@@ -790,7 +790,21 @@ def login(interactive=True) -> dict:
             # Don't discard it and don't launch a browser that also can't reach the site.
             print("Chaikin unreachable (network/proxy/5xx) — keeping existing session; skipping browser re-auth.")
             return session_data
-        print("Saved session has expired — re-authenticating via browser.")
+        
+        print("Saved session has expired — attempting rapid JWT-based renewal...")
+        jwt = session_data.get("jwttoken")
+        if jwt:
+            try:
+                new_jsid = _jwt_to_session_id(jwt)
+                if new_jsid:
+                    session_data["jsessionid"] = new_jsid
+                    _save_session_to_file(session_data)
+                    print("✅ Chaikin session successfully renewed via JWT API!")
+                    return session_data
+            except Exception as je:
+                print(f"JWT session renewal failed: {je}. Falling back to browser re-auth.")
+        else:
+            print("No JWT token found in session file. Falling back to browser re-auth.")
 
     # Run headless if we are non-interactive or stdin is not a tty to prevent hanging
     is_tty = sys.stdin and sys.stdin.isatty()
