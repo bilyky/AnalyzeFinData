@@ -104,7 +104,7 @@ $Tasks = @(
         Triggers  = @(
             (New-ScheduledTaskTrigger -Daily -At "3:00 PM")
         )
-        Script   = "venv_new\Scripts\python.exe -c `"import watchdog; watchdog.sync_data_folder()`""
+        Script   = "venv_new\Scripts\python.exe scripts/utils/run_data_backup.py"
         Log      = "data_backup_agent.log"
         Desc     = "Robocopy synchronization of the local Data folder to the network Storage drive at 3:00 PM PST."
     },
