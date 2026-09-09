@@ -2,8 +2,13 @@
 Pattern recognition: candlestick, chart, and momentum patterns.
 Returns float scores in [-2, +2] for integration into scoring pipeline.
 
-Weights are PLACEHOLDER until backtest_ratings.py Phase A runs produce spread data.
+Candlestick per-pattern weights are backtest-calibrated and loaded from
+Data/candlestick_pattern_study.json (see CANDLESTICK_WEIGHTS below); chart/momentum
+weights remain hand-set pending their own per-pattern studies.
 """
+
+import json
+import os
 
 import numpy as np
 
@@ -90,84 +95,127 @@ def _find_peaks_troughs(closes: np.ndarray, n: int = 3):
 # ── Candlestick score ─────────────────────────────────────────────────────────
 
 # Per-pattern *magnitude* weights — how strongly each pattern's fire moves the raw
-# bull/bear tally. These are hand-set reliability priors (NOT per-pattern backtested)
-# and remain PROVISIONAL pending per-pattern calibration; only the aggregate
-# candlestick factor weight is backtested (3.49% spread) and consumed CONTRARIAN
-# (negative) in scoring.short_score/long_score — so a larger fire on a "strong"
-# bullish pattern lowers the buy score. The reliability labels below describe the
-# pattern's classical strength, not a directional/bullish contribution.
-CANDLESTICK_WEIGHTS = {
-    "engulfing":       1.50, # High reliability
-    "harami":          0.75, # Moderate
-    "harami_strict":   1.00, # High strictness
-    "doji":            0.30, # Low reliability (indecision)
-    "piercing":        1.25, # High
-    "star":            1.40, # High (Morning/Evening star)
-    "tasuki":          0.80, # Moderate
-    "bottle":          0.90, # Moderate
-    "neck":            0.50, # Low
-    "h":               0.60, # Low
-    "slingshot":       1.10, # Moderate-High
-    "hikkake":         1.15, # Moderate-High
-    "three_methods":   1.35, # High continuation
-    "stick_sandwich":  1.20, # Moderate-High
-    "tweezers":        0.95, # Moderate
-    "quintuplets":     1.50, # High
-    "double_trouble":  1.60, # Very High (highly explosive breakout!)
-}
+# bull/bear tally — are BACKTEST-CALIBRATED, loaded at import from
+# Data/candlestick_pattern_study.json (produced by
+# scripts/backtesting/candlestick_pattern_study.py over ~2M symbol-days).
+#
+# Derivation (see that script): a pattern significant at |t|>=1.96 with N>=100 in the
+# aggregate-aligned direction is weighted by its forward-return effect size, clamped to
+# [0.5, 2.0]; a significant-but-wrong-direction pattern is demoted to 0.5; everything
+# else defaults to UNIT weight 1.0 (R&D #25). REVALIDATE MONTHLY by re-running the
+# study — the JSON is the single source of truth; do NOT hand-edit weights here.
+#
+# The saturation divisor (raw tally that maps to full [-2,+2] scale) is calibrated the
+# same way (95th percentile of |raw|) and loaded alongside the weights.
+#
+# NOTE: these magnitudes are direction-AGNOSTIC — a pattern's bull and bear fire share
+# the same weight. The factor's directional sign lives in scoring.short_score/
+# long_score (candlestick_score * +0.30 / +0.15), NOT here.
+_PATTERN_NAMES = (
+    "engulfing", "harami", "harami_strict", "doji", "piercing", "star", "tasuki",
+    "bottle", "neck", "h", "slingshot", "hikkake", "three_methods", "stick_sandwich",
+    "tweezers", "quintuplets", "double_trouble",
+)
+_STUDY_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "Data", "candlestick_pattern_study.json")
+_DEFAULT_SATURATION_DIVISOR = 5.0  # hand-set fallback when the study JSON is absent
 
-def candlestick_score(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> float:
-    """Run all signals.py patterns; aggregate bullish/bearish fires over last lookback bars.
 
-    Returns float in [-2, +2]. 0.0 if OHLCV unavailable or <10 bars.
+def _load_candlestick_calibration(path: str = _STUDY_PATH) -> tuple[dict, float]:
+    """Load per-pattern weights + saturation divisor from the study JSON.
+
+    Returns (weights, divisor). `weights` always carries all 17 pattern keys; any
+    pattern missing from the JSON — or the whole file missing/malformed — falls back to
+    unit weight 1.0, and the divisor falls back to _DEFAULT_SATURATION_DIVISOR. So an
+    unsynced Data/ degrades gracefully to the pre-calibration unweighted behavior
+    rather than raising at import.
+    """
+    weights = {name: 1.0 for name in _PATTERN_NAMES}
+    divisor = _DEFAULT_SATURATION_DIVISOR
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            study = json.load(f)
+        jw = study.get("weights", {})
+        for name in _PATTERN_NAMES:
+            weights[name] = float(jw.get(name, 1.0))
+        d = study.get("saturation_divisor")
+        if d is not None and float(d) > 0:
+            divisor = float(d)
+    except Exception:
+        pass  # missing/malformed study -> unit weights + hand-set divisor
+    return weights, divisor
+
+
+CANDLESTICK_WEIGHTS, _SATURATION_DIVISOR = _load_candlestick_calibration()
+
+def candlestick_fires(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> dict:
+    """Return {pattern_name: (bull_fired, bear_fired)} over the last `lookback` bars.
+
+    The single source of truth for *which* candlestick patterns fire on a bar,
+    independent of any weighting. Consumed by candlestick_score() (which weights and
+    normalizes these fires) and by scripts/backtesting/candlestick_pattern_study.py
+    (which measures each pattern's forward-return spread to calibrate its weight).
+
+    Returns {} if OHLCV is unavailable or there are <10 bars.
     """
     arr = ohlcv_to_array(ohlcv_ts, date_str, lookback=30)
     if arr is None or len(arr) < 10:
-        return 0.0
+        return {}
 
     body = float(np.mean(arr[-lookback:, 3])) * 0.01  # 1% of avg close
     atr_vals = _wilder_atr(arr)
 
-    bull = 0.0
-    bear = 0.0
+    fires = {}
 
-    def _check(result, b_col, s_col, pattern_name):
-        nonlocal bull, bear
+    def _fire(result, b_col, s_col, pattern_name):
         window = result[-lookback:]
-        weight = CANDLESTICK_WEIGHTS.get(pattern_name, 1.0)
-        if any(window[:, b_col] > 0):
-            bull += weight
-        if any(window[:, s_col] < 0):
-            bear += weight
+        fires[pattern_name] = (bool(np.any(window[:, b_col] > 0)),
+                               bool(np.any(window[:, s_col] < 0)))
 
     # Each call needs a fresh copy: signals.py calls pf.add_column() expanding shape
-    _check(sig.engulfing_signal(arr.copy(),       0, 3, 5, 6),       5, 6, "engulfing")
-    _check(sig.harami_signal(arr.copy(),          0, 1, 2, 3, 5, 6), 5, 6, "harami")
-    _check(sig.harami_strict_signal(arr.copy(),   0, 1, 2, 3, 5, 6), 5, 6, "harami_strict")
-    _check(sig.doji_signal(arr.copy(),            0, 3, 5, 6),       5, 6, "doji")
-    _check(sig.piersing_signal(arr.copy(),        0, 3, 5, 6),       5, 6, "piercing")
-    _check(sig.star_signal(arr.copy(),            0, 1, 2, 3, 5, 6), 5, 6, "star")
-    _check(sig.tasuki_signal(arr.copy(),          0, 3, 5, 6),       5, 6, "tasuki")
-    _check(sig.bottle_signal(arr.copy(),          0, 1, 2, 3, 5, 6), 5, 6, "bottle")
-    _check(sig.neck_signal(arr.copy(),            0, 1, 2, 3, 5, 6), 5, 6, "neck")
-    _check(sig.h_signal(arr.copy(),               0, 1, 2, 3, 5, 6), 5, 6, "h")
-    _check(sig.slingshot_signal(arr.copy(),       0, 1, 2, 3, 5, 6), 5, 6, "slingshot")
-    _check(sig.hikkake_signal(arr.copy(),         0, 1, 2, 3, 5, 6), 5, 6, "hikkake")
-    _check(sig.three_methods_signal(arr.copy(),   0, 1, 2, 3, 5, 6), 5, 6, "three_methods")
-    _check(sig.stick_sandwich_signal(arr.copy(),  0, 1, 2, 3, 5, 6), 5, 6, "stick_sandwich")
-    _check(sig.tweezers_signal(arr.copy(),        0, 1, 2, 3, 5, 6, body), 5, 6, "tweezers")
-    _check(sig.quintuplets_signal(arr.copy(),     0, 3, 5, 6, body), 5, 6, "quintuplets")
+    _fire(sig.engulfing_signal(arr.copy(),       0, 3, 5, 6),       5, 6, "engulfing")
+    _fire(sig.harami_signal(arr.copy(),          0, 1, 2, 3, 5, 6), 5, 6, "harami")
+    _fire(sig.harami_strict_signal(arr.copy(),   0, 1, 2, 3, 5, 6), 5, 6, "harami_strict")
+    _fire(sig.doji_signal(arr.copy(),            0, 3, 5, 6),       5, 6, "doji")
+    _fire(sig.piersing_signal(arr.copy(),        0, 3, 5, 6),       5, 6, "piercing")
+    _fire(sig.star_signal(arr.copy(),            0, 1, 2, 3, 5, 6), 5, 6, "star")
+    _fire(sig.tasuki_signal(arr.copy(),          0, 3, 5, 6),       5, 6, "tasuki")
+    _fire(sig.bottle_signal(arr.copy(),          0, 1, 2, 3, 5, 6), 5, 6, "bottle")
+    _fire(sig.neck_signal(arr.copy(),            0, 1, 2, 3, 5, 6), 5, 6, "neck")
+    _fire(sig.h_signal(arr.copy(),               0, 1, 2, 3, 5, 6), 5, 6, "h")
+    _fire(sig.slingshot_signal(arr.copy(),       0, 1, 2, 3, 5, 6), 5, 6, "slingshot")
+    _fire(sig.hikkake_signal(arr.copy(),         0, 1, 2, 3, 5, 6), 5, 6, "hikkake")
+    _fire(sig.three_methods_signal(arr.copy(),   0, 1, 2, 3, 5, 6), 5, 6, "three_methods")
+    _fire(sig.stick_sandwich_signal(arr.copy(),  0, 1, 2, 3, 5, 6), 5, 6, "stick_sandwich")
+    _fire(sig.tweezers_signal(arr.copy(),        0, 1, 2, 3, 5, 6, body), 5, 6, "tweezers")
+    _fire(sig.quintuplets_signal(arr.copy(),     0, 3, 5, 6, body), 5, 6, "quintuplets")
 
     # double_trouble needs ATR pre-computed as column 5
     arr_atr = np.column_stack([arr, atr_vals])
-    _check(sig.double_trouble_signal(arr_atr.copy(), 0, 1, 2, 3, 5, 6, 7), 6, 7, "double_trouble")
+    _fire(sig.double_trouble_signal(arr_atr.copy(), 0, 1, 2, 3, 5, 6, 7), 6, 7, "double_trouble")
+
+    return fires
+
+
+def candlestick_score(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> float:
+    """Weight the per-pattern fires from candlestick_fires() into a [-2, +2] factor.
+
+    Returns 0.0 if OHLCV unavailable or <10 bars.
+    """
+    fires = candlestick_fires(ohlcv_ts, date_str, lookback=lookback)
+    if not fires:
+        return 0.0
+
+    bull = sum(CANDLESTICK_WEIGHTS.get(name, 1.0) for name, (b, _s) in fires.items() if b)
+    bear = sum(CANDLESTICK_WEIGHTS.get(name, 1.0) for name, (_b, s) in fires.items() if s)
 
     raw = bull - bear
-    # Normalize to [-2, +2]. The /5.0 saturation point (raw >= 5 -> full scale) is a
-    # provisional hand-set constant, NOT backtest-derived — it caps a few concurrent
-    # fires at the rail so no single bar dominates. Calibrate alongside the per-pattern
-    # CANDLESTICK_WEIGHTS when the per-pattern backtest lands.
-    score = max(-2.0, min(2.0, raw / 5.0 * 2.0))
+    # Normalize to [-2, +2]. The saturation point (raw >= _SATURATION_DIVISOR -> full
+    # scale) is BACKTEST-CALIBRATED alongside CANDLESTICK_WEIGHTS from the study JSON
+    # (95th percentile of |raw|), falling back to the hand-set _DEFAULT_SATURATION_DIVISOR
+    # when the study is absent. It caps a burst of concurrent fires at the rail so no
+    # single bar dominates.
+    score = max(-2.0, min(2.0, raw / _SATURATION_DIVISOR * 2.0))
     return round(score, 2)
 
 
