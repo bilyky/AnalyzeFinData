@@ -30,5 +30,8 @@ if errorlevel 1 (
 )
 
 :: 3. Run the engine command exactly as passed by Task Scheduler.
+::    Reset the errorlevel left by the where-probe above so the exit code reflects ONLY the engine
+::    (an external engine sets its own; this also keeps a builtin passthrough clean).
+ver >nul
 %*
 exit /b %errorlevel%
