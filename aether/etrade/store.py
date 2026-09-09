@@ -17,21 +17,24 @@ from ``DATABASE_URL`` with *zero* call-site changes.
 
 DESIGN NOTES
 ------------
-* The **token and reauth** file adapters **delegate to the proven free functions**
-  in ``aether.etrade`` (``_load_tokens`` / ``_save_tokens`` / ``_load_reauth_state``
-  …) rather than re-implementing the JSON shapes, so those two backends can never
-  drift from the battle-tested (IP-ban-hardened) core, and — critically — they
-  inherit the core's two non-negotiable test seams for free:
-    - path constants (``_TOKEN_PATH`` …) are read **at call time**, so a test that
-      reassigns ``etrade._TOKEN_PATH`` redirects the store too;
-    - deletion goes through the package's ``os`` object, so ``mock.patch.object(
-      etrade.os, "remove")`` still intercepts it.
-  ``FileBrowserStateStore`` is the **one exception**: the core exposes no standalone
-  browser-state load/save function to delegate to (that I/O is inline inside the
-  Playwright login flow), so this adapter reads/writes ``_BROWSER_STATE_PATH``
-  directly. It still reads the path constant at call time, but its JSON handling is
-  an *independent copy* — if the core's inline browser-state writer changes shape,
-  update this adapter to match.
+* The **token and reauth** file adapters **own the JSON I/O** — the ``_TOKEN_PATH`` /
+  ``_REAUTH_STATE_PATH`` load/save logic lives here, in the adapter. The legacy
+  ``aether.etrade`` free functions (``_load_tokens`` / ``_save_tokens`` /
+  ``_load_reauth_state`` …) are now **thin shims that delegate to these adapters** —
+  the dependency arrow was inverted so the store is the single home of the logic ahead
+  of retiring the free-function surface entirely. To keep the core's non-negotiable
+  test seams working, the adapters still touch the package lazily at call time for
+  everything seam-bearing:
+    - path constants (``_TOKEN_PATH`` / ``_reauth_state_path`` …) and helpers
+      (``_et_today`` / ``_log`` / ``notify``) are read off the package **at call
+      time**, so a test that reassigns ``etrade._TOKEN_PATH`` (or patches
+      ``etrade._et_today``) redirects the store too;
+    - existence checks and deletion go through the package's ``os`` object, so
+      ``mock.patch.object(etrade.os.path, "exists")`` / ``(etrade.os, "remove")``
+      still intercept.
+  ``FileBrowserStateStore`` reads/writes ``_BROWSER_STATE_PATH`` directly (the core
+  never exposed a standalone browser-state load/save function — that I/O is inline in
+  the Playwright login flow); it too reads the path constant at call time.
 * **Secrets never go in a plain DB table.** The DB adapter (future) persists only
   the *non-secret* rows — circuit-breaker state. OAuth secrets and browser state
   stay in a k8s Secret / envelope-encrypted blob. The port split below marks
@@ -130,18 +133,57 @@ class ReauthStateStore(abc.ABC):
 
 
 # ===========================================================================
-# File adapters (today's behaviour — delegate to the proven core)
+# File adapters (today's behaviour — the JSON I/O lives here; the ``aether.etrade``
+# free functions are thin shims over these adapters, see module docstring)
 # ===========================================================================
 
 class FileTokenStore(TokenStore):
     def load(self, env: str) -> Optional[dict]:
-        return _pkg()._load_tokens(env)
+        """Return cached tokens if issued today (ET), otherwise None."""
+        p = _pkg()
+        if not p.os.path.exists(p._TOKEN_PATH):
+            return None
+        with open(p._TOKEN_PATH) as f:
+            tokens = json.load(f)
+        if tokens.get("env") != env:
+            return None
+        if tokens.get("issued_date_et") != p._et_today():
+            p._log.info("Cached tokens are from a previous trading day — re-authenticating...")
+            return None
+        age_min = max(0.0, p.time.time() - tokens.get("saved_at", 0)) / 60
+        p._log.info(f"Cached tokens found ({age_min:.0f} min old, issued today ET).")
+        return tokens
 
     def load_any_date(self, env: str) -> Optional[dict]:
-        return _pkg()._load_tokens_any_date(env)
+        """Load cached tokens regardless of issue date — for renewal attempts."""
+        p = _pkg()
+        if not p.os.path.exists(p._TOKEN_PATH):
+            return None
+        try:
+            with open(p._TOKEN_PATH) as f:
+                tokens = json.load(f)
+            return tokens if tokens.get("env") == env else None
+        except Exception:
+            return None
 
     def save(self, tokens: dict, env: str) -> None:
-        _pkg()._save_tokens(tokens, env)
+        p = _pkg()
+        tokens["env"] = env
+        tokens["saved_at"]       = p.time.time()
+        tokens["issued_date_et"] = p._et_today()
+        p.os.makedirs(p.os.path.dirname(p._TOKEN_PATH), exist_ok=True)
+        with open(p._TOKEN_PATH, "w") as f:
+            json.dump(tokens, f, indent=2)
+        # Log the ABSOLUTE destination: the token path is checkout-relative, so a re-auth run
+        # from the wrong worktree silently saves where prod never reads. Making the target
+        # visible turns that class of mistake into something you can see in one glance.
+        p._log.info(f"E*TRADE {env} token saved ({tokens['issued_date_et']}) -> {p._TOKEN_PATH}")
+        # A fresh token means the session is healthy again — end any active re-auth alert episode
+        # so the next time a wall appears the throttled email/push fires anew (best-effort).
+        try:
+            p.notify.clear_reauth_alert(env)
+        except Exception as exc:
+            p._log.debug("etrade: clear_reauth_alert best-effort failed: %s", exc)
 
     def delete(self) -> None:
         p = _pkg()
@@ -170,13 +212,34 @@ class FileBrowserStateStore(BrowserStateStore):
 
 class FileReauthStateStore(ReauthStateStore):
     def load(self, env: str = "production") -> dict:
-        return _pkg()._load_reauth_state(env)
+        """Circuit-breaker state: {consecutive_failures, last_attempt, cooldown_until}.
+
+        A missing/corrupt file reads as a fully-open gate (no active cooldown).
+        """
+        p = _pkg()
+        try:
+            with open(p._reauth_state_path(env)) as f:
+                s = json.load(f)
+            return {
+                "consecutive_failures": int(s.get("consecutive_failures", 0)),
+                "last_attempt":         float(s.get("last_attempt", 0.0)),
+                "cooldown_until":       float(s.get("cooldown_until", 0.0)),
+            }
+        except (OSError, ValueError, TypeError):
+            return {"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}
 
     def save(self, state: dict, env: str = "production") -> None:
-        _pkg()._save_reauth_state(state, env)
+        p = _pkg()
+        path = p._reauth_state_path(env)
+        try:
+            p.os.makedirs(p.os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(state, f, indent=2)
+        except OSError:
+            pass
 
     def reset(self, env: str = "production") -> None:
-        _pkg().reset_reauth_circuit_breaker(env)
+        self.save({"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}, env)
 
 
 # ===========================================================================

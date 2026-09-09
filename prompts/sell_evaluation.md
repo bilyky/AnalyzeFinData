@@ -24,6 +24,14 @@ Judge the decision against these lenses:
    patience; Bearish PGR below the 50-DMA argues for exit.
 5. DETERIORATING HOLD. If the engine says HOLD but the name is below its stop-ish
    level with weak scores, FLAG-FOR-REVIEW the other way.
+6. LEGACY DRAWDOWN / OPTION VALUE. If a legacy position is already down severely
+   (>70%) so the remaining recoverable cash is small, and there is an active
+   qualitative corporate catalyst (a recent merger, acquisition, or fundamental
+   business turnover) that could plausibly drive a reversal, prefer
+   FLAG-FOR-REVIEW over an automatic momentum-based exit: the residual stake may
+   hold more upside optionality than the cash recovered. This never overrides an
+   ATR hard stop or the capital-preservation mandate; it only flags the decision
+   for a human.
 
 Verdict vocabulary:
 - AGREE            — the deterministic action looks right.

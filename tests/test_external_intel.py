@@ -234,5 +234,34 @@ class TestIntelCacheKeying(unittest.TestCase):
         self.assertNotIn("LEGACY", [i.get("symbol") for i in ideas])
 
 
+class TestDedupRdTopics(unittest.TestCase):
+    """The single-source R&D dedup shared by /api/intel-ideas and the email report."""
+
+    def test_dedup_is_case_and_trailing_period_insensitive(self):
+        # Red-green: without normalization all three would survive.
+        raw = ["Backtest gap persistence", "backtest gap persistence.",
+               "BACKTEST GAP PERSISTENCE"]
+        self.assertEqual(external_intel.dedup_rd_topics(raw),
+                         ["Backtest gap persistence"])
+
+    def test_first_seen_form_and_order_preserved(self):
+        raw = ["Alpha study", "Beta study", "alpha study."]
+        self.assertEqual(external_intel.dedup_rd_topics(raw),
+                         ["Alpha study", "Beta study"])
+
+    def test_accepts_str_or_list_items_and_flattens(self):
+        # Items may be a bare string OR a list of strings (both shapes rd_topics takes).
+        raw = ["solo topic", ["nested one", "nested two"], "solo topic"]
+        self.assertEqual(external_intel.dedup_rd_topics(raw),
+                         ["solo topic", "nested one", "nested two"])
+
+    def test_empty_whitespace_and_non_string_entries_skipped(self):
+        raw = ["", "   ", None, 42, ["  keep me  ", None], "keep me"]
+        self.assertEqual(external_intel.dedup_rd_topics(raw), ["keep me"])
+
+    def test_empty_input_returns_empty_list(self):
+        self.assertEqual(external_intel.dedup_rd_topics([]), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -54,7 +54,7 @@ $Tasks = @(
                 $T
             )
         )
-        Prompt   = "Execute the automated skill defined in .claude/commands/watchdog.md"
+        Script   = "venv_new\Scripts\python.exe watchdog.py"
         Log      = "watchdog_agent.log"
         Desc     = "Hourly diagnostics and self-healing loop running 24/7."
     },
@@ -68,7 +68,7 @@ $Tasks = @(
                 $T
             )
         )
-        Prompt   = "Execute the automated skill defined in .claude/commands/intraday-monitor.md"
+        Script   = "venv_new\Scripts\python.exe scripts/utils/intraday_monitor.py"
         Log      = "intraday_monitor_agent.log"
         Desc     = "Real-time risk monitor checking open positions against stop levels every 30 mins."
     },
@@ -98,6 +98,15 @@ $Tasks = @(
         Prompt   = "Execute the automated skill defined in .claude/commands/post-market-sync.md"
         Log      = "post_market_sync_agent.log"
         Desc     = "Nightly post-market data sync to refresh Chaikin ratings and backfill price caches at 1:30 PM PST."
+    },
+    @{
+        Name     = "AETHER_Data_Backup"
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Daily -At "3:00 PM")
+        )
+        Script   = "venv_new\Scripts\python.exe scripts/utils/run_data_backup.py"
+        Log      = "data_backup_agent.log"
+        Desc     = "Robocopy synchronization of the local Data folder to the network Storage drive at 3:00 PM PST."
     },
     @{
         Name     = "AETHER_RD_Scientist"

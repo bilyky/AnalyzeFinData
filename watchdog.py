@@ -54,8 +54,8 @@ SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 # Placeholders: {prompt} (inline text) or {prompt_file} (safe text file path, highly recommended for Windows).
 _CLAUDE_EXE = os.path.expandvars(r"%USERPROFILE%\.gnai\claude\claude.exe")
 _DEFAULT_HEALER = (
-    f'"{_CLAUDE_EXE}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep"'
-    ' --approval-mode acceptEdits'
+    f'"{_CLAUDE_EXE}" --allowedTools "Read,Glob,Grep"'
+    ' --approval-mode plan'
     ' -p "{prompt_file}"'
 )
 HEALER_CMD_TEMPLATE = os.environ.get("AETHER_HEALER_CMD", _DEFAULT_HEALER)
@@ -109,7 +109,7 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
     try:
         with open(AETHER_JSONL, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
-        for line in lines[-200:]:  # recent enough window for structured log
+        for line in reversed(lines):  # Scan backwards to handle high volume log files efficiently
             line = line.strip()
             if not line:
                 continue
@@ -117,9 +117,24 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            
+            ts_str = entry.get("ts", "")
+            # Since the log is chronological, if we encounter an entry older than 2 hours,
+            # we can stop scanning backwards.
+            if ts_str:
+                parsed_t = None
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+                    try:
+                        parsed_t = datetime.datetime.strptime(ts_str[:19], fmt)
+                        break
+                    except ValueError:
+                        continue
+                if parsed_t and (now - parsed_t).total_seconds() > 7200:
+                    break
+
             if entry.get("level", "").upper() != "ERROR":
                 continue
-            if not _within_window(entry.get("ts", ""), now):
+            if not _within_window(ts_str, now):
                 continue
             module = entry.get("module", "")
             msg = entry.get("msg", "")
@@ -130,6 +145,8 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
                 # Include just the last line of the traceback
                 detail += f" | {exc.strip().splitlines()[-1]}"
             errors.append(f"[{module}] {msg}{detail}")
+        
+        errors.reverse()  # Restore chronological order
     except Exception as e:
         _log.warning("Failed to scan structured log", extra={"error": str(e)})
     return errors
@@ -190,6 +207,7 @@ def trigger_ai_self_healing(traceback):
             prompt_file=str(SELF_HEAL_PROMPT_FILE)
         )
         _log.console(f"🚀 [AETHER BRAIN] Dispatching self-healing command (prompt written to file)")
+        
         result = subprocess.run(
             cmd,
             shell=True,
@@ -247,19 +265,55 @@ def purge_stray_tasks():
     """
     do_delete = os.environ.get("AETHER_PURGE_STRAY_TASKS", "").strip() == "1"
     try:
-        # Query all scheduled tasks in LIST format
-        result = subprocess.run(["schtasks", "/query", "/fo", "LIST"], capture_output=True, text=True, errors="replace")
+        # Query all scheduled tasks recursively in LIST format with verbose details
+        result = subprocess.run(["schtasks", "/query", "/fo", "LIST", "/v"], capture_output=True, text=True, errors="replace")
         if result.returncode == 0:
-            # Extract all task names matching the AETHER / AnalyzeFinData prefix
-            # TaskName contains the path (e.g. \AnalyzeFinData_Morning or \AnalyzeFinData_Morning_Test)
-            all_tasks = re.findall(r"TaskName:\s+\\*(AnalyzeFinData_\w+|Project_AETHER_\w+)", result.stdout, re.IGNORECASE)
-            
-            # Filter and deduplicate
+            tasks = []
+            current = {}
+            for line in result.stdout.splitlines():
+                if not line.strip():
+                    if current and "taskname" in current:
+                        tasks.append(current)
+                        current = {}
+                    continue
+                if ":" in line:
+                    parts = line.split(":", 1)
+                    k = parts[0].strip().lower()
+                    v = parts[1].strip()
+                    current[k] = v
+            if current and "taskname" in current:
+                tasks.append(current)
+
+            # Filter for AETHER / AnalyzeFinData namespace
+            aether_tasks = [t["taskname"] for t in tasks if "aether" in t["taskname"].lower() or "analyzefindata" in t["taskname"].lower()]
+
+            # Whitelisted production tasks
+            whitelist = set(TASKS + ["Project_AETHER_Watchdog"])
+
+            # Attempt to parse sub_tasks dynamically from scripts/utils/register_agent_tasks.ps1 (R&D #4)
+            sub_tasks = ["AETHER_DailyDriver", "AETHER_PostMarketReporter", "AETHER_PostMarketSync", "AETHER_PreFlight_Audit", "AETHER_RD_Scientist", "AETHER_StopMonitor", "AETHER_Watchdog"]
+            ps1_path = BASE_DIR / "scripts" / "utils" / "register_agent_tasks.ps1"
+            if ps1_path.exists():
+                try:
+                    with open(ps1_path, "r", encoding="utf-8", errors="ignore") as f:
+                        ps1_content = f.read()
+                    discovered = re.findall(r'Name\s*=\s*\"([^\"]+)\"', ps1_content)
+                    if discovered:
+                        # Unify discovered subtasks with our standard fallback list
+                        sub_tasks = list(set(sub_tasks + discovered))
+                except Exception as pe:
+                    _log.warning(f"Failed to dynamically parse register_agent_tasks.ps1 (using fallback): {pe}")
+
+            for st in sub_tasks:
+                whitelist.add(f"\\AETHER_Agents\\{st}")
+                whitelist.add(st) # also direct name
+
             stray_tasks = []
-            for t in set(all_tasks):
-                # If it carries our namespace but is not in our official white-list (TASKS or Project_AETHER_Watchdog)
-                if t not in TASKS and t != "Project_AETHER_Watchdog":
-                    stray_tasks.append(t)
+            for name in aether_tasks:
+                # Get the bare name (without folder)
+                bare_name = name.split("\\")[-1]
+                if name not in whitelist and bare_name not in whitelist:
+                    stray_tasks.append(name)
             
             if stray_tasks:
                 if not do_delete:
@@ -268,7 +322,7 @@ def purge_stray_tasks():
                 else:
                     _log.warning(f"[Stray-Task] Purging {len(stray_tasks)} stray task(s) (AETHER_PURGE_STRAY_TASKS=1): {stray_tasks}")
                     for t in stray_tasks:
-                        del_res = subprocess.run(["schtasks", "/delete", "/tn", f"\\{t}", "/f"], capture_output=True, text=True, errors="replace")
+                        del_res = subprocess.run(["schtasks", "/delete", "/tn", t, "/f"], capture_output=True, text=True, errors="replace")
                         if del_res.returncode == 0:
                             _log.info(f"[Stray-Task] Deleted stray task '{t}'.")
                         else:
@@ -380,26 +434,35 @@ def sync_data_folder() -> bool:
             
         dst_path.mkdir(parents=True, exist_ok=True)
         _log.console(f"🔄 Syncing Data folder to: {dst} ...")
-        # Use /E (recursive copy, NO DELETIONS) instead of /MIR to prevent data loss on backup drive
-        cmd = ["robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS"]
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+        # Use /E (recursive copy, NO DELETIONS) instead of /MIR to prevent data loss on backup drive.
+        # Exclude only the live chrome profile: robocopy locks/fails on its open files
+        # (Default/Crashpad/GPUPersistentCache). The Symbol/Symbol_full caches stay in the
+        # backup — the raised 600s timeout (PR #64) absorbs their volume.
+        cmd = [
+            "robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS",
+            "/XD", "etrade_chrome_profile"
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=600)
         if result.returncode < 8:
             _log.info(f"✅ Data folder successfully synchronized to {dst}.")
             return True
         else:
             _log.error(f"❌ Robocopy sync failed (rc={result.returncode}). Stderr: {result.stderr.strip()}")
             return False
+    except subprocess.TimeoutExpired:
+        _log.warning("⚠️ Data folder sync timed out (600s limit reached). This is an incomplete backup.")
+        return False # Treat timeout as a failure, not a success, per mandatory backup policy
     except Exception as e:
         _log.error(f"❌ Failed to sync Data folder to Z: drive: {e}", exc_info=True)
         return False
 
 def is_pid_running(pid: int) -> bool:
-    """Return True if a process with the given PID is actively running on Windows."""
+    """Return True if a python process with the given PID is actively running on Windows."""
     if pid <= 0:
         return False
     try:
         res = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, errors="replace")
-        return "No tasks" not in res.stdout and str(pid) in res.stdout
+        return "No tasks" not in res.stdout and str(pid) in res.stdout and "python" in res.stdout.lower()
     except Exception:
         return False
 
@@ -516,7 +579,7 @@ def run_watchdog():
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            timeout=15
+            timeout=120
         )
         compilation_passed = (val_result.returncode == 0)
         validation_output = val_result.stdout if compilation_passed else val_result.stderr
@@ -527,26 +590,21 @@ def run_watchdog():
     # 6. Re-Audit Logs after the fix
     remaining_errors = check_logs()
     
-    # 6.5. Run Backup Sync and Monitor Success/Errors
-    sync_success = sync_data_folder()
-    
     # Check if there are any active issues left
     issues = []
     if remaining_errors and not ai_triggered: # If we self-healed, the old log errors are still there, so we ignore them for the "issues" list
         issues.append("REMAINING LOG ERRORS:\n" + "\n".join(remaining_errors))
     if data_issue: 
         issues.append(data_issue)
-    if not sync_success:
-        issues.append("CRITICAL: Network Backup Data Sync Failed!")
 
     # 7. Construct the Consolidated HTML Recovery Report (The Final Step!)
-    # We send an email if a healing action occurred, an AI healer triggered, there are active code errors in the logs, or the backup sync failed.
-    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered) or not sync_success:
+    # We send an email if a healing action occurred, an AI healer triggered, or there are active code errors in the logs.
+    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered):
         _log.console("Healer cycle complete. Constructing consolidated recovery report...")
         
         # Color badges
-        status_color = "#27ae60" if compilation_passed and sync_success else "#c0392b"
-        status_text = "NOMINAL (HEALED)" if compilation_passed and sync_success else "MANUAL INTERVENTION REQUIRED"
+        status_color = "#27ae60" if compilation_passed else "#c0392b"
+        status_text = "NOMINAL (HEALED)" if compilation_passed else "MANUAL INTERVENTION REQUIRED"
         
         # Clean console log for email (last 2000 chars to avoid size limits)
         trimmed_console_log = ai_console_log[-2000:] if ai_console_log else "No AI logs available."
@@ -589,13 +647,6 @@ def run_watchdog():
                 <pre style="background: #f1f2f6; color: #2c3e50; padding: 12px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; overflow-x: auto; font-family: monospace;">{validation_output}</pre>
             </div>
 
-            <!-- SECTION 3b: DATA BACKUP SYNC STATUS -->
-            <div style="background: {'#f9f9f9' if sync_success else '#fdf2f2'}; border-left: 5px solid {'#34495e' if sync_success else '#ec5b5b'}; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
-                <h3 style="margin-top: 0; color: {'#34495e' if sync_success else '#c0392b'}; font-size: 15px;">📁 3b. DATA BACKUP SYNC STATUS:</h3>
-                <p style="font-size: 13px; font-weight: bold;">Backup Location: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">\\\\10.0.0.156\\Storage\\Yura\\Develop\\StockTrading\\AnalyzeFinData\\Data</span></p>
-                <p style="font-size: 13px; font-weight: bold;">Sync Status: <span style="color: {'#27ae60' if sync_success else '#c0392b'}; font-size: 14px;">{'SUCCESS / NOMINAL' if sync_success else 'FAILED / SYNC ERROR'}</span></p>
-            </div>
-
             <!-- SECTION 4: NEXT STEPS -->
             <div style="background: #fff9db; border-left: 5px solid #f59f00; padding: 15px; margin-bottom: 30px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #f08c00; font-size: 15px;">🏁 4. RESULTS & NEXT STEPS:</h3>
@@ -604,7 +655,6 @@ def run_watchdog():
                     {'<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>' if compilation_passed else ''}
                     {'<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>' if ai_triggered else ''}
                     {'<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>' if not compilation_passed else ''}
-                    {f'<li><b>Backup Status:</b> Robocopy sync completed successfully.</li>' if sync_success else '<li><b>Backup Status Alert:</b> robocopy was unable to push updates to \\\\10.0.0.156\\Storage\\ - check server connection.</li>'}
                 </ul>
             </div>
 

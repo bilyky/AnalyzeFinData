@@ -193,6 +193,12 @@ class _Config:
         self.system_pyramiding_s10_floor  = float(os.environ.get("AETHER_PYRAMIDING_S10_FLOOR")  or system.get("pyramiding_s10_floor", 0.0))
         self.system_pyramiding_l60_floor  = float(os.environ.get("AETHER_PYRAMIDING_L60_FLOOR")  or system.get("pyramiding_l60_floor", 2.0))
 
+        # Covered-call flower exclusion (R&D #26 follow-up, Item 1): winners with L60 >= this
+        # ceiling are NOT written against — their upside is protected. Seeded at the strong-long
+        # zone (+6.0) from covered_call_winner_study.py (the >50%-momentum cohort loses -0.488%/
+        # write to the cap vs -0.046% mid-conviction). Tunable via AETHER_CC_L60_CEILING.
+        self.system_covered_call_l60_ceiling = float(os.environ.get("AETHER_CC_L60_CEILING") or system.get("cc_l60_ceiling", 6.0))
+
         # ── Configuration Health Checks ───────────────────────────────────────
         self.verify_config_health()
 

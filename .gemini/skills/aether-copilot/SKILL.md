@@ -46,6 +46,27 @@ python ai_portfolio_game.py
 
 ---
 
+## Authentication & Data Mechanics
+When troubleshooting connections or executing data pulls, strictly adhere to the following verified architectural constraints:
+1. **Chaikin API Key is Mandatory:** The new Fastify Chaikin API (`/api/suggestions`) explicitly requires the `x-api-key` header (configured in `config.json` under the `chaikin` block). If it is missing, the server misleadingly returns `403 SESSION_EXPIRED`.
+2. **CAPTCHA & Browser Fallback Hierarchy:** Cloudflare Turnstile's risk-scoring is dynamic; it may pass a headless browser seamlessly or it may demand human interaction. The correct execution order handles this dynamically: 1) Try the automated API JWT refresh first. 2) If that fails, attempt `headless=True` Playwright. 3) If Turnstile presents an interactive challenge, fallback to `headless=False` (interactive browser) so the user can click the CAPTCHA box. 4) Only as an absolute last resort, demand manual token extraction to `Data/session.json`.
+3. **Automated Renewals use JWT:** Once a manual session is saved, the system automatically bypasses the browser/CAPTCHA entirely using the **0.2-second API-based JWT Token Refresh** (`_jwt_to_session_id`). This is the primary automated renewal path.
+
+## Safe Source Control Mandates (Zero-Destruction Rule)
+Because `state_of_the_day.xlsx` is tracked by git but functions as an active manual input file, global destructive git commands are strictly banned in the PROD workspace.
+1. **Never use `git reset --hard`:** This command will permanently destroy the user's uncommitted manual Excel watchlists. 
+2. **Never use `git clean -fd`:** This command will wipe out local diagnostic scripts, `.bak` files, and session states.
+3. **Use Surgical Cleaning Only:** To clean a branch safely, use `git reset --soft origin/main`, followed by `git restore --staged <files>`, and finally `git checkout <specific_py_files>`. **Never checkout or restore `state_of_the_day.xlsx`.**
+4. **Never Bypass Pre-Commits:** You are explicitly forbidden from using `git commit --no-verify` or `-n`. You must let `pre_commit_validator.py` run and fix the underlying issues (like `MEMORY.md` parity) if the commit fails.
+5. **Strict Branch Hygiene & TDD:** Never bundle unrelated fixes (e.g., mixing a bug fix with a new feature or unrelated hooks). Every PR must be a clean, atomic unit branched from a `git pull`-refreshed `origin/main`. Furthermore, **no behavioral code change may be committed without an accompanying red-green unit test** proving the new contract.
+6. **Mandatory Pre-Push Regression Testing:** You are strictly forbidden from executing `git push` on a behavioral code change without first running the full test suite (`python -m pytest tests/` or via virtual environment) locally. If tests fail, you must fix the code before pushing.
+7. **Architectural Fallback Awareness:** Before inserting 'fail-fast' or 'rejection' gates into the execution logic, you MUST read the downstream code to ensure you are not preempting intentional fallback mechanisms (e.g., rejecting missing Excel data before the system can apply its downstream ATR-based fallback stops).
+
+## Headless Execution & Hook Engineering
+1. **The CP1252 Encoding Trap:** When writing `.ps1` scripts or Gemini hooks (e.g., `BeforeTool`), you are **strictly forbidden** from using Unicode characters, emojis, or non-ASCII characters. The headless Windows Task Scheduler executes background PowerShell instances in the legacy `CP1252` code page, not `UTF-8`. Unicode characters (like a lock emoji) will mangle the string terminator, throw a `ParserError`, and completely paralyze the Gemini CLI engine in production. Use strictly ASCII text for all system messages and logs.
+
+---
+
 ## References
 
 When analyzing setups, exits, or allocations, refer to these specialized guideline files:
@@ -53,6 +74,22 @@ When analyzing setups, exits, or allocations, refer to these specialized guideli
 *   **Risk Profiles:** See [references/strategy_profiles.md](references/strategy_profiles.md) for strict position limits, cash buffers, and LLM exit-analyst rubrics.
 *   **Structural Scarcity:** See [references/scarcity_core.md](references/scarcity_core.md) for the 20% hard-asset cap rules, LLM-classifier heuristics, and "shrink-ray" order-sizing limits.
 *   **Bottom Snipers:** See [references/trader_vic.md](references/trader_vic.md) for Victor Sperandeo's "1-2-3 Reversal" and "2B Pattern" price action heuristics.
+
+
+## Qualitative Catalyst & Legacy-Position Option Value
+
+When conducting "Second-Opinion" exit or hold reviews on severely underwater held positions, the agent should weigh these factors. None of them override the ATR hard stop or the capital-preservation mandate; they only decide whether to recommend FLAG-FOR-REVIEW instead of an automatic momentum-based exit:
+
+1.  **Option value vs. marginal cash recovery:**
+    When a legacy asset is already down severely (e.g., `-70%` to `-75%`), momentum-only exit rules can be sub-optimal. If the remaining recoverable cash (e.g., `< 25%` of original capital) is small, the option value of holding the residual stake for a structural business turnaround may be worth more than the negligible cash recovered.
+2.  **Catalyst discovery:**
+    Do not recommend selling a deeply underwater asset without first checking for qualitative, fundamental corporate catalysts (recent mergers, major acquisitions, positive earnings surprises, or key product restructurings) that could serve as a fundamental turning point.
+3.  **Flag, don't override:**
+    A major corporate acquisition or strategic structural shift is a fundamental catalyst that pure charts/momentum models do not capture. When such a catalyst is active and the remaining cash value is marginal, recommend FLAG-FOR-REVIEW rather than an automatic momentum-based exit; surface it for a human decision and never silently override an ATR stop.
+4.  **Target-locked catalyst exit (limit-sells):**
+    Because micro-cap and small-cap turnover rallies are volatile, rapid, and brief (often 1-3 days before profit-taking pulls the price back), do not recommend holding indefinitely. Suggest a target-locked limit-sell at a logical milestone (e.g., `+100%` from the bottom) to capture the catalyst-driven spike.
+5.  **Last-stand support floor:**
+    Keep a hard "last-stand" floor (such as the psychological `$1.00` listing-support level) below which the position is exited to prevent a penny-stock delisting or bankruptcy wipeout.
 
 
 ## 🧠 Permanent Cognitive & Zero-Trust Mandates

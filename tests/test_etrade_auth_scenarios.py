@@ -116,15 +116,17 @@ class TestTokenLifecycle(_EtradeScenarioBase):
         m_lh.assert_not_called()
 
     def test_A3_yesterday_token_renewed_survives_midnight(self):
-        # Token from yesterday but the broker still accepts it → silent renewal, no browser.
+        # Token from yesterday (but renewable). We explicitly bypass the data probe
+        # (which would return False) and blindly try the pure-HTTP renewal.
         self._write_token(_yesterday_et(), age_min=90.0)
         m_pw, m_lh = self._no_browser_guard()
         renewed = {"oauth_token": "fresh", "oauth_token_secret": "s2",
                    "env": "production", "issued_date_et": etrade._et_today()}
-        with mock.patch.object(etrade, "_probe_token_auth", return_value=True), \
+        with mock.patch.object(etrade, "_probe_token_auth") as m_probe, \
              mock.patch.object(etrade, "renew_tokens", return_value=renewed):
             out = etrade.get_tokens("production", allow_browser=False)
         self.assertEqual(out, renewed)
+        m_probe.assert_not_called()
         m_pw.assert_not_called()
         m_lh.assert_not_called()
 

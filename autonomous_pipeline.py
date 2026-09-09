@@ -65,6 +65,7 @@ def verify_data_freshness():
     return True, f"Data is fresh ({mtime.strftime('%Y-%m-%d %H:%M')})"
 
 def validate_sheets():
+    wb = None
     try:
         wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
         required_sheets = ["Research", "Picks", "Replacements"]
@@ -79,6 +80,12 @@ def validate_sheets():
         return True, "All required sheets validated and rendered."
     except Exception as e:
         return False, f"Validation error: {e}"
+    finally:
+        if wb:
+            try:
+                wb.close()
+            except Exception:
+                pass
 
 
 def check_earnings(symbol):
@@ -137,7 +144,8 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
         # Structural intel: aggregate catalysts, missing symbols, R&D across all emails.
         # Catalysts older than 15 days are historical filler, not action signals — drop them.
         _cutoff = (datetime.date.today() - datetime.timedelta(days=15)).isoformat()
-        all_catalysts, all_missing, all_rd = [], [], []
+        all_catalysts, all_missing = [], []
+        raw_rd = []
         for i in intel_ideas:
             if not isinstance(i, dict):
                 continue
@@ -162,11 +170,10 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
                 elif isinstance(missing_syms, dict):
                     all_missing.append(missing_syms)
                 
-                rd_topics_list = iv.get("rd_topics", [])
-                if isinstance(rd_topics_list, list):
-                    all_rd.extend(rd_topics_list)
-                elif isinstance(rd_topics_list, str):
-                    all_rd.append(rd_topics_list)
+                raw_rd.append(iv.get("rd_topics", []))
+
+        # Single source of truth for R&D dedup (shared with /api/intel-ideas).
+        all_rd = external_intel.dedup_rd_topics(raw_rd)
 
         structural = ""
         if all_catalysts:
@@ -360,9 +367,10 @@ def main():
             old_pid = 0
             
         if old_pid > 0:
-            # Check if the process is actively running
+            # Check if the process is actively running AND is a python process
+            # (Windows recycles PIDs rapidly; we must not false-positive on Chrome/svchost)
             res = subprocess.run(["tasklist", "/FI", f"PID eq {old_pid}", "/FO", "CSV"], capture_output=True, text=True, errors="replace")
-            if str(old_pid) in res.stdout:
+            if str(old_pid) in res.stdout and "python" in res.stdout.lower():
                 log(f"🛑 [Overlap Guard] Active pipeline process (PID {old_pid}) is already running! Exiting immediately to prevent race conditions or duplicate dispatches.")
                 sys.exit(0)
                 

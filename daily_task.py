@@ -49,6 +49,7 @@ def run_command(command_list, timeout=600):
         return ""
 
 def get_symbols_from_xls():
+    wb = None
     try:
         # We read from the ROOT folder file
         src_path = BASE_DIR / "state_of_the_day.xlsx"
@@ -63,6 +64,12 @@ def get_symbols_from_xls():
     except Exception as e:
         _log.error(f"Error reading symbols from XLS: {e}")
         return []
+    finally:
+        if wb:
+            try:
+                wb.close()
+            except Exception:
+                pass
 
 def get_all_data(date):
     # Dynamic import to use existing logic

@@ -25,7 +25,7 @@ from aether.config import CFG
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-_TIMEOUT = 60   # generous for chat; context build can take ~9s on cold Research cache
+_TIMEOUT = 180  # generous for chat; context build can take ~9s on cold Research cache
 
 _gemini_cli_lock = threading.Lock()
 
@@ -206,7 +206,7 @@ def _run_gemini(model: str, context: str, instruction: str) -> str:
     env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
 
     executable = "gemini.cmd" if sys.platform == "win32" else "gemini"
-    args = [executable, "--skip-trust", "-m", model, "--approval-mode", "plan", "--allowed-mcp-server-names", "none", "--allowed-tools", "none", "-p", instruction]
+    args = [executable, "--skip-trust", "-m", model, "--approval-mode", "yolo", "--allowed-mcp-server-names", "none", "--allowed-tools", "none", "-p", instruction]
 
     with _gemini_cli_lock:
         out = subprocess.run(

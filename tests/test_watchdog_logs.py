@@ -89,6 +89,17 @@ class TestCheckStructuredLog(unittest.TestCase):
             errs = watchdog._check_structured_log(NOW)
         self.assertEqual(len(errs), 1)   # only the valid JSON entry
 
+    def test_large_log_volume_does_not_miss_error(self):
+        # Create 300 entries: first is an error, followed by 299 info messages.
+        # If _check_structured_log only looks at the last 200 lines, it will miss the error.
+        entries = []
+        entries.append({"ts": RECENT, "level": "ERROR", "module": "m", "msg": "target error"})
+        for i in range(299):
+            entries.append({"ts": RECENT, "level": "INFO", "module": "m", "msg": f"info {i}"})
+        errs = self._run(entries)
+        self.assertEqual(len(errs), 1)
+        self.assertIn("target error", errs[0])
+
 
 class TestCheckLogsIntegration(unittest.TestCase):
     def test_combines_plain_and_structured(self):

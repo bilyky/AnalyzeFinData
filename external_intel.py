@@ -123,6 +123,35 @@ def _max_intel_emails() -> int:
         return 20
 
 
+def dedup_rd_topics(raw_topics) -> list:
+    """Flatten + case-insensitively deduplicate R&D topic strings.
+
+    Single source of truth for the "intelligent deduplication" used by both the web
+    dashboard (``/api/intel-ideas``) and the daily email report (``format_html_report``).
+    ``raw_topics`` is an iterable whose items are each a topic string OR a list of topic
+    strings (the two shapes ``rd_topics`` takes in the intel cache). Normalization key =
+    lowercased, trailing '.'/whitespace stripped; the FIRST-seen cleaned form is kept, in
+    order. Non-string / empty entries are skipped.
+    """
+    seen = set()
+    out = []
+    for item in raw_topics:
+        topics = [item] if isinstance(item, str) else item
+        if not isinstance(topics, list):
+            continue
+        for t in topics:
+            if not isinstance(t, str):
+                continue
+            t_clean = t.strip()
+            if not t_clean:
+                continue
+            key = t_clean.lower().rstrip(".").strip()
+            if key and key not in seen:
+                seen.add(key)
+                out.append(t_clean)
+    return out
+
+
 def fetch_idea_emails():
     """Check inbox, Promotions, and Trash for stock-oriented emails from the last 24h.
     Supports scanning multiple mailboxes defined in config.json.

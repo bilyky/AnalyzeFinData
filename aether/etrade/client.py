@@ -3,7 +3,8 @@
 This is the front door the rest of AETHER (and the standalone microservice) should
 use going forward. It composes five resource interfaces —
 
-    client.auth       tokens / renew / keep-alive / revoke / circuit-breaker
+    client.auth       tokens / renew / keep-alive / revoke / circuit-breaker /
+                      scheduled (unattended) re-auth
     client.market     quotes / market clock / option chains
     client.accounts   positions / account list
     client.orders     place / cancel / list            (extension stub, Phase 3)
@@ -88,6 +89,23 @@ class _AuthInterface:
     def reset_circuit_breaker(self) -> None:
         self._require_auth_role("reset_circuit_breaker")
         _pkg.reset_reauth_circuit_breaker(self._c.env)
+
+    def scheduled_reauth(self) -> dict:
+        """The ONE unattended automated re-auth door: renew-first (pure HTTP, no
+        browser), and only if that fails does it open a browser AT MOST once — and
+        only when the profile is trusted and the breaker is clear. Auth-role only —
+        the scaled data plane must never trigger a re-auth on the shared credential.
+
+        Unlike ``get_tokens``, this door is deliberately NOT governed by the client's
+        ``allow_browser`` flag — its own trust-marker + circuit-breaker gate decides
+        whether a browser opens, so one can open here even on an ``allow_browser=False``
+        client. That is intentional: this is the sanctioned scheduled door, and gating
+        it on the flag would defeat its purpose.
+
+        Returns ``scheduled_reauth``'s JSON-serializable result dict
+        ({ok, env, reason, browser_opened, ...})."""
+        self._require_auth_role("scheduled_reauth")
+        return _pkg.scheduled_reauth(self._c.env)
 
     # -- read-only (both roles) --------------------------------------------
     def current_token(self) -> Optional[dict]:
