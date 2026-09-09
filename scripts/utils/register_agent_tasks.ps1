@@ -124,29 +124,14 @@ $Tasks = @(
 # Settings: standard reliable settings (wake machine, allow demand run, run missed)
 $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable   
 
-# Resolve Node and Engine parent directories dynamically to prevent 0x80070002 (File Not Found) in background S4U contexts
-$EngineCmd = Get-Command $Engine -ErrorAction SilentlyContinue
-$NodeCmd = Get-Command "node" -ErrorAction SilentlyContinue
-
-$PathPrefix = ""
-if ($EngineCmd -and $NodeCmd) {
-    $EngineDir = Split-Path -Parent $EngineCmd.Source
-    $NodeDir = Split-Path -Parent $NodeCmd.Source
-    $PathPrefix = "`$env:PATH += ';$EngineDir;$NodeDir'; "
-    Write-Host "Auto-resolved system PATH prefix to: $PathPrefix" -ForegroundColor Green
-} else {
-    Write-Host "Warning: Could not dynamically resolve Engine ($Engine) or Node paths." -ForegroundColor Yellow
-}
-
-
 # Iterate and register each task
 foreach ($T in $Tasks) {
     $TaskName = $T.Name
     $PromptPayload = $T.Prompt
     $LogFile = Join-Path $LogDir $T.Log
     
-    $Launcher = Join-Path $RepoRoot "aether.cmd"
-    # Build the scheduled task action: raw scripts execute via PowerShell; AI agent tasks run via the robust aether.cmd launcher
+    $Launcher = Join-Path $RepoRoot "run_agent.cmd"
+    # Build the scheduled task action: raw scripts execute via PowerShell; AI agent tasks run via the robust run_agent.cmd launcher
     if ($T.Script) {
         $ExecCmd = "cd '$RepoRoot'; $($T.Script) >> '$LogFile' 2>&1"
         $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$ExecCmd`""
