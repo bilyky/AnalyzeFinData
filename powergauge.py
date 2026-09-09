@@ -105,6 +105,9 @@ from aether.token_renewer import TokenRenewer as _TokenRenewer
 _SESSION_VALID_TTL   = 300   # seconds to trust a validated session without re-checking
 _session_valid_until = 0.0   # monotonic timestamp; avoids HTTP validation on every call
 
+_auth_circuit_breaker_until = 0.0 # monotonic timestamp; blocks re-auth attempts for 15m if browser fails
+_last_email_alert_time      = 0.0 # monotonic timestamp; prevents spamming the user's inbox on multi-thread fails
+
 _chaikin_renewer = _TokenRenewer(
     lock_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "chaikin_reauth.lock"),
     renew_fn=lambda: login(interactive=False),
@@ -172,6 +175,12 @@ def ensure_valid_session() -> dict:
                     err_msg = re.sub(r"jwtToken=[^&\s]+", "jwtToken=REDACTED", err_msg)
                 _pg_log.warning(f"Failed to refresh session using JWT token (will fall back to browser): {err_msg}")
 
+    # --- CIRCUIT BREAKER: Check if we are currently locked out of browser attempts ---
+    global _auth_circuit_breaker_until
+    if time.monotonic() < _auth_circuit_breaker_until:
+        _pg_log.warning("Chaikin automated re-auth is currently suspended (Circuit Breaker active). Wait 15 minutes before next attempt.")
+        raise EnvironmentError("Chaikin automated re-auth suspended (Circuit Breaker).")
+
     # Expired — delegate to the cross-process singleton (protected by try-except to send email outside of lock duration)
     try:
         new_session = _chaikin_renewer.ensure(current_token=session)
@@ -179,16 +188,20 @@ def ensure_valid_session() -> dict:
             _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
         return new_session or session or {}
     except EnvironmentError as e:
+        _auth_circuit_breaker_until = time.monotonic() + 900 # Suspend further browser launches for 15 minutes
+        global _last_email_alert_time
         # We are now OUTSIDE the cross-process lock! We can safely send the email alert
-        # without adding any 30s SMTP latency to other waiting background tasks.
-        try:
-            session_abs_path = os.path.abspath(SESSION_FILE)
-            send_email(
-                subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
-                body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
-            )
-        except Exception as mail_err:
-            _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
+        # ONLY if we haven't already sent one in the last 15 minutes to prevent massive spam.
+        if time.monotonic() > _last_email_alert_time + 900:
+            try:
+                session_abs_path = os.path.abspath(SESSION_FILE)
+                send_email(
+                    subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
+                    body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
+                )
+                _last_email_alert_time = time.monotonic()
+            except Exception as mail_err:
+                _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
         raise
 
 
