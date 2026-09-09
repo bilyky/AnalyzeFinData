@@ -158,7 +158,7 @@ def ensure_valid_session() -> dict:
                     return latest_session
 
             try:
-                new_sid = _jwt_to_session_id(session["jwttoken"])
+                new_sid = _jwt_to_session_id(session)
                 if new_sid:
                     # Mutation Hygiene: Copy dict before modifying to prevent in-place corruption
                     test_session = session.copy()
@@ -170,6 +170,10 @@ def ensure_valid_session() -> dict:
                         return test_session
                     else:
                         _pg_log.warning("JWT exchanged session ID failed active validation check.")
+                else:
+                    # 200-but-empty => the sessionToken itself has expired. No in-window
+                    # refresh is possible; fall through to the browser re-auth path below.
+                    _pg_log.info("sessionToken expired (empty JWT exchange) — falling back to browser re-auth.")
             except Exception as e:
                 # Security Best Practice: Sanitize and redact raw JWT token from exception logs to prevent exposure
                 err_msg = str(e)
@@ -267,6 +271,13 @@ def _build_cache_index():
 
 
 SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
+
+# Persistent Chrome profile for browser re-auth. Its long-lived `cf_clearance` cookie
+# (~355-day exp, re-minted on each login) is the durable credential that lets Cloudflare
+# Turnstile auto-pass in a real (headed) browser with NO human — a throwaway context has
+# no cf_clearance, hits a cold Turnstile, and fails headless. (verified live 2026-09-09;
+# see plans/chaikin_api.md "Credential model" and memory project_chaikin_auto_reauth.)
+_CHAIKIN_PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "chaikin_chrome_profile")
 
 _http_session: requests.Session | None = None
 _resolved_proxy: str | None = None   # process-level memo: "" (direct) or a proxy URL
@@ -700,21 +711,41 @@ def _validate_session(session_data: dict) -> bool:
     return _probe_session(session_data) == "valid"
 
 
-def _jwt_to_session_id(jwt_token: str) -> str:
-    url = ("https://members-backend.chaikinanalytics.com/CPTRestSecure/app"
+def _jwt_to_session_id(session: dict) -> str:
+    """Mint a fresh sessionKey from a still-valid sessionToken WITHOUT a browser.
+
+    Calls the OMNI Fastify refresh endpoint on the NEW backend (the legacy
+    /CPTRestSecure/* path 503s for everyone — see plans/chaikin_api.md). Verified live
+    contract (2026-09-09): the call mints a session ONLY when acquireSessionForcibly=Yes
+    AND the current session headers (jwttoken/jsessionid/x-session-id/uuid) are all
+    present — apikey+appid alone returns HTTP 200 with EMPTY sessionId/omniSessionKey.
+    The response's `sessionId` == `omniSessionKey` and is the new `jsessionid`.
+
+    A 200-but-empty response means the sessionToken itself has expired: there is no
+    in-window refresh possible and the caller must fall through to a browser re-auth.
+    That is signalled by returning "" (not by raising), so ensure_valid_session moves
+    on to the browser path instead of tripping the circuit breaker on an "error".
+    """
+    jwt_token = session.get("jwttoken") or ""
+    sid = session.get("jsessionid") or ""
+    url = ("https://members-backend.chaikinanalytics.com/api"
            "/authenticate/getJWTAuthorization?acquireSessionForcibly=Yes"
            f"&jwtToken={jwt_token}")
     headers = {
         'X-Api-Key': _CHAIKIN_API_KEY,
         'X-App-Id': 'omni',
+        'User-Agent': _CHAIKIN_UA,
+        'jwttoken': jwt_token,
+        'jsessionid': sid,
+        'x-session-id': sid,
+        'uuid': session.get('uuid') or _chaikin_uuid(),
     }
     r = _get_http_session().get(url, headers=headers, timeout=(5, 15))
     if not r.ok:
         raise EnvironmentError(f"JWT exchange failed: HTTP {r.status_code}")
-    session_id = r.json().get('sessionId')
-    if not session_id:
-        raise EnvironmentError(f"No sessionId in JWT exchange response: {r.text[:200]}")
-    return session_id
+    data = r.json()
+    # sessionId and omniSessionKey are the same 24-char value; either is the new jsessionid.
+    return data.get('sessionId') or data.get('omniSessionKey') or ""
 
 
 def _load_credentials() -> tuple[str, str]:
@@ -748,52 +779,65 @@ def _login_via_browser(headless: bool = False) -> dict:
                     "uuid": uuid
                 }
 
+    global _CHAIKIN_UA
+    proxy_url = _resolve_proxy()
+    launch_kwargs = dict(
+        headless=headless,
+        channel='chrome',
+        args=['--disable-blink-features=AutomationControlled'],
+    )
+    if proxy_url:
+        launch_kwargs['proxy'] = {"server": proxy_url}
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=headless,
-            channel='chrome',
-            args=['--disable-blink-features=AutomationControlled'],
-        )
-        global _CHAIKIN_UA
-        _CHAIKIN_UA = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{browser.version} Safari/537.36"
-        context = browser.new_context(user_agent=_CHAIKIN_UA)
-        page = context.new_page()
-        if Stealth is not None:
+        # Persistent context reuses Data/chaikin_chrome_profile, whose long-lived
+        # cf_clearance cookie lets Turnstile auto-pass in a real (headed) browser with no
+        # human. A throwaway launch()+new_context() has no cf_clearance -> cold Turnstile
+        # -> headless can't solve it (why prod re-auth had been failing). (see
+        # _CHAIKIN_PROFILE_DIR note; verified live 2026-09-09)
+        os.makedirs(_CHAIKIN_PROFILE_DIR, exist_ok=True)
+        context = p.chromium.launch_persistent_context(_CHAIKIN_PROFILE_DIR, **launch_kwargs)
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            if Stealth is not None:
+                try:
+                    Stealth().apply_stealth_sync(page)
+                except Exception as e:
+                    _pg_log.warning(f"Failed to apply playwright-stealth: {e}")
+            page.on('request', on_request)
+
+            page.goto('https://members.chaikinanalytics.com/login', wait_until='domcontentloaded', timeout=60000)
+            # Pin the requests-based UA to the real browser's UA so downstream /api/* calls
+            # present a consistent fingerprint with the profile that just authenticated.
             try:
-                Stealth().apply_stealth_sync(page)
-            except Exception as e:
-                _pg_log.warning(f"Failed to apply playwright-stealth: {e}")
-        page.on('request', on_request)
+                _CHAIKIN_UA = page.evaluate("() => navigator.userAgent") or _CHAIKIN_UA
+            except Exception:
+                pass
 
-        page.goto('https://members.chaikinanalytics.com/login', wait_until='domcontentloaded', timeout=60000)
+            email, password = _load_credentials()
+            page.fill('input[name="email"]', email)
+            page.fill('input[name="password"]', password)
 
-        email, password = _load_credentials()
-        page.fill('input[name="email"]', email)
-        page.fill('input[name="password"]', password)
+            # Wait for Turnstile to enable the submit button (auto-verifies with a warm
+            # profile; a human can click the widget in the rare cold-profile case).
+            print("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
+            page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=60000)
+            page.click('button[type="submit"]')
 
-        # Wait for Turnstile to enable the submit button (auto-verifies or user clicks widget)
-        print("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
-        page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=60000)
-        page.click('button[type="submit"]')
+            print("Waiting for login to complete (up to 60s)...")
+            try:
+                page.wait_for_function(
+                    "window.location.pathname !== '/login'",
+                    timeout=60000
+                )
+            except Exception:
+                pass
 
-        print("Waiting for login to complete (up to 60s)...")
-        try:
-            page.wait_for_function(
-                "window.location.pathname !== '/login'",
-                timeout=60000
-            )
-        except Exception:
-            pass
-
-        # Navigate to app.chaikinanalytics.com to fully activate the session
-        print("Navigating to app.chaikinanalytics.com to activate the session...")
-        try:
-            page.goto('https://app.chaikinanalytics.com', timeout=30000)
-            page.wait_for_timeout(5000)
-        except Exception as e:
-            print(f"Warning: Navigation to app.chaikinanalytics.com failed or timed out: {e}")
-
-        browser.close()
+            # Stay on members.* and let the app fire its members-backend /api/* calls so
+            # on_request captures the live jsessionid/jwttoken/uuid contract.
+            page.wait_for_timeout(6000)
+        finally:
+            context.close()
 
     if not session_data[0]:
         raise EnvironmentError(
@@ -821,9 +865,12 @@ def login(interactive=True) -> dict:
             return session_data
         print("Saved session has expired — re-authenticating via browser.")
 
-    # Run headless if we are non-interactive or stdin is not a tty to prevent hanging
-    is_tty = sys.stdin and sys.stdin.isatty()
-    headless_run = not interactive or not is_tty
+    # Run HEADED by default: the persistent profile's cf_clearance lets Turnstile
+    # auto-pass in a real browser with no human, whereas headless trips the fingerprint
+    # even WITH cf_clearance present (verified live 2026-09-09). Headed needs a desktop
+    # session (fine for the scheduled task / RDP) but requires NO interaction. Override
+    # with CHAIKIN_HEADLESS_LOGIN=1 only for debugging.
+    headless_run = os.environ.get("CHAIKIN_HEADLESS_LOGIN", "").strip().lower() in ("1", "true", "yes")
 
     try:
         return _login_via_browser(headless=headless_run)
