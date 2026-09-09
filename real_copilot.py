@@ -35,11 +35,12 @@ def run_real_copilot_audit():
 
     # 2. Connect to E*TRADE and fetch actual holdings
     try:
-        tokens = etrade.get_tokens("production")
+        _et = etrade.ETradeClient("production", role="auth")
+        tokens = _et.auth.get_tokens()
         if not tokens:
             print("[Shadow Copilot] Error: Could not obtain E*TRADE tokens.")
             return
-        positions = etrade.fetch_positions(tokens, "production")
+        positions = _et.accounts.positions(tokens)
     except Exception as e:
         print(f"[Shadow Copilot] E*TRADE connection failed: {e}")
         return
