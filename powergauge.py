@@ -865,12 +865,27 @@ def login(interactive=True) -> dict:
             return session_data
         print("Saved session has expired — re-authenticating via browser.")
 
-    # Run HEADED by default: the persistent profile's cf_clearance lets Turnstile
-    # auto-pass in a real browser with no human, whereas headless trips the fingerprint
-    # even WITH cf_clearance present (verified live 2026-09-09). Headed needs a desktop
-    # session (fine for the scheduled task / RDP) but requires NO interaction. Override
-    # with CHAIKIN_HEADLESS_LOGIN=1 only for debugging.
-    headless_run = os.environ.get("CHAIKIN_HEADLESS_LOGIN", "").strip().lower() in ("1", "true", "yes")
+    # Headless decision (env override wins, else gate on `interactive`):
+    #   * Interactive / desktop run (a human, or a run with a real desktop) -> HEADED.
+    #     The persistent profile's cf_clearance lets Turnstile auto-pass in a real browser
+    #     with no human, whereas headless trips the fingerprint even WITH cf_clearance
+    #     present (verified live 2026-09-09). Headed needs a desktop but no interaction.
+    #   * Automated renewer path (`login(interactive=False)`, the 500-thread ranking
+    #     fallback) -> HEADLESS. That context has no guaranteed desktop, so headed would
+    #     hang ~60s on Turnstile before the circuit breaker trips; headless FAST-FAILS
+    #     instead. Headless can't actually solve Turnstile, so this reactive path is a
+    #     best-effort fast-fail — the proactive, desktop-bound chaikin_reauth.py task
+    #     (which calls _login_via_browser(headless=False) directly) is what really
+    #     re-mints the token.
+    # Override either way with CHAIKIN_HEADLESS_LOGIN: 1/true/yes forces headless,
+    # 0/false/no forces headed (e.g. a desktop-bound scheduled task through login()).
+    _hl_env = os.environ.get("CHAIKIN_HEADLESS_LOGIN", "").strip().lower()
+    if _hl_env in ("1", "true", "yes"):
+        headless_run = True
+    elif _hl_env in ("0", "false", "no"):
+        headless_run = False
+    else:
+        headless_run = not interactive
 
     try:
         return _login_via_browser(headless=headless_run)

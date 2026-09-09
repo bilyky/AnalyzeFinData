@@ -84,10 +84,16 @@ session.json = { jsessionid: <sessionKey>, jwttoken: <sessionToken>, uuid: <emai
    Chrome via `launch_persistent_context(Data/chaikin_chrome_profile)`. The profile's
    `cf_clearance` makes Turnstile auto-pass, so the login self-completes and mints a fresh
    7-day `sessionToken`. **Headless FAILS** the same flow even with `cf_clearance` (the
-   fingerprint trips Turnstile), so this path is headed by default — override only for
-   debugging with `CHAIKIN_HEADLESS_LOGIN=1`. It needs a desktop session but no
-   interaction. A weekly scheduled task (`scripts/monitoring/chaikin_reauth.py`) runs this
-   proactively so the token never lapses.
+   fingerprint trips Turnstile). It needs a desktop session but no interaction. A weekly
+   scheduled task (`scripts/monitoring/chaikin_reauth.py`) runs this proactively — calling
+   `_login_via_browser(headless=False)` directly — so the token never lapses.
+
+   `login()` picks headed vs headless by its `interactive` flag: an interactive/desktop
+   run is **headed** (as above), while the automated ranking-path renewer
+   (`login(interactive=False)`) is **headless** so it *fast-fails* rather than hanging ~60s
+   on Turnstile before the circuit breaker trips — that reactive path can't solve Turnstile
+   anyway, so re-minting is left to the proactive headed task. `CHAIKIN_HEADLESS_LOGIN`
+   overrides either way (`1/true/yes` forces headless, `0/false/no` forces headed).
 3. **cf_clearance expired (~yearly) or Turnstile blocks.** The circuit breaker trips and
    one throttled email alert is sent; a human logs in once (headed) to re-warm the
    profile. Tokens can also be captured via a warm, human-logged-in Chrome over CDP
