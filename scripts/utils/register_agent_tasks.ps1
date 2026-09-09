@@ -126,6 +126,23 @@ $Tasks = @(
         Script   = "venv_new\Scripts\python.exe scripts/diagnostics/preflight_validator.py --email"
         Log      = "preflight_audit.log"
         Desc     = "Nightly pre-flight system diagnostics and connection check at 9:30 PM PST."
+    },
+    @{
+        Name     = "AETHER_Chaikin_Reauth"
+        # Weekly, Sunday 8:00 AM. Proactively re-mints the Chaikin PGR session token
+        # (~7-day JWT) BEFORE it lapses, so the daily pipeline never wakes to a dead token.
+        # It launches a HEADED Chrome (the persistent profile's cf_clearance auto-passes
+        # Turnstile with no human) — so unlike every other task here it MUST run in the
+        # interactive desktop session. That is what the Interactive Principal below enforces
+        # ("run only when the user is logged on"); a hidden/S4U/Session-0 context has no
+        # display and Turnstile would fail. See plans/chaikin_api.md "Credential model".
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Weekly -At "8:00 AM" -DaysOfWeek Sunday)
+        )
+        Script    = "venv_new\Scripts\python.exe scripts/monitoring/chaikin_reauth.py"
+        Log       = "chaikin_reauth_agent.log"
+        Desc      = "Weekly proactive Chaikin PGR token re-auth (headed, no interaction). Runs only when logged on."
+        Principal = (New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited)
     }
 )
 
@@ -178,8 +195,19 @@ foreach ($T in $Tasks) {
             }
         }
         
-        # Register the task cleanly under the path \AETHER_Agents\
-        Register-ScheduledTask -TaskName $TaskName -TaskPath "\AETHER_Agents\" -Action $Action -Trigger $T.Triggers -Settings $Settings -Description $T.Desc | Out-Null
+        # Register the task cleanly under the path \AETHER_Agents\.
+        # Most tasks take the default principal; a task may supply its own (e.g. the
+        # Chaikin re-auth needs an Interactive principal so headed Chrome has a desktop).
+        $RegParams = @{
+            TaskName    = $TaskName
+            TaskPath    = "\AETHER_Agents\"
+            Action      = $Action
+            Trigger     = $T.Triggers
+            Settings    = $Settings
+            Description = $T.Desc
+        }
+        if ($T.Principal) { $RegParams.Principal = $T.Principal }
+        Register-ScheduledTask @RegParams | Out-Null
         Write-Host "  [SUCCESS] registered $TaskName successfully." -ForegroundColor Green
     }
     catch {
