@@ -4,6 +4,7 @@ import re
 import requests
 import json
 import os
+import shutil
 import time
 import urllib3
 import pytz
@@ -789,61 +790,98 @@ def _login_via_browser(headless: bool = False) -> dict:
     if proxy_url:
         launch_kwargs['proxy'] = {"server": proxy_url}
 
-    with sync_playwright() as p:
-        # Persistent context reuses Data/chaikin_chrome_profile, whose long-lived
-        # cf_clearance cookie lets Turnstile auto-pass in a real (headed) browser with no
-        # human. A throwaway launch()+new_context() has no cf_clearance -> cold Turnstile
-        # -> headless can't solve it (why prod re-auth had been failing). (see
-        # _CHAIKIN_PROFILE_DIR note; verified live 2026-09-09)
-        os.makedirs(_CHAIKIN_PROFILE_DIR, exist_ok=True)
-        context = p.chromium.launch_persistent_context(_CHAIKIN_PROFILE_DIR, **launch_kwargs)
-        try:
-            page = context.pages[0] if context.pages else context.new_page()
-            if Stealth is not None:
+    try:
+        with sync_playwright() as p:
+            # Persistent context reuses Data/chaikin_chrome_profile, whose long-lived
+            # cf_clearance cookie lets Turnstile auto-pass in a real (headed) browser with no
+            # human. A throwaway launch()+new_context() has no cf_clearance -> cold Turnstile
+            # -> headless can't solve it (why prod re-auth had been failing). (see
+            # _CHAIKIN_PROFILE_DIR note; verified live 2026-09-09)
+            os.makedirs(_CHAIKIN_PROFILE_DIR, exist_ok=True)
+            context = p.chromium.launch_persistent_context(_CHAIKIN_PROFILE_DIR, **launch_kwargs)
+            try:
+                page = context.pages[0] if context.pages else context.new_page()
+                if Stealth is not None:
+                    try:
+                        Stealth().apply_stealth_sync(page)
+                    except Exception as e:
+                        _pg_log.warning(f"Failed to apply playwright-stealth: {e}")
+                page.on('request', on_request)
+
+                page.goto('https://members.chaikinanalytics.com/login', wait_until='domcontentloaded', timeout=60000)
+                # Pin the requests-based UA to the real browser's UA so downstream /api/* calls
+                # present a consistent fingerprint with the profile that just authenticated.
                 try:
-                    Stealth().apply_stealth_sync(page)
-                except Exception as e:
-                    _pg_log.warning(f"Failed to apply playwright-stealth: {e}")
-            page.on('request', on_request)
+                    _CHAIKIN_UA = page.evaluate("() => navigator.userAgent") or _CHAIKIN_UA
+                except Exception:
+                    pass
 
-            page.goto('https://members.chaikinanalytics.com/login', wait_until='domcontentloaded', timeout=60000)
-            # Pin the requests-based UA to the real browser's UA so downstream /api/* calls
-            # present a consistent fingerprint with the profile that just authenticated.
-            try:
-                _CHAIKIN_UA = page.evaluate("() => navigator.userAgent") or _CHAIKIN_UA
-            except Exception:
-                pass
+                email, password = _load_credentials()
+                page.fill('input[name="email"]', email)
+                page.fill('input[name="password"]', password)
 
-            email, password = _load_credentials()
-            page.fill('input[name="email"]', email)
-            page.fill('input[name="password"]', password)
+                # Wait for Turnstile to enable the submit button (auto-verifies with a warm
+                # profile; a human can click the widget in the rare cold-profile case).
+                # Shorten timeout in headless mode to enforce a true fast-fail and prevent hangs.
+                print("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
+                turnstile_timeout = 10000 if headless else 60000
+                page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=turnstile_timeout)
+                page.click('button[type="submit"]')
 
-            # Wait for Turnstile to enable the submit button (auto-verifies with a warm
-            # profile; a human can click the widget in the rare cold-profile case).
-            print("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
-            page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=60000)
-            page.click('button[type="submit"]')
+                print("Waiting for login to complete (up to 60s)...")
+                try:
+                    login_timeout = 10000 if headless else 60000
+                    page.wait_for_function(
+                        "window.location.pathname !== '/login'",
+                        timeout=login_timeout
+                    )
+                except Exception:
+                    pass
 
-            print("Waiting for login to complete (up to 60s)...")
-            try:
-                page.wait_for_function(
-                    "window.location.pathname !== '/login'",
-                    timeout=60000
-                )
-            except Exception:
-                pass
+                # Stay on members.* and let the app fire its members-backend /api/* calls so
+                # on_request captures the live jsessionid/jwttoken/uuid contract.
+                page.wait_for_timeout(6000)
+            finally:
+                context.close()
 
-            # Stay on members.* and let the app fire its members-backend /api/* calls so
-            # on_request captures the live jsessionid/jwttoken/uuid contract.
-            page.wait_for_timeout(6000)
-        finally:
-            context.close()
-
-    if not session_data[0]:
-        raise EnvironmentError(
-            "Browser login completed but session ID was not captured. "
-            "Fall back to manual session: " + SESSION_FILE
-        )
+        if not session_data[0]:
+            raise EnvironmentError(
+                "Browser login completed but session ID was not captured. "
+                "Fall back to manual session: " + SESSION_FILE
+            )
+    except Exception as e:
+        # A genuine failure here can mean a *poisoned* persistent profile: a stale or
+        # Cloudflare-flagged cf_clearance/aws-waf cookie makes Turnstile keep returning
+        # error 600010 ("generic challenge failure / suspected bot"). Clearing the profile
+        # forces a fresh challenge on the next login and can self-heal that case.
+        #
+        # But that SAME cf_clearance cookie is the durable ~355-day credential, and a fresh
+        # (cold) Turnstile can only be solved in a HEADED browser — headless is *expected*
+        # to fail (that is exactly what the 10s fast-fail above is for). So we must NEVER
+        # wipe the profile on a headless failure: doing so throws away a good credential and
+        # leaves the next cold challenge unsolvable headless, making things strictly worse.
+        # Only self-heal (back up, then clear) when we ran headed and can re-solve.
+        if headless:
+            _pg_log.warning(
+                "Chaikin headless login failed (expected when Turnstile challenges a "
+                f"headless browser); keeping the persistent profile intact: {e}"
+            )
+            raise
+        _pg_log.warning(f"Chaikin headed login failed; backing up and clearing persistent Chrome profile to self-heal: {e}")
+        try:
+            backup_dir = os.path.join(os.path.dirname(_CHAIKIN_PROFILE_DIR), "Backup")
+            os.makedirs(backup_dir, exist_ok=True)
+            stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_dst = os.path.join(backup_dir, f"chaikin_profile_backup_{stamp}")
+            # Back up the profile before deletion (Mandatory Backup Policy).
+            # (copytree has no ignore_errors kwarg — that's rmtree; any partial-copy
+            # error is caught below and we proceed with the clear as best-effort.)
+            shutil.copytree(_CHAIKIN_PROFILE_DIR, backup_dst, dirs_exist_ok=True)
+            _pg_log.info(f"Persistent Chrome profile backed up to: {backup_dst}")
+        except Exception as backup_err:
+            _pg_log.warning(f"Failed to back up Chrome profile before clearing: {backup_err}")
+        shutil.rmtree(_CHAIKIN_PROFILE_DIR, ignore_errors=True)
+        raise
 
     _save_session_to_file(session_data[0])
     print(f"Session saved to {SESSION_FILE}")

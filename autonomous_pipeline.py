@@ -9,10 +9,9 @@ import openpyxl
 import notify
 import watchdog
 import html
-import rapidapi
 from aether import trash
+from aether.run_guard import DailyRunGuard, RunSkipped
 from config import CFG
-from run_history import load_symbols
 from pathlib import Path
 from aether_logger import get_logger as _get_logger
 from scripts.diagnostics.preflight_validator import run_preflight_diagnostics
@@ -386,6 +385,20 @@ def main():
         trash.soft_delete(lock_path, reason="pipeline-lock", force=True)
     atexit.register(_cleanup_pipeline_lock)
 
+    # ── Shared portfolio-state mutex (Cross-Task Overlap Guard) ──
+    # The lock above only stops a second *pipeline* from overlapping. This one
+    # is shared with the deterministic trade executor (ai_portfolio_game.py --run):
+    # it makes the AI driver WAIT for a running 07:00 executor to finish instead
+    # of racing it on state_of_the_day.xlsx behind a fixed 5-minute scheduler gap.
+    _state_guard = DailyRunGuard("portfolio_state", wait_timeout=7200)
+    try:
+        _state_guard.acquire()
+    except RunSkipped as e:
+        log(f"🛑 [State Guard] Portfolio state is busy ({e}); deferring pipeline to avoid "
+            "overlapping the trade executor. The next scheduled run will proceed.")
+        sys.exit(0)
+    atexit.register(_state_guard.release)
+
     no_email = "--no-email" in sys.argv[1:]
     no_history = "--no-history" in sys.argv[1:]
     report_only = "--report-only" in sys.argv[1:] or "--cached" in sys.argv[1:]
@@ -502,19 +515,8 @@ def main():
             return
 
     if not report_only:
-        # 2b. OHLCV recovery pass — repair missing/corrupted/stale Symbol_full files via RapidAPI.
-        #     Today's closes are already written by main.py (Chaikin). This only touches symbols
-        #     with gaps > 30 days. Non-fatal: pipeline continues even if RapidAPI is unavailable.
-        log("OHLCV recovery pass (rapidapi.py)...")
-        try:
-            _ohlcv_syms = load_symbols()
-            _today_str = str(datetime.date.today())
-            _ohlcv_result = rapidapi.repair_missing(_ohlcv_syms, _today_str)
-            log(f"OHLCV: {_ohlcv_result['updated']} recovered, "
-                f"{_ohlcv_result['skipped']} already current, "
-                f"{len(_ohlcv_result['errors'])} errors")
-        except Exception as e:
-            log(f"Warning: OHLCV recovery failed (non-fatal, pipeline continues): {e}")
+        # 2b. OHLCV recovery pass — moved to the evening daily_task.py to prevent morning API rate limits and delays.
+        log("Skipping OHLCV recovery pass (moved to evening daily_task.py)...")
 
     # 3. Verify data freshness
     fresh, msg = verify_data_freshness()

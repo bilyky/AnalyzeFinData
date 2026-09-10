@@ -34,16 +34,17 @@ TASKS = ["AnalyzeFinData_Morning", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_
 SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
 
 python_exe = sys.executable
+run_agent = BASE_DIR / "run_agent.cmd"
 _TASK_DEFS = {
-    "AnalyzeFinData_Morning":  (f"'{python_exe}' '{BASE_DIR / 'autonomous_pipeline.py'}'", "daily", "05:30"),
-    "AnalyzeFinData_Evening":  (f"'{python_exe}' '{BASE_DIR / 'daily_task.py'}'",           "daily", "17:00"),
-    "AnalyzeFinData_AI_Game":  (f"'{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --run", "daily", "07:00"),
-    "AnalyzeFinData_AI_Summary": (f"'{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --summary", "daily", "18:00"),
+    "AnalyzeFinData_Morning":  (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'autonomous_pipeline.py'}'", "daily", "05:30"),
+    "AnalyzeFinData_Evening":  (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'daily_task.py'}'",           "daily", "17:00"),
+    "AnalyzeFinData_AI_Game":  (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --run", "daily", "07:00"),
+    "AnalyzeFinData_AI_Summary": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --summary", "daily", "18:00"),
     # Unattended daily E*TRADE re-auth at 05:15 — just before the 05:30 Morning pipeline so the
     # token is fresh for it. Renew-first + trusted-profile-only + once/day: ≤1 browser/day, and
     # none at all once trust lapses (it latches sms_required and emails/pushes for a human).
-    "AnalyzeFinData_ETrade_Reauth": (f"'{python_exe}' '{BASE_DIR / 'server.py'}' etrade-reauth --scheduled", "daily", "05:15"),
-    "Project_AETHER_Watchdog": (f"'{python_exe}' '{BASE_DIR / 'watchdog.py'}'",              "hourly", None),
+    "AnalyzeFinData_ETrade_Reauth": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'server.py'}' etrade-reauth --scheduled", "daily", "05:15"),
+    "Project_AETHER_Watchdog": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'watchdog.py'}'",              "hourly", None),
 }
 
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
@@ -368,13 +369,23 @@ def heal_tasks(missing_tasks, force=False):
         tr, sc, st = _TASK_DEFS[task]
         # Use absolute task path starting with backslash to prevent folder-relative registration failures
         abs_task = f"\\{task}" if not task.startswith("\\") else task
-        args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/np", "/ru", run_as]
+        # E*TRADE re-auth MUST run headed in an interactive desktop session (no /np, use /it)
+        if "etrade_reauth" in task.lower():
+            args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/it", "/ru", run_as]
+        else:
+            args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/np", "/ru", run_as]
         if st:
             args += ["/st", st]
         try:
             result = subprocess.run(args, capture_output=True)
             if result.returncode == 0:
                 _log.info(f"✅ Task {task} successfully registered with native UTF-8 environment.")
+                # Apply advanced reliability settings (WakeToRun, StartWhenAvailable, StopExisting, ExecutionTimeLimit) via PowerShell
+                ps_cmd = [
+                    "powershell.exe", "-NoProfile", "-Command",
+                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances StopExisting -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) -ErrorAction SilentlyContinue"
+                ]
+                subprocess.run(ps_cmd, capture_output=True)
             else:
                 _log.error(f"❌ schtasks failed for {task} (rc={result.returncode}): {result.stderr.decode(errors='replace').strip()}")
         except Exception as e:

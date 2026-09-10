@@ -73,13 +73,22 @@ $Tasks = @(
         Desc     = "Real-time risk monitor checking open positions against stop levels every 30 mins."
     },
     @{
-        Name     = "AETHER_DailyDriver"
+        Name     = "AETHER_ExecuteTrades"
         Triggers  = @(
             (New-ScheduledTaskTrigger -Daily -At "7:00 AM")
         )
+        Script   = "venv_new\Scripts\python.exe ai_portfolio_game.py --run"
+        Log      = "execute_trades_agent.log"
+        Desc     = "Fast, 100% deterministic Python task to execute buy/sell trades and check stop-losses at market open."
+    },
+    @{
+        Name     = "AETHER_DailyDriver"
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Daily -At "7:05 AM")
+        )
         Prompt   = "Execute the automated skill defined in .claude/commands/daily-run.md"
         Log      = "daily_driver_agent.log"
-        Desc     = "Core screener, rebalancing, and buy/sell execution pipeline at 7:00 AM PST."
+        Desc     = "Slow, qualitative AI-decision and re-qualification pipeline running at 7:05 AM PST."
     },
     @{
         Name     = "AETHER_PostMarketReporter"
@@ -147,8 +156,8 @@ $Tasks = @(
 )
 
 
-# Settings: standard reliable settings (wake machine, allow demand run, run missed)
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable   
+# Settings: standard reliable settings (wake machine, allow demand run, run missed, prevent process hangs and skips)
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances StopExisting -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 
 # Iterate and register each task
 foreach ($T in $Tasks) {
