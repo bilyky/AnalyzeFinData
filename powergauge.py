@@ -849,8 +849,20 @@ def _login_via_browser(headless: bool = False) -> dict:
                 "Fall back to manual session: " + SESSION_FILE
             )
     except Exception as e:
-        _pg_log.warning(f"Chaikin browser login failed; clearing persistent Chrome profile to self-heal: {e}")
+        _pg_log.warning(f"Chaikin browser login failed; backing up and clearing persistent Chrome profile to self-heal: {e}")
         import shutil
+        import datetime
+        try:
+            backup_dir = os.path.join(os.path.dirname(_CHAIKIN_PROFILE_DIR), "Backup")
+            os.makedirs(backup_dir, exist_ok=True)
+            stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_dst = os.path.join(backup_dir, f"chaikin_profile_backup_{stamp}")
+            # Safely backup the directory before deletion
+            shutil.copytree(_CHAIKIN_PROFILE_DIR, backup_dst, dirs_exist_ok=True, ignore_errors=True)
+            _pg_log.info(f"Persistent Chrome profile successfully backed up to: {backup_dst}")
+        except Exception as backup_err:
+            _pg_log.warning(f"Failed to backup Chrome profile before clearing: {backup_err}")
+        
         shutil.rmtree(_CHAIKIN_PROFILE_DIR, ignore_errors=True)
         raise
 
