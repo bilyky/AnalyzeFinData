@@ -17,7 +17,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import threading
 
 import requests
 from aether_logger import get_logger as _get_logger
@@ -26,8 +25,6 @@ from aether.config import CFG
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 _TIMEOUT = 180  # generous for chat; context build can take ~9s on cold Research cache
-
-_gemini_cli_lock = threading.Lock()
 
 
 # ── Key resolution ─────────────────────────────────────────────────────────────
@@ -185,12 +182,6 @@ def _call_anthropic(pcfg, key, system, messages, max_tokens) -> str:
     return _parse_anthropic_response(resp)
 
 
-def _get_gemini_sandbox() -> str:
-    sandbox = os.path.join(tempfile.gettempdir(), "aether_gemini_cli_sandbox")
-    os.makedirs(sandbox, exist_ok=True)
-    return sandbox
-
-
 def _run_gemini(model: str, context: str, instruction: str) -> str:
     """Single invocation path for the gemini CLI, shared by evaluate() and chat().
 
@@ -208,13 +199,13 @@ def _run_gemini(model: str, context: str, instruction: str) -> str:
     executable = "gemini.cmd" if sys.platform == "win32" else "gemini"
     args = [executable, "--skip-trust", "-m", model, "--approval-mode", "yolo", "--allowed-mcp-server-names", "none", "--allowed-tools", "none", "-p", instruction]
 
-    with _gemini_cli_lock:
+    with tempfile.TemporaryDirectory(prefix="aether_gem_") as sandbox:
         out = subprocess.run(
             args,
             input=context,
             capture_output=True, text=True, timeout=_TIMEOUT,
             shell=(sys.platform == "win32"),
-            cwd=_get_gemini_sandbox(),
+            cwd=sandbox,
             encoding="utf-8",
             env=env,
         )
