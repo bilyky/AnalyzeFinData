@@ -369,13 +369,23 @@ def heal_tasks(missing_tasks, force=False):
         tr, sc, st = _TASK_DEFS[task]
         # Use absolute task path starting with backslash to prevent folder-relative registration failures
         abs_task = f"\\{task}" if not task.startswith("\\") else task
-        args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/np", "/ru", run_as]
+        # E*TRADE re-auth MUST run headed in an interactive desktop session (no /np, use /it)
+        if "etrade_reauth" in task.lower():
+            args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/it", "/ru", run_as]
+        else:
+            args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/np", "/ru", run_as]
         if st:
             args += ["/st", st]
         try:
             result = subprocess.run(args, capture_output=True)
             if result.returncode == 0:
                 _log.info(f"✅ Task {task} successfully registered with native UTF-8 environment.")
+                # Apply advanced reliability settings (WakeToRun, StartWhenAvailable) via PowerShell
+                ps_cmd = [
+                    "powershell.exe", "-NoProfile", "-Command",
+                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun) -ErrorAction SilentlyContinue"
+                ]
+                subprocess.run(ps_cmd, capture_output=True)
             else:
                 _log.error(f"❌ schtasks failed for {task} (rc={result.returncode}): {result.stderr.decode(errors='replace').strip()}")
         except Exception as e:

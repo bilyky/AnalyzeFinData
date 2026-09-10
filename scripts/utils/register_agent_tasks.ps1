@@ -148,7 +148,7 @@ $Tasks = @(
 
 
 # Settings: standard reliable settings (wake machine, allow demand run, run missed)
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable   
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun   
 
 # Iterate and register each task
 foreach ($T in $Tasks) {

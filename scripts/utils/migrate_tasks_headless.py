@@ -36,7 +36,10 @@ def main():
         if len(row) > name_idx:
             name = row[name_idx]
             if 'aether' in name.lower() or 'analyzefindata' in name.lower():
-                tasks_to_convert.add(name)
+                # E*TRADE re-auth MUST run headed in an interactive desktop session
+                # to load the persistent Chrome profile with device-trust and bypass Akamai
+                if 'etrade_reauth' not in name.lower():
+                    tasks_to_convert.add(name)
 
     _log.info(f"Found {len(tasks_to_convert)} unique AETHER/AnalyzeFinData tasks to convert.")
 
