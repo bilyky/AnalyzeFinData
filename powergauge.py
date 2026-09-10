@@ -4,6 +4,7 @@ import re
 import requests
 import json
 import os
+import shutil
 import time
 import urllib3
 import pytz
@@ -849,20 +850,36 @@ def _login_via_browser(headless: bool = False) -> dict:
                 "Fall back to manual session: " + SESSION_FILE
             )
     except Exception as e:
-        _pg_log.warning(f"Chaikin browser login failed; backing up and clearing persistent Chrome profile to self-heal: {e}")
-        import shutil
-        import datetime
+        # A genuine failure here can mean a *poisoned* persistent profile: a stale or
+        # Cloudflare-flagged cf_clearance/aws-waf cookie makes Turnstile keep returning
+        # error 600010 ("generic challenge failure / suspected bot"). Clearing the profile
+        # forces a fresh challenge on the next login and can self-heal that case.
+        #
+        # But that SAME cf_clearance cookie is the durable ~355-day credential, and a fresh
+        # (cold) Turnstile can only be solved in a HEADED browser — headless is *expected*
+        # to fail (that is exactly what the 10s fast-fail above is for). So we must NEVER
+        # wipe the profile on a headless failure: doing so throws away a good credential and
+        # leaves the next cold challenge unsolvable headless, making things strictly worse.
+        # Only self-heal (back up, then clear) when we ran headed and can re-solve.
+        if headless:
+            _pg_log.warning(
+                "Chaikin headless login failed (expected when Turnstile challenges a "
+                f"headless browser); keeping the persistent profile intact: {e}"
+            )
+            raise
+        _pg_log.warning(f"Chaikin headed login failed; backing up and clearing persistent Chrome profile to self-heal: {e}")
         try:
             backup_dir = os.path.join(os.path.dirname(_CHAIKIN_PROFILE_DIR), "Backup")
             os.makedirs(backup_dir, exist_ok=True)
             stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_dst = os.path.join(backup_dir, f"chaikin_profile_backup_{stamp}")
-            # Safely backup the directory before deletion
-            shutil.copytree(_CHAIKIN_PROFILE_DIR, backup_dst, dirs_exist_ok=True, ignore_errors=True)
-            _pg_log.info(f"Persistent Chrome profile successfully backed up to: {backup_dst}")
+            # Back up the profile before deletion (Mandatory Backup Policy).
+            # (copytree has no ignore_errors kwarg — that's rmtree; any partial-copy
+            # error is caught below and we proceed with the clear as best-effort.)
+            shutil.copytree(_CHAIKIN_PROFILE_DIR, backup_dst, dirs_exist_ok=True)
+            _pg_log.info(f"Persistent Chrome profile backed up to: {backup_dst}")
         except Exception as backup_err:
-            _pg_log.warning(f"Failed to backup Chrome profile before clearing: {backup_err}")
-        
+            _pg_log.warning(f"Failed to back up Chrome profile before clearing: {backup_err}")
         shutil.rmtree(_CHAIKIN_PROFILE_DIR, ignore_errors=True)
         raise
 
