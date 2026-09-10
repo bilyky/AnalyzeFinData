@@ -236,6 +236,14 @@ def main():
             # 2. Run main script to populate Data and Excel
             run_command([sys.executable, "main.py"])
 
+            # 2b. OHLCV recovery pass — repair missing/corrupted/stale Symbol_full files via RapidAPI.
+            #     This is the evening/night task, which is the perfect time to run this heavy sync!
+            _log.info("Running OHLCV recovery pass (rapidapi.py)...")
+            try:
+                run_command([sys.executable, "rapidapi.py"])
+            except Exception as e:
+                _log.warning(f"Warning: OHLCV recovery failed (non-fatal, daily_task continues): {e}")
+
         # 3. Get all processed data
         all_symbols_data = get_all_data(today)
         if not all_symbols_data:
