@@ -1,1 +1,2 @@
 playwright-stealth>=2.0.0
+pyotp>=2.9.0  # software-TOTP MFA for the headless E*TRADE daily token refresh

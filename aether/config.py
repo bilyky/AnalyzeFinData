@@ -57,6 +57,10 @@ class _Config:
         self.etrade_username = os.environ.get("ETRADE_USERNAME") or etrade.get("username", "")
         self.etrade_password = os.environ.get("ETRADE_PASSWORD") or etrade.get("password", "")
         self.etrade_proxy    = os.environ.get("ETRADE_PROXY")    or etrade.get("proxy",    "")
+        # Software TOTP secret (base32) for headless MFA — provisioned once via python-vipaccess
+        # (Symantec VIP type SYMZ) and registered under E*TRADE Security Settings. When set, the
+        # automated daily door self-completes 2FA headlessly instead of hitting an SMS wall.
+        self.etrade_totp_secret = os.environ.get("ETRADE_TOTP_SECRET") or etrade.get("totp_secret", "")
         self.etrade_sandbox_key        = os.environ.get("ETRADE_SANDBOX_KEY")        or sandbox.get("consumer_key",    "")
         self.etrade_sandbox_secret     = os.environ.get("ETRADE_SANDBOX_SECRET")     or sandbox.get("consumer_secret", "")
         self.etrade_production_key     = os.environ.get("ETRADE_PRODUCTION_KEY")     or production.get("consumer_key",    "")
