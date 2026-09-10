@@ -104,3 +104,13 @@ To maintain an adaptive, self-correcting quantitative trading desk, Project AETH
 *   **Phase 4: Dynamic Rejection Rules:** The retrospective analyzer automatically writes these toxic patterns to `Data/failure_dna_rules.json` and outputs a rich, human-readable summary in `Data/retrospective_report.txt`.
 *   **Phase 5: The Autopilot Rejection Guard:** During the daily buy cycle (`_execute_buys` in `ai_portfolio_game.py`), the buy-loop must run `check_failure_rules()` on all prospective candidates, immediately rejecting any stock matching our dynamically generated toxic rules on autopilot!
 
+### 🚨 Strict Ban on Direct Commits/Pushes to Production Branches (The Branch-Safety Lock)
+To prevent accidental direct commits, merges, or pushes to the stable `main` production branch:
+*   **The Mandate:** You are **strictly and absolutely forbidden** from executing any staging (`git add`), committing (`git commit`), or pushing (`git push`) commands on the `main` or `master` branch in any repository **unless the user has explicitly written the exact phrase "main/master direct push" in that exact current turn**.
+*   **The Verification Pass:** Before executing any git write or push operation, you **MUST** run a direct, unmocked shell command (such as `git branch --show-current`) in that exact turn to print the active branch on screen. If the current branch is `main` or `master`, and the user has not written the exact words "main/master direct push", you **MUST** immediately halt, print a branch-safety block, and ask the user which feature or Pull Request branch they would like you to switch to. There are absolutely no exceptions to this safety lock.
+
+### 🛑 Strict Ban on Stale-Data Fallbacks & Stale Trading (The Live-Data Only Mandate)
+To completely prevent automated systems from trading on outdated or stale data, which introduces critical financial risk to the active portfolio:
+*   **The Mandate:** You are **strictly and absolutely forbidden** from implementing, suggesting, or deploying any automated "historical cache fallbacks" or offline trading loops inside Chaikin or E*TRADE modules. If live fetching of Chaikin ratings or E*TRADE pricing fails, the system **MUST fail loudly, crash immediately, and trigger emergency alerts** to a human operator. 
+*   **Zero Silent Decay:** Never attempt to "smooth over" a network or authentication failure by silently loading stale cached files or decaying ratings. It is infinitely safer for the desk to do nothing and halt than to execute trades on stale/fake market data.
+

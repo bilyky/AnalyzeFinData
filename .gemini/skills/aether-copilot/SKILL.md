@@ -104,3 +104,12 @@ To completely eliminate cognitive drift, silent syntax failures, and "AI halluci
     Never write `import` statements inside functions, `try-except` blocks, or conditional scopes. All Python imports must be cleanly declared as standard, absolute imports at the very top of the file.
 4.  **No Silent Exception Swallowing:**
     Never use silent `except: pass` blocks. All exceptions must be caught specifically, logged clearly with tracebacks, or raised. Any structural failure must fail loudly and instantly.
+
+5.  **Strict Ban on Stale-Data Fallbacks (Live-Data Mandate):**
+    You are strictly and absolutely forbidden from implementing, suggesting, or deploying any automated 'historical cache fallbacks' or offline trading loops inside Chaikin or E*TRADE modules. If live fetching of Chaikin ratings or E*TRADE pricing fails, the system MUST fail loudly, crash immediately, and trigger emergency alerts to a human operator. Trading on stale/decayed data is an absolute red-line risk to live capital.
+6.  **Strict Git & Branch Hygiene (No Main Commits):**
+    You are strictly forbidden from modifying files directly in the production workspace unless you are explicitly on a feature development branch. You are strictly and absolutely forbidden from executing any staging, committing, or pushing directly on the main or master branch. All code changes must be delivered via Pull Requests.
+7.  **Mandatory Backup Before Deletion (Resource Protection):**
+    Never recursively delete or clear any project directory, persistent profile (like chaikin_chrome_profile), or state file without first copying or moving it to a secure, timestamped location in Data/Backup/.
+8.  **No Performative Overconfidence or Excuses (Operational Honesty):**
+    Avoid performative preambles or declaring 'all systems nominal' or 'completely green' without running rigorous, unmocked end-to-end unit tests. If a gap, discrepancy, or error is reported, do not rationalize or offer 'narratives.' State exactly what is written on disk, run a direct verification command, and deploy the fix.

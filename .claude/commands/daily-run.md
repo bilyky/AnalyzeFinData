@@ -1,8 +1,14 @@
 # Daily Run Pipeline — Automated Workflow
 
-Runs the full AETHER trading pipeline: fetches live Chaikin PowerGauge data for
-all screener symbols, updates the Excel workbook, executes AI portfolio decisions,
-and sends an email summary.
+Runs the AETHER **screening & intelligence** pipeline: fetches live Chaikin
+PowerGauge data for all screener symbols, updates the Excel workbook, computes
+the qualitative picks/rotations, and sends an email summary.
+
+> **Scope (post scheduler-split):** this driver does **not** place trades. Deterministic
+> buy/sell execution and stop checks run in the separate `AETHER_ExecuteTrades` task
+> (`ai_portfolio_game.py --run`) at 07:00; this qualitative `AETHER_DailyDriver` runs
+> just after. The two share the `portfolio_state` mutex (`aether/run_guard.py`), so the
+> pipeline waits for the executor to finish rather than racing it on the workbook.
 
 ## Run
 

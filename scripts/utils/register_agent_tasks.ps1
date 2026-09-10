@@ -54,7 +54,7 @@ $Tasks = @(
                 $T
             )
         )
-        Prompt   = "Execute the automated skill defined in .claude/commands/watchdog.md"
+        Script   = "venv_new\Scripts\python.exe watchdog.py"
         Log      = "watchdog_agent.log"
         Desc     = "Hourly diagnostics and self-healing loop running 24/7."
     },
@@ -68,18 +68,27 @@ $Tasks = @(
                 $T
             )
         )
-        Prompt   = "Execute the automated skill defined in .claude/commands/intraday-monitor.md"
+        Script   = "venv_new\Scripts\python.exe scripts/utils/intraday_monitor.py"
         Log      = "intraday_monitor_agent.log"
         Desc     = "Real-time risk monitor checking open positions against stop levels every 30 mins."
     },
     @{
-        Name     = "AETHER_DailyDriver"
+        Name     = "AETHER_ExecuteTrades"
         Triggers  = @(
             (New-ScheduledTaskTrigger -Daily -At "7:00 AM")
         )
+        Script   = "venv_new\Scripts\python.exe ai_portfolio_game.py --run"
+        Log      = "execute_trades_agent.log"
+        Desc     = "Fast, 100% deterministic Python task to execute buy/sell trades and check stop-losses at market open."
+    },
+    @{
+        Name     = "AETHER_DailyDriver"
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Daily -At "7:05 AM")
+        )
         Prompt   = "Execute the automated skill defined in .claude/commands/daily-run.md"
         Log      = "daily_driver_agent.log"
-        Desc     = "Core screener, rebalancing, and buy/sell execution pipeline at 7:00 AM PST."
+        Desc     = "Slow, qualitative AI-decision and re-qualification pipeline running at 7:05 AM PST."
     },
     @{
         Name     = "AETHER_PostMarketReporter"
@@ -100,6 +109,15 @@ $Tasks = @(
         Desc     = "Nightly post-market data sync to refresh Chaikin ratings and backfill price caches at 1:30 PM PST."
     },
     @{
+        Name     = "AETHER_Data_Backup"
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Daily -At "3:00 PM")
+        )
+        Script   = "venv_new\Scripts\python.exe scripts/utils/run_data_backup.py"
+        Log      = "data_backup_agent.log"
+        Desc     = "Robocopy synchronization of the local Data folder to the network Storage drive at 3:00 PM PST."
+    },
+    @{
         Name     = "AETHER_RD_Scientist"
         # Saturdays at 10:00 AM
         Triggers  = @(
@@ -117,27 +135,29 @@ $Tasks = @(
         Script   = "venv_new\Scripts\python.exe scripts/diagnostics/preflight_validator.py --email"
         Log      = "preflight_audit.log"
         Desc     = "Nightly pre-flight system diagnostics and connection check at 9:30 PM PST."
+    },
+    @{
+        Name     = "AETHER_Chaikin_Reauth"
+        # Weekly, Sunday 8:00 AM. Proactively re-mints the Chaikin PGR session token
+        # (~7-day JWT) BEFORE it lapses, so the daily pipeline never wakes to a dead token.
+        # It launches a HEADED Chrome (the persistent profile's cf_clearance auto-passes
+        # Turnstile with no human) — so unlike every other task here it MUST run in the
+        # interactive desktop session. That is what the Interactive Principal below enforces
+        # ("run only when the user is logged on"); a hidden/S4U/Session-0 context has no
+        # display and Turnstile would fail. See plans/chaikin_api.md "Credential model".
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Weekly -At "8:00 AM" -DaysOfWeek Sunday)
+        )
+        Script    = "venv_new\Scripts\python.exe scripts/monitoring/chaikin_reauth.py"
+        Log       = "chaikin_reauth_agent.log"
+        Desc      = "Weekly proactive Chaikin PGR token re-auth (headed, no interaction). Runs only when logged on."
+        Principal = (New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited)
     }
 )
 
 
-# Settings: standard reliable settings (wake machine, allow demand run, run missed)
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable   
-
-# Resolve Node and Engine parent directories dynamically to prevent 0x80070002 (File Not Found) in background S4U contexts
-$EngineCmd = Get-Command $Engine -ErrorAction SilentlyContinue
-$NodeCmd = Get-Command "node" -ErrorAction SilentlyContinue
-
-$PathPrefix = ""
-if ($EngineCmd -and $NodeCmd) {
-    $EngineDir = Split-Path -Parent $EngineCmd.Source
-    $NodeDir = Split-Path -Parent $NodeCmd.Source
-    $PathPrefix = "`$env:PATH += ';$EngineDir;$NodeDir'; "
-    Write-Host "Auto-resolved system PATH prefix to: $PathPrefix" -ForegroundColor Green
-} else {
-    Write-Host "Warning: Could not dynamically resolve Engine ($Engine) or Node paths." -ForegroundColor Yellow
-}
-
+# Settings: standard reliable settings (wake machine, allow demand run, run missed, prevent process hangs and skips)
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances StopExisting -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 
 # Iterate and register each task
 foreach ($T in $Tasks) {
@@ -145,15 +165,15 @@ foreach ($T in $Tasks) {
     $PromptPayload = $T.Prompt
     $LogFile = Join-Path $LogDir $T.Log
     
-    # Build the command: cd to repo root, then run either a raw script or the engine+prompt.
+    $Launcher = Join-Path $RepoRoot "run_agent.cmd"
+    # Build the scheduled task action: raw scripts execute via PowerShell; AI agent tasks run via the robust run_agent.cmd launcher
     if ($T.Script) {
         $ExecCmd = "cd '$RepoRoot'; $($T.Script) >> '$LogFile' 2>&1"
+        $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$ExecCmd`""
     } else {
-        $ExecCmd = "$PathPrefix`cd '$RepoRoot'; $Engine $Args -p '$PromptPayload' >> '$LogFile' 2>&1"
+        # Using cmd.exe /c to launch our central environment-healing batch file
+        $Action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"`"$Launcher`" $Engine $Args -p `"$PromptPayload`" >> `"$LogFile`" 2>&1`""
     }
-
-    # Run in a hidden PowerShell window (no visible console) so the scheduled task is non-interactive.
-    $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$ExecCmd`""
     
     Write-Host "Registering task: $TaskName..." -ForegroundColor Yellow
     Write-Host "  Trigger:     $($T.Desc)"
@@ -169,8 +189,19 @@ foreach ($T in $Tasks) {
             }
         }
         
-        # Register the task cleanly under the path \AETHER_Agents\
-        Register-ScheduledTask -TaskName $TaskName -TaskPath "\AETHER_Agents\" -Action $Action -Trigger $T.Triggers -Settings $Settings -Description $T.Desc | Out-Null
+        # Register the task cleanly under the path \AETHER_Agents\.
+        # Most tasks take the default principal; a task may supply its own (e.g. the
+        # Chaikin re-auth needs an Interactive principal so headed Chrome has a desktop).
+        $RegParams = @{
+            TaskName    = $TaskName
+            TaskPath    = "\AETHER_Agents\"
+            Action      = $Action
+            Trigger     = $T.Triggers
+            Settings    = $Settings
+            Description = $T.Desc
+        }
+        if ($T.Principal) { $RegParams.Principal = $T.Principal }
+        Register-ScheduledTask @RegParams | Out-Null
         Write-Host "  [SUCCESS] registered $TaskName successfully." -ForegroundColor Green
     }
     catch {

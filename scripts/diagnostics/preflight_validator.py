@@ -177,7 +177,7 @@ def check_chaikin_api() -> bool:
         return False
 
 
-def check_etrade_api() -> bool:
+def check_etrade_api() -> bool | str:
     """Validate live E*TRADE API OAuth session token validity.
     On weekends (Saturdays and Sundays), since the stock market is closed,
     verification failures are waived to allow reporting/summaries to run.
@@ -192,13 +192,13 @@ def check_etrade_api() -> bool:
         else:
             if is_weekend:
                 _log.console("  ⚠️ E*TRADE: Verification failed, but waiving requirement because today is the weekend (market closed).")
-                return True
+                return "WAIVED"
             _log.console("  ❌ E*TRADE: No valid cached session or headless Playwright login failed.")
             return False
     except Exception as e:
         if is_weekend:
             _log.console(f"  ⚠️ E*TRADE: Active OAuth verification failed ({e}), but waiving requirement because today is the weekend (market closed).")
-            return True
+            return "WAIVED"
         _log.console(f"  ❌ E*TRADE: Active OAuth verification failed: {e}")
         return False
 
@@ -311,7 +311,8 @@ def check_watchdog_health(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
                         except ValueError:
                             last_result = 0
                             
-                        if last_result != 0 and last_result != 267009:
+                        # Allow 0 (success), 267009 (SCHED_S_TASK_RUNNING), and 267011 (SCHED_S_TASK_HAS_NOT_RUN) as valid
+                        if last_result not in (0, 267009, 267011):
                             issues.append(f"Task Scheduler: 'AETHER_Watchdog' last run failed (Exit Code: {last_result_str} / {hex(last_result)}).")
             else:
                 issues.append("Task Scheduler: 'AETHER_Watchdog' task is not found or schtasks query failed.")
@@ -471,8 +472,9 @@ def send_preflight_email(checks, missing_items, active_locks, duration, all_ok, 
         subject = f"🔔 AETHER Pre-Flight Status Briefing: {today}"
 
         def _badge(ok):
+            if ok == "WAIVED":
+                return '<span style="color: #db6d28; font-weight: bold;">[WAIVED]</span>'
             return '<span style="color: #2ea043; font-weight: bold;">[PASS]</span>' if ok else '<span style="color: #f85149; font-weight: bold;">[FAIL]</span>'
-
         def _lock_badge(ok):
             return '<span style="color: #2ea043; font-weight: bold;">[CLEAN]</span>' if ok else '<span style="color: #db6d28; font-weight: bold;">[LOCKED]</span>'
 
@@ -595,7 +597,10 @@ def run_preflight_diagnostics() -> bool:
     _log.console(f"PRE-FLIGHT DIAGNOSTIC SUMMARY (Duration: {duration:.2f}s)")
     _log.console("-" * 70)
     for i, (label, ok, kind) in enumerate(checks, 1):
-        word = ("CLEAN" if ok else "LOCKED") if kind == "lock" else ("PASS" if ok else "FAIL")
+        if ok == "WAIVED":
+            word = "WAIVED"
+        else:
+            word = ("CLEAN" if ok else "LOCKED") if kind == "lock" else ("PASS" if ok else "FAIL")
         _log.console(f"  [{i}] {label:<28}: {word}")
     _log.console("=" * 70)
 

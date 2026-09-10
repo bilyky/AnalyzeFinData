@@ -17,6 +17,7 @@ from pathlib import Path
 import aether_oracle
 from aether.utils import _to_float
 from aether.config import CFG
+from aether.run_guard import DailyRunGuard, RunSkipped
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
 # before the first non-ASCII print. Reduces, not eliminates, cp1252 crashes in
@@ -945,6 +946,7 @@ def is_bottom_confirmed(symbol):
 def update_excel_log(state, new_transactions):
     if not AI_PERF_XLSX.exists():
         return
+    wb = None
     try:
         wb = openpyxl.load_workbook(AI_PERF_XLSX)
         today = str(datetime.date.today())
@@ -958,6 +960,12 @@ def update_excel_log(state, new_transactions):
         wb.save(AI_PERF_XLSX)
     except Exception as e:
         _log.info(f"Failed to update Excel log: {e}")
+    finally:
+        if wb:
+            try:
+                wb.close()
+            except Exception:
+                pass
 
 def get_live_google_price(symbol):
     """Scrape the latest price from Google Finance as a fallback when E*TRADE is unavailable."""
@@ -1152,6 +1160,7 @@ def send_daily_summary(return_html=False):
 
     # Standardize fallback to workbook close prices if E*TRADE renewal fails (e.g. on weekends)
     if not live_prices or any(sym not in live_prices for sym in positions):
+        wb = None
         try:
             wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
             # Use Short_Long sheet if available, as it contains all active portfolio holdings and current prices
@@ -1172,6 +1181,12 @@ def send_daily_summary(return_html=False):
                             live_prices[sym] = row[10] or positions[sym]["cost"]
         except Exception as e:
             _log.warning(f"Workbook fallback failed inside summary: {e}")
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
 
     # Final safety fallback to cost basis if both API and workbook are empty
     for sym in positions:
@@ -2050,6 +2065,11 @@ def run_daily_ai_management(force=False, manual_profile=None):
     except Exception as e:
         _log.exception(f"run_daily_ai_management failed: {e}")
     finally:
+        if "wb" in locals() and wb:
+            try:
+                wb.close()
+            except Exception:
+                pass
         if state is not None:
             save_game(state)
             update_excel_log(state, new_transactions)
@@ -2125,12 +2145,29 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.run:
-        run_daily_ai_management(force=args.force, manual_profile=args.profile)
-        send_consolidated_morning_report()
+        # Single-executor guard. The state mutex ("portfolio_state") serialises
+        # this deterministic executor against the AI pipeline (autonomous_pipeline.py)
+        # so the two never touch state_of_the_day.xlsx concurrently — a fixed
+        # scheduler gap is not a dependency, this lock is. The once-per-trading-day
+        # stamp makes a duplicate 07:00 fire from a second task registrar
+        # (AETHER_ExecuteTrades vs AnalyzeFinData_AI_Game) a no-op, so trades
+        # execute exactly once. A deliberate manual --force bypasses the day-stamp
+        # (human override) but never the mutex — overlap is never allowed.
         try:
-            watchdog.sync_data_folder()
-        except Exception as e:
-            _log.warning(f"Post-run sync failed: {e}")
+            with DailyRunGuard(
+                "portfolio_state",
+                stamp=None if args.force else "trade_execution",
+                wait_timeout=7200,
+            ):
+                run_daily_ai_management(force=args.force, manual_profile=args.profile)
+                send_consolidated_morning_report()
+                try:
+                    watchdog.sync_data_folder()
+                except Exception as e:
+                    _log.warning(f"Post-run sync failed: {e}")
+        except RunSkipped as e:
+            _log.info(f"Trade execution skipped — {e}. Another scheduler already ran "
+                      "it today, or the state is busy (single-executor guard).")
     elif args.summary:
         send_daily_summary()
         try:

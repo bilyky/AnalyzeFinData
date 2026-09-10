@@ -49,22 +49,55 @@ session probe reports `unreachable`/`invalid` until the key is set.
 
 ## Credential model
 
-`sessionToken` is the durable refresh credential (live tokens expire ~7 days out).
-The app mints a per-run session via
-`GET /api/authenticate/getJWTAuthorization?jwtToken=<sessionToken>`. The captured
-`sessionKey` + `sessionToken` + `email` also work directly on data calls, which is
-what `session.json` holds:
+There are two credentials with very different lifetimes, and the durable one is
+**not** the JWT:
+
+- **`sessionToken`** (`jwttoken`) — a 420-char JWT that expires **~7 days** out. It is
+  the in-window refresh credential, but it lapses weekly, so it is *not* the thing that
+  keeps auth alive long-term.
+- **`cf_clearance`** — the Cloudflare clearance cookie in the persistent Chrome profile
+  (`Data/chaikin_chrome_profile`), lifetime **~355 days**, re-minted on each successful
+  login. This is the real durable credential: a profile that logs in regularly stays
+  warm ~indefinitely, and its presence is what lets a *headed* browser pass Turnstile
+  with no human.
+
+The captured `sessionKey` + `sessionToken` + `email` also work directly on data calls,
+which is what `session.json` holds:
 
 ```
 session.json = { jsessionid: <sessionKey>, jwttoken: <sessionToken>, uuid: <email> }
 ```
 
-A fully headless refresh (mint a fresh `sessionKey` from `sessionToken` with no
-browser) is **not yet confirmed** — a bare replay of `getJWTAuthorization` returned
-403; it likely also needs the session headers. Not blocking while the captured
-token has runway. Tokens are captured via a warm, human-logged-in Chrome over CDP
-(`scripts/diagnostics/chaikin_cdp_attach_capture.py`); the CAPTCHA is never
-automated.
+### Refresh ladder (`powergauge.ensure_valid_session`)
+
+1. **In-window (no browser).** While the `sessionToken` is still valid, mint a fresh
+   `sessionKey` via
+   `GET /api/authenticate/getJWTAuthorization?acquireSessionForcibly=Yes&jwtToken=<sessionToken>`.
+   **Verified live (2026-09-09):** this returns a session **only** when the call carries
+   `acquireSessionForcibly=Yes` **and** the current session headers
+   (`jwttoken`/`jsessionid`/`x-session-id`/`uuid`) alongside `x-api-key`/`x-app-id`/UA.
+   `x-api-key`+`x-app-id` alone return HTTP 200 with an **empty** `sessionId`/
+   `omniSessionKey`. The response `sessionId` == `omniSessionKey` (24-char) is the new
+   `jsessionid`. This is `powergauge._jwt_to_session_id(session)`. A 200-but-empty
+   response means the `sessionToken` itself expired → returns `""` → fall to step 2.
+2. **sessionToken expired (weekly, no human).** `_login_via_browser` launches a **headed**
+   Chrome via `launch_persistent_context(Data/chaikin_chrome_profile)`. The profile's
+   `cf_clearance` makes Turnstile auto-pass, so the login self-completes and mints a fresh
+   7-day `sessionToken`. **Headless FAILS** the same flow even with `cf_clearance` (the
+   fingerprint trips Turnstile). It needs a desktop session but no interaction. A weekly
+   scheduled task (`scripts/monitoring/chaikin_reauth.py`) runs this proactively — calling
+   `_login_via_browser(headless=False)` directly — so the token never lapses.
+
+   `login()` picks headed vs headless by its `interactive` flag: an interactive/desktop
+   run is **headed** (as above), while the automated ranking-path renewer
+   (`login(interactive=False)`) is **headless** so it *fast-fails* rather than hanging ~60s
+   on Turnstile before the circuit breaker trips — that reactive path can't solve Turnstile
+   anyway, so re-minting is left to the proactive headed task. `CHAIKIN_HEADLESS_LOGIN`
+   overrides either way (`1/true/yes` forces headless, `0/false/no` forces headed).
+3. **cf_clearance expired (~yearly) or Turnstile blocks.** The circuit breaker trips and
+   one throttled email alert is sent; a human logs in once (headed) to re-warm the
+   profile. Tokens can also be captured via a warm, human-logged-in Chrome over CDP
+   (`scripts/diagnostics/chaikin_cdp_attach_capture.py`); the CAPTCHA is never automated.
 
 ## Adapter: new bundle → legacy schema
 

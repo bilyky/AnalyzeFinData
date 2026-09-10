@@ -34,16 +34,17 @@ TASKS = ["AnalyzeFinData_Morning", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_
 SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
 
 python_exe = sys.executable
+run_agent = BASE_DIR / "run_agent.cmd"
 _TASK_DEFS = {
-    "AnalyzeFinData_Morning":  (f"'{python_exe}' '{BASE_DIR / 'autonomous_pipeline.py'}'", "daily", "05:30"),
-    "AnalyzeFinData_Evening":  (f"'{python_exe}' '{BASE_DIR / 'daily_task.py'}'",           "daily", "17:00"),
-    "AnalyzeFinData_AI_Game":  (f"'{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --run", "daily", "07:00"),
-    "AnalyzeFinData_AI_Summary": (f"'{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --summary", "daily", "18:00"),
+    "AnalyzeFinData_Morning":  (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'autonomous_pipeline.py'}'", "daily", "05:30"),
+    "AnalyzeFinData_Evening":  (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'daily_task.py'}'",           "daily", "17:00"),
+    "AnalyzeFinData_AI_Game":  (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --run", "daily", "07:00"),
+    "AnalyzeFinData_AI_Summary": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --summary", "daily", "18:00"),
     # Unattended daily E*TRADE re-auth at 05:15 — just before the 05:30 Morning pipeline so the
     # token is fresh for it. Renew-first + trusted-profile-only + once/day: ≤1 browser/day, and
     # none at all once trust lapses (it latches sms_required and emails/pushes for a human).
-    "AnalyzeFinData_ETrade_Reauth": (f"'{python_exe}' '{BASE_DIR / 'server.py'}' etrade-reauth --scheduled", "daily", "05:15"),
-    "Project_AETHER_Watchdog": (f"'{python_exe}' '{BASE_DIR / 'watchdog.py'}'",              "hourly", None),
+    "AnalyzeFinData_ETrade_Reauth": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'server.py'}' etrade-reauth --scheduled", "daily", "05:15"),
+    "Project_AETHER_Watchdog": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'watchdog.py'}'",              "hourly", None),
 }
 
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
@@ -54,8 +55,8 @@ SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 # Placeholders: {prompt} (inline text) or {prompt_file} (safe text file path, highly recommended for Windows).
 _CLAUDE_EXE = os.path.expandvars(r"%USERPROFILE%\.gnai\claude\claude.exe")
 _DEFAULT_HEALER = (
-    f'"{_CLAUDE_EXE}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep"'
-    ' --approval-mode acceptEdits'
+    f'"{_CLAUDE_EXE}" --allowedTools "Read,Glob,Grep"'
+    ' --approval-mode plan'
     ' -p "{prompt_file}"'
 )
 HEALER_CMD_TEMPLATE = os.environ.get("AETHER_HEALER_CMD", _DEFAULT_HEALER)
@@ -109,7 +110,7 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
     try:
         with open(AETHER_JSONL, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
-        for line in lines[-200:]:  # recent enough window for structured log
+        for line in reversed(lines):  # Scan backwards to handle high volume log files efficiently
             line = line.strip()
             if not line:
                 continue
@@ -117,9 +118,24 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            
+            ts_str = entry.get("ts", "")
+            # Since the log is chronological, if we encounter an entry older than 2 hours,
+            # we can stop scanning backwards.
+            if ts_str:
+                parsed_t = None
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+                    try:
+                        parsed_t = datetime.datetime.strptime(ts_str[:19], fmt)
+                        break
+                    except ValueError:
+                        continue
+                if parsed_t and (now - parsed_t).total_seconds() > 7200:
+                    break
+
             if entry.get("level", "").upper() != "ERROR":
                 continue
-            if not _within_window(entry.get("ts", ""), now):
+            if not _within_window(ts_str, now):
                 continue
             module = entry.get("module", "")
             msg = entry.get("msg", "")
@@ -130,6 +146,8 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
                 # Include just the last line of the traceback
                 detail += f" | {exc.strip().splitlines()[-1]}"
             errors.append(f"[{module}] {msg}{detail}")
+        
+        errors.reverse()  # Restore chronological order
     except Exception as e:
         _log.warning("Failed to scan structured log", extra={"error": str(e)})
     return errors
@@ -190,6 +208,7 @@ def trigger_ai_self_healing(traceback):
             prompt_file=str(SELF_HEAL_PROMPT_FILE)
         )
         _log.console(f"🚀 [AETHER BRAIN] Dispatching self-healing command (prompt written to file)")
+        
         result = subprocess.run(
             cmd,
             shell=True,
@@ -350,13 +369,23 @@ def heal_tasks(missing_tasks, force=False):
         tr, sc, st = _TASK_DEFS[task]
         # Use absolute task path starting with backslash to prevent folder-relative registration failures
         abs_task = f"\\{task}" if not task.startswith("\\") else task
-        args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/np", "/ru", run_as]
+        # E*TRADE re-auth MUST run headed in an interactive desktop session (no /np, use /it)
+        if "etrade_reauth" in task.lower():
+            args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/it", "/ru", run_as]
+        else:
+            args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/np", "/ru", run_as]
         if st:
             args += ["/st", st]
         try:
             result = subprocess.run(args, capture_output=True)
             if result.returncode == 0:
                 _log.info(f"✅ Task {task} successfully registered with native UTF-8 environment.")
+                # Apply advanced reliability settings (WakeToRun, StartWhenAvailable, StopExisting, ExecutionTimeLimit) via PowerShell
+                ps_cmd = [
+                    "powershell.exe", "-NoProfile", "-Command",
+                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances StopExisting -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) -ErrorAction SilentlyContinue"
+                ]
+                subprocess.run(ps_cmd, capture_output=True)
             else:
                 _log.error(f"❌ schtasks failed for {task} (rc={result.returncode}): {result.stderr.decode(errors='replace').strip()}")
         except Exception as e:
@@ -417,8 +446,14 @@ def sync_data_folder() -> bool:
         dst_path.mkdir(parents=True, exist_ok=True)
         _log.console(f"🔄 Syncing Data folder to: {dst} ...")
         # Use /E (recursive copy, NO DELETIONS) instead of /MIR to prevent data loss on backup drive.
-        cmd = ["robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS"]
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=120)
+        # Exclude only the live chrome profile: robocopy locks/fails on its open files
+        # (Default/Crashpad/GPUPersistentCache). The Symbol/Symbol_full caches stay in the
+        # backup — the raised 600s timeout (PR #64) absorbs their volume.
+        cmd = [
+            "robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS",
+            "/XD", "etrade_chrome_profile"
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=600)
         if result.returncode < 8:
             _log.info(f"✅ Data folder successfully synchronized to {dst}.")
             return True
@@ -426,19 +461,19 @@ def sync_data_folder() -> bool:
             _log.error(f"❌ Robocopy sync failed (rc={result.returncode}). Stderr: {result.stderr.strip()}")
             return False
     except subprocess.TimeoutExpired:
-        _log.warning("⚠️ Data folder sync timed out (120s limit reached). This is an incomplete backup.")
+        _log.warning("⚠️ Data folder sync timed out (600s limit reached). This is an incomplete backup.")
         return False # Treat timeout as a failure, not a success, per mandatory backup policy
     except Exception as e:
         _log.error(f"❌ Failed to sync Data folder to Z: drive: {e}", exc_info=True)
         return False
 
 def is_pid_running(pid: int) -> bool:
-    """Return True if a process with the given PID is actively running on Windows."""
+    """Return True if a python process with the given PID is actively running on Windows."""
     if pid <= 0:
         return False
     try:
         res = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, errors="replace")
-        return "No tasks" not in res.stdout and str(pid) in res.stdout
+        return "No tasks" not in res.stdout and str(pid) in res.stdout and "python" in res.stdout.lower()
     except Exception:
         return False
 
@@ -566,26 +601,21 @@ def run_watchdog():
     # 6. Re-Audit Logs after the fix
     remaining_errors = check_logs()
     
-    # 6.5. Run Backup Sync and Monitor Success/Errors
-    sync_success = sync_data_folder()
-    
     # Check if there are any active issues left
     issues = []
     if remaining_errors and not ai_triggered: # If we self-healed, the old log errors are still there, so we ignore them for the "issues" list
         issues.append("REMAINING LOG ERRORS:\n" + "\n".join(remaining_errors))
     if data_issue: 
         issues.append(data_issue)
-    if not sync_success:
-        issues.append("CRITICAL: Network Backup Data Sync Failed!")
 
     # 7. Construct the Consolidated HTML Recovery Report (The Final Step!)
-    # We send an email if a healing action occurred, an AI healer triggered, there are active code errors in the logs, or the backup sync failed.
-    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered) or not sync_success:
+    # We send an email if a healing action occurred, an AI healer triggered, or there are active code errors in the logs.
+    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered):
         _log.console("Healer cycle complete. Constructing consolidated recovery report...")
         
         # Color badges
-        status_color = "#27ae60" if compilation_passed and sync_success else "#c0392b"
-        status_text = "NOMINAL (HEALED)" if compilation_passed and sync_success else "MANUAL INTERVENTION REQUIRED"
+        status_color = "#27ae60" if compilation_passed else "#c0392b"
+        status_text = "NOMINAL (HEALED)" if compilation_passed else "MANUAL INTERVENTION REQUIRED"
         
         # Clean console log for email (last 2000 chars to avoid size limits)
         trimmed_console_log = ai_console_log[-2000:] if ai_console_log else "No AI logs available."
@@ -628,13 +658,6 @@ def run_watchdog():
                 <pre style="background: #f1f2f6; color: #2c3e50; padding: 12px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; overflow-x: auto; font-family: monospace;">{validation_output}</pre>
             </div>
 
-            <!-- SECTION 3b: DATA BACKUP SYNC STATUS -->
-            <div style="background: {'#f9f9f9' if sync_success else '#fdf2f2'}; border-left: 5px solid {'#34495e' if sync_success else '#ec5b5b'}; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
-                <h3 style="margin-top: 0; color: {'#34495e' if sync_success else '#c0392b'}; font-size: 15px;">📁 3b. DATA BACKUP SYNC STATUS:</h3>
-                <p style="font-size: 13px; font-weight: bold;">Backup Location: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">\\\\10.0.0.156\\Storage\\Yura\\Develop\\StockTrading\\AnalyzeFinData\\Data</span></p>
-                <p style="font-size: 13px; font-weight: bold;">Sync Status: <span style="color: {'#27ae60' if sync_success else '#c0392b'}; font-size: 14px;">{'SUCCESS / NOMINAL' if sync_success else 'FAILED / SYNC ERROR'}</span></p>
-            </div>
-
             <!-- SECTION 4: NEXT STEPS -->
             <div style="background: #fff9db; border-left: 5px solid #f59f00; padding: 15px; margin-bottom: 30px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #f08c00; font-size: 15px;">🏁 4. RESULTS & NEXT STEPS:</h3>
@@ -643,7 +666,6 @@ def run_watchdog():
                     {'<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>' if compilation_passed else ''}
                     {'<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>' if ai_triggered else ''}
                     {'<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>' if not compilation_passed else ''}
-                    {f'<li><b>Backup Status:</b> Robocopy sync completed successfully.</li>' if sync_success else '<li><b>Backup Status Alert:</b> robocopy was unable to push updates to \\\\10.0.0.156\\Storage\\ - check server connection.</li>'}
                 </ul>
             </div>
 
