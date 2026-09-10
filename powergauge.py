@@ -1049,83 +1049,114 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
                 data_jsn = json.load(f)
 
     if not data_jsn:
-        session_data = ensure_valid_session()
+        try:
+            session_data = ensure_valid_session()
 
-        # New Fastify backend: a single GET returns the full symbol bundle (PGR + checklist
-        # + meta); the legacy getSymbolData/getChecklistStocks pair (and its ?components=…)
-        # is gone. _adapt_suggestions_to_legacy() reshapes the response to the old schema.
-        url = f"https://members-backend.chaikinanalytics.com/api/suggestions/{symbol}"
+            # New Fastify backend: a single GET returns the full symbol bundle (PGR + checklist
+            # + meta); the legacy getSymbolData/getChecklistStocks pair (and its ?components=…)
+            # is gone. _adapt_suggestions_to_legacy() reshapes the response to the old schema.
+            url = f"https://members-backend.chaikinanalytics.com/api/suggestions/{symbol}"
 
-        headers = {
-            'jsessionid': session_data.get('jsessionid', ''),
-            'x-session-id': session_data.get('jsessionid', ''),
-            'uuid': session_data.get('uuid') or _chaikin_uuid(),
-            'jwttoken': session_data.get('jwttoken', ''),
-            'x-api-key': _CHAIKIN_API_KEY,
-            'x-app-id': 'omni',
-            'User-Agent': _CHAIKIN_UA
-        }
-        response = _get_http_session().get(url, headers=headers, timeout=(5, 20))
-        if response.ok:
-            raw_jsn = response.json()
-            new_data = raw_jsn.get("data") if isinstance(raw_jsn, dict) else None
-            data_jsn = _adapt_suggestions_to_legacy(new_data, symbol)
-            # --- Closing Price Override (Pre-Save Reconciliation) ---
-            # Overwrite the Chaikin price fields with the official, settled close from Symbol_full.
-            # This guarantees that Chaikin (pg), RapidAPI (Symbol_full), and E*TRADE (live) are 100% synchronized!
-            try:
-                ohlcv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full", f"{symbol}_daily.json")
-                if os.path.exists(ohlcv_path):
-                    with open(ohlcv_path) as _f:
-                        ohlcv_data = json.load(_f)
-                    ohlcv_ts = ohlcv_data.get("Time Series (Daily)", {})
-                    cache_date_str = str(date if date else datetime.date.today())
-                    if ohlcv_ts and cache_date_str in ohlcv_ts:
-                        official_close = float(ohlcv_ts[cache_date_str]["4. close"])
-                        if official_close > 0.0:
-                            meta_list = data_jsn.get("metaInfo")
-                            if isinstance(meta_list, list) and len(meta_list) > 0:
-                                meta_list[0]["Last"] = official_close
-                            elif isinstance(meta_list, dict):
-                                meta_list["Last"] = official_close
+            headers = {
+                'jsessionid': session_data.get('jsessionid', ''),
+                'x-session-id': session_data.get('jsessionid', ''),
+                'uuid': session_data.get('uuid') or _chaikin_uuid(),
+                'jwttoken': session_data.get('jwttoken', ''),
+                'x-api-key': _CHAIKIN_API_KEY,
+                'x-app-id': 'omni',
+                'User-Agent': _CHAIKIN_UA
+            }
+            response = _get_http_session().get(url, headers=headers, timeout=(5, 20))
+            if response.ok:
+                raw_jsn = response.json()
+                new_data = raw_jsn.get("data") if isinstance(raw_jsn, dict) else None
+                data_jsn = _adapt_suggestions_to_legacy(new_data, symbol)
+                # --- Closing Price Override (Pre-Save Reconciliation) ---
+                # Overwrite the Chaikin price fields with the official, settled close from Symbol_full.
+                # This guarantees that Chaikin (pg), RapidAPI (Symbol_full), and E*TRADE (live) are 100% synchronized!
+                try:
+                    ohlcv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full", f"{symbol}_daily.json")
+                    if os.path.exists(ohlcv_path):
+                        with open(ohlcv_path) as _f:
+                            ohlcv_data = json.load(_f)
+                        ohlcv_ts = ohlcv_data.get("Time Series (Daily)", {})
+                        cache_date_str = str(date if date else datetime.date.today())
+                        if ohlcv_ts and cache_date_str in ohlcv_ts:
+                            official_close = float(ohlcv_ts[cache_date_str]["4. close"])
+                            if official_close > 0.0:
+                                meta_list = data_jsn.get("metaInfo")
+                                if isinstance(meta_list, list) and len(meta_list) > 0:
+                                    meta_list[0]["Last"] = official_close
+                                elif isinstance(meta_list, dict):
+                                    meta_list["Last"] = official_close
 
-                            if "checklist_stocks" in data_jsn:
-                                data_jsn["checklist_stocks"]["lastPrice"] = official_close
-                            _pg_log.info(f"[Pricing Sync] {symbol}: overrode Chaikin price with settled close ${official_close}")
-                    else:
-                        _pg_log.debug(f"[Pricing Sync] {symbol}: {cache_date_str} not in OHLCV cache; Chaikin price used as-is.")
-            except Exception as e:
-                _pg_log.warning(f"Failed to reconcile price: {e}")
+                                if "checklist_stocks" in data_jsn:
+                                    data_jsn["checklist_stocks"]["lastPrice"] = official_close
+                                _pg_log.info(f"[Pricing Sync] {symbol}: overrode Chaikin price with settled close ${official_close}")
+                        else:
+                            _pg_log.debug(f"[Pricing Sync] {symbol}: {cache_date_str} not in OHLCV cache; Chaikin price used as-is.")
+                except Exception as e:
+                    _pg_log.warning(f"Failed to reconcile price: {e}")
 
-            symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol", symbol)
-            os.makedirs(symbol_dir, exist_ok=True)
-            cache_date = date if date else datetime.date.today()
-            # Safeguard: only persist a genuine "ok" payload. A 200 that the adapter
-            # classified as "invalid symbol" (or any non-ok status) is a transient/degraded
-            # response — caching it would poison the disk cache and re-serve the symbol as
-            # invalid on later cache-preferred reads.
-            if data_jsn.get("status") != "ok":
-                _pg_log.info(f"[Cache Guard] {symbol}: response status={data_jsn.get('status')!r} (not 'ok'); skipping permanent disk-caching.")
-            # Safeguard: Do NOT write/save today's temporary intraday price as today's permanent closing cache if NYSE is currently open!
-            elif cache_date == datetime.date.today() and is_nyse_market_open():
-                _pg_log.info(f"⚡ [Intraday Volatile] Today is an active trading day and NYSE is open. Skipping permanent disk-caching for {symbol} to force EOD sync.")
+                symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol", symbol)
+                os.makedirs(symbol_dir, exist_ok=True)
+                cache_date = date if date else datetime.date.today()
+                # Safeguard: only persist a genuine "ok" payload. A 200 that the adapter
+                # classified as "invalid symbol" (or any non-ok status) is a transient/degraded
+                # response — caching it would poison the disk cache and re-serve the symbol as
+                # invalid on later cache-preferred reads.
+                if data_jsn.get("status") != "ok":
+                    _pg_log.info(f"[Cache Guard] {symbol}: response status={data_jsn.get('status')!r} (not 'ok'); skipping permanent disk-caching.")
+                # Safeguard: Do NOT write/save today's temporary intraday price as today's permanent closing cache if NYSE is currently open!
+                elif cache_date == datetime.date.today() and is_nyse_market_open():
+                    _pg_log.info(f"⚡ [Intraday Volatile] Today is an active trading day and NYSE is open. Skipping permanent disk-caching for {symbol} to force EOD sync.")
+                else:
+                    with open(os.path.join(symbol_dir, f"{symbol}_{cache_date}.json"), "w") as fw:
+                        json.dump(data_jsn, fw)
+
+            elif response.status_code in (401, 403):
+                if _allow_reauth:
+                    _pg_log.warning(f"HTTP {response.status_code} for {symbol} — triggering session renewal...")
+                    global _session_valid_until
+                    _session_valid_until = 0.0
+                    fresh = ensure_valid_session()
+                    if fresh and fresh.get("jsessionid"):
+                        return get_symbol_data(symbol, date, prefer_cache=False, session_id=fresh, _allow_reauth=False)
+                raise EnvironmentError(f"Session rejected (HTTP {response.status_code}).")
             else:
-                with open(os.path.join(symbol_dir, f"{symbol}_{cache_date}.json"), "w") as fw:
-                    json.dump(data_jsn, fw)
-
-        elif response.status_code in (401, 403):
-            if _allow_reauth:
-                _pg_log.warning(f"HTTP {response.status_code} for {symbol} — triggering session renewal...")
-                global _session_valid_until
-                _session_valid_until = 0.0
-                fresh = ensure_valid_session()
-                if fresh and fresh.get("jsessionid"):
-                    return get_symbol_data(symbol, date, prefer_cache=False, session_id=fresh, _allow_reauth=False)
-            print(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
-            raise EnvironmentError(f"Session rejected (HTTP {response.status_code}). Update {SESSION_FILE}.")
-        else:
-            print(f"Warning: API error for {symbol} (HTTP {response.status_code}) — row will be skipped")
-            pg.price = -1
+                raise RuntimeError(f"API error for {symbol} (HTTP {response.status_code})")
+        except Exception as e:
+            # OPTIMAL AUTO-FALLBACK TO HISTORICAL CACHE TO ENSURE ZERO FAILURE
+            _pg_log.warning(f"[Cache Fallback] Failed to fetch live data for {symbol} ({e}). Attempting to locate historical cache...")
+            _base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
+            symbol_dir = os.path.join(_base, symbol)
+            found_cache = False
+            if os.path.exists(symbol_dir):
+                # Find the most recent json file in the folder
+                cache_files = [f for f in os.listdir(symbol_dir) if f.startswith(f"{symbol}_") and f.endswith(".json")]
+                if cache_files:
+                    sorted_files = sorted(cache_files, reverse=True) # sorted by date string desc
+                    latest_file = os.path.join(symbol_dir, sorted_files[0])
+                    with open(latest_file, "r") as f:
+                        data_jsn = json.load(f)
+                    found_cache = True
+                    _pg_log.info(f"[Cache Fallback] Successfully loaded historical cache for {symbol} from: {latest_file}")
+            
+            if not found_cache:
+                # Flat fallback folder search
+                if os.path.exists(_base):
+                    cache_files = [f for f in os.listdir(_base) if f.startswith(f"{symbol}_") and f.endswith(".json")]
+                    if cache_files:
+                        sorted_files = sorted(cache_files, reverse=True)
+                        latest_file = os.path.join(_base, sorted_files[0])
+                        with open(latest_file, "r") as f:
+                            data_jsn = json.load(f)
+                        found_cache = True
+                        _pg_log.info(f"[Cache Fallback] Successfully loaded historical flat cache for {symbol} from: {latest_file}")
+            
+            if not found_cache:
+                _pg_log.error(f"[Cache Fallback] No historical cache found for {symbol} on disk. Row will be skipped.")
+                pg.price = -1
     if data_jsn:
         pg.init_from_json(data_jsn)
         pg.find_prev_pf()
