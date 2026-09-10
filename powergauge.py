@@ -820,15 +820,18 @@ def _login_via_browser(headless: bool = False) -> dict:
 
             # Wait for Turnstile to enable the submit button (auto-verifies with a warm
             # profile; a human can click the widget in the rare cold-profile case).
+            # Shorten timeout in headless mode to enforce a true fast-fail and prevent hangs.
             print("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
-            page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=60000)
+            turnstile_timeout = 10000 if headless else 60000
+            page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=turnstile_timeout)
             page.click('button[type="submit"]')
 
             print("Waiting for login to complete (up to 60s)...")
             try:
+                login_timeout = 10000 if headless else 60000
                 page.wait_for_function(
                     "window.location.pathname !== '/login'",
-                    timeout=60000
+                    timeout=login_timeout
                 )
             except Exception:
                 pass
