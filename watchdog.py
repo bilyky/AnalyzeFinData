@@ -266,6 +266,9 @@ def check_task_scheduler():
                         # 0 = Success, 267011 = Has not run (new), 267008 = Running, 267012 = Queued
                         if res_code not in (0, 267011, 267008, 267012):
                             _log.error(f"🛑 [Scheduler Audit] Task '{task}' failed on its last execution (Exit Code: {res_code}).")
+                            # Add failed tasks to the returned missing list so the watchdog immediately
+                            # triggers alerts, emails the report, and re-registers the failed task to heal it.
+                            missing.append(task)
                     except ValueError:
                         pass
         except OSError:
