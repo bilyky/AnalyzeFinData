@@ -199,6 +199,20 @@ class _Config:
         # write to the cap vs -0.046% mid-conviction). Tunable via AETHER_CC_L60_CEILING.
         self.system_covered_call_l60_ceiling = float(os.environ.get("AETHER_CC_L60_CEILING") or system.get("cc_l60_ceiling", 6.0))
 
+        # ── Defensive Risk-Management Overlay (generalized A/B/C family) ─────────
+        # ONE shared namespace so the three capital-preservation rules read as a single
+        # capability, each key consumed at exactly one home: Rule C -> the credit-spread
+        # builders in aether/options_adviser.py; Rule B -> risk_utils.scale_out_plan;
+        # Rule A -> circuit_breaker's principal floor (B/A keys added on their own branches).
+        # Env AETHER_OVERLAY_* -> config.json "overlay" -> default. Every default is
+        # backtest-gated; see scripts/backtesting/*_study.py.
+        overlay = raw.get("overlay") or {}
+        # Rule C — bull-put / bear-call OTM vertical credit spreads. Short strike OTM
+        # distance and spread width as fractions of spot. Defaults = the credit_spread_study.py
+        # best cell (bull-put otm=0.15, width=0.05: win 86.5%, E[ror] +0.041, t=36.3, n=114,679).
+        self.overlay_credit_spread_otm_pct   = float(os.environ.get("AETHER_OVERLAY_CREDIT_SPREAD_OTM_PCT")   or overlay.get("credit_spread_otm_pct",   0.15))
+        self.overlay_credit_spread_width_pct = float(os.environ.get("AETHER_OVERLAY_CREDIT_SPREAD_WIDTH_PCT") or overlay.get("credit_spread_width_pct", 0.05))
+
         # ── Configuration Health Checks ───────────────────────────────────────
         self.verify_config_health()
 
