@@ -39,6 +39,27 @@ def _load_file() -> dict:
         raise RuntimeError(f"config.json is malformed: {e}") from e
 
 
+def _num_list(env_val, file_val, default):
+    """Parse a numeric list from (in priority order) an env JSON string, a config
+    list, or the hard default. Any malformed / non-numeric source is skipped and the
+    next one tried, so a bad env override can never crash config load."""
+    for candidate in (env_val, file_val):
+        if candidate is None or candidate == "":
+            continue
+        seq = candidate
+        if isinstance(candidate, str):
+            try:
+                seq = json.loads(candidate)
+            except (json.JSONDecodeError, ValueError):
+                continue
+        if isinstance(seq, (list, tuple)) and seq:
+            try:
+                return [float(x) for x in seq]
+            except (TypeError, ValueError):
+                continue
+    return list(default)
+
+
 class _Config:
     def __init__(self):
         raw = _load_file()
@@ -198,6 +219,30 @@ class _Config:
         # zone (+6.0) from covered_call_winner_study.py (the >50%-momentum cohort loses -0.488%/
         # write to the cap vs -0.046% mid-conviction). Tunable via AETHER_CC_L60_CEILING.
         self.system_covered_call_l60_ceiling = float(os.environ.get("AETHER_CC_L60_CEILING") or system.get("cc_l60_ceiling", 6.0))
+
+        # ── Defensive Risk-Management Overlay (generalized A/B/C capability family) ──
+        # One shared namespace so every member of the capital-preservation family reads
+        # the same knobs. Rule B (Bank-As-You-Go scale-out) keys this pass; Rule C
+        # (credit-spread) and Rule A (principal-floor) keys land on their own branches.
+        overlay = raw.get("overlay") or {}
+        # Rule B — scale-out ladder: bank a fraction of a winning lot at each ATR-scaled
+        # profit tier, trail the residual. `tiers` (ATR multiples) and `fracs` (fraction
+        # of the ORIGINAL lot banked at that tier) are parallel lists; defaults are the
+        # study-validated ladder (Data/scale_out_study.json: variance -76%, ~0 mean cost).
+        self.overlay_scale_out_tiers = _num_list(
+            os.environ.get("AETHER_OVERLAY_SCALE_OUT_TIERS"),
+            overlay.get("scale_out_tiers"), [1.5, 3.0])
+        self.overlay_scale_out_fracs = _num_list(
+            os.environ.get("AETHER_OVERLAY_SCALE_OUT_FRACS"),
+            overlay.get("scale_out_fracs"), [0.30, 0.30])
+        # Guard: parallel lists, each fraction in (0, 1], cumulative <= 1.0. A malformed
+        # ladder falls back to the defaults rather than banking a nonsensical amount.
+        if (len(self.overlay_scale_out_tiers) != len(self.overlay_scale_out_fracs)
+                or not self.overlay_scale_out_tiers
+                or any(f <= 0 for f in self.overlay_scale_out_fracs)
+                or sum(self.overlay_scale_out_fracs) > 1.0 + 1e-9):
+            self.overlay_scale_out_tiers = [1.5, 3.0]
+            self.overlay_scale_out_fracs = [0.30, 0.30]
 
         # ── Configuration Health Checks ───────────────────────────────────────
         self.verify_config_health()
