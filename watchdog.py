@@ -240,7 +240,7 @@ def trigger_ai_self_healing(traceback):
         return False, f"Execution failure: {e}", str(e)
 
 def check_task_scheduler():
-    """Verify all AETHER tasks are present and active."""
+    """Verify all AETHER tasks are present and active, and check for execution failures."""
     missing = []
     for task in TASKS:
         # Use absolute task path starting with backslash to prevent folder-relative lookup failures
@@ -253,6 +253,21 @@ def check_task_scheduler():
                 output = f"{result.stdout or ''} {result.stderr or ''}".lower()
                 if "cannot find" in output or "not find" in output:
                     missing.append(task)
+            else:
+                # Query LastTaskResult via PowerShell to catch silent crashes/terminations
+                ps_cmd = [
+                    "powershell.exe", "-NoProfile", "-Command",
+                    f"(Get-ScheduledTask -TaskName '{task}' -TaskPath '\\AETHER_Agents\\' -ErrorAction SilentlyContinue | Get-ScheduledTaskInfo).LastTaskResult"
+                ]
+                ps_res = subprocess.run(ps_cmd, capture_output=True, text=True, errors="replace")
+                if ps_res.returncode == 0:
+                    try:
+                        res_code = int(ps_res.stdout.strip())
+                        # 0 = Success, 267011 = Has not run (new), 267008 = Running, 267012 = Queued
+                        if res_code not in (0, 267011, 267008, 267012):
+                            _log.error(f"🛑 [Scheduler Audit] Task '{task}' failed on its last execution (Exit Code: {res_code}).")
+                    except ValueError:
+                        pass
         except OSError:
             missing.append(task)
     return missing
