@@ -118,6 +118,13 @@ unreachable, **verify over the git transport**, which uses the same proxy git al
 - **Open PRs:** `git ls-remote origin 'refs/pull/*/head'` — every open PR advertises a
   `refs/pull/<n>/head` ref; empty output = no open PR.
 - **Confirm a push landed:** `git ls-remote origin 'refs/heads/<branch>'`.
+- **Confirm a MERGE landed — by ancestry, not the badge.** A GitHub "Merged" badge is not
+  proof the commit is in the base branch (a later history rewrite can drop it). Verify the
+  merge commit is actually reachable from the default branch:
+  `git fetch -q origin && git merge-base --is-ancestor <merge_sha> origin/main` (exit 0 =
+  merged for real). Get `<merge_sha>` from `gh api repos/<owner>/<repo>/pulls/<n> --jq
+  .merge_commit_sha`. For extra assurance, confirm the change's *effect* is on the base
+  branch (`git show origin/main:<path>`), not just that a merge commit exists.
 - **CI run logs** (if the API/browser is blocked from the agent): only the user can see
   them — point them at `https://github.com/<owner>/<repo>/actions`.
 
