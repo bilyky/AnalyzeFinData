@@ -383,7 +383,7 @@ def heal_tasks(missing_tasks, force=False):
                 # Apply advanced reliability settings (WakeToRun, StartWhenAvailable, StopExisting, ExecutionTimeLimit) via PowerShell
                 ps_cmd = [
                     "powershell.exe", "-NoProfile", "-Command",
-                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances StopExisting -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) -ErrorAction SilentlyContinue"
+                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances StopExisting -ExecutionTimeLimit (New-TimeSpan -Hours 2)) -ErrorAction SilentlyContinue"
                 ]
                 subprocess.run(ps_cmd, capture_output=True)
             else:
