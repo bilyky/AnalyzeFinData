@@ -109,6 +109,15 @@ $Tasks = @(
         Desc     = "Nightly post-market data sync to refresh Chaikin ratings and backfill price caches at 1:30 PM PST."
     },
     @{
+        Name     = "AETHER_AftermarketReport"
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Daily -At "5:00 PM")
+        )
+        Script   = "venv_new\Scripts\python.exe daily_task.py"
+        Log      = "aftermarket_report_agent.log"
+        Desc     = "Generates and emails the final post-market closing equity and daily performance report at 5:00 PM PST."
+    },
+    @{
         Name     = "AETHER_Data_Backup"
         Triggers  = @(
             (New-ScheduledTaskTrigger -Daily -At "3:00 PM")
