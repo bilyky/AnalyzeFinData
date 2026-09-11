@@ -120,6 +120,36 @@ class TestConfigWeb(unittest.TestCase):
         self.assertEqual(cfg.web_admins, [])
 
 
+class TestConfigOverlay(unittest.TestCase):
+    """Defensive Risk-Management Overlay namespace (Rule C keys this pass)."""
+
+    def test_overlay_defaults(self):
+        cfg = _make_cfg({})
+        self.assertAlmostEqual(cfg.overlay_credit_spread_otm_pct, 0.15)
+        self.assertAlmostEqual(cfg.overlay_credit_spread_width_pct, 0.05)
+
+    def test_overlay_from_file(self):
+        cfg = _make_cfg({"overlay": {"credit_spread_otm_pct": 0.10,
+                                     "credit_spread_width_pct": 0.075}})
+        self.assertAlmostEqual(cfg.overlay_credit_spread_otm_pct, 0.10)
+        self.assertAlmostEqual(cfg.overlay_credit_spread_width_pct, 0.075)
+
+    def test_overlay_env_override(self):
+        cfg = _make_cfg({"overlay": {"credit_spread_otm_pct": 0.10}},
+                        env={"AETHER_OVERLAY_CREDIT_SPREAD_OTM_PCT": "0.20"})
+        self.assertAlmostEqual(cfg.overlay_credit_spread_otm_pct, 0.20)
+
+    def test_overlay_null_block_safe(self):
+        cfg = _make_cfg({"overlay": None})
+        self.assertAlmostEqual(cfg.overlay_credit_spread_otm_pct, 0.15)
+        self.assertAlmostEqual(cfg.overlay_credit_spread_width_pct, 0.05)
+
+    def test_overlay_is_float(self):
+        cfg = _make_cfg({"overlay": {"credit_spread_otm_pct": "0.12"}})   # string coerced
+        self.assertIsInstance(cfg.overlay_credit_spread_otm_pct, float)
+        self.assertAlmostEqual(cfg.overlay_credit_spread_otm_pct, 0.12)
+
+
 class TestConfigMissingFile(unittest.TestCase):
     # Note: "mocked empty file -> empty attrs" is already covered by
     # TestConfigNullSafety.test_empty_config_returns_empty_strings. This class

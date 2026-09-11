@@ -3,6 +3,10 @@
     "SelectedED": {"month": 10, "day": 16, "year": 2026},
     "OptionPair": [
       {
+        "Call": {"optionType": "CALL", "strikePrice": 80, "symbol": "INTC", "bid": 20.4, "ask": 20.8, "lastPrice": 20.6, "volume": 40,  "openInterest": 900,  "inTheMoney": "y", "OptionGreeks": {"delta": 0.92, "gamma": 0.01, "theta": -0.02, "vega": 0.03, "iv": 0.35}},
+        "Put":  {"optionType": "PUT",  "strikePrice": 80, "symbol": "INTC", "bid": 0.35, "ask": 0.50, "lastPrice": 0.42, "volume": 210, "openInterest": 3800, "inTheMoney": "n", "OptionGreeks": {"delta": -0.08, "gamma": 0.01, "theta": -0.01, "vega": 0.03, "iv": 0.37}}
+      },
+      {
         "Call": {"optionType": "CALL", "strikePrice": 85, "symbol": "INTC", "bid": 15.6, "ask": 15.9, "lastPrice": 15.7, "volume": 120, "openInterest": 2100, "inTheMoney": "y", "OptionGreeks": {"delta": 0.88, "gamma": 0.02, "theta": -0.03, "vega": 0.05, "iv": 0.34}},
         "Put":  {"optionType": "PUT",  "strikePrice": 85, "symbol": "INTC", "bid": 0.75, "ask": 0.95, "lastPrice": 0.85, "volume": 340, "openInterest": 5400, "inTheMoney": "n", "OptionGreeks": {"delta": -0.14, "gamma": 0.02, "theta": -0.02, "vega": 0.05, "iv": 0.36}}
       },
@@ -29,6 +33,10 @@
       {
         "Call": {"optionType": "CALL", "strikePrice": 115, "symbol": "INTC", "bid": 0.80, "ask": 1.00, "lastPrice": 0.90, "volume": 220, "openInterest": 5200, "inTheMoney": "n", "OptionGreeks": {"delta": 0.15, "gamma": 0.02, "theta": -0.03, "vega": 0.05, "iv": 0.31}},
         "Put":  {"optionType": "PUT",  "strikePrice": 115, "symbol": "INTC", "bid": 15.6, "ask": 15.9, "lastPrice": 15.75, "volume": 80, "openInterest": 1900, "inTheMoney": "y", "OptionGreeks": {"delta": -0.86, "gamma": 0.02, "theta": -0.02, "vega": 0.05, "iv": 0.32}}
+      },
+      {
+        "Call": {"optionType": "CALL", "strikePrice": 120, "symbol": "INTC", "bid": 0.35, "ask": 0.50, "lastPrice": 0.42, "volume": 90,  "openInterest": 3100, "inTheMoney": "n", "OptionGreeks": {"delta": 0.09, "gamma": 0.01, "theta": -0.02, "vega": 0.03, "iv": 0.31}},
+        "Put":  {"optionType": "PUT",  "strikePrice": 120, "symbol": "INTC", "bid": 20.4, "ask": 20.8, "lastPrice": 20.6, "volume": 30,  "openInterest": 800,  "inTheMoney": "y", "OptionGreeks": {"delta": -0.91, "gamma": 0.01, "theta": -0.02, "vega": 0.03, "iv": 0.33}}
       }
     ]
   }

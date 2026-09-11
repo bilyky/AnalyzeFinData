@@ -29,9 +29,9 @@ class TestNormalizeChain(unittest.TestCase):
         self.quotes = oa.normalize_chain(RAW)
 
     def test_counts_and_split(self):
-        self.assertEqual(len(self.quotes), 14)
-        self.assertEqual(len([q for q in self.quotes if q.option_type == "CALL"]), 7)
-        self.assertEqual(len([q for q in self.quotes if q.option_type == "PUT"]), 7)
+        self.assertEqual(len(self.quotes), 18)
+        self.assertEqual(len([q for q in self.quotes if q.option_type == "CALL"]), 9)
+        self.assertEqual(len([q for q in self.quotes if q.option_type == "PUT"]), 9)
 
     def test_expiry_and_fields(self):
         put90 = next(q for q in self.quotes if q.option_type == "PUT" and q.strike == 90)
@@ -146,6 +146,54 @@ class TestStrategyEconomics(unittest.TestCase):
         self.assertAlmostEqual(s.max_gain, 155.0)
         self.assertAlmostEqual(s.breakevens[0], 88.45)     # 90 - 1.55
 
+    def test_bull_put_spread(self):
+        # otm 0.10 @ spot 100 -> short PUT 90 (bid 1.55), long PUT 85 (ask 0.95).
+        # credit 0.60/sh on a $5-wide spread.
+        s = oa.build_bull_put_spread(self.pos, oa.Levels(), self.quotes,
+                                     otm_pct=0.10, width_pct=0.05)
+        self.assertEqual(s.kind, "bull_put_spread")
+        strikes = sorted(l.strike for l in s.legs)
+        self.assertEqual(strikes, [85, 90])
+        short = next(l for l in s.legs if l.action == "sell")
+        self.assertEqual(short.strike, 90)                 # sell the higher-strike put
+        self.assertAlmostEqual(s.net_cost, -60.0)          # credit (1.55 - 0.95) * 100
+        self.assertAlmostEqual(s.max_gain, 60.0)           # full credit kept
+        self.assertAlmostEqual(s.max_loss, 440.0)          # (5 - 0.60) * 100
+        self.assertAlmostEqual(s.breakevens[0], 89.40)     # 90 - 0.60
+        self.assertIsNone(s.downside_floor)
+        self.assertIsNone(s.upside_cap)
+
+    def test_bear_call_spread(self):
+        # otm 0.10 @ spot 100 -> short CALL 110 (bid 1.55), long CALL 115 (ask 1.00).
+        # credit 0.55/sh on a $5-wide spread.
+        s = oa.build_bear_call_spread(self.pos, oa.Levels(), self.quotes,
+                                      otm_pct=0.10, width_pct=0.05)
+        self.assertEqual(s.kind, "bear_call_spread")
+        strikes = sorted(l.strike for l in s.legs)
+        self.assertEqual(strikes, [110, 115])
+        short = next(l for l in s.legs if l.action == "sell")
+        self.assertEqual(short.strike, 110)                # sell the lower-strike call
+        self.assertAlmostEqual(s.net_cost, -55.0)          # credit (1.55 - 1.00) * 100
+        self.assertAlmostEqual(s.max_gain, 55.0)
+        self.assertAlmostEqual(s.max_loss, 445.0)          # (5 - 0.55) * 100
+        self.assertAlmostEqual(s.breakevens[0], 110.55)    # 110 + 0.55
+
+    def test_credit_spread_refuses_when_legs_collapse(self):
+        # A width so tight both legs round to the same strike -> no spread (returns None),
+        # never an inverted / zero-width position.
+        self.assertIsNone(oa.build_bull_put_spread(self.pos, oa.Levels(), self.quotes,
+                                                   otm_pct=0.10, width_pct=0.001))
+
+    def test_credit_spread_uses_config_defaults(self):
+        # With no explicit otm/width, the builders read CFG.overlay_credit_spread_* .
+        # Default otm 0.15 @ spot 100 -> bull-put short 85 / long 80; bear-call short 115 / long 120.
+        bp = oa.build_bull_put_spread(self.pos, oa.Levels(), self.quotes)
+        bc = oa.build_bear_call_spread(self.pos, oa.Levels(), self.quotes)
+        self.assertEqual(sorted(l.strike for l in bp.legs), [80, 85])
+        self.assertEqual(sorted(l.strike for l in bc.legs), [115, 120])
+        self.assertLess(bp.net_cost, 0)                    # both are net credits
+        self.assertLess(bc.net_cost, 0)
+
     def test_sub_100_shares_skips_covered_structures(self):
         small = _pos(qty=50)
         levels = oa.Levels(stop=90, target=110)
@@ -215,6 +263,23 @@ class TestTaxConsiderations(unittest.TestCase):
         flags = self._flags(s, pos)
         self.assertFalse(any("§1092" in f for f in flags))
 
+    def test_bull_put_spread_straddle_and_wash_sale(self):
+        # Underwater lot (spot 92 < cost 100) -> straddle note AND the wash-sale note.
+        pos = _pos(cost=100.0)
+        s = oa.build_bull_put_spread(pos, oa.Levels(), self.quotes, otm_pct=0.10, width_pct=0.05)
+        flags = self._flags(s, pos, spot=92.0)
+        self.assertTrue(any("§1092 straddle" in f for f in flags))
+        self.assertTrue(any("§1091 wash sale" in f for f in flags))
+
+    def test_bear_call_spread_not_framed_as_covered_call(self):
+        # The bear-call's short call must NOT trigger the QCC covered-call framing —
+        # it is a defined-risk options leg, not a cover. Straddle note still applies.
+        pos = _pos()
+        s = oa.build_bear_call_spread(pos, oa.Levels(), self.quotes, otm_pct=0.10, width_pct=0.05)
+        flags = self._flags(s, pos)
+        self.assertFalse(any("qualified-covered-call" in f for f in flags))
+        self.assertTrue(any("§1092 straddle" in f for f in flags))
+
 
 class TestReportAndRenderers(unittest.TestCase):
     def setUp(self):
@@ -224,7 +289,8 @@ class TestReportAndRenderers(unittest.TestCase):
 
     def test_report_has_full_menu_with_tax_flags(self):
         kinds = {s.kind for s in self.report.strategies}
-        self.assertEqual(kinds, {"collar", "protective_put", "covered_call", "cash_secured_put"})
+        self.assertEqual(kinds, {"collar", "protective_put", "covered_call", "cash_secured_put",
+                                 "bull_put_spread", "bear_call_spread"})
         self.assertTrue(all(s.tax_flags for s in self.report.strategies))
         self.assertEqual(self.report.expiry, EXPIRY)
 
