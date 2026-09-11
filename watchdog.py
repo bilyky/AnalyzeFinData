@@ -380,10 +380,10 @@ def heal_tasks(missing_tasks, force=False):
             result = subprocess.run(args, capture_output=True)
             if result.returncode == 0:
                 _log.info(f"✅ Task {task} successfully registered with native UTF-8 environment.")
-                # Apply advanced reliability settings (WakeToRun, StartWhenAvailable, StopExisting, ExecutionTimeLimit) via PowerShell
+                # Apply advanced reliability settings (WakeToRun, StartWhenAvailable, Parallel, ExecutionTimeLimit) via PowerShell
                 ps_cmd = [
                     "powershell.exe", "-NoProfile", "-Command",
-                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances StopExisting -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) -ErrorAction SilentlyContinue"
+                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) -ErrorAction SilentlyContinue"
                 ]
                 subprocess.run(ps_cmd, capture_output=True)
             else:

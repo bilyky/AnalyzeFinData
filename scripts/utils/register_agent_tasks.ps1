@@ -157,7 +157,7 @@ $Tasks = @(
 
 
 # Settings: standard reliable settings (wake machine, allow demand run, run missed, prevent process hangs and skips)
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances StopExisting -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 
 # Iterate and register each task
 foreach ($T in $Tasks) {
