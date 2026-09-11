@@ -6,6 +6,7 @@ full Covered Call lifecycle (write -> worthless expiry / strike assignment / buy
 including the ledger invariant that a written premium is booked exactly once.
 """
 
+import math
 import unittest
 from aether import options
 
@@ -57,6 +58,38 @@ class TestCoveredCallOptions(unittest.TestCase):
         # 3. Deep In-The-Money (S = 100, K = 80) Call price must equal its intrinsic value (~$20)
         c_itm = options.calculate_black_scholes_call(S=100.0, K=80.0, T=7.0/365.0, r=0.04, sigma=0.30)
         self.assertGreaterEqual(c_itm, 19.90)
+
+    def test_black_scholes_call_delegates_without_double_round(self):
+        """Regression (PR #74): calculate_black_scholes_call delegates to option_pricing.bs_price
+        but must round EXACTLY ONCE (2 dp) — i.e. be bit-identical to a single-round reference of
+        the raw diffusion. Guards against a double-round (bs_price's own 4-dp round feeding the
+        2-dp round here), which shifts ~0.4% of premiums by 1 cent. Locks the single-BS-home
+        delegation contract against future pricer drift."""
+        def _reference(S, K, T, r, sigma):
+            # Independent inline BSM call, rounded ONCE to 2 dp with the $0.01 floor — the exact
+            # pre-delegation behavior calculate_black_scholes_call must reproduce.
+            if S <= 0.0 or K <= 0.0:
+                return 0.0
+            if T <= 0.0 or sigma <= 0.0:
+                return max(0.0, S - K)
+            d1 = (math.log(S / K) + (r + sigma * sigma / 2.0) * T) / (sigma * math.sqrt(T))
+            d2 = d1 - sigma * math.sqrt(T)
+            raw = S * options.norm_cdf(d1) - K * math.exp(-r * T) * options.norm_cdf(d2)
+            return max(0.01, round(raw, 2))
+
+        # Inputs chosen to include known double-round boundary cases (values near x.xx5 at 4 dp).
+        cases = [
+            (100.0, 100.0, 7 / 365, 0.04, 0.30), (285.598675, 322.699772, 0.123288, 0.0268, 0.9428),
+            (95.951042, 89.684976, 0.082192, 0.0376, 1.0533), (113.609483, 150.534005, 0.123288, 0.0595, 0.3522),
+            (107.161504, 75.275836, 0.019178, 0.0749, 0.7794), (50.0, 55.0, 0.1, 0.03, 0.45),
+            (412.5, 400.0, 0.25, 0.05, 0.22), (12.34, 15.0, 0.04, 0.01, 0.8),
+        ]
+        for S, K, T, r, sigma in cases:
+            self.assertEqual(
+                options.calculate_black_scholes_call(S=S, K=K, T=T, r=r, sigma=sigma),
+                _reference(S, K, T, r, sigma),
+                msg=f"double-round drift at S={S} K={K} T={T} r={r} sigma={sigma}",
+            )
 
     def test_select_covered_call(self):
         """Verify OTM strike selection, standard-interval rounding, and the 5% OTM floor."""
