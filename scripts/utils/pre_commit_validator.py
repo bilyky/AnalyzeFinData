@@ -191,7 +191,13 @@ def check_wiki_about_sync() -> bool:
 
 
 def check_no_inline_imports(file_path: str) -> bool:
-    """Use ast to detect any import statement not at module scope (col_offset > 0)."""
+    """Use ast to detect any import statement not at module scope (col_offset > 0).
+
+    A module-level ``try/except``-guarded import (a direct child of a top-level
+    ``try`` block or one of its handlers) is a legitimate optional-dependency /
+    fallback pattern, not a lazy inline import, so it is allowed. Imports nested
+    inside a function or class are still flagged.
+    """
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             source = f.read()
@@ -200,9 +206,23 @@ def check_no_inline_imports(file_path: str) -> bool:
         except SyntaxError:
             return True  # py_compile will catch syntax errors separately
         rel = os.path.relpath(file_path, ROOT_DIR)
+
+        # Allowlist: imports that are direct children of a module-level `try`
+        # block (its body/orelse/finalbody or any handler body). These are
+        # guarded fallback imports at module scope, not lazy inline imports.
+        guarded = set()
+        for stmt in tree.body:
+            if isinstance(stmt, ast.Try):
+                blocks = [stmt.body, stmt.orelse, stmt.finalbody]
+                blocks += [h.body for h in stmt.handlers]
+                for block in blocks:
+                    for child in block:
+                        if isinstance(child, (ast.Import, ast.ImportFrom)):
+                            guarded.add(child)
+
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
-                if node.col_offset > 0:
+                if node.col_offset > 0 and node not in guarded:
                     print(f"[GIT PRE-COMMIT] Inline import in {rel} at line {node.lineno}")
                     print("   Action required: Move all imports to the top of the file.")
                     return False
@@ -542,16 +562,16 @@ def main():
             if not check_no_silent_exceptions(fpath):
                 success = False
 
-            # Files exempt from print() check (Playwright interactive browser prompts
-            # that intentionally write to the user's terminal, not to the log system;
-            # plus the diagnostics/ tests trees, which print by design).
-            # Filenames match by basename; the scripts/ and tests/ trees match by
-            # repo-relative path prefix — NOT substring, so an unrelated path (e.g.
-            # test_etrade.py, .../latests/...) can't accidentally slip the gate.
-            _skip_print_files = ("powergauge.py", "run_history.py", "real_copilot.py")
+            # Print() is banned in production code — user-facing terminal output goes
+            # through the logger's CONSOLE level (_log.console(), stderr, excluded from
+            # the log files), which reaches the terminal without cluttering aether.log.
+            # Only the scripts/ and tests/ trees are exempt (diagnostics/one-off tooling
+            # that prints by design). Match by repo-relative path PREFIX — NOT substring,
+            # so an unrelated path (e.g. .../latests/..., .../myscripts/...) can't slip
+            # the gate.
             _skip_print_trees = ("scripts/", "tests/")
             _rel = os.path.relpath(fpath, ROOT_DIR).replace(os.sep, "/")
-            if not (os.path.basename(fpath) in _skip_print_files or _rel.startswith(_skip_print_trees)):
+            if not _rel.startswith(_skip_print_trees):
                 if not check_no_print_statements(fpath):
                     success = False
                 
