@@ -1,13 +1,15 @@
-# INTC Options + CPA/Tax Adviser
+# OceanView Options + CPA/Tax Adviser
 
-Build a menu of protection / income option strategies for a stock position (default
-**INTC**) — collar, protective put, covered call, cash-secured put — each with its
+The **OceanView Agent** — a symbol-agnostic consumer of AETHER's options engine. Build a
+menu of protection / income option strategies for **any** stock position (`--symbol <sym>`;
+**default INTC**) — collar, protective put, covered call, cash-secured put — each with its
 economics *and* its U.S.-tax considerations (LTCG/STCG holding period, IRC §1259
 constructive sale, §1092 qualified covered call, §1091 wash sale).
 
-Engine: `aether/options_adviser.py` (pure, unit-tested). CLI: `options_adviser.py`.
-This skill runs the **offline** path and reports the menu; it recommends only — it
-never places an order.
+Engine: `aether/options_adviser.py` (pure, unit-tested, interface-agnostic). CLI:
+`options_adviser.py`. INTC is only the default argument, not the agent's identity — point it
+at any holding. This skill runs the **offline** path and reports the menu; it recommends
+only — it never places an order.
 
 ## Step 1 — Run the adviser (offline)
 
