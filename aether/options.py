@@ -1,8 +1,9 @@
 """
 Project AETHER: Centralized Option Pricing & Premium Capture Engine (R&D #26)
 
-Implements a self-contained Black-Scholes-Merton pricing model, automated weekly
-out-of-the-money (OTM) Covered Call selection, and position-assignment lifecycles.
+Prices via the shared Black-Scholes-Merton engine in ``aether.option_pricing``, and adds
+automated weekly out-of-the-money (OTM) Covered Call selection and position-assignment
+lifecycles.
 """
 
 import datetime
@@ -10,6 +11,8 @@ import math
 
 from aether import instruments
 from aether.config import CFG
+from aether.option_pricing import bs_price
+from aether.option_pricing import norm_cdf as norm_cdf  # re-export: single BS-math home
 from aether_logger import get_logger as _get_logger
 
 
@@ -45,14 +48,14 @@ def atr_implied_vol(atr: float, price: float) -> float:
     return max(IV_FLOOR, min(IV_CEILING, proxy))
 
 
-def norm_cdf(x: float) -> float:
-    """Exact cumulative standard normal distribution N(x) via math.erf (not an approximation)."""
-    return (1.0 + math.erf(x / math.sqrt(2.0))) / 2.0
-
-
 def calculate_black_scholes_call(S: float, K: float, T: float, r: float, sigma: float) -> float:
-    """Calculate the fair value of a European Call option using the Black-Scholes-Merton model.
-    
+    """Fair value of a European Call (Black-Scholes-Merton).
+
+    Delegates the diffusion pricing to :func:`aether.option_pricing.bs_price` — the single
+    home for the BS math — while preserving this function's covered-call contract:
+    nonpositive S/K returns 0.0, a degenerate T/sigma returns undiscounted intrinsic, and the
+    premium is floored at $0.01 and rounded to 2 decimals.
+
     S: Current stock price
     K: Strike price
     T: Time to expiration in years (e.g. 7/365 for weekly options)
@@ -65,10 +68,7 @@ def calculate_black_scholes_call(S: float, K: float, T: float, r: float, sigma: 
     if T <= 0.0 or sigma <= 0.0:
         return max(0.0, S - K)
 
-    d1 = (math.log(S / K) + (r + (sigma ** 2) / 2.0) * T) / (sigma * math.sqrt(T))
-    d2 = d1 - sigma * math.sqrt(T)
-    call_price = S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
-    return max(0.01, round(call_price, 2))
+    return max(0.01, round(bs_price(S, K, T, r, sigma, "CALL"), 2))
 
 
 def select_covered_call(symbol: str, current_price: float, atr: float, volatility: float = FLAT_SIGMA, interest_rate: float = FLAT_RATE) -> dict:
