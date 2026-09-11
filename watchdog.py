@@ -240,11 +240,26 @@ def trigger_ai_self_healing(traceback):
         return False, f"Execution failure: {e}", str(e)
 
 def check_task_scheduler():
-    """Verify all AETHER tasks are present and active, and check for execution failures."""
+    """Verify all AETHER tasks are present, and audit each for a failed last execution.
+
+    Returns (missing, failed):
+      missing = tasks absent from Task Scheduler (or unqueryable) -> safe to re-register.
+      failed  = tasks that exist but whose last run exited with a real failure code ->
+                alert only. Re-registering a crashed task does not fix the crash and would
+                churn/reset it (and re-fire the alert) every hourly cycle, so failed tasks
+                are surfaced for manual review, not routed through heal_tasks.
+    """
     missing = []
+    failed = []
     for task in TASKS:
         # Use absolute task path starting with backslash to prevent folder-relative lookup failures
         abs_task = f"\\{task}" if not task.startswith("\\") else task
+        # Split abs_task into (name, folder) so the PowerShell audit below queries the SAME
+        # location schtasks did — a root task ("\Name") -> TaskPath "\"; a foldered task
+        # ("\AETHER_Agents\Name") -> TaskPath "\AETHER_Agents\". Hardcoding a folder here
+        # would make Get-ScheduledTask find nothing and the audit silently never fire.
+        task_name = abs_task.rsplit("\\", 1)[-1]
+        task_path = abs_task[: len(abs_task) - len(task_name)] or "\\"
         try:
             result = subprocess.run(["schtasks", "/query", "/tn", abs_task], capture_output=True, text=True, errors="replace")
             if result.returncode != 0:
@@ -254,26 +269,28 @@ def check_task_scheduler():
                 if "cannot find" in output or "not find" in output:
                     missing.append(task)
             else:
-                # Query LastTaskResult via PowerShell to catch silent crashes/terminations
+                # Query LastTaskResult via PowerShell to catch silent crashes/terminations.
                 ps_cmd = [
                     "powershell.exe", "-NoProfile", "-Command",
-                    f"(Get-ScheduledTask -TaskName '{task}' -TaskPath '\\AETHER_Agents\\' -ErrorAction SilentlyContinue | Get-ScheduledTaskInfo).LastTaskResult"
+                    f"(Get-ScheduledTask -TaskName '{task_name}' -TaskPath '{task_path}' -ErrorAction SilentlyContinue | Get-ScheduledTaskInfo).LastTaskResult"
                 ]
                 ps_res = subprocess.run(ps_cmd, capture_output=True, text=True, errors="replace")
                 if ps_res.returncode == 0:
                     try:
                         res_code = int(ps_res.stdout.strip())
-                        # 0 = Success, 267011 = Has not run (new), 267008 = Running, 267012 = Queued
-                        if res_code not in (0, 267011, 267008, 267012):
+                        # Benign LastTaskResult codes (WinError.h SCHED_S_*): 0=Success,
+                        # 267008=READY, 267009=RUNNING, 267011=HAS_NOT_RUN, 267012=NO_MORE_RUNS,
+                        # 267035=QUEUED. Anything else (a real app exit code, or 267014=TERMINATED)
+                        # is a genuine execution failure.
+                        benign = (0, 267008, 267009, 267011, 267012, 267035)
+                        if res_code not in benign:
                             _log.error(f"🛑 [Scheduler Audit] Task '{task}' failed on its last execution (Exit Code: {res_code}).")
-                            # Add failed tasks to the returned missing list so the watchdog immediately
-                            # triggers alerts, emails the report, and re-registers the failed task to heal it.
-                            missing.append(task)
+                            failed.append(task)
                     except ValueError:
                         pass
         except OSError:
             missing.append(task)
-    return missing
+    return missing, failed
 
 def purge_stray_tasks():
     """Detect Task Scheduler entries in our namespace that are not in the TASKS white-list.
@@ -398,10 +415,14 @@ def heal_tasks(missing_tasks, force=False):
             result = subprocess.run(args, capture_output=True)
             if result.returncode == 0:
                 _log.info(f"✅ Task {task} successfully registered with native UTF-8 environment.")
-                # Apply advanced reliability settings (WakeToRun, StartWhenAvailable, Parallel, ExecutionTimeLimit) via PowerShell
+                # Apply advanced reliability settings (WakeToRun, StartWhenAvailable, IgnoreNew, ExecutionTimeLimit) via PowerShell.
+                # IgnoreNew: if an instance is already running, skip the new trigger — never run two
+                # instances of a state-mutating pipeline concurrently (racing writes to the portfolio
+                # JSON / xlsx, duplicate emails). ('StopExisting' is invalid for New-ScheduledTaskSettingsSet;
+                # 'IgnoreNew' also avoids interrupting an in-flight state write, unlike 'Queue'.)
                 ps_cmd = [
                     "powershell.exe", "-NoProfile", "-Command",
-                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) -ErrorAction SilentlyContinue"
+                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) -ErrorAction SilentlyContinue"
                 ]
                 subprocess.run(ps_cmd, capture_output=True)
             else:
@@ -559,7 +580,7 @@ def run_watchdog():
 
     # 1. Gather Initial System Health Data
     initial_errors = check_logs()
-    missing_tasks = check_task_scheduler()
+    missing_tasks, failed_tasks = check_task_scheduler()
     data_issue = check_data_freshness()
     
     # 1b. Clean up any stray/duplicate AETHER tasks (Pillar 1 Self-Sanitation)
@@ -585,6 +606,14 @@ def run_watchdog():
     if missing_tasks:
         heal_tasks(missing_tasks)
         recovery_actions.append(f"Healed missing tasks: {', '.join(missing_tasks)}")
+
+    # 2b. Tasks that exist but failed their last run: alert (the email fires on a non-empty
+    #     recovery_actions) but do NOT re-register — a crash isn't cured by re-registration,
+    #     and re-registering every hourly cycle would churn the task and reset manual tuning.
+    if failed_tasks:
+        recovery_actions.append(
+            f"⚠️ Tasks failed their last execution (manual review — NOT auto-re-registered): {', '.join(failed_tasks)}"
+        )
 
     # 3. Heal resource locks if permission error is logged
     if any("PERMISSION" in str(err).upper() for err in initial_errors):
