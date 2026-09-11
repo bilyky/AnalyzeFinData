@@ -54,7 +54,9 @@ def calculate_black_scholes_call(S: float, K: float, T: float, r: float, sigma: 
     Delegates the diffusion pricing to :func:`aether.option_pricing.bs_price` — the single
     home for the BS math — while preserving this function's covered-call contract:
     nonpositive S/K returns 0.0, a degenerate T/sigma returns undiscounted intrinsic, and the
-    premium is floored at $0.01 and rounded to 2 decimals.
+    premium is floored at $0.01 and rounded to 2 decimals. ``ndigits=None`` takes the unrounded
+    diffusion value so the 2-dp round happens exactly once here (no double-round drift), keeping
+    this bit-identical to the pre-delegation inline implementation.
 
     S: Current stock price
     K: Strike price
@@ -68,7 +70,7 @@ def calculate_black_scholes_call(S: float, K: float, T: float, r: float, sigma: 
     if T <= 0.0 or sigma <= 0.0:
         return max(0.0, S - K)
 
-    return max(0.01, round(bs_price(S, K, T, r, sigma, "CALL"), 2))
+    return max(0.01, round(bs_price(S, K, T, r, sigma, "CALL", ndigits=None), 2))
 
 
 def select_covered_call(symbol: str, current_price: float, atr: float, volatility: float = FLAT_SIGMA, interest_rate: float = FLAT_RATE) -> dict:

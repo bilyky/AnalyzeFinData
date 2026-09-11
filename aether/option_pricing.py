@@ -56,25 +56,32 @@ def _d1_d2(S: float, K: float, T: float, r: float, sigma: float, q: float):
 
 
 def bs_price(S: float, K: float, T: float, r: float, sigma: float,
-             option_type: str, q: float = DEFAULT_DIV_YIELD) -> float:
+             option_type: str, q: float = DEFAULT_DIV_YIELD, *,
+             ndigits: Optional[int] = 4) -> float:
     """Black-Scholes-Merton price of a European call/put.
 
     Falls back to discounted intrinsic value when the diffusion is degenerate (``T<=0`` or
     ``sigma<=0``), so the function is total. ``option_type`` is case-insensitive CALL/PUT.
+
+    ``ndigits`` rounds the result (default 4 dp for the modeled-chain callers). Pass ``None``
+    for the **unrounded** diffusion value so a caller that applies its own rounding (e.g.
+    ``options.calculate_black_scholes_call`` → 2 dp) rounds exactly once and avoids a
+    double-round drift.
     """
     is_call = str(option_type).upper().startswith("C")
     d1, d2 = _d1_d2(S, K, T, r, sigma, q)
     if d1 is None:
         # Degenerate: no time/vol left — value is (undiscounted) intrinsic.
-        intrinsic = (S - K) if is_call else (K - S)
-        return round(max(intrinsic, 0.0), 4)
+        val = max((S - K) if is_call else (K - S), 0.0)
+        return round(val, ndigits) if ndigits is not None else val
     disc_s = S * math.exp(-q * T)
     disc_k = K * math.exp(-r * T)
     if is_call:
         px = disc_s * norm_cdf(d1) - disc_k * norm_cdf(d2)
     else:
         px = disc_k * norm_cdf(-d2) - disc_s * norm_cdf(-d1)
-    return round(max(px, 0.0), 4)
+    val = max(px, 0.0)
+    return round(val, ndigits) if ndigits is not None else val
 
 
 def bs_delta(S: float, K: float, T: float, r: float, sigma: float,

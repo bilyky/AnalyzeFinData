@@ -78,7 +78,7 @@ def _load(path):
 
     Skips the provisional vol=0 synthetic append (flat OHLC) so it never becomes an entry or a
     settlement price, then back-adjusts OHLC onto one continuous (current) price scale via
-    risk_utils._split_adjust_ohlcv. Without this, a raw split bar (e.g. INTC's 2000-07-31 2:1:
+    risk_utils.split_adjust_ohlcv. Without this, a raw split bar (e.g. INTC's 2000-07-31 2:1:
     close 129.10 -> 66.75, ~-48%) is read as a ~-48% overnight crash — poisoning realized vol for
     a month and settling any straddling entry across a phantom halving. `opens` are loaded solely
     to CONFIRM a split (the adjuster's crash guard); they are not otherwise used.
@@ -104,7 +104,7 @@ def _load(path):
         closes.append(cl)
     if len(closes) <= WARMUP + 5:
         return None
-    highs, lows, closes = risk_utils._split_adjust_ohlcv(opens, highs, lows, closes)
+    highs, lows, closes = risk_utils.split_adjust_ohlcv(opens, highs, lows, closes)
     return (dates, highs, lows, closes)
 
 
