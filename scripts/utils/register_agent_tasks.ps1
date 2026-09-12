@@ -158,7 +158,7 @@ $Tasks = @(
 
 # Settings: standard reliable settings (wake machine, allow demand run, run missed, prevent process hangs and skips)
 # Increased execution time limit to 2 hours to ensure long backfills and recovery passes do not get abruptly terminated (R&D #10, #30).
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances StopExisting -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 
 # Iterate and register each task
 foreach ($T in $Tasks) {
