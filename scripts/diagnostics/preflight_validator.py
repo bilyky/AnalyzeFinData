@@ -390,7 +390,9 @@ def check_scheduled_tasks_integrity() -> tuple[bool, list[str]]:
                 script_key = None
                 if "autonomous_pipeline.py" in to_run:
                     script_key = "autonomous_pipeline.py"
-                elif "ai_portfolio_game.py" in to_run or "daily-run.md" in to_run:
+                elif "daily-run.md" in to_run:
+                    script_key = "AETHER_DailyDriver (AI-Qualitative)"
+                elif "ai_portfolio_game.py" in to_run:
                     script_key = "ai_portfolio_game.py (Trading Desk)"
                 elif "watchdog.py" in to_run or "watchdog.md" in to_run:
                     script_key = "watchdog.py (Watchdog)"

@@ -113,3 +113,8 @@ To completely eliminate cognitive drift, silent syntax failures, and "AI halluci
     Never recursively delete or clear any project directory, persistent profile (like chaikin_chrome_profile), or state file without first copying or moving it to a secure, timestamped location in Data/Backup/.
 8.  **No Performative Overconfidence or Excuses (Operational Honesty):**
     Avoid performative preambles or declaring 'all systems nominal' or 'completely green' without running rigorous, unmocked end-to-end unit tests. If a gap, discrepancy, or error is reported, do not rationalize or offer 'narratives.' State exactly what is written on disk, run a direct verification command, and deploy the fix.
+
+9.  **Strict Ban on Test Coupling (Tests Do Not Change):**
+    Unit and integration tests are independent, unmocked contracts of system functionality. You are strictly forbidden from modifying or rewriting existing tests to accommodate code edits. A test must remain rigid, stable, and completely decoupled from implementation. If a code change causes a test to fail, it represents a regression; fix the implementation logic, never the test.
+10. **Strict Ban on Silent Task Failures (Immediate Failure Auditing):**
+    A system health check or watchdog process must never report 'nominal' or 'PASS' if a registered scheduled task has failed or was terminated (non-zero LastTaskResult). Scheduled task execution results must be validated dynamically, and any non-zero exit code must immediately trigger loud, non-silent recovery alerts.
