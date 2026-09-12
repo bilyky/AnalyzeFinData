@@ -157,7 +157,8 @@ $Tasks = @(
 
 
 # Settings: standard reliable settings (wake machine, allow demand run, run missed, prevent process hangs and skips)
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances StopExisting -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+# Increased execution time limit to 2 hours to ensure long backfills and recovery passes do not get abruptly terminated (R&D #10, #30).
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 
 # Iterate and register each task
 foreach ($T in $Tasks) {
@@ -168,7 +169,8 @@ foreach ($T in $Tasks) {
     $Launcher = Join-Path $RepoRoot "run_agent.cmd"
     # Build the scheduled task action: raw scripts execute via PowerShell; AI agent tasks run via the robust run_agent.cmd launcher
     if ($T.Script) {
-        $ExecCmd = "cd '$RepoRoot'; $($T.Script) >> '$LogFile' 2>&1"
+        # Appended 'exit $LastExitCode' to cleanly return Python's exit code instead of PowerShell setting it to 1 due to stderr redirection warnings.
+        $ExecCmd = "cd '$RepoRoot'; $($T.Script) >> '$LogFile' 2>&1; exit `$LastExitCode"
         $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$ExecCmd`""
     } else {
         # Using cmd.exe /c to launch our central environment-healing batch file

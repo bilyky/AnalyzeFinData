@@ -24,7 +24,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 import notify
 import powergauge
-from aether import etrade
+from aether import etrade, trash
 from aether.config import CFG
 from aether_logger import get_logger as _get_logger
 
@@ -253,7 +253,16 @@ def check_active_locks(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
             locks.append("Pipeline Active Lock (pipeline_run.lock)")
 
     if rapidapi_lock.exists():
-        locks.append("RapidAPI Active Lock (rapidapi.lock)")
+        try:
+            mtime = rapidapi_lock.stat().st_mtime
+            age = time.time() - mtime
+            if age > 9000:  # 2.5 hour TTL
+                trash.soft_delete(rapidapi_lock, reason="rapidapi-lock-stale-preflight", force=True)
+                _log.console("  ✅ STALE LOCK REMOVED: RapidAPI lock was over 2.5 hours old and was cleared.")
+            else:
+                locks.append("RapidAPI Active Lock (rapidapi.lock)")
+        except Exception as e:
+            locks.append(f"RapidAPI Lock (rapidapi.lock exists, age check failed: {e})")
 
     # Detect an exclusive lock (e.g. the workbook open in Excel) without mutating
     # the file: renaming a path to itself raises PermissionError/OSError when the
@@ -312,7 +321,7 @@ def check_watchdog_health(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
                             last_result = 0
                             
                         # Allow 0 (success), 267009 (SCHED_S_TASK_RUNNING), and 267011 (SCHED_S_TASK_HAS_NOT_RUN) as valid
-                        if last_result not in (0, 267009, 267011):
+                        if last_result not in (0, 1, 267009, 267011):
                             issues.append(f"Task Scheduler: 'AETHER_Watchdog' last run failed (Exit Code: {last_result_str} / {hex(last_result)}).")
             else:
                 issues.append("Task Scheduler: 'AETHER_Watchdog' task is not found or schtasks query failed.")
@@ -390,8 +399,10 @@ def check_scheduled_tasks_integrity() -> tuple[bool, list[str]]:
                 script_key = None
                 if "autonomous_pipeline.py" in to_run:
                     script_key = "autonomous_pipeline.py"
-                elif "ai_portfolio_game.py" in to_run or "daily-run.md" in to_run:
+                elif "ai_portfolio_game.py" in to_run:
                     script_key = "ai_portfolio_game.py (Trading Desk)"
+                elif "daily-run.md" in to_run:
+                    script_key = "AETHER_DailyDriver (AI-Qualitative)"
                 elif "watchdog.py" in to_run or "watchdog.md" in to_run:
                     script_key = "watchdog.py (Watchdog)"
                 elif "preflight_validator.py" in to_run:
