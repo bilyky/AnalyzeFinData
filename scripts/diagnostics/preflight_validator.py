@@ -25,6 +25,7 @@ sys.path.insert(0, str(BASE_DIR))
 import notify
 import powergauge
 from aether import etrade
+from aether import trash
 from aether.config import CFG
 from aether_logger import get_logger as _get_logger
 
@@ -253,7 +254,23 @@ def check_active_locks(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
             locks.append("Pipeline Active Lock (pipeline_run.lock)")
 
     if rapidapi_lock.exists():
-        locks.append("RapidAPI Active Lock (rapidapi.lock)")
+        # rapidapi.lock is a content-less O_EXCL mutex (see rapidapi.py: it is
+        # created with os.open(..., O_CREAT|O_EXCL|O_WRONLY) and nothing is written
+        # to it). It therefore holds NO pid, so a liveness cross-check like the one
+        # pipeline_run.lock uses above is impossible here — mtime is the only
+        # staleness signal. Mirror rapidapi.py's OWN self-clear exactly (same 9000s
+        # / 2.5h TTL; a recovery pass can legitimately run up to ~2h) so preflight
+        # doesn't false-alarm on a lock a crashed run left behind. The producer
+        # would clear the same stale lock on its next pass regardless; this only
+        # avoids blocking preflight in the interim.
+        try:
+            if time.time() - os.path.getmtime(rapidapi_lock) > 9000:
+                trash.soft_delete(str(rapidapi_lock), reason="rapidapi-lock-stale-preflight", force=True)
+                _log.console("  ✅ Cleared stale RapidAPI lock (>2.5h old; no live producer possible).")
+            else:
+                locks.append("RapidAPI Active Lock (rapidapi.lock)")
+        except OSError:
+            locks.append("RapidAPI Active Lock (rapidapi.lock)")
 
     # Detect an exclusive lock (e.g. the workbook open in Excel) without mutating
     # the file: renaming a path to itself raises PermissionError/OSError when the
