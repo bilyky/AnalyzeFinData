@@ -1,9 +1,35 @@
 import os
+import subprocess
 import sys
 from pathlib import Path
 
-# Repo root directory
+# Windows consoles/pipes default to cp1252, which raises UnicodeEncodeError on the
+# status emoji below (and on any emoji in re-printed validator output). Reconfigure
+# to UTF-8 defensively so a cosmetic glyph can never abort the install / a commit.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+# Repo root directory (fallback only; the git query below is authoritative)
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+def _git(*args):
+    """Run a git command from ROOT_DIR and return its stripped stdout, or None
+    on failure. Used to resolve the real hooks directory so we honor worktrees
+    and a repo-configured core.hooksPath instead of hardcoding .git/hooks."""
+    try:
+        res = subprocess.run(
+            ["git", *args], cwd=str(ROOT_DIR),
+            capture_output=True, text=True, errors="ignore",
+        )
+        if res.returncode == 0:
+            return res.stdout.strip()
+    except Exception:
+        pass
+    return None
 
 HOOK_CONTENT = """#!/usr/bin/env python
 \"\"\"
@@ -13,6 +39,11 @@ and ensures strict Unix LF line endings across the repository.
 \"\"\"
 import sys
 import subprocess
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 def run_cmd(args):
     res = subprocess.run(args, capture_output=True, text=True, errors="ignore")
@@ -74,43 +105,62 @@ if __name__ == "__main__":
     main()
 """
 
-def install_hooks():
-    hooks_dir = ROOT_DIR / ".git" / "hooks"
-    if not hooks_dir.exists():
-        # Handle cases where we are in a worktree and .git is a file referencing the main repo
-        dot_git = ROOT_DIR / ".git"
-        if dot_git.is_file():
-            # Parse worktree gitdir pointer: "gitdir: C:/Develop/StockTrading/AnalyzeFinData/.git/worktrees/feat-process-supervisor"
-            try:
-                with open(dot_git, "r") as f:
-                    gitdir = f.read().strip().split("gitdir: ")[-1]
-                # The shared hooks are in the central repo's .git/hooks directory
-                # gitdir is inside .git/worktrees/<name>; the main .git folder is parent to the worktrees folder
-                main_git = Path(gitdir).parent.parent
-                hooks_dir = main_git / "hooks"
-            except Exception as e:
-                print(f"Could not locate central .git hooks directory: {e}")
-                return False
-        else:
-            print("Could not find .git hooks directory.")
-            return False
+def _resolve_hooks_dir():
+    """Resolve the pre-commit hooks directory the way git itself would.
 
-    hooks_dir.mkdir(parents=True, exist_ok=True)
+    `git rev-parse --git-path hooks` honors core.hooksPath AND resolves correctly
+    from inside a linked worktree (returns the shared common hooks dir) — so we no
+    longer hand-parse the `.git` worktree pointer. Falls back to <root>/.git/hooks
+    only when git is unavailable."""
+    hooks = _git("rev-parse", "--git-path", "hooks")
+    if hooks:
+        hp = Path(hooks)
+        if not hp.is_absolute():
+            top = _git("rev-parse", "--show-toplevel")
+            hp = (Path(top) if top else ROOT_DIR) / hp
+        return hp
+    return ROOT_DIR / ".git" / "hooks"
+
+
+def install_hooks():
+    hooks_dir = _resolve_hooks_dir()
+    try:
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"❌ Could not create hooks directory {hooks_dir}: {e}")
+        return False
+
     pre_commit_file = hooks_dir / "pre-commit"
-    
+
+    # Preserve a pre-existing, unrelated pre-commit hook instead of silently
+    # clobbering it: back it up to pre-commit.local.bak (only if it isn't already
+    # ours — detected by the validator reference every AETHER hook carries).
+    try:
+        if pre_commit_file.exists():
+            existing = pre_commit_file.read_text(encoding="utf-8", errors="ignore")
+            if "pre_commit_validator.py" not in existing:
+                backup = pre_commit_file.with_suffix(".local.bak")
+                backup.write_text(existing, encoding="utf-8")
+                print(f"ℹ️  Backed up existing unrelated pre-commit hook to: {backup}")
+    except Exception as e:
+        print(f"⚠️  Could not back up existing pre-commit hook (continuing): {e}")
+
     try:
         with open(pre_commit_file, "w", encoding="utf-8", newline="\n") as f:
             f.write(HOOK_CONTENT)
-        
+
         # On non-Windows platforms, make the hook executable
         if sys.platform != "win32":
             os.chmod(pre_commit_file, 0o755)
-            
+
         print(f"✅ Successfully installed defensive pre-commit hook to: {pre_commit_file}")
+        print("   Bypass a single doc-sync block with: "
+              "AETHER_DOCSYNC_ACK=<feature-key> git commit …")
         return True
     except Exception as e:
         print(f"❌ Failed to install pre-commit hook: {e}")
         return False
 
+
 if __name__ == "__main__":
-    install_hooks()
+    sys.exit(0 if install_hooks() else 1)

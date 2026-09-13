@@ -238,6 +238,44 @@ def check_task_scheduler():
             missing.append(task)
     return missing
 
+# Only console processes whose command line references THIS repo are AETHER-owned
+# and therefore safe to purge. 30-minute minimum age matches roadmap #29(b).
+_ORPHAN_MIN_AGE_MIN = 30
+
+
+def _parse_listener_pids_8888(netstat_stdout: str) -> set[int]:
+    """Pure: extract PIDs of processes *listening* on port 8888 from `netstat -ano`
+    output. Identifies a listener by the invariant socket shape (TCP, local address
+    ends in :8888, foreign address is the null endpoint) rather than the word
+    "LISTENING", which is localized on non-English Windows.
+    """
+    pids: set[int] = set()
+    for line in netstat_stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0].upper() != "TCP":
+            continue
+        local, foreign, pid = parts[1], parts[2], parts[-1]
+        if not local.endswith(":8888"):
+            continue
+        # A listening socket has no bound peer; an established connection does.
+        if foreign not in ("0.0.0.0:0", "[::]:0", "*:*"):
+            continue
+        if pid.isdigit() and int(pid) > 0:
+            pids.add(int(pid))
+    return pids
+
+
+def _select_stale_server_pids(server_processes: list) -> list:
+    """Pure: given [(pid, creation_date_str), ...] for the duplicate server.py
+    binders, return the PIDs to terminate — every one except the newest (latest
+    creation date). Keeping the newest preserves the just-started server.
+    """
+    if len(server_processes) <= 1:
+        return []
+    ordered = sorted(server_processes, key=lambda x: x[1])
+    return [pid for pid, _ in ordered[:-1]]
+
+
 def check_port_8888_sentry():
     """Verify if multiple processes are trying to bind to port 8888 (the Web UI port)
     and automatically terminate any duplicate server.py processes.
@@ -247,15 +285,8 @@ def check_port_8888_sentry():
     try:
         # Run netstat to find listening processes on port 8888
         res = subprocess.run(["cmd.exe", "/c", "netstat -ano | findstr :8888"], capture_output=True, text=True, errors="ignore")
-        pids = set()
-        for line in res.stdout.splitlines():
-            if "listening" in line.lower():
-                parts = line.strip().split()
-                if parts:
-                    pid = parts[-1]
-                    if pid.isdigit() and int(pid) > 0:
-                        pids.add(int(pid))
-        
+        pids = _parse_listener_pids_8888(res.stdout)
+
         if len(pids) > 1:
             _log.warning(f"⚠️ Port Sentry: Multiple processes ({pids}) binding to port 8888!")
             server_processes = []
@@ -271,47 +302,82 @@ def check_port_8888_sentry():
                             server_processes.append((pid, creation_date))
                     except Exception:
                         pass
-            
-            if len(server_processes) > 1:
-                # Sort by creation date ascending (oldest first). Keep the newest (last index) and terminate the rest.
-                server_processes.sort(key=lambda x: x[1])
-                to_terminate = server_processes[:-1]
-                for pid, cdate in to_terminate:
-                    _log.warning(f"🧹 Port Sentry: Terminating duplicate older server.py process (PID={pid}, Created={cdate})")
-                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+
+            for pid in _select_stale_server_pids(server_processes):
+                _log.warning(f"🧹 Port Sentry: Terminating duplicate older server.py process (PID={pid})")
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
     except Exception as e:
         _log.warning(f"Port Sentry check failed (non-fatal): {e}")
 
 
+def _select_orphans_to_purge(procs: list, repo_path: str,
+                             min_age_min: float = _ORPHAN_MIN_AGE_MIN) -> list:
+    """Pure: from the PowerShell process snapshot (a list of dicts with keys
+    ProcessId, AgeMinutes, CommandLine, ChildCount), return the PIDs that are
+    SAFE to force-kill.
+
+    Safety contract (this is the whole point of the function): a process is
+    purged only if it is **AETHER-owned** — its command line references this
+    repo's directory — AND it is childless AND older than the TTL. A process we
+    cannot attribute to AETHER is never returned, no matter how old or idle, so
+    the sweep can never touch the user's own shells or unrelated console hosts.
+    """
+    repo = (repo_path or "").replace("\\", "/").lower()
+    victims: list = []
+    if not repo:
+        return victims
+    for p in procs:
+        cmdline = (p.get("CommandLine") or "").replace("\\", "/").lower()
+        if repo not in cmdline:
+            continue  # not AETHER-owned → never kill (non-invasive)
+        try:
+            if int(p.get("ChildCount") or 0) != 0:
+                continue
+            if float(p.get("AgeMinutes") or 0) <= min_age_min:
+                continue
+            victims.append(int(p["ProcessId"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    return victims
+
+
 def clean_orphaned_containers():
-    """Identify and force-terminate orphaned powershell.exe and conhost.exe processes
-    older than 30 minutes with zero active children.
+    """Force-terminate ONLY AETHER-owned orphaned powershell.exe/conhost.exe
+    processes — childless, older than 30 minutes, and whose command line points at
+    this repo. PowerShell only *snapshots* the process table (PID, age, child
+    count, command line); the kill decision is made by the pure, tested
+    `_select_orphans_to_purge` in Python. This keeps the sweep "non-invasive" per
+    roadmap #29(b): it can never kill the user's own shells, unrelated console
+    hosts, or a non-AETHER job.
     """
     if sys.platform != "win32":
         return
     try:
-        # Run PowerShell to find and kill orphaned conhost.exe and powershell.exe
+        # Snapshot only — no Stop-Process here; Python decides and kills.
         ps_cmd = (
-            "$now = Get-Date; "
             "Get-CimInstance Win32_Process -Filter \"Name = 'powershell.exe' or Name = 'conhost.exe'\" | "
             "ForEach-Object { "
-            "  $pid = $_.ProcessId; "
-            "  $children = Get-CimInstance Win32_Process -Filter \"ParentProcessId = $pid\"; "
-            "  $child_count = if ($children) { @($children).Count } else { 0 }; "
-            "  if ($child_count -eq 0) { "
-            "    $age_min = ($now - $_.CreationDate).TotalMinutes; "
-            "    if ($age_min -gt 30) { "
-            "      Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue; "
-            "      Write-Output \"Purged orphaned process PID=$pid (Age: [int]$age_min min)\"; "
-            "    } "
+            "  $p = $_; "
+            "  $kids = @(Get-CimInstance Win32_Process -Filter \"ParentProcessId = $($p.ProcessId)\").Count; "
+            "  [PSCustomObject]@{ "
+            "    ProcessId = $p.ProcessId; "
+            "    AgeMinutes = ((Get-Date) - $p.CreationDate).TotalMinutes; "
+            "    CommandLine = $p.CommandLine; "
+            "    ChildCount = $kids "
             "  } "
-            "}"
+            "} | ConvertTo-Json -Depth 2"
         )
         cmd = ["powershell.exe", "-NoProfile", "-Command", ps_cmd]
         res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
-        for line in res.stdout.splitlines():
-            if line.strip():
-                _log.info(f"🧹 Process Sentry: {line.strip()}")
+        if not res.stdout.strip():
+            return
+        data = json.loads(res.stdout)
+        if isinstance(data, dict):   # ConvertTo-Json emits a bare object for a single row
+            data = [data]
+        for pid in _select_orphans_to_purge(data, str(BASE_DIR)):
+            _log.warning(f"🧹 Process Sentry: purging orphaned AETHER console process PID={pid} "
+                         f"(childless, >{_ORPHAN_MIN_AGE_MIN}min)")
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
     except Exception as e:
         _log.warning(f"Orphaned process cleanup failed (non-fatal): {e}")
 
