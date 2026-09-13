@@ -280,9 +280,9 @@ def check_task_scheduler():
                         res_code = int(ps_res.stdout.strip())
                         # Benign LastTaskResult codes (WinError.h SCHED_S_*): 0=Success,
                         # 267008=READY, 267009=RUNNING, 267011=HAS_NOT_RUN, 267012=NO_MORE_RUNS,
-                        # 267035=QUEUED. Anything else (a real app exit code, or 267014=TERMINATED)
-                        # is a genuine execution failure.
-                        benign = (0, 267008, 267009, 267011, 267012, 267035)
+                        # 267035=SOME_TRIGGERS_FAILED, 267045=QUEUED. Anything else (a real app exit code,
+                        # or 267014=TERMINATED) is a genuine execution failure.
+                        benign = (0, 267008, 267009, 267011, 267012, 267035, 267045)
                         if res_code not in benign:
                             _log.error(f"🛑 [Scheduler Audit] Task '{task}' failed on its last execution (Exit Code: {res_code}).")
                             failed.append(task)

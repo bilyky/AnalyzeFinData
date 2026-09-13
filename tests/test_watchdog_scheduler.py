@@ -40,9 +40,9 @@ class TestWatchdogSchedulerAuditing(unittest.TestCase):
     @mock.patch("subprocess.run")
     @mock.patch("watchdog._log")
     def test_successful_or_standard_result_not_logged_or_reported(self, mock_log, mock_run):
-        """Benign SCHED_S_* codes (Success/Ready/Running/HasNotRun/NoMoreRuns/Queued) are ignored."""
-        # 0=Success, 267008=READY, 267009=RUNNING, 267011=HAS_NOT_RUN, 267012=NO_MORE_RUNS, 267035=QUEUED
-        for ok_code in ("0", "267008", "267009", "267011", "267012", "267035"):
+        """Benign SCHED_S_* codes (Success/Ready/Running/HasNotRun/NoMoreRuns/SomeTriggersFailed/Queued) are ignored."""
+        # 0=Success, 267008=READY, 267009=RUNNING, 267011=HAS_NOT_RUN, 267012=NO_MORE_RUNS, 267035=SOME_TRIGGERS_FAILED, 267045=QUEUED
+        for ok_code in ("0", "267008", "267009", "267011", "267012", "267035", "267045"):
             mock_log.reset_mock()
             mock_query = mock.MagicMock(returncode=0, stdout="AETHER_Morning Ready")
             mock_ps_res = mock.MagicMock(returncode=0, stdout=f"{ok_code}\n")
