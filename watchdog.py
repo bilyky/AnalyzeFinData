@@ -292,6 +292,159 @@ def check_task_scheduler():
             missing.append(task)
     return missing, failed
 
+# Only console processes whose command line references THIS repo are AETHER-owned
+# and therefore safe to purge. 30-minute minimum age matches roadmap #29(b).
+_ORPHAN_MIN_AGE_MIN = 30
+
+
+def _parse_listener_pids_8888(netstat_stdout: str) -> set[int]:
+    """Pure: extract PIDs of processes *listening* on port 8888 from `netstat -ano`
+    output. Identifies a listener by the invariant socket shape (TCP, local address
+    ends in :8888, foreign address is the null endpoint) rather than the word
+    "LISTENING", which is localized on non-English Windows.
+    """
+    pids: set[int] = set()
+    for line in netstat_stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0].upper() != "TCP":
+            continue
+        local, foreign, pid = parts[1], parts[2], parts[-1]
+        if not local.endswith(":8888"):
+            continue
+        # A listening socket has no bound peer; an established connection does.
+        if foreign not in ("0.0.0.0:0", "[::]:0", "*:*"):
+            continue
+        if pid.isdigit() and int(pid) > 0:
+            pids.add(int(pid))
+    return pids
+
+
+def _select_stale_server_pids(server_processes: list) -> list:
+    """Pure: given [(pid, creation_date_str), ...] for the duplicate server.py
+    binders, return the PIDs to terminate — every one except the newest (latest
+    creation date). Keeping the newest preserves the just-started server.
+    """
+    if len(server_processes) <= 1:
+        return []
+    ordered = sorted(server_processes, key=lambda x: x[1])
+    return [pid for pid, _ in ordered[:-1]]
+
+
+def check_port_8888_sentry():
+    """Verify if multiple processes are trying to bind to port 8888 (the Web UI port)
+    and automatically terminate any duplicate server.py processes.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        # Run netstat to find listening processes on port 8888
+        res = subprocess.run(["cmd.exe", "/c", "netstat -ano | findstr :8888"], capture_output=True, text=True, errors="ignore")
+        pids = _parse_listener_pids_8888(res.stdout)
+
+        if len(pids) > 1:
+            _log.warning(f"⚠️ Port Sentry: Multiple processes ({pids}) binding to port 8888!")
+            server_processes = []
+            for pid in pids:
+                cmd = ["powershell.exe", "-NoProfile", "-Command", f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' | Select-Object CreationDate, CommandLine | ConvertTo-Json"]
+                proc_res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
+                if proc_res.returncode == 0 and proc_res.stdout.strip():
+                    try:
+                        proc_data = json.loads(proc_res.stdout)
+                        cmdline = proc_data.get("CommandLine") or ""
+                        if "server.py" in cmdline.lower():
+                            creation_date = proc_data.get("CreationDate") or ""
+                            server_processes.append((pid, creation_date))
+                    except Exception:
+                        pass
+
+            for pid in _select_stale_server_pids(server_processes):
+                _log.warning(f"🧹 Port Sentry: Terminating duplicate older server.py process (PID={pid})")
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+    except Exception as e:
+        _log.warning(f"Port Sentry check failed (non-fatal): {e}")
+
+
+def _select_orphans_to_purge(procs: list, repo_path: str,
+                             min_age_min: float = _ORPHAN_MIN_AGE_MIN) -> list:
+    """Pure: from the PowerShell process snapshot (a list of dicts with keys
+    ProcessId, AgeMinutes, CommandLine, ChildCount), return the PIDs that are
+    SAFE to force-kill.
+
+    Safety contract (this is the whole point of the function): a process is
+    purged only if it is **AETHER-owned** — its command line references this
+    repo's directory — AND it is childless AND older than the TTL. A process we
+    cannot attribute to AETHER is never returned, no matter how old or idle, so
+    the sweep can never touch the user's own shells or unrelated console hosts.
+    """
+    repo = (repo_path or "").replace("\\", "/").lower()
+    victims: list = []
+    if not repo:
+        return victims
+    for p in procs:
+        cmdline = (p.get("CommandLine") or "").replace("\\", "/").lower()
+        if repo not in cmdline:
+            continue  # not AETHER-owned → never kill (non-invasive)
+        try:
+            if int(p.get("ChildCount") or 0) != 0:
+                continue
+            if float(p.get("AgeMinutes") or 0) <= min_age_min:
+                continue
+            victims.append(int(p["ProcessId"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    return victims
+
+
+def clean_orphaned_containers():
+    """Force-terminate ONLY AETHER-owned orphaned powershell.exe/conhost.exe
+    processes — childless, older than 30 minutes, and whose command line points at
+    this repo. PowerShell only *snapshots* the process table (PID, age, child
+    count, command line); the kill decision is made by the pure, tested
+    `_select_orphans_to_purge` in Python. This keeps the sweep "non-invasive" per
+    roadmap #29(b): it can never kill the user's own shells, unrelated console
+    hosts, or a non-AETHER job.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        # Snapshot only — no Stop-Process here; Python decides and kills.
+        ps_cmd = (
+            "Get-CimInstance Win32_Process -Filter \"Name = 'powershell.exe' or Name = 'conhost.exe'\" | "
+            "ForEach-Object { "
+            "  $p = $_; "
+            "  $kids = @(Get-CimInstance Win32_Process -Filter \"ParentProcessId = $($p.ProcessId)\").Count; "
+            "  [PSCustomObject]@{ "
+            "    ProcessId = $p.ProcessId; "
+            "    AgeMinutes = ((Get-Date) - $p.CreationDate).TotalMinutes; "
+            "    CommandLine = $p.CommandLine; "
+            "    ChildCount = $kids "
+            "  } "
+            "} | ConvertTo-Json -Depth 2"
+        )
+        cmd = ["powershell.exe", "-NoProfile", "-Command", ps_cmd]
+        res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
+        if not res.stdout.strip():
+            return
+        data = json.loads(res.stdout)
+        if isinstance(data, dict):   # ConvertTo-Json emits a bare object for a single row
+            data = [data]
+        for pid in _select_orphans_to_purge(data, str(BASE_DIR)):
+            _log.warning(f"🧹 Process Sentry: purging orphaned AETHER console process PID={pid} "
+                         f"(childless, >{_ORPHAN_MIN_AGE_MIN}min)")
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+    except Exception as e:
+        _log.warning(f"Orphaned process cleanup failed (non-fatal): {e}")
+
+
+def supervise_processes():
+    """R&D #29: Autonomous Process Supervisor & Port Sentry.
+    Detects and cleans up port 8888 socket duplicates and orphaned console host processes.
+    """
+    _log.console("🔍 Running Autonomous Process Supervisor & Port Sentry (R&D #29)...")
+    check_port_8888_sentry()
+    clean_orphaned_containers()
+
+
 def purge_stray_tasks():
     """Detect Task Scheduler entries in our namespace that are not in the TASKS white-list.
 
@@ -585,6 +738,9 @@ def run_watchdog():
     
     # 1b. Clean up any stray/duplicate AETHER tasks (Pillar 1 Self-Sanitation)
     purge_stray_tasks()
+
+    # 1bb. Process Supervisor & Port Sentry (R&D #29)
+    supervise_processes()
 
     # 1c. Empty the auth-state garbage can past its retention window. Rejected/revoked
     #     token files are soft-deleted (moved to Data/.trash, kept ~1 month for recovery)
