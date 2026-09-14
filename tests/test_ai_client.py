@@ -85,6 +85,9 @@ class TestAIClientTransport(unittest.TestCase):
         argv = m_run.call_args.args[0]
         self.assertIn(argv[0], ["gemini", "gemini.cmd"])
         self.assertEqual(m_run.call_args.kwargs["input"], "SYS\n\nUSR")  # payload on stdin
+        self.assertIn("--approval-mode", argv)
+        approval_mode_idx = argv.index("--approval-mode")
+        self.assertEqual(argv[approval_mode_idx + 1], "yolo")
 
     @mock.patch("aether.ai_client.subprocess.run")
     def test_gemini_nonzero_exit_raises(self, m_run):

@@ -5,17 +5,19 @@ import os
 import pytz
 import re
 import requests
-import etrade
+from aether import etrade
 import rapidapi
 import sys
 import console_safe
 import circuit_breaker
+from aether import trash
 import aether.notify as notify
 import argparse
 from pathlib import Path
 import aether_oracle
 from aether.utils import _to_float
 from aether.config import CFG
+from aether.run_guard import DailyRunGuard, RunSkipped
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
 # before the first non-ASCII print. Reduces, not eliminates, cp1252 crashes in
@@ -36,14 +38,49 @@ import sell_rules
 import decision_eval
 import watchdog
 import instruments
+from aether import options
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
 
 
-def check_failure_rules(symbol, pgr, score, z_score, industry) -> tuple[bool, str]:
-    """Check if the candidate matches any active toxic rules in Data/failure_dna_rules.json."""
+_SYMBOL_DAY_CACHE = {}
+
+def _load_symbol_today_cache(symbol: str, today_str: str) -> dict:
+    """Flyweight Cache Pattern: loads and returns the daily JSON cache,
+    ensuring each symbol is read from the hard drive at most once."""
+    symbol = symbol.upper()
+    if symbol in _SYMBOL_DAY_CACHE:
+        return _SYMBOL_DAY_CACHE[symbol]
+        
+    cache_path = BASE_DIR / "Data" / "Symbol" / symbol / f"{symbol}_{today_str}.json"
+    cache = {}
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+        except Exception as e:
+            _log.warning(f"Failed to read daily cache for {symbol}: {e}")
+            
+    _SYMBOL_DAY_CACHE[symbol] = cache
+    return cache
+
+def check_failure_rules(symbol, pgr, score, z_score, industry, s10=0.0) -> tuple[bool, str]:
+    """Check if the candidate matches any active toxic rules in Data/failure_dna_rules.json or dynamic filters."""
     rules_file = BASE_DIR / "Data" / "failure_dna_rules.json"
+    
+    # ── Earnings-Shock Failure Gate (Pillar 1 Guard) ──
+    # Programmatic, un-bypassable veto on any symbol that has just reported a massive earnings miss
+    today_str = str(datetime.date.today())
+    cache = _load_symbol_today_cache(symbol, today_str)
+    if cache:
+        eps_data = cache.get("EPSData", {})
+        eps_diff = eps_data.get("eps_diff_description", "")
+        warning_impact = eps_data.get("warning_impact", "")
+        
+        if "missed by" in (eps_diff or "").lower() or warning_impact == "Very Bearish":
+            return True, f"Earnings Shock Veto: {eps_diff or 'Very Bearish earnings'}"
+
     if not rules_file.exists() or rules_file.stat().st_size == 0:
         return False, ""
     try:
@@ -53,15 +90,31 @@ def check_failure_rules(symbol, pgr, score, z_score, industry) -> tuple[bool, st
             field = r.get("field")
             condition = r.get("condition")
             reason = r.get("reason", "Toxic pattern match")
-            
+
             # 1. PGR Match
             if field == "pgr" and condition == "startswith_Be" and str(pgr).startswith("Be"):
+                # ── R&D #13: PGR Waivers (canonical two-factor elite gate) ──
+                # A. HighScorePGRBypass: bypass Bearish PGR only for an elite breakout
+                #    leader per risk_utils.is_elite_breakout_candidate — BOTH
+                #    score >= CFG.system_bypass_score_floor AND s10 >= CFG.system_bypass_s10_floor
+                #    (single-sourced from CFG; same gate run_daily_ai_management uses for
+                #    the R:R waiver, so both stages agree on "elite" and re-tune together).
+                # B. BottomSnipePGRWaiver: bypass Bearish PGR on a confirmed bottom setup.
+                # Test the cheap in-memory gate first; only read the daily-history file
+                # (is_bottom_confirmed) when the elite gate did not already waive.
+                if risk_utils.is_elite_breakout_candidate(score, s10):
+                    _log.info(f"[R&D #13 PGR Waiver] Bypassed Bearish PGR '{pgr}' for {symbol} (elite breakout: score {score:.1f}, s10 {s10:.1f}).")
+                    continue
+                bottom_ok, _ = is_bottom_confirmed(symbol)
+                if bottom_ok:
+                    _log.info(f"[R&D #13 PGR Waiver] Bypassed Bearish PGR '{pgr}' for {symbol} (bottom confirmed).")
+                    continue
                 return True, reason
-                
+
             # 2. Score Match
             if field == "score" and condition == "less_than_5.0" and score < 5.0:
                 return True, reason
-                
+
             # 3. Z-Score Match
             if field == "z_score" and condition == "greater_than_2.5" and z_score > 2.5:
                 return True, reason
@@ -126,6 +179,7 @@ def _load_closes(symbol):
 
 
 _HEAL_ATTEMPTED: set = set()  # per-process guard: each symbol healed at most once
+_MAX_STALE_DAYS = 10          # single source of truth for the OHLCV freshness horizon
 
 
 def _heal_symbol_cache(symbol) -> bool:
@@ -154,23 +208,32 @@ def _heal_symbol_cache(symbol) -> bool:
         return False
 
 
-def _cache_stale(symbol, max_stale_days=10) -> bool:
-    """Return True if the symbol's OHLCV cache is missing or older than max_stale_days."""
+def _cache_age_days(symbol):
+    """Age in days of the newest RAW cached bar (no split-adjust), or None if the cache
+    is missing/empty/unreadable. Cheap sibling of risk_utils.ohlcv_age_days — reads the
+    same raw JSON _cache_stale already consults, so the freshness gate can report an age
+    without a second, heavier split-adjusting load."""
     path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
     if not path.exists():
-        return True
+        return None
     try:
         with open(path) as f:
             ts = json.load(f).get("Time Series (Daily)", {})
         dates = sorted(ts.keys())
         if not dates:
-            return True
-        return (datetime.date.today() - datetime.date.fromisoformat(dates[-1])).days > max_stale_days
+            return None
+        return (datetime.date.today() - datetime.date.fromisoformat(dates[-1])).days
     except Exception:
-        return True
+        return None
 
 
-def _sma50(symbol, max_stale_days=10):
+def _cache_stale(symbol, max_stale_days=_MAX_STALE_DAYS) -> bool:
+    """Return True if the symbol's OHLCV cache is missing or older than max_stale_days."""
+    age = _cache_age_days(symbol)
+    return age is None or age > max_stale_days
+
+
+def _sma50(symbol, max_stale_days=_MAX_STALE_DAYS):
     """50-day SMA of closes from the local OHLCV cache, with autonomic on-demand self-healing."""
     try:
         path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
@@ -409,7 +472,7 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
             # Dynamic Feedback Analyzer Guard Check (Anti-Failure DNA)
             pgr_val = buy.get("pgr", "Neutral")
             score_val = buy.get("total", 0.0)
-            is_toxic, t_reason = check_failure_rules(buy["sym"], pgr_val, score_val, z_score, buy.get("industry", "Unknown"))
+            is_toxic, t_reason = check_failure_rules(buy["sym"], pgr_val, score_val, z_score, buy.get("industry", "Unknown"), s10=buy.get("s10", 0.0))
             if is_toxic:
                 _log.warning(f"AI BUY REJECTED (Feedback Analyzer Rule Match): {buy['sym']} - {t_reason}")
                 continue
@@ -808,7 +871,7 @@ def save_game(state):
             backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime)
             if len(backups) > 15:
                 for old_b in backups[:-15]:
-                    old_b.unlink()
+                    trash.soft_delete(old_b, reason="game-backup-prune", force=True)
         except Exception as e:
             _log.warning(f"  [Warning] Game backup failed: {e}")
 
@@ -883,6 +946,7 @@ def is_bottom_confirmed(symbol):
 def update_excel_log(state, new_transactions):
     if not AI_PERF_XLSX.exists():
         return
+    wb = None
     try:
         wb = openpyxl.load_workbook(AI_PERF_XLSX)
         today = str(datetime.date.today())
@@ -896,6 +960,12 @@ def update_excel_log(state, new_transactions):
         wb.save(AI_PERF_XLSX)
     except Exception as e:
         _log.info(f"Failed to update Excel log: {e}")
+    finally:
+        if wb:
+            try:
+                wb.close()
+            except Exception:
+                pass
 
 def get_live_google_price(symbol):
     """Scrape the latest price from Google Finance as a fallback when E*TRADE is unavailable."""
@@ -1090,6 +1160,7 @@ def send_daily_summary(return_html=False):
 
     # Standardize fallback to workbook close prices if E*TRADE renewal fails (e.g. on weekends)
     if not live_prices or any(sym not in live_prices for sym in positions):
+        wb = None
         try:
             wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
             # Use Short_Long sheet if available, as it contains all active portfolio holdings and current prices
@@ -1110,6 +1181,12 @@ def send_daily_summary(return_html=False):
                             live_prices[sym] = row[10] or positions[sym]["cost"]
         except Exception as e:
             _log.warning(f"Workbook fallback failed inside summary: {e}")
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
 
     # Final safety fallback to cost basis if both API and workbook are empty
     for sym in positions:
@@ -1383,7 +1460,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
         # Pre-flight: batch-heal stale OHLCV caches before the decision loop so
         # _sma50 never blocks on a live network call mid-iteration.
-        stale_syms = [s for s in symbols_to_check if _cache_stale(s, max_stale_days=10)]
+        stale_syms = [s for s in symbols_to_check if _cache_stale(s, max_stale_days=_MAX_STALE_DAYS)]
         if stale_syms:
             _log.info(f"[Pre-flight] Healing {len(stale_syms)} stale OHLCV cache(s) before evaluation: {stale_syms}")
             for _s in stale_syms:
@@ -1416,6 +1493,10 @@ def run_daily_ai_management(force=False, manual_profile=None):
         # --- Systemic Crash Circuit Breaker Guard ---
         circuit_breaker.enforce_circuit_breaker(state, prices)
 
+        # --- Options Settlement Pass (R&D #26) ---
+        # Settle any active weekly Covered Calls expiring today!
+        options.resolve_expiring_options(state, today, prices)
+
         # Zero-Trust: surface held positions with no live quote, but do NOT abort the
         # run over them — aborting would skip stop-loss enforcement on every *other*
         # position too, violating the Rule of Loss Minimization. Unpriced names fall
@@ -1436,7 +1517,9 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 if price <= 0: continue
                 
                 if order["type"] == "SELL" and sym in state["positions"]:
-                    pos = state["positions"].pop(sym)
+                    pos = state["positions"][sym]
+                    options.unwind_option_liability_if_held(sym, pos, state, price, today)
+                    state["positions"].pop(sym)
                     proceeds = pos["qty"] * price
                     state["balance"] += proceeds
                     tx = {
@@ -1451,6 +1534,17 @@ def run_daily_ai_management(force=False, manual_profile=None):
                     log_closed_trade_dna(sym, pos, price, today)
                     
                 elif order["type"] == "BUY" and sym not in state["positions"]:
+                    # Zero-Trust Freshness Gate (execution-time): a queued BUY may have sat overnight,
+                    # so the screen-time gate that cleared it can be stale by now. The ATR stop below is
+                    # derived from this cache, so re-verify freshness before filling. Heal once, then
+                    # SKIP (drop) the order rather than execute on untrustworthy data — the screener
+                    # re-surfaces the name next run if it still qualifies. (Queued SELLs are intentionally
+                    # NOT gated: a strategic/stop exit must always be allowed to run.)
+                    if _cache_stale(sym, max_stale_days=_MAX_STALE_DAYS):
+                        _heal_symbol_cache(sym)
+                        if _cache_stale(sym, max_stale_days=_MAX_STALE_DAYS):
+                            _log.warning(f"🛑 QUEUED BUY SKIPPED (Zero-Trust Freshness): {sym} - OHLCV cache stale/missing at execution; refusing to derive an ATR stop from untrustworthy data.")
+                            continue
                     max_positions = rules["max_positions"]
                     available_slots = max_positions - len(state["positions"])
                     if state["balance"] > 500 and available_slots > 0:
@@ -1662,8 +1756,10 @@ def run_daily_ai_management(force=False, manual_profile=None):
             decision_eval.log_decisions(decision_entries)
 
         for sym in symbols_to_sell:
-            pos = state["positions"].pop(sym)
+            pos = state["positions"][sym]
             price = prices.get(sym, pos["cost"])
+            options.unwind_option_liability_if_held(sym, pos, state, price, today)
+            state["positions"].pop(sym)
             
             # Slippage-Protected Limit Stop (STP LMT - R&D #8): Execute at exactly the stop price
             # if the market close price dropped below our stop-loss floor, preventing slippage leaks.
@@ -1730,6 +1826,31 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
             # Filter by strategy profile threshold OR mathematically confirmed bottom
             if (setup in ('1', 'OK', 1)) and price > 0:
+                # Zero-Trust Freshness Gate (CLAUDE.md Rule of Zero-Trust / Temporal Zero-Trust):
+                # Never OPEN a new position on stale or missing OHLCV. Every downstream risk level —
+                # the ATR stop assigned in _execute_buys, swing support, and is_bottom_confirmed just
+                # below — is derived from this cache, so acting on a stale bar is the real "buying
+                # blind" (empty workbook S/R is not — that still gets a live ATR stop). Attempt one
+                # self-heal, then reject if the cache is still not fresh. Held positions are pre-healed
+                # above (line ~1437); this extends the identical discipline to buy candidates, which
+                # were previously ungated. NOTE: this gate sits at the top of the qualifying-candidate
+                # block, so it applies to EVERY buy candidate — those with explicit workbook S/R just
+                # as much as the empty-S/R rows handled below — not only the empty-S/R case. Validated
+                # over the live cache: a meaningful fraction of symbols are stale on any given day, and
+                # their ATR stops would be computed off old bars.
+                if _cache_stale(sym, max_stale_days=_MAX_STALE_DAYS):
+                    _healed = _heal_symbol_cache(sym)  # bool: True only on a real refresh
+                    if _cache_stale(sym, max_stale_days=_MAX_STALE_DAYS):
+                        # Distinguish missing vs N-days-stale in the reject line, reusing the cheap
+                        # raw-JSON age (_cache_age_days) that _cache_stale already read — not the
+                        # heavier split-adjusting ohlcv_age_days. The precise heal outcome (healed /
+                        # lock-deferred / failed / 0-updates) is on the preceding [Self-Healer] line,
+                        # so lock-deferral is separable from genuine failure.
+                        _age = _cache_age_days(sym)
+                        _age_desc = "missing" if _age is None else f"{_age}d stale"
+                        _log.warning(f"🛑 AI BUY REJECTED (Zero-Trust Freshness): {sym} - OHLCV cache {_age_desc}, self-heal did not refresh it (healed={_healed}; see preceding [Self-Healer] line for lock-deferral vs failure); refusing to derive risk levels from untrustworthy data.")
+                        continue
+
                 bottom_ok, bottom_msg = is_bottom_confirmed(sym)
 
                 # Catastrophic Gap Guard (The CNXC Trap):
@@ -1755,13 +1876,19 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 pgr_val = str(row[6] or "Neutral")
 
                 is_elite_breakout = risk_utils.is_elite_breakout_candidate(total_score, short10)
-                
+
+                # The R:R and target-gain gates apply ONLY when the workbook carries explicit
+                # Support/Resistance levels (row[9]/row[11]). A row with empty workbook S/R is NOT
+                # "buying blind": the execution path assigns a downstream ATR-based stop, so such a
+                # setup is intentionally allowed to fall through to the ATR fallback rather than be
+                # rejected here. Do NOT re-add a hard reject on missing workbook S/R — it preempts
+                # that ATR stop and rejects entries the system was designed to make.
                 if stop_val > 0 and target_val > 0:
                     upside = target_val - price
                     downside = price - stop_val
                     rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
                     target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
-                    
+
                     min_rr = CFG.system_default_min_rr
                     if rr_ratio < min_rr:
                         if is_elite_breakout:
@@ -1769,13 +1896,35 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         else:
                             _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required {min_rr}:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
                             continue
-                        
+
                     if target_gain_pct < 5.0:
                         if is_elite_breakout:
                             _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 5.0% target upside limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, Target Gain: {target_gain_pct}%).")
                         else:
                             _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
                             continue
+                else:
+                    # Incomplete workbook S/R (missing stop AND/OR target — this branch is the negation
+                    # of `stop_val > 0 and target_val > 0`) — synthesize the risk thesis for TRANSPARENCY,
+                    # not as a gate.
+                    # The freshness gate above already proved the cache is trustworthy, and _execute_buys
+                    # assigns a live ATR stop, so this row is not "buying blind". Derive stop/target from
+                    # the SAME split-adjusted, provenance-reporting resolvers the UI and backtests use and
+                    # log the thesis. We deliberately DO NOT hard-gate on this synthesized R:R: the nearest
+                    # confirmed resistance is structurally the smallest possible upside while support can be
+                    # far below, so a uniform R:R>=2 reject would gut the fresh pipeline (validated live —
+                    # most fresh names score R:R<2 on synthesized levels). The R:R / target-gain quality
+                    # screen stays scoped to explicit workbook levels; freshness is the real safety gate.
+                    excl = instruments.is_excluded(sym)
+                    # Load the (freshness-gated) split-adjusted series ONCE and feed both resolvers,
+                    # instead of letting each reload + re-adjust the same cache is_bottom_confirmed
+                    # already read above. Freshness is guaranteed by the gate, so the resolvers'
+                    # internal staleness check is redundant here and passing the series skips it.
+                    _hi, _lo, _cl, _ = risk_utils._load_ohlcv_series(sym)
+                    _sd = risk_utils.resolve_stop_detailed(price, highs=_hi, lows=_lo, closes=_cl, exclude_swing=excl)
+                    _td = risk_utils.resolve_target_detailed(price, highs=_hi, lows=_lo, closes=_cl, exclude_swing=excl)
+                    _wb_sr = f"workbook stop={row[9]!r}/target={row[11]!r} incomplete"
+                    _log.info(f"[Synthesized Risk Thesis] {sym} @ ${price}: stop ${_sd.get('stop')} ({_sd.get('source')}) / target ${_td.get('target')} ({_td.get('source')}) — {_wb_sr}; live ATR stop applied at execution.")
 
                 if total_score >= rules["min_score_threshold"] or bottom_ok:
                     bottom_desc = f" (Bottom Confirmed: {bottom_msg})" if bottom_ok else ""
@@ -1790,6 +1939,20 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         "industry": row[4]
                     })
         
+        # ── R&D #32 Overbought Breakout Guard score penalty ──
+        for buy_cand in top_buys:
+            sym_upper = buy_cand["sym"].upper()
+            cache = _load_symbol_today_cache(sym_upper, today)
+            if cache:
+                checklist = cache.get("checklist_stocks", {})
+                strength_count = checklist.get("strengthCount", 1)
+                timing_count = checklist.get("timingCount", 1)
+                industry_rating = checklist.get("industry", "Neutral")
+                
+                if (strength_count < 1 and timing_count < 1) or industry_rating == "Weak":
+                    buy_cand["total"] -= 1.5
+                    _log.info(f"🛡️ [R&D #32 Guard] Applied -1.5 score penalty to {sym_upper} (overbought/weak-sector: strength={strength_count}, timing={timing_count}, industry={industry_rating})")
+
         top_buys.sort(key=lambda x: x["total"], reverse=True)
 
         # ── R&D #27: Dynamic Momentum Rotation Engine ──
@@ -1799,8 +1962,10 @@ def run_daily_ai_management(force=False, manual_profile=None):
         )
         
         for sym_to_sell in sells_to_rotate:
-            pos = state["positions"].pop(sym_to_sell)
+            pos = state["positions"][sym_to_sell]
             price = prices.get(sym_to_sell, pos["cost"])
+            options.unwind_option_liability_if_held(sym_to_sell, pos, state, price, today)
+            state["positions"].pop(sym_to_sell)
             
             # Retrieve score for logging details if available
             score_val = active_position_scores.get(sym_to_sell, 0.0)
@@ -1889,11 +2054,22 @@ def run_daily_ai_management(force=False, manual_profile=None):
                                     _log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f}")
                 # ───────────────────────────────────────────────────────────
 
+                # ── Dynamic Covered Call Writing (R&D #26): Generate weekly premium cash-flow ──
+                if is_market_hours():
+                    _log.info("🚀 [Options Pass] Checking active holdings to write weekly Covered Calls...")
+                    options.execute_weekly_covered_call_pass(state, today, prices, ws)
+                # ───────────────────────────────────────────────────────────
+
     except RuntimeError:
         raise  # critical failures (no prices, etc.) must propagate — never swallow
     except Exception as e:
         _log.exception(f"run_daily_ai_management failed: {e}")
     finally:
+        if "wb" in locals() and wb:
+            try:
+                wb.close()
+            except Exception:
+                pass
         if state is not None:
             save_game(state)
             update_excel_log(state, new_transactions)
@@ -1969,12 +2145,29 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.run:
-        run_daily_ai_management(force=args.force, manual_profile=args.profile)
-        send_consolidated_morning_report()
+        # Single-executor guard. The state mutex ("portfolio_state") serialises
+        # this deterministic executor against the AI pipeline (autonomous_pipeline.py)
+        # so the two never touch state_of_the_day.xlsx concurrently — a fixed
+        # scheduler gap is not a dependency, this lock is. The once-per-trading-day
+        # stamp makes a duplicate 07:00 fire from a second task registrar
+        # (AETHER_ExecuteTrades vs AnalyzeFinData_AI_Game) a no-op, so trades
+        # execute exactly once. A deliberate manual --force bypasses the day-stamp
+        # (human override) but never the mutex — overlap is never allowed.
         try:
-            watchdog.sync_data_folder()
-        except Exception as e:
-            _log.warning(f"Post-run sync failed: {e}")
+            with DailyRunGuard(
+                "portfolio_state",
+                stamp=None if args.force else "trade_execution",
+                wait_timeout=7200,
+            ):
+                run_daily_ai_management(force=args.force, manual_profile=args.profile)
+                send_consolidated_morning_report()
+                try:
+                    watchdog.sync_data_folder()
+                except Exception as e:
+                    _log.warning(f"Post-run sync failed: {e}")
+        except RunSkipped as e:
+            _log.info(f"Trade execution skipped — {e}. Another scheduler already ran "
+                      "it today, or the state is busy (single-executor guard).")
     elif args.summary:
         send_daily_summary()
         try:

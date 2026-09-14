@@ -123,11 +123,59 @@ def _max_intel_emails() -> int:
         return 20
 
 
+def dedup_rd_topics(raw_topics) -> list:
+    """Flatten + case-insensitively deduplicate R&D topic strings.
+
+    Single source of truth for the "intelligent deduplication" used by both the web
+    dashboard (``/api/intel-ideas``) and the daily email report (``format_html_report``).
+    ``raw_topics`` is an iterable whose items are each a topic string OR a list of topic
+    strings (the two shapes ``rd_topics`` takes in the intel cache). Normalization key =
+    lowercased, trailing '.'/whitespace stripped; the FIRST-seen cleaned form is kept, in
+    order. Non-string / empty entries are skipped.
+    """
+    seen = set()
+    out = []
+    for item in raw_topics:
+        topics = [item] if isinstance(item, str) else item
+        if not isinstance(topics, list):
+            continue
+        for t in topics:
+            if not isinstance(t, str):
+                continue
+            t_clean = t.strip()
+            if not t_clean:
+                continue
+            key = t_clean.lower().rstrip(".").strip()
+            if key and key not in seen:
+                seen.add(key)
+                out.append(t_clean)
+    return out
+
+
 def fetch_idea_emails():
     """Check inbox, Promotions, and Trash for stock-oriented emails from the last 24h.
     Supports scanning multiple mailboxes defined in config.json.
     Returns standard ticker ideas (analyze_email_content) AND structural intel
     (extract_email_intel.extract) per email as 'intel' key."""
+    # Reuse a prior run's AI extractions for messages already processed, keyed on
+    # the unique Message-ID. Subjects are deliberately NOT used as the key: daily
+    # newsletters reuse subject lines, so a subject key would serve a brand-new
+    # email stale intel and never parse its real body.
+    cache = {}
+    cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "intel_ideas_cache.json")
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cached_list = json.load(f)
+            if isinstance(cached_list, list):
+                for item in cached_list:
+                    mid = item.get("msg_id")
+                    if mid:
+                        cache.setdefault(mid, []).append(item)
+                _log.console(f"  Loaded {len(cache)} cached message(s) for incremental reuse.")
+        except Exception as e:
+            _log.warning(f"Failed to load intel_ideas_cache.json in external_intel: {e}")
+
     # Gmail IMAP folder names. Spam is deliberately excluded — financial newsletters
     # rarely land there legitimately and it adds noise.
     FOLDERS = [
@@ -202,7 +250,14 @@ def fetch_idea_emails():
                                 continue
                             processed_msg_ids.add(msg_id)
 
+                            # Reuse this message's cached extraction if a prior run
+                            # already parsed it (unique Message-ID match).
+                            if msg_id in cache:
+                                ideas.extend(cache[msg_id])
+                                continue
+
                         subject = str(msg["subject"] or "")
+
                         body = ""
                         if msg.is_multipart():
                             for part in msg.walk():
@@ -222,6 +277,7 @@ def fetch_idea_emails():
                             continue
 
                         candidates.append({
+                            "msg_id": msg_id,
                             "from": msg["from"],
                             "subject": subject,
                             "body": body,
@@ -239,6 +295,9 @@ def fetch_idea_emails():
                     _log.console(f"Intel candidate cap ({max_intel}) reached; breaking email scan to protect rate-limits.")
                     break
         except Exception as e:
+            # Fail SOFT per-mailbox: one flaky IMAP account must not abort the whole scan and
+            # silently drop the entire External Intelligence section. Log and move on to the
+            # next mailbox so the remaining ones still contribute candidates.
             _log.error(f"Failed to fetch emails for {email_user}: {e}")
         finally:
             if mail:
@@ -280,6 +339,7 @@ def fetch_idea_emails():
                 intel = res.get("intel")
                 
                 base = {
+                    "msg_id": cand.get("msg_id"),
                     "from": cand.get("from"),
                     "subject": cand.get("subject"),
                     "folder": cand.get("folder"),

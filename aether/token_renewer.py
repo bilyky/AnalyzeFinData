@@ -21,6 +21,8 @@ import os
 import threading
 import time
 
+from aether import trash
+
 _log = logging.getLogger("aether.token_renewer")
 
 
@@ -49,6 +51,8 @@ class TokenRenewer:
         """Return a valid token, renewing if necessary.
 
         Returns the renewed token on success, or None if renewal failed.
+        If the renew_fn raises an exception, the exception is propagated
+        loudly to enforce zero-trust transparency.
         Thread-safe and cross-process safe.
         """
         with self._thread_lock:
@@ -109,7 +113,7 @@ class TokenRenewer:
             # Clean stale lock from a crashed process
             try:
                 if time.time() - os.path.getmtime(self._lock_path) > self._lock_ttl:
-                    os.unlink(self._lock_path)
+                    trash.soft_delete(self._lock_path, reason="renew-lock-stale", force=True)
                     _log.warning(f"Removed stale lock: {self._lock_path}")
                     return os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except (OSError, FileExistsError):
@@ -121,7 +125,4 @@ class TokenRenewer:
             os.close(fd)
         except OSError:
             pass
-        try:
-            os.unlink(self._lock_path)
-        except OSError:
-            pass
+        trash.soft_delete(self._lock_path, reason="renew-lock", force=True)

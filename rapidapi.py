@@ -30,6 +30,7 @@ import time
 import numpy as np
 import requests
 
+from aether import trash
 from aether.logger import get_logger as _get_logger
 from bar_provenance import is_provisional
 from config import CFG
@@ -203,7 +204,7 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> d
         try:
             # 2.5 hour TTL to clear stale locks from crashed runs (recovery can take up to 2 hours)
             if time.time() - os.path.getmtime(lock_path) > 9000:
-                os.unlink(lock_path)
+                trash.soft_delete(lock_path, reason="rapidapi-lock-stale", force=True)
                 fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except OSError:
             pass
@@ -245,10 +246,7 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> d
                 os.close(fd)
             except OSError:
                 pass
-            try:
-                os.unlink(lock_path)
-            except OSError:
-                pass
+            trash.soft_delete(lock_path, reason="rapidapi-lock", force=True)
 
     return results
 

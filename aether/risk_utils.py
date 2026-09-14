@@ -54,7 +54,7 @@ def calculate_atr(symbol, period=14):
         # single tested adjuster; positions align (df is sorted chronological).
         _o, _h, _l, _c = (df["open"].tolist(), df["high"].tolist(),
                           df["low"].tolist(), df["close"].tolist())
-        _h, _l, _c = _split_adjust_ohlcv(_o, _h, _l, _c)
+        _h, _l, _c = split_adjust_ohlcv(_o, _h, _l, _c)
         df["high"], df["low"], df["close"] = _h, _l, _c
 
         # True Range components
@@ -90,10 +90,14 @@ STALE_STOP_DAYS = 10    # OHLCV cache older than this -> don't trust swing-low/A
 _SPLIT_HI, _SPLIT_LO, _SPLIT_OPEN_AGREE = 1.8, 0.55, 0.35
 
 
-def _split_adjust_ohlcv(opens, highs, lows, closes):
+def split_adjust_ohlcv(opens, highs, lows, closes):
     """Back-adjust OHLC for detected splits onto one continuous (current) price scale.
     Returns (highs, lows, closes) — the originals unchanged when no split is found.
-    `opens` are used only for split detection (the crash guard)."""
+    `opens` are used only for split detection (the crash guard).
+
+    Public API: the backtest studies (intc_options_replay_study, covered_call_iv_study,
+    covered_call_winner_study) reuse this, so it is exported without the leading underscore.
+    ``_split_adjust_ohlcv`` remains as a backward-compatible alias for existing callers."""
     n = len(closes)
     if n < 2:
         return highs, lows, closes
@@ -124,6 +128,10 @@ def _split_adjust_ohlcv(opens, highs, lows, closes):
             [closes[i] * factor[i] for i in range(n)])
 
 
+# Backward-compatible alias: pre-existing callers (and tests) import the underscore name.
+_split_adjust_ohlcv = split_adjust_ohlcv
+
+
 def _load_ohlcv_series(symbol, as_of=None):
     """(highs, lows, closes, last_date) chronological from the local OHLCV cache,
     SPLIT-ADJUSTED onto the current price scale; ([], [], [], None) when
@@ -145,7 +153,7 @@ def _load_ohlcv_series(symbol, as_of=None):
         highs = [float(ts[d]["2. high"]) for d in dates]
         lows = [float(ts[d]["3. low"]) for d in dates]
         closes = [float(ts[d]["4. close"]) for d in dates]
-        highs, lows, closes = _split_adjust_ohlcv(opens, highs, lows, closes)
+        highs, lows, closes = split_adjust_ohlcv(opens, highs, lows, closes)
         return highs, lows, closes, dates[-1]
     except Exception:
         return [], [], [], None
