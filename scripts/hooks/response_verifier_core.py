@@ -106,7 +106,7 @@ HEALTH_CLAIMS = (
 
 # Semantic-relevancy mapping: specific health/infra claims are strictly coupled
 # to their relevant diagnostic tools. An unrelated tool call (like Get-Date) can
-# never satisfy these claims (R&D #34).
+# never satisfy these claims (R&D #35).
 RELEVANT_TOOL_KEYWORDS = {
     "etrade": ["etrade", "preflight_validator.py", "test_etrade.py", "verify_live_etrade_token.py"],
     "e*trade": ["etrade", "preflight_validator.py", "test_etrade.py", "verify_live_etrade_token.py"],
@@ -182,7 +182,7 @@ def ran_diagnostic(transcript_path):
 
 def get_diagnostic_turn_text(transcript_path) -> str | None:
     """Read the transcript and return the current turn text if a tool was run,
-    otherwise None. Pure helper for semantic-relevancy verification (R&D #34).
+    otherwise None. Pure helper for semantic-relevancy verification (R&D #35).
     """
     if not transcript_path:
         return None
