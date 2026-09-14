@@ -130,5 +130,62 @@ class AnchorParseTest(unittest.TestCase):
         self.assertEqual(pcv._anchor_regions(content), {"k": [(1, 3), (5, 7)]})
 
 
+class RegistryConsistencyTest(unittest.TestCase):
+    """Guard the REAL DOC_SYNC_SURFACES registry and the REAL anchors in production
+    source. These catch the exact defect that left the gate dormant: a hyphenated key
+    (unmatchable by the anchor regex) and an anchor whose key maps to no surface — both
+    pass check_feature_doc_sync silently, so only a consistency test surfaces them."""
+
+    # Production source roots to scan for live anchors. Excludes tests/ (synthetic
+    # fixtures like `testfeat`) and the validator itself (contains the regex literal,
+    # not a real anchor).
+    _SKIP_DIRS = {".git", "__pycache__", "node_modules", "tests", ".venv", "venv"}
+    _SKIP_FILES = {os.path.join("scripts", "utils", "pre_commit_validator.py")}
+
+    def _live_anchor_keys(self):
+        keys = {}
+        for dirpath, dirnames, filenames in os.walk(_ROOT):
+            dirnames[:] = [d for d in dirnames if d not in self._SKIP_DIRS]
+            for fn in filenames:
+                if not fn.endswith((".py", ".js", ".html")):
+                    continue
+                full = os.path.join(dirpath, fn)
+                rel = os.path.relpath(full, _ROOT)
+                if rel in self._SKIP_FILES:
+                    continue
+                try:
+                    with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                        text = fh.read()
+                except OSError:
+                    continue
+                for key in pcv._ANCHOR_START_RE.findall(text):
+                    keys.setdefault(key, rel)
+        return keys
+
+    def test_all_surface_keys_match_anchor_charset(self):
+        # A key with a hyphen can never be captured by _ANCHOR_START_RE, so its anchor
+        # is dead. Every registered key must be resolvable.
+        for key in pcv.DOC_SYNC_SURFACES:
+            with self.subTest(key=key):
+                self.assertRegex(key, r"^[A-Za-z0-9_]+$",
+                                 f"DOC_SYNC_SURFACES key {key!r} can't match the anchor regex")
+
+    def test_every_surface_doc_exists(self):
+        # A surface pointing at a non-existent file can never be "staged" -> unenforceable.
+        for key, surfaces in pcv.DOC_SYNC_SURFACES.items():
+            for (path, _desc) in surfaces:
+                with self.subTest(key=key, path=path):
+                    self.assertTrue(os.path.isfile(os.path.join(_ROOT, path)),
+                                    f"{key!r} surface {path!r} does not exist")
+
+    def test_no_orphan_live_anchors(self):
+        # Every @doc-sync-start key in production code must map to a surface, else the
+        # anchor fires but blocks nothing (the scarcity_core/chaikin_api failure mode).
+        for key, where in sorted(self._live_anchor_keys().items()):
+            with self.subTest(key=key, where=where):
+                self.assertIn(key, pcv.DOC_SYNC_SURFACES,
+                              f"anchor '{key}' in {where} has no DOC_SYNC_SURFACES entry")
+
+
 if __name__ == "__main__":
     unittest.main()

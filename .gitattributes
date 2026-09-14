@@ -1,0 +1,11 @@
+# Enforce LF endings on checkout and commit for all text files
+* text=auto eol=lf
+
+# Force specific binary or compressed file types to be treated as binary to prevent corruption
+*.png binary
+*.xlsx binary
+*.zip binary
+*.gif binary
+*.jpg binary
+*.jpeg binary
+*.ico binary

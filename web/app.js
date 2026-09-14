@@ -1032,12 +1032,30 @@ async function loadSystem() {
         api("/api/tasks/manual"),
     ]);
 
+    // E*TRADE auth state — the non-sensitive posture embedded in /api/health (state +
+    // needs_manual_auth; the rich detail is admin-only at GET /api/etrade/status). Green = live,
+    // red = a human must run the SMS bootstrap, muted = a self-healing expiry the daily door fixes.
+    const et = health.etrade;
+    const etTitle = et
+        ? (et.needs_manual_auth ? "A human must run the one-time SMS bootstrap."
+           : et.state === "live" ? "Token valid."
+           : "Self-healing: the daily automated re-auth will refresh it.")
+        : "";
+    const etRow = et
+        ? `<div title="${etTitle}">E*TRADE auth: <b class="${
+              et.needs_manual_auth ? "neg" : (et.state === "live" ? "pos" : "mut")
+            }">${(et.state || "—").toUpperCase()}</b>${
+              et.needs_manual_auth ? ' <span class="neg">— manual re-auth needed</span>' : ""
+            }</div>`
+        : `<div>E*TRADE auth: <span class="mut">—</span></div>`;
+
     $("health-body").innerHTML = `
         <div>Data fresh: <b class="${health.data_fresh ? "pos" : "neg"}">${health.data_fresh ? "YES" : "NO"}</b></div>
         <div>Last refresh: <span class="mut">${health.last_refresh || "—"}</span></div>
         <div>Last pipeline: <span class="mut">${health.last_pipeline_run || "—"}</span></div>
         <div>Pipeline status: <b class="${health.pipeline_status === "OK" ? "pos" : "mut"}">${health.pipeline_status}</b></div>
-        <div>Server time: <span class="mut">${health.server_time || "—"}</span></div>`;
+        <div>Server time: <span class="mut">${health.server_time || "—"}</span></div>
+        ${etRow}`;
 
     // Scheduled tasks — with a "Run Now" button that triggers the matching manual task
     const manualById = Object.fromEntries((manual.tasks || []).map((t) => [t.id, t]));
@@ -1728,7 +1746,50 @@ function loadTab(tab) {
     else if (tab === "accounts") loadAccounts();
     else if (tab === "chat") setTimeout(() => $("chat-input").focus(), 50);
     else if (tab === "system") { loadSystem(); _startLogRefresh(); }
-    else if (tab === "about") loadRoadmap();
+    else if (tab === "about") { loadRoadmap(); loadIntelIdeas(); }
+}
+
+function _muted(el, msg) {
+    // Render a dimmed status line as text (no HTML), matching the tab's idiom.
+    const span = document.createElement("span");
+    span.className = "text-slate-500";
+    span.textContent = msg;
+    el.replaceChildren(span);
+}
+
+async function loadIntelIdeas() {
+    const el = $("intel-ideas-dynamic-content");
+    if (!el) return;
+    _muted(el, "Loading AI qualitative research ideas...");
+    try {
+        const d = await api("/api/intel-ideas");
+        if (d.error) {
+            _muted(el, "Error loading research ideas: " + d.error);
+            return;
+        }
+        if (!d.ideas || d.ideas.length === 0) {
+            _muted(el, "No AI qualitative research ideas in backlog.");
+            return;
+        }
+        // Build the list via DOM + textContent — no innerHTML, so idea text can never
+        // be interpreted as markup (matches the .textContent idiom used across app.js).
+        const ul = document.createElement("ul");
+        ul.className = "list-disc pl-4 space-y-2 mt-2";
+        d.ideas.forEach((idea, idx) => {
+            const li = document.createElement("li");
+            li.className = "text-slate-300 hover:text-slate-100 transition";
+            const b = document.createElement("b");
+            b.className = "text-sky-400 font-semibold";
+            b.textContent = `Prompt #${idx + 1}: `;
+            li.appendChild(b);
+            li.appendChild(document.createTextNode(idea));
+            ul.appendChild(li);
+        });
+        el.replaceChildren(ul);
+    } catch (e) {
+        console.warn("Failed to load AI research ideas:", e);
+        _muted(el, "Failed to load AI research ideas (offline fallback).");
+    }
 }
 
 async function loadRoadmap() {

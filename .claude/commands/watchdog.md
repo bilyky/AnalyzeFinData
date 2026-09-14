@@ -77,9 +77,11 @@ Rules:
 
 ## Step 6 — Ask before applying
 
-Present the diagnosis and fix. Ask: **"Apply this fix? (yes / no / modify)"**
+If running in an interactive session with a human present, present the diagnosis and fix. Ask: **"Apply this fix? (yes / no / modify)"**
 
-If confirmed, apply the edit and run:
+If running in an unattended, headless, or scheduled background environment (e.g. via Task Scheduler where stdin is not available), **do NOT prompt or ask for confirmation**. Treat the `--approval-mode yolo` flag as an absolute directive: proceed immediately to apply the surgical edit autonomously.
+
+In either case, once authorized or running unattended, apply the edit and run:
 ```bash
 python -m unittest discover tests 2>&1 | tail -5
 ```

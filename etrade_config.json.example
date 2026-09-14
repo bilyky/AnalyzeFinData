@@ -1,0 +1,13 @@
+{
+    "sandbox": {
+        "consumer_key": "YOUR_SANDBOX_KEY",
+        "consumer_secret": "YOUR_SANDBOX_SECRET"
+    },
+    "production": {
+        "consumer_key": "YOUR_PRODUCTION_KEY",
+        "consumer_secret": "YOUR_PRODUCTION_SECRET"
+    },
+    "username": "YOUR_ETRADE_USERNAME",
+    "password": "YOUR_ETRADE_PASSWORD",
+    "proxy": ""
+}

@@ -51,6 +51,8 @@ class TokenRenewer:
         """Return a valid token, renewing if necessary.
 
         Returns the renewed token on success, or None if renewal failed.
+        If the renew_fn raises an exception, the exception is propagated
+        loudly to enforce zero-trust transparency.
         Thread-safe and cross-process safe.
         """
         with self._thread_lock:

@@ -93,8 +93,9 @@ jobs:
   `https://github.com/<owner>/<repo>/pull/new/<branch>` and paste the title/body.
 
 > ⚠️ **Security boundary:** do NOT scrape a push token out of the `origin` remote URL (or
-> any credential store) to hit the GitHub API — the Claude Code security classifier blocks
-> this, correctly. Use the Actions `GITHUB_TOKEN` (Auto-PR) or interactive `gh auth login`.
+> any credential store) to hit the GitHub API — your agent runtime's security policy should
+> block this, and correctly so. Use the Actions `GITHUB_TOKEN` (Auto-PR) or interactive
+> `gh auth login`.
 
 ## 4. gh CLI setup notes
 
@@ -102,8 +103,8 @@ jobs:
   interactive store prompt: `winget install --id GitHub.cli -e --source winget
   --accept-source-agreements --accept-package-agreements`.
 - **PATH:** a freshly-installed `gh` may not be on the running tool-host's PATH until it
-  restarts — invoke by full path if `gh: command not found` (e.g. Windows:
-  `"C:\Program Files\GitHub CLI\gh.exe"`).
+  restarts — if `gh: command not found`, resolve its location portably (`command -v gh`, or
+  `Get-Command gh` on PowerShell) and invoke it by that full path. Don't hardcode an OS path.
 - **Auth is interactive:** `gh auth login` needs a browser/prompt a non-interactive shell
   can't drive. Ask the user to run it (`! gh auth login`), or use a PAT they supply via
   `gh auth login --with-token`. Don't hunt for a hidden token.
@@ -117,6 +118,13 @@ unreachable, **verify over the git transport**, which uses the same proxy git al
 - **Open PRs:** `git ls-remote origin 'refs/pull/*/head'` — every open PR advertises a
   `refs/pull/<n>/head` ref; empty output = no open PR.
 - **Confirm a push landed:** `git ls-remote origin 'refs/heads/<branch>'`.
+- **Confirm a MERGE landed — by ancestry, not the badge.** A GitHub "Merged" badge is not
+  proof the commit is in the base branch (a later history rewrite can drop it). Verify the
+  merge commit is actually reachable from the default branch:
+  `git fetch -q origin && git merge-base --is-ancestor <merge_sha> origin/main` (exit 0 =
+  merged for real). Get `<merge_sha>` from `gh api repos/<owner>/<repo>/pulls/<n> --jq
+  .merge_commit_sha`. For extra assurance, confirm the change's *effect* is on the base
+  branch (`git show origin/main:<path>`), not just that a merge commit exists.
 - **CI run logs** (if the API/browser is blocked from the agent): only the user can see
   them — point them at `https://github.com/<owner>/<repo>/actions`.
 

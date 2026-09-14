@@ -32,6 +32,19 @@ class _StateFileMixin:
         self.addCleanup(
             lambda: os.path.exists(self._state_path) and os.unlink(self._state_path)
         )
+        # A successful _login_headless now (re-)proves device trust via _set_profile_trust,
+        # which writes _TRUST_MARKER_PATH. Redirect it to a throwaway temp file so the success
+        # test never leaks a bogus 'trusted' marker into the real Data/ (a stray marker there
+        # would let production's scheduled_reauth open an unattended browser with no real seed).
+        fd2, self._trust_path = tempfile.mkstemp(suffix=".trust.json")
+        os.close(fd2)
+        os.unlink(self._trust_path)
+        tp = mock.patch.object(etrade, "_TRUST_MARKER_PATH", self._trust_path)
+        tp.start()
+        self.addCleanup(tp.stop)
+        self.addCleanup(
+            lambda: os.path.exists(self._trust_path) and os.unlink(self._trust_path)
+        )
 
 
 class TestCircuitBreakerBackoff(_StateFileMixin, unittest.TestCase):

@@ -1,6 +1,5 @@
 import datetime
 import json
-import logging
 import os
 import re as _re
 import sys
@@ -13,14 +12,31 @@ from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 from requests_oauthlib import OAuth1Session
 
-from aether import notify
-from aether import paths
+from aether import notify, paths, trash
 from aether.config import CFG
+from aether.logger import get_logger
+from aether.token_renewer import TokenRenewer as _TokenRenewer
 
 
-_log = logging.getLogger("aether.etrade")
+_log = get_logger("aether.etrade")
 
-_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+class SmsRequired(Exception):
+    """Raised when an AUTOMATED (headless) re-auth reaches E*TRADE's SMS/OTP wall.
+
+    Device-trust has lapsed, so E*TRADE demands a one-time SMS code no code can supply. This
+    is NOT a failure/ban condition — the browser and login worked, trust merely expired — so
+    the automated door (scheduled_reauth) catches it to latch the profile 'sms_required' and
+    alert a human, WITHOUT escalating the anti-ban circuit breaker. Carries the env for logs.
+    """
+    def __init__(self, env: str = "production"):
+        super().__init__(f"E*TRADE {env}: SMS/OTP required — device trust lapsed")
+        self.env = env
+
+
+# Checkout root. This module lives at <root>/aether/etrade/__init__.py, so climb THREE
+# levels (etrade/ -> aether/ -> root). Was two when this was the single-file aether/etrade.py.
+_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Canonical directory for E*TRADE auth-state files (token, browser state, breaker, locks).
 # Resolved through aether.paths.data_dir() — the ONE place the $AETHER_DATA_DIR-vs-<checkout>/Data
@@ -32,7 +48,6 @@ _DATA_DIR = paths.data_dir()
 _TOKEN_PATH = os.path.join(_DATA_DIR, "etrade_tokens.json")
 _FAIL_STATE_PATH = os.path.join(_DATA_DIR, "etrade_fail_state.json")
 
-from aether.token_renewer import TokenRenewer as _TokenRenewer
 
 
 try:
@@ -72,11 +87,28 @@ _BROWSER_STATE_PATH = os.path.join(_DATA_DIR, "etrade_browser_state.json")
 # _DATA_DIR (gitignored Data/), so the profile — and its cookies — never reach git.
 _CHROME_PROFILE_DIR = os.path.join(_DATA_DIR, "etrade_chrome_profile")
 
+# Trust-state marker driving the automated daily re-auth door (scheduled_reauth). The state
+# machine is UNSEEDED → TRUSTED → SMS_REQUIRED: the automated path opens a browser ONLY when
+# this reads "trusted" (a supervised bootstrap proved the profile holds device-trust), and
+# latches to "sms_required" the instant a headless run hits the OTP wall — so no automated
+# browser ever hammers the login while device-trust is down. Gitignored Data/, never in git.
+_TRUST_MARKER_PATH = os.path.join(_DATA_DIR, "etrade_profile_trusted.json")
+
+# Single-source JS predicate: "has the browser LEFT the login page?" — true once we've reached
+# the OAuth consent page, the OTP wall, or any non-login URL. Used by both the headed (human)
+# and headless (auto-submit) waits below so the detection rule can't drift between them.
+_LEFT_LOGIN_PAGE_JS = """() => {
+    const href = location.href.toLowerCase();
+    if (!href.includes('/pxy/login')) return true;   // left the login page
+    if (href.includes('otp')) return true;           // OTP wall reached
+    return !!document.querySelector(
+        "input[value='Accept'], button[value='Accept'], #oauth_pin");
+}"""
+
 # Auth-state files are never hard-deleted in the hot path: a fresh, still-valid token
 # can be destroyed by one transient/edge 401, so on rejection/revoke we route through
 # the project-wide soft-delete (moved to Data/.trash, recoverable, purged after the
 # retention window by the watchdog). See aether/trash.py.
-from aether import trash
 
 
 def _et_today() -> str:
@@ -84,6 +116,31 @@ def _et_today() -> str:
     # to completely isolate live brokerage authentications from any simulated
     # or mocked date-stepping inside your game/backtest runs!
     return datetime.datetime.fromtimestamp(time.time(), _ET).date().isoformat()
+
+
+def _et_now() -> str:
+    """Full ET timestamp (seconds) — stamps WHEN an auth verdict was computed (Temporal
+    Zero-Trust: a status is only true as of its check time). Same unmocked physical clock."""
+    return datetime.datetime.fromtimestamp(time.time(), _ET).isoformat(timespec="seconds")
+
+
+class AuthReason:
+    """The E*TRADE auth-state vocabulary, defined once.
+
+    Shared by auth_status() and scheduled_reauth() so neither hardcodes a divergent string. The
+    first six values double as scheduled_reauth's `reason` field (string values unchanged), so
+    both paths speak one language.
+    """
+    RENEWED       = "renewed"        # a live same-day token was refreshed via ban-free HTTP renew
+    REAUTHED      = "reauthed"       # a fresh token was minted through the browser (automated door)
+    SMS_REQUIRED  = "sms_required"   # device trust lapsed — a human SMS bootstrap is required
+    UNSEEDED      = "unseeded"       # profile never bootstrapped — a supervised bootstrap is required
+    BREAKER       = "breaker"        # the anti-ban circuit breaker is cooling down
+    FAILED        = "failed"         # an automated browser re-auth attempt failed
+    LIVE          = "live"           # token present and valid (local record, or probe-confirmed)
+    EXPIRED       = "expired"        # token dead (overnight/midnight-ET) or broker-rejected (401/403)
+    MISSING       = "missing"        # no token file present
+    INDETERMINATE = "indeterminate"  # transient/unknown (probe blip) — never act destructively
 
 
 # ---------------------------------------------------------------------------
@@ -113,32 +170,19 @@ def _proxies():
 
 
 def _save_tokens(tokens, env):
-    tokens["env"] = env
-    tokens["saved_at"]      = time.time()
-    tokens["issued_date_et"] = _et_today()
-    os.makedirs(os.path.dirname(_TOKEN_PATH), exist_ok=True)
-    with open(_TOKEN_PATH, "w") as f:
-        json.dump(tokens, f, indent=2)
-    # Log the ABSOLUTE destination: the token path is checkout-relative, so a re-auth run
-    # from the wrong worktree silently saves where prod never reads. Making the target
-    # visible turns that class of mistake into something you can see in one glance.
-    _log.info(f"E*TRADE {env} token saved ({tokens['issued_date_et']}) -> {_TOKEN_PATH}")
+    """Shim → ``store.FileTokenStore().save``; the I/O body lives in the store adapter.
+
+    (``FileTokenStore`` is imported at module scope from the bottom store import.)
+    """
+    FileTokenStore().save(tokens, env)
 
 
 def _load_tokens(env):
-    """Return cached tokens if issued today (ET), otherwise None."""
-    if not os.path.exists(_TOKEN_PATH):
-        return None
-    with open(_TOKEN_PATH) as f:
-        tokens = json.load(f)
-    if tokens.get("env") != env:
-        return None
-    if tokens.get("issued_date_et") != _et_today():
-        _log.info("Cached tokens are from a previous trading day — re-authenticating...")
-        return None
-    age_min = (time.time() - tokens.get("saved_at", 0)) / 60
-    _log.info(f"Cached tokens found ({age_min:.0f} min old, issued today ET).")
-    return tokens
+    """Return cached tokens if issued today (ET), otherwise None.
+
+    Shim → ``store.FileTokenStore().load``; the I/O body lives in the store adapter.
+    """
+    return FileTokenStore().load(env)
 
 
 def _probe_token_auth(tokens, env="production"):
@@ -182,7 +226,7 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
     # E*TRADE rejects renewal if called too soon (< 55 min) and may revoke the session.
     # We set this to 55 minutes so that hourly (60-minute) Watchdog executions can successfully
     # renew the session without drifting into soft-expiry or triggering E*TRADE rate limits.
-    age_min = (time.time() - tokens.get("saved_at", 0)) / 60
+    age_min = max(0.0, time.time() - tokens.get("saved_at", 0)) / 60
     if age_min < 55:
         _log.debug(f"Token {age_min:.0f}m old — reusing without renewal.")
         return tokens
@@ -194,6 +238,8 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
             r = session.get(_RENEW_URL[env], proxies=_proxies(), verify=False, timeout=10)
             if r.ok:
                 tokens["saved_at"] = time.time()
+                # A successful renewal across midnight officially promotes the token to the new day
+                tokens["issued_date_et"] = _et_today()
                 _save_tokens(tokens, env)
                 return tokens
             _log.warning(f"Renew failed: HTTP {r.status_code} — {r.text[:120]}")
@@ -234,12 +280,12 @@ def revoke_tokens(tokens, env="sandbox") -> bool:
         r = session.get(_REVOKE_URL[env], proxies=_proxies(), verify=False, timeout=10)
         if r.ok:
             trash.soft_delete(_TOKEN_PATH, reason="revoked")   # soft-delete (recoverable)
-            print("Tokens revoked and cache cleared.")
+            _log.console("Tokens revoked and cache cleared.")
             return True
-        print(f"  [Token] Revoke failed: HTTP {r.status_code}")
+        _log.console(f"  [Token] Revoke failed: HTTP {r.status_code}")
         return False
     except Exception as e:
-        print(f"  [Token] Revoke error: {e}")
+        _log.console(f"  [Token] Revoke error: {e}")
         return False
 
 
@@ -286,39 +332,33 @@ def _load_reauth_state(env: str = "production") -> dict:
     """Circuit-breaker state: {consecutive_failures, last_attempt, cooldown_until}.
 
     A missing/corrupt file reads as a fully-open gate (no active cooldown).
+    Shim → ``store.FileReauthStateStore().load``; the I/O body lives in the store adapter.
     """
-    try:
-        with open(_reauth_state_path(env)) as f:
-            s = json.load(f)
-        return {
-            "consecutive_failures": int(s.get("consecutive_failures", 0)),
-            "last_attempt":         float(s.get("last_attempt", 0.0)),
-            "cooldown_until":       float(s.get("cooldown_until", 0.0)),
-        }
-    except (OSError, ValueError, TypeError):
-        return {"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}
+    return FileReauthStateStore().load(env)
 
 
 def _save_reauth_state(state: dict, env: str = "production") -> None:
-    path = _reauth_state_path(env)
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(state, f, indent=2)
-    except OSError:
-        pass
+    """Shim → ``store.FileReauthStateStore().save``; the I/O body lives in the store adapter."""
+    FileReauthStateStore().save(state, env)
+
+
+def _cooldown_remaining_from_state(state: dict) -> float:
+    """Seconds left on the automated-reauth cooldown for an ALREADY-LOADED breaker state dict —
+    the single home of the cooldown arithmetic. 0.0 means the gate is open."""
+    return max(0.0, state["cooldown_until"] - time.time())
 
 
 def _reauth_cooldown_remaining(env: str = "production") -> float:
     """Seconds left on the automated-reauth cooldown. 0.0 means the gate is open."""
-    return max(0.0, _load_reauth_state(env)["cooldown_until"] - time.time())
+    return _cooldown_remaining_from_state(_load_reauth_state(env))
 
 
 def reset_reauth_circuit_breaker(env: str = "production") -> None:
     """Clear the breaker. Called automatically on any SUCCESSFUL login (including the
     human `scripts/diagnostics/test_etrade.py` path), so a good re-auth restores normal
-    automated operation. Safe to call by hand to force a retry."""
-    _save_reauth_state({"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}, env)
+    automated operation. Safe to call by hand to force a retry.
+    Shim → ``store.FileReauthStateStore().reset``; the I/O body lives in the store adapter."""
+    FileReauthStateStore().reset(env)
 
 
 def _record_reauth_attempt(env: str = "production") -> None:
@@ -345,6 +385,57 @@ def _record_reauth_attempt(env: str = "production") -> None:
         f"E*TRADE: automated re-auth attempt #{failures} — breaker armed for {backoff:.0f} min "
         f"(cleared on success). Manual re-auth: python scripts/diagnostics/test_etrade.py {env}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Persistent-profile trust state (gates the automated daily re-auth door)
+# ---------------------------------------------------------------------------
+
+def _profile_trust_state(env: str = "production") -> str:
+    """Automated-reauth trust state for env: 'trusted' | 'sms_required' | 'unseeded'.
+
+    'unseeded'     — no supervised bootstrap has proved the profile yet (default; missing file).
+    'trusted'      — a bootstrap (or a prior zero-touch run) minted a token through the profile
+                     browser; the automated door MAY open a browser.
+    'sms_required' — a headless run hit the OTP wall; the automated door must NOT open a browser
+                     until a human re-seeds via `aether etrade-login --bootstrap`.
+    """
+    try:
+        with open(_TRUST_MARKER_PATH) as f:
+            m = json.load(f)
+    except (OSError, ValueError, TypeError):
+        return "unseeded"
+    if not isinstance(m, dict) or m.get("env") != env:
+        return "unseeded"
+    state = m.get("state")
+    return state if state in ("trusted", "sms_required") else "unseeded"
+
+
+def _set_profile_trust(env: str, state: str) -> None:
+    """Persist the profile trust state ('trusted' or 'sms_required'). Best-effort."""
+    try:
+        os.makedirs(os.path.dirname(_TRUST_MARKER_PATH), exist_ok=True)
+        with open(_TRUST_MARKER_PATH, "w") as f:
+            json.dump({
+                "env": env,
+                "state": state,
+                "updated_at": time.time(),
+                "updated_date_et": _et_today(),
+            }, f, indent=2)
+        _log.info(f"E*TRADE {env} profile trust -> {state}")
+    except OSError as e:
+        _log.warning(f"E*TRADE: could not write trust marker: {e}")
+
+
+def _scheduled_headless() -> bool:
+    """Whether the automated daily re-auth (scheduled_reauth) runs headless. Default True; set
+    AETHER_ETRADE_SCHEDULED_HEADLESS=0 (or config etrade_scheduled_headless=false) to run headful
+    without a code change — the escape hatch if the prove stage finds headless trips Akamai and a
+    real window survives the challenge."""
+    v = os.environ.get("AETHER_ETRADE_SCHEDULED_HEADLESS")
+    if v is None:
+        v = str(getattr(CFG, "etrade_scheduled_headless", "") or "")
+    return v.strip().lower() not in ("0", "false", "no", "off")
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +476,14 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str, he
             tokens = oauth.get_access_token(verifier_code)
             _save_tokens(tokens, env)
             reset_reauth_circuit_breaker(env)   # success retracts the pre-armed failure
+            _set_profile_trust(env, "trusted")  # a clean mint through the profile proves trust
             return tokens
+    except SmsRequired:
+        # OTP wall in a headless run: the browser and login WORKED — trust merely lapsed. That
+        # is not a ban-risk failure, so retract the pre-armed breaker (don't let it escalate)
+        # and propagate the signal so the caller latches sms_required and alerts a human.
+        reset_reauth_circuit_breaker(env)
+        raise SmsRequired(env)
     except Exception as e:
         _log.debug(f"_login_headless: {e}")
     return None
@@ -424,7 +522,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                 return True
             except PWTimeout:
                 continue
-        print(f"  [Auth] Could not auto-fill {step_name} — complete it manually in the browser.")
+        _log.console(f"  [Auth] Could not auto-fill {step_name} — complete it manually in the browser.")
         return False
 
     verifier = None
@@ -439,6 +537,18 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
         # (launch_persistent_context returns the context and owns the browser).
         os.makedirs(_CHROME_PROFILE_DIR, exist_ok=True)
         _log.info("  [Auth] Using persistent Chrome profile: %s", _CHROME_PROFILE_DIR)
+
+        # Defensively clean up any stale Chrome lock file (SingletonLock) before launching.
+        # This completely prevents BrowserType.launch_persistent_context from crashing with
+        # exitCode=21 (RESULT_CODE_PROFILE_IN_USE) on Windows if a previous session crashed.
+        lock_file = os.path.join(_CHROME_PROFILE_DIR, "SingletonLock")
+        if os.path.exists(lock_file):
+            try:
+                os.remove(lock_file)
+                _log.info("  [Auth] Removed stale Chrome SingletonLock file to prevent profile-in-use errors.")
+            except Exception as le:
+                _log.warning("  [Auth] Could not remove stale SingletonLock (might be locked by an active process): %s", le)
+
         ctx = p.chromium.launch_persistent_context(
             _CHROME_PROFILE_DIR,
             headless=headless,
@@ -450,6 +560,11 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
             args=["--disable-blink-features=AutomationControlled"],
+            # Suppress Chrome's default --enable-automation switch: it paints the
+            # "Chrome is being controlled by automated test software" infobar and is a
+            # cheap, well-known Akamai Bot Manager tell that stalls the login POST even
+            # when a human types the credentials. Removing it drops that fingerprint.
+            ignore_default_args=["--enable-automation"],
         )
         # Remove navigator.webdriver flag so E*TRADE doesn't detect automation
         ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -470,19 +585,47 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
             try:
                 p = os.path.join(_SS, f"etrade_debug_{name}.png")
                 page.screenshot(path=p)
-                print(f"  [Debug] Screenshot: {p}  |  URL: {page.url[:80]}")
-            except Exception:
-                pass
+                _log.console(f"  [Debug] Screenshot: {p}  |  URL: {page.url[:80]}")
+            except Exception as exc:
+                _log.debug("etrade auth: debug screenshot failed: %s", exc)
 
         try:
-            print("Opening E*TRADE authorization page...")
+            _log.console("Opening E*TRADE authorization page...")
             page.goto(auth_url, wait_until="domcontentloaded", timeout=30000)
             _snap("01_loaded")
 
-            # Auto-fill login form
-            user_ok = _try_fill(page, _USER_SELECTORS, username, "username")
-            pass_ok = _try_fill(page, _PASS_SELECTORS, password, "password")
-            _snap("02_filled")
+            # How the login form gets filled depends on WHO drives it. Programmatic keystrokes
+            # (page.type / page.press) carry a behavioral fingerprint E*TRADE's Akamai bot-check
+            # flags — the "Log on" button then spins forever on the .../pxy/login URL and the flow
+            # stalls. A HUMAN typing on a trusted device passes cleanly (and, device-trust intact,
+            # is never even asked for SMS). So:
+            #   * headless (automated daily run on an already-PROVEN profile) -> auto-fill + submit
+            #   * headed  (supervised bootstrap / re-seed)                    -> the HUMAN types
+            if headless:
+                user_ok = _try_fill(page, _USER_SELECTORS, username, "username")
+                pass_ok = _try_fill(page, _PASS_SELECTORS, password, "password")
+                _snap("02_filled")
+            else:
+                user_ok = pass_ok = False   # skip the auto-submit + 30s auto-wait blocks below
+                _snap("02_login_page")
+                # Human-action prompt that gates a 3-min blocking wait below — must stay
+                # visible even under LOG_LEVEL=WARNING (CONSOLE is suppressed there), so use
+                # warning, not console. See _log.console vs .warning gating in aether/logger.py.
+                _log.warning("\n" + "=" * 68)
+                _log.warning("  ACTION NEEDED - log in YOURSELF in the browser window:")
+                _log.warning("    1. Type your User ID + password and click 'Log on'.")
+                _log.warning("       (If the SCRIPT types, Akamai stalls the login; your own")
+                _log.warning("        typing on this trusted device passes cleanly.)")
+                _log.warning("    2. If asked, complete SMS and tick 'remember this device'.")
+                _log.warning("    3. On the 'Authorize application' page, click Accept.")
+                _log.warning("  Then return here - the verifier is captured automatically.")
+                _log.warning("=" * 68 + "\n")
+                try:
+                    page.wait_for_function(_LEFT_LOGIN_PAGE_JS, timeout=180000)  # 3 min for the human
+                    _log.console(f"  [Auth] Login processed - page is now: {page.url[:80]}")
+                except Exception:
+                    _log.console("  [Auth] Did not leave the login page within 3 min - inspecting state.")
+                _snap("03b_post_login")
             if user_ok and pass_ok:
                 # Press Enter exactly once on the first matching password field to prevent duplicate submission loops
                 submitted = False
@@ -490,7 +633,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                     try:
                         page.wait_for_selector(sel, timeout=3000)
                         page.press(sel, "Enter")
-                        print("  [Auth] Enter pressed on password field.")
+                        _log.console("  [Auth] Enter pressed on password field.")
                         submitted = True
                         break
                     except Exception:
@@ -500,31 +643,60 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                     # Wait for navigation/load state with grace, without re-submitting and spamming E*TRADE
                     try:
                         page.wait_for_load_state("domcontentloaded", timeout=15000)
-                        print("  [Auth] Submitted login form via Enter.")
+                        _log.console("  [Auth] Submitted login form via Enter.")
                     except Exception:
-                        print("  [Auth] Submission page load completed silently or timed out.")
+                        _log.console("  [Auth] Submission page load completed silently or timed out.")
                 else:
                     try:
                         page.evaluate("document.querySelector('button').click()")
-                        print("  [Auth] Submitted via JS click.")
+                        _log.console("  [Auth] Submitted via JS click.")
                         page.wait_for_load_state("domcontentloaded", timeout=15000)
                     except Exception as e:
-                        print(f"  [Auth] Submit failed ({e}) — click Log on manually.")
+                        _log.console(f"  [Auth] Submit failed ({e}) — click Log on manually.")
             _snap("03_after_submit")
+
+            # E*TRADE's login submit is an AJAX/SPA call: no full-document navigation fires, so
+            # the domcontentloaded wait above returns while the "Log on" button is still spinning
+            # on the SAME .../pxy/login URL. Proceeding immediately made the flow hunt for consent
+            # controls on the login page itself (it toggled the login page's "Remember User ID"
+            # box and found no Accept button), then poll fruitlessly for a verifier that never
+            # appears. Wait for the page to actually LEAVE the login screen — the OAuth consent
+            # page, the OTP wall, or any non-login URL — before running the OTP / Accept logic.
+            # Bounded so a genuine Akamai spinner-hang still fails fast instead of blocking.
+            if user_ok and pass_ok:
+                try:
+                    page.wait_for_function(_LEFT_LOGIN_PAGE_JS, timeout=30000)
+                    _log.console(f"  [Auth] Login processed — page is now: {page.url[:80]}")
+                except Exception:
+                    _log.console("  [Auth] Still on the login page after 30s (slow render or Akamai "
+                          "hold) — proceeding to inspect the current state.")
+                _snap("03b_post_login")
 
             # Handle MFA / OTP step (sendotpcode page)
             if "sendotpcode" in page.url or "otp" in page.url.lower():
                 _snap("04_otp_page")
-                print("  [Auth] MFA required — clicking 'Send Code'...")
+                if headless:
+                    # Automated/scheduled path: device-trust lapsed and E*TRADE wants a one-time
+                    # SMS. No human is here — do NOT click "Send Code" (that fires a real SMS for
+                    # nothing) and do NOT wait. Abort instantly with a distinct signal so the
+                    # caller latches 'sms_required' and alerts a human. Close the context first so
+                    # any partial Akamai cookie progress flushes to the persistent profile.
+                    _log.warning("  [Auth] OTP wall hit in headless mode — aborting for manual SMS re-auth.")
+                    try:
+                        ctx.close()
+                    except Exception as exc:
+                        _log.debug("etrade auth: ctx.close() during headless OTP abort failed: %s", exc)
+                    raise SmsRequired()
+                _log.console("  [Auth] MFA required — clicking 'Send Code'...")
                 for sel in ["button:has-text('Send Code')", "input[value='Send Code']",
                             "button[type='submit']"]:
                     try:
                         page.click(sel, timeout=5000)
-                        print("  [Auth] SMS code sent to your phone.")
+                        _log.console("  [Auth] SMS code sent to your phone.")
                         break
                     except PWTimeout:
                         continue
-                print("  [Auth] Enter the SMS code in the browser window, then submit.")
+                _log.console("  [Auth] Enter the SMS code in the browser window, then submit.")
                 # Wait up to 2 min for user to leave ALL OTP-related pages
                 _otp_pages = ("sendotpcode", "enterotpcode", "verifyotpcode")
                 for _ in range(24):
@@ -533,14 +705,14 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                         _snap("05_after_otp")
                         break
                 else:
-                    print("  [Auth] Still on OTP page — complete it manually in the browser.")
+                    _log.console("  [Auth] Still on OTP page — complete it manually in the browser.")
 
             if not verifier:
                 # Wait for the authorize page to fully load
                 try:
                     page.wait_for_load_state("networkidle", timeout=10000)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.debug("etrade auth: wait_for_load_state(networkidle) timed out: %s", exc)
                 _snap("06_authorize_page")
 
                 # Scroll window + any scrollable divs to reveal checkbox/buttons
@@ -552,18 +724,18 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                         });
                     """)
                     page.wait_for_timeout(700)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.debug("etrade auth: scroll-to-reveal failed: %s", exc)
 
                 # Check agreement checkbox — try role locator, CSS, then JS fallback
                 try:
                     page.get_by_role("checkbox").first.check(timeout=3000)
-                    print("  [Auth] Checked agreement checkbox (role).")
+                    _log.console("  [Auth] Checked agreement checkbox (role).")
                     page.wait_for_timeout(500)
                 except Exception:
                     try:
                         page.locator("input[type='checkbox']").first.check(timeout=2000)
-                        print("  [Auth] Checked agreement checkbox (locator).")
+                        _log.console("  [Auth] Checked agreement checkbox (locator).")
                         page.wait_for_timeout(500)
                     except Exception:
                         try:
@@ -571,20 +743,20 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                                 "document.querySelector('input[type=\"checkbox\"]')?.click()"
                             )
                             page.wait_for_timeout(500)
-                            print("  [Auth] Checked agreement checkbox (JS).")
-                        except Exception:
-                            pass
+                            _log.console("  [Auth] Checked agreement checkbox (JS).")
+                        except Exception as exc:
+                            _log.debug("etrade auth: agreement-checkbox JS fallback failed: %s", exc)
 
                 # Auto-click Accept — try role locator first, then CSS selectors, then JS
                 accepted = False
                 try:
                     with page.expect_navigation(timeout=15000):
                         page.get_by_role("button", name="Accept").click(timeout=5000)
-                    print("  [Auth] Clicked Accept (role).")
+                    _log.console("  [Auth] Clicked Accept (role).")
                     _snap("07_after_accept")
                     accepted = True
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.debug("etrade auth: Accept (role) click failed: %s", exc)
 
                 if not accepted:
                     for sel in _ACCEPT_SELECTORS:
@@ -592,7 +764,7 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                             page.wait_for_selector(sel, timeout=5000)
                             with page.expect_navigation(timeout=15000):
                                 page.click(sel)
-                            print("  [Auth] Clicked Accept.")
+                            _log.console("  [Auth] Clicked Accept.")
                             _snap("07_after_accept")
                             accepted = True
                             break
@@ -610,15 +782,15 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                         }""")
                         page.wait_for_timeout(3000)
                         if page.url != _url_before:
-                            print("  [Auth] Clicked Accept (JS).")
+                            _log.console("  [Auth] Clicked Accept (JS).")
                             _snap("07_after_accept")
                             accepted = True
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _log.debug("etrade auth: Accept (JS) fallback failed: %s", exc)
 
                 if not accepted:
                     _snap("07_no_accept")
-                    print("  [Auth] Accept button not found — complete it manually in the browser.")
+                    _log.console("  [Auth] Accept button not found — complete it manually in the browser.")
 
             def _try_read_verifier():
                 """Attempt to extract verifier from the current page."""
@@ -631,8 +803,8 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                             val = (el.get_attribute("value") or "").strip()
                             if val and _re.match(r'^[A-Z0-9]{4,10}$', val):
                                 return val
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _log.debug("etrade auth: verifier input read failed: %s", exc)
                 # 2. Known text containers
                 for sel in _VERIFIER_SELECTORS:
                     try:
@@ -641,8 +813,8 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                             text = el.inner_text().strip()
                             if text and _re.match(r'^[A-Z0-9]{4,10}$', text):
                                 return text
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _log.debug("etrade auth: verifier text-container read failed: %s", exc)
                 # 3. Scan body — look for "verification code" context then grab adjacent uppercase word
                 try:
                     body = page.inner_text("body")
@@ -650,26 +822,31 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                     m = _re.search(r'(?:verification code[^A-Z0-9]*|code is[^A-Z0-9]*)([A-Z0-9]{4,10})', body)
                     if m:
                         return m.group(1)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.debug("etrade auth: verifier body-scan failed: %s", exc)
                 return None
 
             # Poll page for verifier up to 3 minutes
             if not verifier:
-                print("Waiting for E*TRADE verifier code (up to 3 min)...")
+                _log.console("Waiting for E*TRADE verifier code (up to 3 min)...")
                 for _ in range(36):
                     if verifier:
                         break
                     try:
                         verifier = _try_read_verifier()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _log.debug("etrade auth: verifier poll read failed: %s", exc)
                     if verifier:
                         break
                     page.wait_for_timeout(5000)
 
+        except SmsRequired:
+            # Device trust lapsed and the OTP wall appeared in a headless run. This is NOT a
+            # browser-interaction failure (login worked) — propagate it intact so the caller
+            # latches sms_required. The finally still runs; verifier is None so no state save.
+            raise
         except Exception as e:
-            print(f"  [Auth] Browser interaction error: {e}")
+            _log.console(f"  [Auth] Browser interaction error: {e}")
         finally:
             # Save browser state (trusted-device cookies) before closing.
             # Write via json.dump with utf-8 to avoid Windows cp1252 encoding errors.
@@ -679,14 +856,14 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                     state = ctx.storage_state()   # returns dict — no file I/O by Playwright
                     with open(_BROWSER_STATE_PATH, "w", encoding="utf-8") as _f:
                         json.dump(state, _f, indent=2, ensure_ascii=False)
-                    print("  [Auth] Browser state saved — future logins skip MFA.")
+                    _log.console("  [Auth] Browser state saved — future logins skip MFA.")
                 except Exception as e:
-                    print(f"  [Auth] Could not save browser state: {e}")
+                    _log.console(f"  [Auth] Could not save browser state: {e}")
             # Persistent context owns its browser — closing the context tears both down.
             try:
                 ctx.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug("etrade auth: ctx.close() in finally failed: %s", exc)
 
     # Always fall back to manual entry if automation couldn't capture the verifier
     if not verifier:
@@ -696,9 +873,11 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
                 "Failing immediately to prevent background process hang."
             )
 
-        print("\nCould not auto-capture verifier. Open this URL in your browser if it isn't open:")
-        print(f"  {auth_url}")
-        print("Log in, click Accept, then paste the code shown on screen.")
+        # Human-action prompt that gates the blocking input() below — must stay visible even
+        # under LOG_LEVEL=WARNING (CONSOLE is suppressed there), so use warning, not console.
+        _log.warning("\nCould not auto-capture verifier. Open this URL in your browser if it isn't open:")
+        _log.warning("  %s", auth_url)
+        _log.warning("Log in, click Accept, then paste the code shown on screen.")
         try:
             verifier = input("Verification code: ").strip()
         except EOFError:
@@ -711,15 +890,11 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
 
 
 def _load_tokens_any_date(env) -> dict | None:
-    """Load cached tokens regardless of issue date — for renewal attempts."""
-    if not os.path.exists(_TOKEN_PATH):
-        return None
-    try:
-        with open(_TOKEN_PATH) as f:
-            tokens = json.load(f)
-        return tokens if tokens.get("env") == env else None
-    except Exception:
-        return None
+    """Load cached tokens regardless of issue date — for renewal attempts.
+
+    Shim → ``store.FileTokenStore().load_any_date``; the I/O body lives in the store adapter.
+    """
+    return FileTokenStore().load_any_date(env)
 
 
 def _get_failure_state():
@@ -728,8 +903,8 @@ def _get_failure_state():
         try:
             with open(fail_path, "r") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("etrade: failure-state read failed: %s", exc)
     return {"consecutive_failures": 0, "last_failure_time": 0}
 
 
@@ -757,8 +932,8 @@ def check_etrade_cookie_freshness():
                     os.makedirs(os.path.dirname(fail_path), exist_ok=True)
                     with open(fail_path, "w") as f:
                         json.dump(state, f)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.debug("etrade: failure-state write failed: %s", exc)
 
                 try:
                     msg = (
@@ -821,14 +996,14 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
         stale = _load_tokens_any_date(env)
         if stale:
             _log.info("Attempting renewal of previous-day E*TRADE tokens...")
-            # Attempt renewal unless the broker explicitly rejects the token (401/403);
-            # a transient probe failure (None) should not block the renewal attempt.
-            if _probe_token_auth(stale, env) is not False:
-                renewed = renew_tokens(stale, env)
-                if renewed:
-                    _log.info("Previous-day token renewed successfully.")
-                    check_etrade_cookie_freshness()
-                    return renewed
+            # We explicitly bypass the data probe here. The broker will ALWAYS reject a data
+            # probe (401/403) on a yesterday token, which would falsely kill the token before
+            # we can renew it across midnight. We blindly fire the pure HTTP renewal instead.
+            renewed = renew_tokens(stale, env)
+            if renewed:
+                _log.info("Previous-day token renewed successfully.")
+                check_etrade_cookie_freshness()
+                return renewed
 
     # Silent renewal exhausted — try headless Playwright with saved browser state.
     # Uses the same cross-process file lock as renew_tokens() to guarantee only ONE
@@ -865,6 +1040,10 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
                     _log.info("E*TRADE: automatic re-authentication succeeded.")
                     return tokens
                 _log.warning("E*TRADE: automatic re-authentication failed (browser state may be stale).")
+            except SmsRequired:
+                # Trust lapsed mid-renewal; don't swallow it as a generic error — let the
+                # dedicated door (scheduled_reauth) latch sms_required and alert a human.
+                raise
             except Exception as e:
                 _log.warning(f"E*TRADE: headless Playwright re-auth error: {e}")
 
@@ -879,11 +1058,11 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     if not sys.stdin.isatty():
         raise RuntimeError("E*TRADE: cannot re-authenticate in a headless environment.")
 
-    print("Re-authenticating with browser...")
+    _log.console("Re-authenticating with browser...")
 
     oauth = pyetrade.ETradeOAuth(ck, cs)
     auth_url = oauth.get_request_token()
-    print(f"Auth URL: {auth_url}")
+    _log.console(f"Auth URL: {auth_url}")
 
     verifier_code = _get_tokens_via_playwright(
         auth_url, username, password,
@@ -898,16 +1077,21 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     # A successful human re-auth clears the automated-reauth circuit breaker, so scheduled
     # jobs resume normal operation without waiting out any residual cooldown.
     reset_reauth_circuit_breaker(env)
-    print("Tokens saved to cache.")
+    # A clean interactive mint through the profile browser (re-)proves device trust, so the
+    # automated daily door is armed again after a monthly SMS bootstrap.
+    _set_profile_trust(env, "trusted")
+    _log.console("Tokens saved to cache.")
     return tokens
 
 
-def _breaker_summary(env: str = "production") -> dict:
-    """JSON-friendly snapshot of the automated-reauth breaker for the re-auth result dict."""
-    st = _load_reauth_state(env)
+def _breaker_summary(env: str = "production", *, state: dict | None = None) -> dict:
+    """JSON-friendly snapshot of the automated-reauth breaker for the re-auth result dict.
+    Pass an already-loaded `state` to reuse a single read of the breaker file (else it reads
+    its own)."""
+    st = state if state is not None else _load_reauth_state(env)
     return {
         "consecutive_failures": st["consecutive_failures"],
-        "cooldown_remaining_min": round(_reauth_cooldown_remaining(env) / 60, 1),
+        "cooldown_remaining_min": round(_cooldown_remaining_from_state(st) / 60, 1),
     }
 
 
@@ -922,9 +1106,11 @@ def reauthenticate(env: str = "production", bootstrap: bool = False, headless: b
     checks "remember this device"); after that the trust window carries the zero-touch runs.
 
     bootstrap=True forces a headed browser (a human must be present for the OTP). Returns a
-    JSON-serializable dict so the HTTP endpoint and CLI render it uniformly. This is a
-    HUMAN-initiated action ONLY — the anti-ban contract still forbids scheduled jobs from ever
-    opening a browser (they use keep_alive); nothing here is wired into the scheduler.
+    JSON-serializable dict so the HTTP endpoint and CLI render it uniformly. This is the
+    HUMAN door. The scheduler now has its OWN dedicated automated door, scheduled_reauth(),
+    which is gated by the persistent-profile trust marker + circuit breaker + a once/day guard
+    and never opens a browser while trust is down — so the anti-ban contract holds: an
+    unattended browser opens at most once/day, only through that door, only while trusted.
     """
     if bootstrap:
         headless = False   # a human must watch to enter the one-time OTP that re-seeds trust
@@ -969,6 +1155,216 @@ def reauthenticate(env: str = "production", bootstrap: bool = False, headless: b
     result["ok"] = result["has_token"] and result["quote_ok"]
     if result["ok"] and not result["message"]:
         result["message"] = f"E*TRADE {env} re-authenticated; token issued {result['issued_date_et']}."
+    return result
+
+
+def _dead_token_gate(trust: str, cooling: bool):
+    """Classify why a dead/absent token can't be auto-refreshed right now — the single
+    definition of the trust->breaker gate, shared by the read-only classifier auth_status()
+    and the acting door scheduled_reauth().
+
+    Returns (reason, needs_manual, can_auto):
+      * trust lapsed (sms_required/unseeded) -> a human must re-seed the profile.
+      * breaker cooling                       -> neither human nor automation acts yet.
+      * trusted + breaker clear (reason=None) -> the automated door can refresh unattended.
+    trust's non-'trusted' values equal the AuthReason.SMS_REQUIRED/UNSEEDED strings, so they
+    are returned verbatim as the reason.
+    """
+    if trust in ("sms_required", "unseeded"):
+        return trust, True, False
+    if cooling:
+        return AuthReason.BREAKER, False, False
+    return None, False, True
+
+
+def _auth_summary(env: str, r: dict) -> str:
+    """Human one-liner for an auth_status verdict — points at the exact next action."""
+    state = r["state"]
+    boot = "`aether etrade-login --bootstrap`"
+    if state == AuthReason.LIVE:
+        probe = r["probe"]
+        if probe == "authorized":
+            return f"E*TRADE {env}: authorized (broker-confirmed)."
+        if probe == "indeterminate":
+            return (f"E*TRADE {env}: token present; broker probe inconclusive (transient) — "
+                    f"treating as live.")
+        return f"E*TRADE {env}: token valid (issued today)."
+    if state == AuthReason.MISSING:
+        return (f"E*TRADE {env}: no token — supervised bootstrap required ({boot})."
+                if r["needs_manual_auth"]
+                else f"E*TRADE {env}: no token — the daily automated re-auth will mint one.")
+    if state == AuthReason.EXPIRED:
+        return f"E*TRADE {env}: token expired — the daily automated re-auth will refresh it."
+    if state == AuthReason.SMS_REQUIRED:
+        return f"E*TRADE {env}: device trust lapsed — a one-time SMS bootstrap is required ({boot})."
+    if state == AuthReason.UNSEEDED:
+        return f"E*TRADE {env}: profile not seeded — a supervised bootstrap is required ({boot})."
+    if state == AuthReason.BREAKER:
+        return (f"E*TRADE {env}: automated re-auth cooling down "
+                f"({r['breaker']['cooldown_remaining_min']} min left).")
+    return f"E*TRADE {env}: {state}."
+
+
+def auth_status(env: str = "production", *, probe: bool = False) -> dict:
+    """Read-only E*TRADE auth-state classifier, shared by every surface (the /api/etrade/status
+    endpoint, the /api/health embed, and the `server.py etrade-status` CLI all call this function).
+    The read-only mirror of the automated door scheduled_reauth(): it reuses the AuthReason
+    vocabulary and the _dead_token_gate trust/breaker gate, but NEVER opens a browser.
+
+    Local-check -> refresh -> probe ladder (mirrors scheduled_reauth's renew-first order):
+      * probe=False (default) -> pure-local: no network, no mutation. Cheap enough to embed in
+        a frequently-polled health blob; the trust/breaker state alone already surfaces whether
+        a human bootstrap is needed.
+      * probe=True -> for a SAME-DAY token, first REFRESH via the ban-free HTTP renew (fixes the
+        2 h idle timeout cheaply), then PROBE the refreshed token against the broker
+        (_probe_token_auth) for ground truth. A previous-day token is an overnight/midnight-ET
+        hard expiry that renew cannot bridge, so it is ruled dead locally with NO wasted probe.
+
+    Returns a JSON-serializable dict. Every non-live state carries needs_manual_auth /
+    can_auto_reauth so any caller decides what to do without re-deriving the state machine.
+    """
+    trust   = _profile_trust_state(env)
+    _bstate = _load_reauth_state(env)          # one read of the breaker file, reused below
+    breaker = _breaker_summary(env, state=_bstate)
+    # Cool off the RAW remaining seconds, not the display-rounded cooldown_remaining_min (rounded
+    # to 1 decimal, so it reads clear for the last ~3 s of a cooldown that scheduled_reauth still
+    # honors) — derived from the same loaded state, so no extra read and no rounding drift.
+    cooling = _cooldown_remaining_from_state(_bstate) > 0
+    tokens  = _load_tokens_any_date(env)
+    issued  = tokens.get("issued_date_et") if tokens else None
+    is_today = bool(tokens) and issued == _et_today()
+
+    result = {
+        "env": env,
+        "state": None,
+        "reason": None,
+        "needs_manual_auth": False,
+        "can_auto_reauth": False,
+        "token": {"present": bool(tokens), "issued_date_et": issued, "is_today": is_today},
+        "trust": trust,
+        "breaker": breaker,
+        "probe": "skipped",
+        "checked_at_et": _et_now(),
+        "summary": "",
+    }
+
+    def _finalize(state, reason, *, needs_manual, can_auto):
+        result["state"] = state
+        result["reason"] = reason
+        result["needs_manual_auth"] = needs_manual
+        result["can_auto_reauth"] = can_auto
+        result["summary"] = _auth_summary(env, result)
+        return result
+
+    def _dead(state):
+        # Token is absent or dead. Why it can't be auto-refreshed is the SAME trust->breaker gate
+        # scheduled_reauth uses, via the shared _dead_token_gate. reason=None means trusted+clear:
+        # report the raw dead-state (missing/expired) and let the automated door fix it.
+        gate_reason, needs_manual, can_auto = _dead_token_gate(trust, cooling)
+        st = gate_reason or state
+        return _finalize(st, st, needs_manual=needs_manual, can_auto=can_auto)
+
+    # 1. Local, no network.
+    if not tokens:
+        return _dead(AuthReason.MISSING)
+    if not is_today:
+        # Previous-day token = overnight/midnight-ET hard expiry; renew cannot bridge it and a
+        # probe would only confirm rejected -> rule dead locally, skip both refresh and probe.
+        return _dead(AuthReason.EXPIRED)
+    if not probe:
+        # Same-day token, cheap path: valid per local record (no network touched).
+        return _finalize(AuthReason.LIVE, AuthReason.LIVE, needs_manual=False, can_auto=False)
+
+    # 2. Refresh (same-day, ban-free HTTP; the 55-min guard reuses a fresh token with no call).
+    orig_saved_at = tokens.get("saved_at")
+    renewed = renew_tokens(tokens, env)
+    live_tokens = renewed or tokens
+    # A real renew stamps a new saved_at (renew_tokens); a <55-min guard-reuse returns the same
+    # token with saved_at unchanged. Comparing saved_at — not re-checking the 55-min threshold
+    # (a second source of truth) and not just bool(renewed) (true for a reuse too) — is what
+    # separates a genuine refresh from a reuse, so RENEWED means the token really changed.
+    did_renew = bool(renewed) and live_tokens.get("saved_at") != orig_saved_at
+
+    # 3. Probe the (possibly-renewed) token for broker ground truth.
+    verdict = _probe_token_auth(live_tokens, env)
+    if verdict is True:
+        result["probe"] = "authorized"
+        reason = AuthReason.RENEWED if did_renew else AuthReason.LIVE
+        return _finalize(AuthReason.LIVE, reason, needs_manual=False, can_auto=False)
+    if verdict is False:
+        result["probe"] = "rejected"
+        return _dead(AuthReason.EXPIRED)
+    # None -> transient/indeterminate: never downgrade a same-day token on a blip.
+    result["probe"] = "indeterminate"
+    return _finalize(AuthReason.LIVE, AuthReason.INDETERMINATE, needs_manual=False, can_auto=False)
+
+
+def scheduled_reauth(env: str = "production") -> dict:
+    """The ONE automated (unattended) E*TRADE re-auth door — safe by construction.
+
+    Called only by the daily Task-Scheduler entry (server.py `etrade-reauth --scheduled`) and
+    the watchdog catch-up. Opens a browser at most ONCE per invocation, and only when ALL of
+    these hold, in order:
+      1. keep_alive() couldn't renew a live same-day token (pure HTTP, no browser). If it
+         could, we return renewed with NO browser.
+      2. The persistent-profile trust marker reads 'trusted'. If it is 'sms_required' or
+         'unseeded', we open NO browser and return that reason so the caller alerts a human.
+      3. The circuit breaker isn't cooling.
+    Only then does it call _login_headless() DIRECTLY (the single breaker/trust choke point) —
+    not get_tokens()'s priority-3 ladder, which many non-scheduled callers (pricing) hit and
+    must never pop a browser through. A headless OTP wall raises SmsRequired, which latches the
+    marker to 'sms_required' (no more automated browsers until a human bootstraps) and reports.
+
+    The "at most one browser per day" property is not a standalone gate but an emergent one:
+    step 1 renews any live same-day token first (so a fresh mint is reused, not re-opened); a
+    failed attempt arms the breaker (step 3 blocks the rest of the day); and an OTP wall latches
+    'sms_required' (step 2 blocks it) — so after any outcome of the first open, same-day reruns
+    do not open a second browser.
+
+    Returns a JSON-serializable dict: {ok, env, reason, browser_opened, ...}. `reason` is one
+    of: renewed | reauthed | sms_required | unseeded | breaker | failed.
+    """
+    result = {"ok": False, "env": env, "reason": "", "browser_opened": False,
+              "issued_date_et": None, "breaker_state": None}
+
+    # 1. Renew-first: a still-live same-day token needs no browser at all (ban-free HTTP).
+    alive = keep_alive(env)
+    if alive:
+        result.update(ok=True, reason=AuthReason.RENEWED, issued_date_et=alive.get("issued_date_et"))
+        result["breaker_state"] = _breaker_summary(env)
+        return result
+
+    # 2-3. Token is dead. The automated door opens a browser ONLY while the profile is trusted
+    # AND the breaker is clear — the SAME gate the read-only auth_status reports, via the shared
+    # _dead_token_gate (trust lapse 'sms_required'/'unseeded' -> no browser, awaiting a human;
+    # cooling -> 'breaker'). reason=None means both gates are open.
+    trust = _profile_trust_state(env)
+    gate_reason, _needs_manual, _can_auto = _dead_token_gate(
+        trust, _reauth_cooldown_remaining(env) > 0)
+    if gate_reason is not None:
+        result["reason"] = gate_reason
+        result["breaker_state"] = _breaker_summary(env)
+        return result
+
+    # All gates passed → the one allowed automated browser open, through the breaker choke point.
+    ck, cs, username, password = _load_config(env)
+    try:
+        tokens = _login_headless(ck, cs, username, password, env, headless=_scheduled_headless())
+    except SmsRequired:
+        # Trust lapsed: the browser+login worked but E*TRADE demanded an OTP. Latch the marker
+        # so NO further automated browser opens until a human re-seeds; breaker already cleared.
+        _set_profile_trust(env, "sms_required")
+        result.update(reason=AuthReason.SMS_REQUIRED, browser_opened=True)
+        result["breaker_state"] = _breaker_summary(env)
+        return result
+
+    result["browser_opened"] = True
+    if tokens:
+        result.update(ok=True, reason=AuthReason.REAUTHED, issued_date_et=tokens.get("issued_date_et"))
+    else:
+        # _login_headless already escalated the breaker (or was suppressed by it).
+        result["reason"] = AuthReason.FAILED
+    result["breaker_state"] = _breaker_summary(env)
     return result
 
 
@@ -1121,6 +1517,46 @@ def is_market_open_now(tokens, env="production") -> bool | None:
 
 
 # ---------------------------------------------------------------------------
+# Object facade (encapsulation / extensibility)
+# ---------------------------------------------------------------------------
+# Imported at the BOTTOM, after every free function/constant above is defined, so
+# these submodules can `from aether import etrade` and resolve a fully-initialised
+# package. They touch the package only at call time, so there is no circular-import
+# hazard. The proven free-function API above is UNCHANGED and remains the back-compat
+# seam every test patches; ETradeClient is the new front door that delegates to it.
+from aether.etrade.client import (  # noqa: E402
+    ETradeClient,
+    ETradeError,
+    RoleNotPermitted,
+)
+from aether.etrade.store import (  # noqa: E402
+    BrowserStateStore,
+    EtradeStore,
+    FileReauthStateStore,
+    FileTokenStore,
+    ReauthStateStore,
+    TokenStore,
+    make_etrade_store,
+)
+
+
+# Forward-facing public API of the package: the object front door + store types.
+# The free functions above stay reachable as module attributes (the back-compat
+# seam every test patches); __all__ only governs `from aether.etrade import *`
+# and resolves the re-export so the names above aren't flagged as unused.
+__all__ = [
+    "ETradeClient",
+    "ETradeError",
+    "RoleNotPermitted",
+    "make_etrade_store",
+    "EtradeStore",
+    "TokenStore",
+    "BrowserStateStore",
+    "ReauthStateStore",
+]
+
+
+# ---------------------------------------------------------------------------
 # Quick test
 # ---------------------------------------------------------------------------
 
@@ -1132,10 +1568,10 @@ if __name__ == "__main__":
             "Run: python scripts/diagnostics/test_etrade.py production"
         )
 
-    print("\n--- Quote: AAPL ---")
+    _log.console("\n--- Quote: AAPL ---")
     market = get_market(tokens)
-    print(market.get_quote(["AAPL"], resp_format="json"))
+    _log.console(market.get_quote(["AAPL"], resp_format="json"))
 
-    print("\n--- Accounts ---")
+    _log.console("\n--- Accounts ---")
     accts = get_accounts(tokens)
-    print(accts.list_accounts(resp_format="json"))
+    _log.console(accts.list_accounts(resp_format="json"))
