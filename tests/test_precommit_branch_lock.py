@@ -64,5 +64,20 @@ class TestBranchSafetyLock(unittest.TestCase):
             ok = pcval.check_no_direct_main_commit()
             self.assertTrue(ok)
 
+    @mock.patch("subprocess.run")
+    def test_branch_safety_lock_exempts_ci_on_main(self, mock_run):
+        # The guard is a LOCAL commit safeguard; in CI the post-merge `push` job runs on the
+        # `main` branch itself and must NOT be failed by it. GITHUB_ACTIONS=true exempts the run.
+        mock_res = mock.Mock()
+        mock_res.stdout = "main\n"
+        mock_res.returncode = 0
+        mock_run.return_value = mock_res
+
+        with mock.patch.dict("os.environ", {"GITHUB_ACTIONS": "true"}, clear=True):
+            ok = pcval.check_no_direct_main_commit()
+            self.assertTrue(ok)
+        # subprocess should not even be consulted once the CI short-circuit fires
+        mock_run.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
