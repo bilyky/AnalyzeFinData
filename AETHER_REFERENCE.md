@@ -206,9 +206,11 @@ The master execution timeline is structured as follows:
 
 ### 📋 Schedulers Execution & Timeout Registry
 
+> ℹ️ **Single Source of Truth Note:** To prevent documentation drift, the authoritative parameters (triggers, schedules, and active execution timeouts) for all tasks are defined programmatically inside the system source code (specifically `watchdog.py`'s `_TASK_DEFS` dictionary and the task-registration PowerShell scripts). The table below serves as a high-level operational map for developer reference.
+
 | Task Name | Active Time | Priority / Role | Key Dependencies | Expected Duration | Task Timeout |
 | :--- | :---: | :--- | :--- | :---: | :---: |
-| **`AETHER_Watchdog`** | Hourly (24/7) | **CRITICAL (P1)** / Keeps OAuth cookies and Chaikin logins warm; executes self-healing. | Active network gateway; E*TRADE production tokens. | $< 3$ seconds (Overnight); $< 10$ seconds (Market Hours) | **2 Hours** (`New-TimeSpan -Hours 2`) |
+| **`AETHER_Watchdog`** | Hourly (24/7) | **CRITICAL (P1)** / Keeps OAuth cookies and Chaikin logins warm; executes self-healing. | Active network gateway; E*TRADE production tokens. | < 3 seconds (Overnight); < 10 seconds (Market Hours) | **2 Hours** (`New-TimeSpan -Hours 2`) |
 | **`AETHER_Morning`** | 05:30 AM PST | **HIGH (P2)** / Scrapes Chaikin ratings, parses email newsletters, and backfills history. | Validated E*TRADE/Chaikin cookies; fresh email ideas. | 4 – 6 minutes (Throttled API) | **2 Hours** (`New-TimeSpan -Hours 2`) |
 | **`AETHER_StopMonitor`** | 06:45 AM PST | **CRITICAL (P1)** / Interday real-time stop-loss monitoring; repeats every 30 mins for 7 hours. | E*TRADE real-time streaming quotes. | 15 – 30 seconds | **30 Minutes** |
 | **`AETHER_ExecuteTrades`**| 07:00 AM PST | **CRITICAL (P1)** / Opens opening rebalancing; executes trailing stop ratchets & buy entries. | Completed 5:30 AM workbook; fresh E*TRADE tokens. | 10 – 20 seconds | **30 Minutes** |
