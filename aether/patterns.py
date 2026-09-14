@@ -121,17 +121,18 @@ _STUDY_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 _DEFAULT_SATURATION_DIVISOR = 5.0  # hand-set fallback when the study JSON is absent
 
 
-def _load_candlestick_calibration(path: str = _STUDY_PATH) -> tuple[dict, float]:
-    """Load per-pattern weights + saturation divisor from the study JSON.
+def _load_candlestick_calibration(path: str = _STUDY_PATH) -> tuple[dict, float, int]:
+    """Load per-pattern weights, saturation divisor, and aggregate_sign from the study JSON.
 
-    Returns (weights, divisor). `weights` always carries all 17 pattern keys; any
+    Returns (weights, divisor, sign). `weights` always carries all 17 pattern keys; any
     pattern missing from the JSON — or the whole file missing/malformed — falls back to
-    unit weight 1.0, and the divisor falls back to _DEFAULT_SATURATION_DIVISOR. So an
-    unsynced Data/ degrades gracefully to the pre-calibration unweighted behavior
-    rather than raising at import.
+    unit weight 1.0, and the divisor falls back to _DEFAULT_SATURATION_DIVISOR, and the sign
+    falls back to 1. So an unsynced Data/ degrades gracefully to the pre-calibration
+    unweighted behavior rather than raising at import.
     """
     weights = {name: 1.0 for name in _PATTERN_NAMES}
     divisor = _DEFAULT_SATURATION_DIVISOR
+    sign = 1
     try:
         with open(path, "r", encoding="utf-8") as f:
             study = json.load(f)
@@ -141,12 +142,15 @@ def _load_candlestick_calibration(path: str = _STUDY_PATH) -> tuple[dict, float]
         d = study.get("saturation_divisor")
         if d is not None and float(d) > 0:
             divisor = float(d)
+        s = study.get("aggregate_sign")
+        if s is not None:
+            sign = int(s)
     except Exception:
         pass  # missing/malformed study -> unit weights + hand-set divisor
-    return weights, divisor
+    return weights, divisor, sign
 
 
-CANDLESTICK_WEIGHTS, _SATURATION_DIVISOR = _load_candlestick_calibration()
+CANDLESTICK_WEIGHTS, _SATURATION_DIVISOR, _CANDLESTICK_SIGN = _load_candlestick_calibration()
 
 def candlestick_fires(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> dict:
     """Return {pattern_name: (bull_fired, bear_fired)} over the last `lookback` bars.
@@ -216,7 +220,8 @@ def candlestick_score(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> float
     # when the study is absent. It caps a burst of concurrent fires at the rail so no
     # single bar dominates.
     score = max(-2.0, min(2.0, raw / _SATURATION_DIVISOR * 2.0))
-    return round(score, 2)
+    # Multiply by our calibrated aggregate_sign directionality factor (R&D #25)
+    return round(score * _CANDLESTICK_SIGN, 2)
 
 
 # ── Chart pattern score ───────────────────────────────────────────────────────

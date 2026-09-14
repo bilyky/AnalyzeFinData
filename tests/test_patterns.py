@@ -146,7 +146,8 @@ class TestCandlestickScore(unittest.TestCase):
         known = dict(patterns.CANDLESTICK_WEIGHTS)
         known.update({"engulfing": 1.5, "double_trouble": 1.6})
         with mock.patch.object(patterns, "CANDLESTICK_WEIGHTS", known), \
-             mock.patch.object(patterns, "_SATURATION_DIVISOR", 5.0):
+             mock.patch.object(patterns, "_SATURATION_DIVISOR", 5.0), \
+             mock.patch.object(patterns, "_CANDLESTICK_SIGN", 1):
             up = patterns.candlestick_score(self._engulfing_series(False), "2026-04-15")
             dn = patterns.candlestick_score(self._engulfing_series(mirror=True), "2026-04-15")
         # patterns actually fired (compute path ran, not a guard short-circuit)
@@ -174,6 +175,7 @@ class TestCandlestickCalibrationLoader(unittest.TestCase):
     def test_loads_weights_and_divisor_from_json(self):
         study = {
             "saturation_divisor": 2.15,
+            "aggregate_sign": -1,
             "weights": {"star": 0.56, "harami_strict": 0.5, "tweezers": 2.0},
         }
         with tempfile.NamedTemporaryFile(
@@ -182,10 +184,11 @@ class TestCandlestickCalibrationLoader(unittest.TestCase):
             json.dump(study, f)
             path = f.name
         try:
-            weights, divisor = patterns._load_candlestick_calibration(path)
+            weights, divisor, sign = patterns._load_candlestick_calibration(path)
         finally:
             os.unlink(path)
         self.assertAlmostEqual(divisor, 2.15)
+        self.assertEqual(sign, -1)
         self.assertAlmostEqual(weights["star"], 0.56)
         self.assertAlmostEqual(weights["harami_strict"], 0.5)
         self.assertAlmostEqual(weights["tweezers"], 2.0)
@@ -194,10 +197,11 @@ class TestCandlestickCalibrationLoader(unittest.TestCase):
         self.assertAlmostEqual(weights["engulfing"], 1.0)
 
     def test_missing_file_falls_back_to_unit_weights(self):
-        weights, divisor = patterns._load_candlestick_calibration(
+        weights, divisor, sign = patterns._load_candlestick_calibration(
             os.path.join(tempfile.gettempdir(), "no_such_candlestick_study.json")
         )
         self.assertAlmostEqual(divisor, patterns._DEFAULT_SATURATION_DIVISOR)
+        self.assertEqual(sign, 1)
         self.assertEqual(set(weights.keys()), set(patterns._PATTERN_NAMES))
         self.assertTrue(all(v == 1.0 for v in weights.values()))
 
@@ -208,11 +212,24 @@ class TestCandlestickCalibrationLoader(unittest.TestCase):
             f.write("{ not valid json ")
             path = f.name
         try:
-            weights, divisor = patterns._load_candlestick_calibration(path)
+            weights, divisor, sign = patterns._load_candlestick_calibration(path)
         finally:
             os.unlink(path)
         self.assertAlmostEqual(divisor, patterns._DEFAULT_SATURATION_DIVISOR)
+        self.assertEqual(sign, 1)
         self.assertTrue(all(v == 1.0 for v in weights.values()))
+
+    def test_candlestick_score_respects_calibrated_contrarian_sign(self):
+        # When _CANDLESTICK_SIGN is -1, the output score must be flipped negative!
+        known = dict(patterns.CANDLESTICK_WEIGHTS)
+        known.update({"engulfing": 1.5, "double_trouble": 1.6})
+        with mock.patch.object(patterns, "CANDLESTICK_WEIGHTS", known), \
+             mock.patch.object(patterns, "_SATURATION_DIVISOR", 5.0), \
+             mock.patch.object(patterns, "_CANDLESTICK_SIGN", -1):
+            up_contrarian = patterns.candlestick_score(TestCandlestickScore._engulfing_series(False), "2026-04-15")
+        
+        # Pre-calibration (sign=1) was -1.24; under contrarian (sign=-1) it must be +1.24!
+        self.assertAlmostEqual(up_contrarian, 1.24, places=2)
 
 
 if __name__ == "__main__":
