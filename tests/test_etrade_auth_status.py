@@ -23,6 +23,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import tests  # globally locks hermeticity and redirects prod Data/ to temp
 import aether.etrade as etrade
 from tests.test_etrade_auth_scenarios import _EtradeScenarioBase, _yesterday_et
 
