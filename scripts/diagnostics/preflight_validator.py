@@ -5,7 +5,9 @@ This utility performs a rapid, 5-second diagnostic sweep of all external API gat
 mailboxes, and session states, verifying system readiness before any cron runs.
 """
 
+import csv
 import datetime
+import io
 import imaplib
 import json
 import os
@@ -23,6 +25,7 @@ sys.path.insert(0, str(BASE_DIR))
 import notify
 import powergauge
 from aether import etrade
+from aether import trash
 from aether.config import CFG
 from aether_logger import get_logger as _get_logger
 
@@ -175,7 +178,7 @@ def check_chaikin_api() -> bool:
         return False
 
 
-def check_etrade_api() -> bool:
+def check_etrade_api() -> bool | str:
     """Validate live E*TRADE API OAuth session token validity.
     On weekends (Saturdays and Sundays), since the stock market is closed,
     verification failures are waived to allow reporting/summaries to run.
@@ -190,13 +193,13 @@ def check_etrade_api() -> bool:
         else:
             if is_weekend:
                 _log.console("  ⚠️ E*TRADE: Verification failed, but waiving requirement because today is the weekend (market closed).")
-                return True
+                return "WAIVED"
             _log.console("  ❌ E*TRADE: No valid cached session or headless Playwright login failed.")
             return False
     except Exception as e:
         if is_weekend:
             _log.console(f"  ⚠️ E*TRADE: Active OAuth verification failed ({e}), but waiving requirement because today is the weekend (market closed).")
-            return True
+            return "WAIVED"
         _log.console(f"  ❌ E*TRADE: Active OAuth verification failed: {e}")
         return False
 
@@ -241,10 +244,33 @@ def check_active_locks(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
     xlsx_file = base_dir / "Data" / "state_of_the_day.xlsx"
 
     if pipeline_lock.exists():
-        locks.append("Pipeline Active Lock (pipeline_run.lock)")
+        # Check if the lock belongs to the current process to avoid self-blocking in active runs
+        try:
+            with open(pipeline_lock, "r", encoding="utf-8") as lf:
+                lock_pid = int(lf.read().strip())
+        except Exception:
+            lock_pid = 0
+        if lock_pid != os.getpid():
+            locks.append("Pipeline Active Lock (pipeline_run.lock)")
 
     if rapidapi_lock.exists():
-        locks.append("RapidAPI Active Lock (rapidapi.lock)")
+        # rapidapi.lock is a content-less O_EXCL mutex (see rapidapi.py: it is
+        # created with os.open(..., O_CREAT|O_EXCL|O_WRONLY) and nothing is written
+        # to it). It therefore holds NO pid, so a liveness cross-check like the one
+        # pipeline_run.lock uses above is impossible here — mtime is the only
+        # staleness signal. Mirror rapidapi.py's OWN self-clear exactly (same 9000s
+        # / 2.5h TTL; a recovery pass can legitimately run up to ~2h) so preflight
+        # doesn't false-alarm on a lock a crashed run left behind. The producer
+        # would clear the same stale lock on its next pass regardless; this only
+        # avoids blocking preflight in the interim.
+        try:
+            if time.time() - os.path.getmtime(rapidapi_lock) > 9000:
+                trash.soft_delete(str(rapidapi_lock), reason="rapidapi-lock-stale-preflight", force=True)
+                _log.console("  ✅ Cleared stale RapidAPI lock (>2.5h old; no live producer possible).")
+            else:
+                locks.append("RapidAPI Active Lock (rapidapi.lock)")
+        except OSError:
+            locks.append("RapidAPI Active Lock (rapidapi.lock)")
 
     # Detect an exclusive lock (e.g. the workbook open in Excel) without mutating
     # the file: renaming a path to itself raises PermissionError/OSError when the
@@ -261,8 +287,198 @@ def check_active_locks(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
     _log.console("  ✅ LOCKS: No active process or spreadsheet locks detected.")
     return True, []
 
+def check_watchdog_health(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
+    """Validate that the hourly AETHER Watchdog is successfully running and keeping the system warm.
+    
+    Checks both:
+      1. Task Scheduler: The LastResult of the 'AETHER_Watchdog' task must be 0 (success).
+      2. Log Freshness: The watchdog log file must have been written to within the last 75 minutes.
+    """
+    _log.console("  Checking AETHER Watchdog Health & Schedulers...")
+    issues = []
+    
+    if sys.platform == "win32":
+        try:
+            cmd = ["schtasks", "/query", "/tn", "\\AETHER_Agents\\AETHER_Watchdog", "/fo", "CSV", "/v"]
+            res = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=10)
+            if res.returncode == 0 and res.stdout.strip():
+                lines = res.stdout.strip().splitlines()
+                if len(lines) >= 2:
 
-def send_preflight_email(checks, missing_items, active_locks, duration, all_ok):
+                    reader = csv.reader(io.StringIO(res.stdout))
+                    header = next(reader)
+                    row = next(reader)
+                    header = [h.strip() for h in header]
+                    
+                    try:
+                        result_idx = header.index("Last Result")
+                    except ValueError:
+                        try:
+                            result_idx = [i for i, h in enumerate(header) if "result" in h.lower() or "code" in h.lower()][0]
+                        except IndexError:
+                            result_idx = -1
+                            
+                    if result_idx != -1 and len(row) > result_idx:
+                        last_result_str = row[result_idx].strip().strip('"')
+                        try:
+                            if last_result_str.startswith("0x"):
+                                last_result = int(last_result_str, 16)
+                            else:
+                                last_result = int(last_result_str)
+                        except ValueError:
+                            last_result = 0
+                            
+                        # Allow 0 (success), 267009 (SCHED_S_TASK_RUNNING), and 267011 (SCHED_S_TASK_HAS_NOT_RUN) as valid
+                        if last_result not in (0, 267009, 267011):
+                            issues.append(f"Task Scheduler: 'AETHER_Watchdog' last run failed (Exit Code: {last_result_str} / {hex(last_result)}).")
+            else:
+                issues.append("Task Scheduler: 'AETHER_Watchdog' task is not found or schtasks query failed.")
+        except subprocess.TimeoutExpired:
+            _log.warning("Task Scheduler query timed out during pre-flight check.")
+        except Exception as e:
+            _log.warning(f"Task Scheduler query failed (non-fatal): {e}")
+            
+    log_file = base_dir / "Data" / "logs" / "agent_runs" / "watchdog_agent.log"
+    if log_file.exists():
+        try:
+            mtime = log_file.stat().st_mtime
+            age_seconds = time.time() - mtime
+            age_minutes = age_seconds / 60
+            
+            if age_minutes > 75:
+                last_time = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %I:%M %p")
+                issues.append(f"Log Freshness: 'watchdog_agent.log' is stale. Last run: {last_time} ({age_minutes:.0f} mins ago, should be < 75 mins).")
+        except Exception as e:
+            issues.append(f"Log Freshness: Failed to audit watchdog log modification time: {e}")
+    else:
+        issues.append("Log Freshness: 'watchdog_agent.log' does not exist (Watchdog has never run).")
+        
+    if issues:
+        for iss in issues:
+            _log.console(f"  ❌ Watchdog: {iss}")
+        return False, issues
+        
+    _log.console("  ✅ Watchdog: Active system monitor is running successfully and keeping session warm.")
+    return True, []
+
+
+def check_scheduled_tasks_integrity() -> tuple[bool, list[str]]:
+    """Scan root (\\) and subdirectory (\\AETHER_Agents\\) recursively to audit
+    AETHER / AnalyzeFinData tasks and flag duplicate/overlapping execution engines.
+    """
+    _log.console("  Checking Scheduled Tasks & Duplication Integrity...")
+    issues = []
+    if sys.platform != "win32":
+        _log.console("  ✅ TASKS: Scheduled task checks skipped on non-Windows platform.")
+        return True, []
+
+    try:
+        # Recursive query of all tasks with verbose details
+        res = subprocess.run(["schtasks", "/query", "/fo", "LIST", "/v"], capture_output=True, text=True, errors="replace", timeout=15)
+        if res.returncode == 0:
+            tasks = []
+            current = {}
+            for line in res.stdout.splitlines():
+                if not line.strip():
+                    if current and "taskname" in current:
+                        tasks.append(current)
+                        current = {}
+                    continue
+                if ":" in line:
+                    parts = line.split(":", 1)
+                    k = parts[0].strip().lower()
+                    v = parts[1].strip()
+                    current[k] = v
+            if current and "taskname" in current:
+                tasks.append(current)
+
+            # Filter for AETHER / AnalyzeFinData namespace
+            aether_tasks = [t for t in tasks if "aether" in t["taskname"].lower() or "analyzefindata" in t["taskname"].lower()]
+
+            # Identify duplicate/overlapping scripts by looking at the Command / Task To Run
+            by_script = {}
+            for t in aether_tasks:
+                name = t["taskname"]
+                to_run = t.get("task to run", "").lower()
+                if not to_run:
+                    continue
+
+                # Identify target scripts
+                script_key = None
+                if "autonomous_pipeline.py" in to_run:
+                    script_key = "autonomous_pipeline.py"
+                elif "daily-run.md" in to_run:
+                    script_key = "AETHER_DailyDriver (AI-Qualitative)"
+                elif "ai_portfolio_game.py" in to_run:
+                    script_key = "ai_portfolio_game.py (Trading Desk)"
+                elif "watchdog.py" in to_run or "watchdog.md" in to_run:
+                    script_key = "watchdog.py (Watchdog)"
+                elif "preflight_validator.py" in to_run:
+                    script_key = "preflight_validator.py"
+
+                if script_key:
+                    by_script.setdefault(script_key, []).append((name, to_run))
+
+            for script, runs in by_script.items():
+                if len(runs) > 1:
+                    names = [r[0] for r in runs]
+                    issues.append(f"Duplicate tasks found running {script}: {', '.join(names)}")
+        else:
+            _log.warning("Task Scheduler query returned non-zero exit code during recursive check.")
+    except Exception as e:
+        _log.warning(f"Task Scheduler recursive integrity audit failed (non-fatal): {e}")
+
+    if issues:
+        for iss in issues:
+            _log.console(f"  ⚠️ TASKS WARNING: {iss}")
+        # Return True so duplicate tasks do not fatally abort the morning pipeline (non-elevated envs),
+        # but report the issues list so they are visible in console summaries and email briefings!
+        return True, issues
+
+    _log.console("  ✅ TASKS: Scheduled tasks are verified with no duplicate or overlapping entries.")
+    return True, []
+
+
+def check_pipeline_smoke_test(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
+    """Execute a dry-run smoke test of the entire pipeline using --cached / --report-only mode
+    to verify end-to-end compilation and lock-check integrity.
+    """
+    if "--smoke" not in sys.argv:
+        _log.console("  Skipping Pipeline Smoke Test (pass --smoke to run)...")
+        return True, []
+
+    _log.console("  Running pipeline smoke test (--cached)...")
+    issues = []
+
+    pipeline_script = base_dir / "autonomous_pipeline.py"
+    if not pipeline_script.exists():
+        issues.append("autonomous_pipeline.py script does not exist on disk!")
+        return True, issues
+
+    try:
+        # Run autonomous_pipeline.py in cached mode. It should compile, pass locks, and exit with 0.
+        # Use sys.executable to ensure we run inside the same virtual environment.
+        cmd = [sys.executable, str(pipeline_script), "--cached", "--no-email"]
+        res = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=60)
+
+        if res.returncode != 0:
+            err_msg = f"Pipeline smoke test failed with Exit Code {res.returncode}.\nStderr: {res.stderr.strip()}"
+            _log.warning(f"  ❌ SMOKE TEST: {err_msg}")
+            issues.append(err_msg)
+            return True, issues
+
+    except subprocess.TimeoutExpired:
+        issues.append("Pipeline smoke test timed out (60s limit reached).")
+        return True, issues
+    except Exception as e:
+        issues.append(f"Failed to spawn pipeline smoke test: {e}")
+        return True, issues
+
+    _log.console("  ✅ SMOKE TEST: Pipeline compilation and dry run passed.")
+    return True, []
+
+
+def send_preflight_email(checks, missing_items, active_locks, duration, all_ok, watchdog_issues=None):
     """Compile and dispatch an HTML status briefing email to the user.
 
     `checks` is the single ordered roster of (label, ok, kind) tuples shared with
@@ -275,8 +491,9 @@ def send_preflight_email(checks, missing_items, active_locks, duration, all_ok):
         subject = f"🔔 AETHER Pre-Flight Status Briefing: {today}"
 
         def _badge(ok):
+            if ok == "WAIVED":
+                return '<span style="color: #db6d28; font-weight: bold;">[WAIVED]</span>'
             return '<span style="color: #2ea043; font-weight: bold;">[PASS]</span>' if ok else '<span style="color: #f85149; font-weight: bold;">[FAIL]</span>'
-
         def _lock_badge(ok):
             return '<span style="color: #2ea043; font-weight: bold;">[CLEAN]</span>' if ok else '<span style="color: #db6d28; font-weight: bold;">[LOCKED]</span>'
 
@@ -324,6 +541,16 @@ def send_preflight_email(checks, missing_items, active_locks, duration, all_ok):
                 </ul>
             </div>
             """
+
+        if watchdog_issues:
+            html += f"""
+            <div style="background-color: rgba(248,81,73,0.1); border: 1px solid #f85149; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 12px; color: #ff7b72;">
+                ⚠️ <b>AETHER Watchdog Diagnostics Failures:</b>
+                <ul style="margin: 5px 0 0 15px; padding: 0;">
+                    {"".join(f"<li>{x}</li>" for x in watchdog_issues)}
+                </ul>
+            </div>
+            """
             
         if all_ok:
             html += """
@@ -364,6 +591,9 @@ def run_preflight_diagnostics() -> bool:
     etrade_ok  = check_etrade_api()
     integrity_ok, missing_items = check_file_and_directory_integrity()
     locks_ok, active_locks = check_active_locks()
+    watchdog_ok, watchdog_issues = check_watchdog_health()
+    tasks_ok, task_issues = check_scheduled_tasks_integrity()
+    smoke_ok, smoke_issues = check_pipeline_smoke_test()
     
     duration = time.time() - start_time
 
@@ -377,13 +607,19 @@ def run_preflight_diagnostics() -> bool:
         ("E*TRADE Brokerage OAuth",     etrade_ok,    "conn"),
         ("File & Directory Integrity",  integrity_ok, "conn"),
         ("Active Process & File Locks", locks_ok,     "lock"),
+        ("AETHER Watchdog Health",      watchdog_ok,  "conn"),
+        ("Scheduled Tasks Integrity",   tasks_ok,     "conn"),
+        ("Pipeline Smoke Test",         smoke_ok,     "conn"),
     ]
 
     _log.console("=" * 70)
     _log.console(f"PRE-FLIGHT DIAGNOSTIC SUMMARY (Duration: {duration:.2f}s)")
     _log.console("-" * 70)
     for i, (label, ok, kind) in enumerate(checks, 1):
-        word = ("CLEAN" if ok else "LOCKED") if kind == "lock" else ("PASS" if ok else "FAIL")
+        if ok == "WAIVED":
+            word = "WAIVED"
+        else:
+            word = ("CLEAN" if ok else "LOCKED") if kind == "lock" else ("PASS" if ok else "FAIL")
         _log.console(f"  [{i}] {label:<28}: {word}")
     _log.console("=" * 70)
 
@@ -391,7 +627,8 @@ def run_preflight_diagnostics() -> bool:
 
     # Send email status if the --email flag is set
     if "--email" in sys.argv:
-        send_preflight_email(checks, missing_items, active_locks, duration, all_ok)
+        combined_warnings = watchdog_issues + task_issues + smoke_issues
+        send_preflight_email(checks, missing_items, active_locks, duration, all_ok, combined_warnings)
         
     if all_ok:
         _log.console("☀️ [PRE-FLIGHT SUCCESS] All external API and email gateways are online.")

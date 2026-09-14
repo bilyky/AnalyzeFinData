@@ -23,7 +23,7 @@ import instruments
 import risk_utils
 import sell_rules
 import openpyxl
-import etrade
+from aether import etrade
 from workbook_read import (
     get_top_5_picks as _ap_picks,
     get_market_regime as _ap_regime,

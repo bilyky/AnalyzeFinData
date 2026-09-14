@@ -33,25 +33,32 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-# Mapping of @doc-sync keys to their documentation files on disk + description
+# Mapping of @doc-sync keys to their documentation files on disk + description.
+# Keys MUST match the anchor charset [A-Za-z0-9_]+ (underscores, not hyphens) so an
+# `@doc-sync-start: <key>` marker resolves to its surface — a hyphen in a key silently
+# never matches, leaving the anchor dead. tests/test_doc_sync.py enforces this and that
+# every live anchor key is registered here.
 DOC_SYNC_SURFACES = {
-    "covered-calls": [
+    "covered_calls": [
         ("plans/roadmap.md", "Shorthand bullet in R&D Roadmap"),
     ],
-    "unwinding-guard": [
+    "unwinding_guard": [
         ("plans/roadmap.md", "Shorthand bullet in R&D Roadmap"),
     ],
-    "scarcity-core": [
+    "scarcity_core": [
         ("plans/dynamic-scarcity-cap.md", "Full System Design specification"),
     ],
-    "trader-vic": [
+    "trader_vic": [
         ("plans/dynamic-scarcity-cap.md", "Full System Design specification"),
     ],
-    "preflight-checks": [
+    "preflight_checks": [
         ("plans/roadmap.md", "Shorthand bullet in R&D Roadmap"),
     ],
-    "circuit-breaker": [
+    "circuit_breaker": [
         ("plans/circuit-breaker.md", "Full System Design specification"),
+    ],
+    "chaikin_api": [
+        ("plans/chaikin_api.md", "Chaikin /api/* contract + new->legacy adapter"),
     ],
 }
 
@@ -161,8 +168,13 @@ def check_wiki_about_sync() -> bool:
     print("[GIT PRE-COMMIT] Wiki surface staged - running About/wiki drift guard "
           "(tests/test_about_wiki_sync.py)...")
     try:
+        # Run the parity test as a STANDALONE SCRIPT, not `-m unittest tests.test_about_wiki_sync`.
+        # The dotted form imports the tests PACKAGE first (tests/__init__.py → aether.etrade →
+        # pyetrade), which is absent in the CI validator environment — so the guard failed CLOSED on
+        # an ImportError instead of on real drift, blocking every wiki-touching commit. Executed as
+        # __main__ the file imports only json/os/re/unittest, so the guard runs anywhere.
         res = subprocess.run(
-            [sys.executable, "-m", "unittest", "tests.test_about_wiki_sync"],
+            [sys.executable, os.path.join(ROOT_DIR, "tests", "test_about_wiki_sync.py")],
             capture_output=True, text=True, errors="replace", cwd=ROOT_DIR)
     except Exception as e:
         print(f"🚨 [GIT PRE-COMMIT] BLOCK - could not run the wiki drift guard: {e}")
@@ -179,7 +191,13 @@ def check_wiki_about_sync() -> bool:
 
 
 def check_no_inline_imports(file_path: str) -> bool:
-    """Use ast to detect any import statement not at module scope (col_offset > 0)."""
+    """Use ast to detect any import statement not at module scope (col_offset > 0).
+
+    A module-level ``try/except``-guarded import (a direct child of a top-level
+    ``try`` block or one of its handlers) is a legitimate optional-dependency /
+    fallback pattern, not a lazy inline import, so it is allowed. Imports nested
+    inside a function or class are still flagged.
+    """
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             source = f.read()
@@ -188,9 +206,23 @@ def check_no_inline_imports(file_path: str) -> bool:
         except SyntaxError:
             return True  # py_compile will catch syntax errors separately
         rel = os.path.relpath(file_path, ROOT_DIR)
+
+        # Allowlist: imports that are direct children of a module-level `try`
+        # block (its body/orelse/finalbody or any handler body). These are
+        # guarded fallback imports at module scope, not lazy inline imports.
+        guarded = set()
+        for stmt in tree.body:
+            if isinstance(stmt, ast.Try):
+                blocks = [stmt.body, stmt.orelse, stmt.finalbody]
+                blocks += [h.body for h in stmt.handlers]
+                for block in blocks:
+                    for child in block:
+                        if isinstance(child, (ast.Import, ast.ImportFrom)):
+                            guarded.add(child)
+
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
-                if node.col_offset > 0:
+                if node.col_offset > 0 and node not in guarded:
                     print(f"[GIT PRE-COMMIT] Inline import in {rel} at line {node.lineno}")
                     print("   Action required: Move all imports to the top of the file.")
                     return False
@@ -332,8 +364,13 @@ def check_rd_roadmap_sync() -> bool:
 
         # The Claude auto-memory MEMORY.md is an index of memory links, not the numbered
         # R&D ledger (that lives in CLAUDE.md here); it structurally has 0 numbered items.
+        # Also, if MEMORY.md is a "Session State Snapshot" or contains "Active Portfolio Standing",
+        # it is a portfolio state tracker and not an R&D ledger, so we should skip this sync check.
         # Only enforce the sync when the memory file actually IS a numbered R&D ledger,
-        # otherwise this check false-blocks every commit in the Claude environment.
+        # otherwise this check false-blocks every commit in the Claude/Gemini environments.
+        if "Session State Snapshot" in mem_text or "Active Portfolio Standing" in mem_text:
+            return True
+
         if not mem_items:
             return True
         
@@ -453,10 +490,30 @@ def get_staged_python_files() -> list:
         print(f"Warning: Failed to fetch staged files via git: {e}. Falling back to empty list.")
         return []
 
+def check_no_direct_main_commit() -> bool:
+    """Verify that we are not committing directly to the stable main/master production branches."""
+    try:
+        res = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True, errors="replace")
+        branch = res.stdout.strip()
+        if branch in ("main", "master"):
+            if os.environ.get("AETHER_ALLOW_DIRECT_MAIN_COMMIT") != "1":
+                print(f"🚨 [GIT PRE-COMMIT] BLOCK - Direct commits to the stable '{branch}' branch are strictly forbidden.")
+                print(f"   Please checkout a dedicated feature/PR branch (e.g. `git checkout -b feat/my-fix`) to stage your changes.")
+                print(f"   To override this lock for emergency administrative force-resets only, run: ")
+                print(f"       $env:AETHER_ALLOW_DIRECT_MAIN_COMMIT=1 (PowerShell) or SET AETHER_ALLOW_DIRECT_MAIN_COMMIT=1 (CMD)")
+                return False
+    except Exception as e:
+        print(f"⚠️ Warning: could not verify current git branch: {e}")
+    return True
+
 def main():
     print("Running Project AETHER Pre-Commit Quality Checks...")
 
     success = True
+
+    # Block direct commits to production branches by default (Branch-Safety Lock)
+    if not check_no_direct_main_commit():
+        success = False
 
     # Check R&D Roadmap Synchronicity
     if not check_rd_roadmap_sync():
@@ -492,7 +549,12 @@ def main():
             # - test_*.py: inline imports inside test methods are legitimate (isolate failures)
             # - powergauge.py: optional try/except imports for Playwright automation
             # - run_history.py: historical backfill parallelized launcher script
-            _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py")
+            # - aether/etrade/store.py: mandatory lazy `_pkg()` import of the parent
+            #   package to break the circular init — it is imported *from* the package
+            #   __init__, so a top-level `from aether import etrade` would hit a
+            #   partially-initialised module. See the module's _pkg() docstring.
+            _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py",
+                             "etrade/store.py")
             if not any(x in fpath for x in _skip_imports):
                 if not check_no_inline_imports(fpath):
                     success = False
@@ -500,10 +562,16 @@ def main():
             if not check_no_silent_exceptions(fpath):
                 success = False
 
-            # Files exempt from print() check (Playwright interactive browser prompts
-            # that intentionally write to the user's terminal, not to the log system)
-            _skip_print = ("etrade.py", "powergauge.py", "run_history.py")
-            if not any(x in fpath for x in _skip_print):
+            # Print() is banned in production code — user-facing terminal output goes
+            # through the logger's CONSOLE level (_log.console(), stderr, excluded from
+            # the log files), which reaches the terminal without cluttering aether.log.
+            # Only the scripts/ and tests/ trees are exempt (diagnostics/one-off tooling
+            # that prints by design). Match by repo-relative path PREFIX — NOT substring,
+            # so an unrelated path (e.g. .../latests/..., .../myscripts/...) can't slip
+            # the gate.
+            _skip_print_trees = ("scripts/", "tests/")
+            _rel = os.path.relpath(fpath, ROOT_DIR).replace(os.sep, "/")
+            if not _rel.startswith(_skip_print_trees):
                 if not check_no_print_statements(fpath):
                     success = False
                 

@@ -19,6 +19,9 @@ venv/
 .venv/
 *.egg-info/
 
+# Logs (runtime artifacts, never source)
+*.log
+
 # Editor / OS
 .vscode/
 .idea/
