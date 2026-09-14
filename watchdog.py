@@ -669,6 +669,28 @@ def is_pid_running(pid: int) -> bool:
     except Exception:
         return False
 
+def _recovery_next_steps_html(compilation_passed, ai_triggered) -> str:
+    """Render the SECTION-4 "Next Steps" <li> bullets for the recovery email.
+
+    ``compilation_passed`` is tri-state: ``True`` (validation ran and passed),
+    ``False`` (ran and failed), or the string ``"SKIPPED"`` (off-market — the
+    compile check was deliberately not run). Only a *verified* ``True`` may emit
+    the success bullets: ``"SKIPPED"`` is a truthy string, so testing it truthily
+    printed "pushed the fix to the main branch" under an OFF-MARKET badge — a
+    false-green. Hence the strict ``is True`` / ``is False`` identity checks.
+    """
+    items = []
+    if compilation_passed is True and ai_triggered:
+        items.append('<li><b>AETHER Self-Healer:</b> Surgically patched the codebase and pushed the fix to the main branch.</li>')
+    if compilation_passed is True:
+        items.append('<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>')
+    if ai_triggered:
+        items.append('<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>')
+    if compilation_passed is False:
+        items.append('<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>')
+    return "\n                    ".join(items)
+
+
 def run_watchdog():
     # Enforce a strict cross-process execution singleton to prevent 2 watchdogs from running concurrently
     lock_file = BASE_DIR / "Data" / "watchdog_run.lock"
@@ -898,10 +920,7 @@ def run_watchdog():
             <div style="background: #fff9db; border-left: 5px solid #f59f00; padding: 15px; margin-bottom: 30px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #f08c00; font-size: 15px;">🏁 4. RESULTS & NEXT STEPS:</h3>
                 <ul style="font-size: 13px; padding-left: 20px; color: #555; line-height: 1.6;">
-                    {'<li><b>AETHER Self-Healer:</b> Surgically patched the codebase and pushed the fix to the main branch.</li>' if compilation_passed and ai_triggered else ''}
-                    {'<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>' if compilation_passed else ''}
-                    {'<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>' if ai_triggered else ''}
-                    {'<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>' if not compilation_passed else ''}
+                    {_recovery_next_steps_html(compilation_passed, ai_triggered)}
                 </ul>
             </div>
 

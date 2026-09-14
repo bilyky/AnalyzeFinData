@@ -90,6 +90,7 @@ class TestWatchdogSchedulerAuditing(unittest.TestCase):
 
 
 class TestWatchdogNightHoursSkip(unittest.TestCase):
+    @mock.patch("watchdog.notify.send_email")
     @mock.patch("watchdog.is_pid_running")
     @mock.patch("watchdog.check_data_freshness")
     @mock.patch("watchdog.check_logs")
@@ -97,7 +98,7 @@ class TestWatchdogNightHoursSkip(unittest.TestCase):
     @mock.patch("watchdog.etrade.scheduled_reauth")
     @mock.patch("watchdog._log")
     @mock.patch("watchdog.datetime")
-    def test_night_hours_skips_heavy_diagnostics(self, mock_datetime, mock_log, mock_reauth, mock_session, mock_check_logs, mock_data_freshness, mock_is_pid):
+    def test_night_hours_skips_heavy_diagnostics(self, mock_datetime, mock_log, mock_reauth, mock_session, mock_check_logs, mock_data_freshness, mock_is_pid, mock_send_email):
         """Outside active weekday operational window (e.g. Sunday night), watchdog exits early after session keeps."""
         import datetime as dt
         mock_is_pid.return_value = False
@@ -121,6 +122,7 @@ class TestWatchdogNightHoursSkip(unittest.TestCase):
         self.assertEqual(mock_check_logs.call_count, 2)
         mock_log.info.assert_any_call("💤 [Night-Hours Skip] Skipping heavy process supervisor and port sentry overnight.")
 
+    @mock.patch("watchdog.notify.send_email")
     @mock.patch("watchdog.is_pid_running")
     @mock.patch("watchdog.check_data_freshness")
     @mock.patch("watchdog.check_logs")
@@ -128,7 +130,7 @@ class TestWatchdogNightHoursSkip(unittest.TestCase):
     @mock.patch("watchdog.etrade.scheduled_reauth")
     @mock.patch("watchdog._log")
     @mock.patch("watchdog.datetime")
-    def test_active_hours_runs_full_diagnostics(self, mock_datetime, mock_log, mock_reauth, mock_session, mock_check_logs, mock_data_freshness, mock_is_pid):
+    def test_active_hours_runs_full_diagnostics(self, mock_datetime, mock_log, mock_reauth, mock_session, mock_check_logs, mock_data_freshness, mock_is_pid, mock_send_email):
         """Inside active operational window (e.g. Monday morning 7:00 AM), watchdog runs full diagnostic suite."""
         import datetime as dt
         mock_is_pid.return_value = False
@@ -154,6 +156,44 @@ class TestWatchdogNightHoursSkip(unittest.TestCase):
 
         # Verify check_logs WAS called (full diagnostics executed!)
         self.assertEqual(mock_check_logs.call_count, 2)
+
+
+class TestRecoveryNextStepsFalseGreen(unittest.TestCase):
+    """The recovery email's SECTION-4 "Next Steps" bullets must never present an
+    OFF-MARKET run as a verified pass. `compilation_passed == "SKIPPED"` is a
+    truthy string; the pre-fix code tested it truthily and rendered "pushed the
+    fix to the main branch" under a SKIPPED (OFF-MARKET) badge — a false-green.
+    These pin the strict tri-state rendering (would fail against truthy checks)."""
+
+    def test_skipped_does_not_render_success_bullets(self):
+        # Off-market healer run: the compile check was deliberately skipped.
+        html = watchdog._recovery_next_steps_html("SKIPPED", ai_triggered=True)
+        # The false-green: a skipped compile must NOT claim it pushed a fix or resumed.
+        self.assertNotIn("pushed the fix to the main branch", html)
+        self.assertNotIn("Automatic Resume", html)
+        # …and skip is not failure, so no "failed to compile" alert either.
+        self.assertNotIn("failed to compile", html)
+        # The healer-triggered lock-file action is still legitimately shown.
+        self.assertIn("delete the circuit breaker lock file", html)
+
+    def test_verified_pass_renders_success_bullets(self):
+        html = watchdog._recovery_next_steps_html(True, ai_triggered=True)
+        self.assertIn("pushed the fix to the main branch", html)
+        self.assertIn("Automatic Resume", html)
+        self.assertNotIn("failed to compile", html)
+
+    def test_verified_failure_renders_only_alert(self):
+        html = watchdog._recovery_next_steps_html(False, ai_triggered=True)
+        self.assertNotIn("pushed the fix to the main branch", html)
+        self.assertNotIn("Automatic Resume", html)
+        self.assertIn("failed to compile", html)
+
+    def test_pass_without_healer_omits_healer_bullets(self):
+        # Nominal in-window pass, nothing healed: no push-fix claim, no lock action.
+        html = watchdog._recovery_next_steps_html(True, ai_triggered=False)
+        self.assertNotIn("pushed the fix to the main branch", html)
+        self.assertIn("Automatic Resume", html)
+        self.assertNotIn("delete the circuit breaker lock file", html)
 
 
 if __name__ == "__main__":
