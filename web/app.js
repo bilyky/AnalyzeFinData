@@ -498,8 +498,8 @@ function renderAccounts() {
     // Real: holdings|rotation).
     const isGameActive = active.type === "game";
     const subs = isGameActive
-        ? [["holdings", "Holdings"], ["history", "History"], ["scorecard", "Scorecard"]]
-        : [["holdings", "Holdings"], ["rotation", "Rotation"]];
+        ? [["holdings", "Holdings"], ["options", "Options"], ["history", "History"], ["scorecard", "Scorecard"]]
+        : [["holdings", "Holdings"], ["options", "Options"], ["rotation", "Rotation"]];
     const validSubs = subs.map(([k]) => k);
     if (!validSubs.includes(acctSubView)) acctSubView = "holdings";
 
@@ -515,10 +515,12 @@ function renderAccounts() {
     const rotBox = $("accounts-rotation");
     const histBox = $("accounts-history");
     const scoreBox = $("accounts-scorecard");
+    const optBox = $("accounts-options");
     box.classList.toggle("hidden", acctSubView !== "holdings");
     if (rotBox) rotBox.classList.toggle("hidden", acctSubView !== "rotation");
     if (histBox) histBox.classList.toggle("hidden", acctSubView !== "history");
     if (scoreBox) scoreBox.classList.toggle("hidden", acctSubView !== "scorecard");
+    if (optBox) optBox.classList.toggle("hidden", acctSubView !== "options");
 
     if (acctSubView === "holdings") {
         // Sort the visible account's holdings per the current sort state.
@@ -542,6 +544,8 @@ function renderAccounts() {
         loadHistory();    // lazy — only when shown
     } else if (acctSubView === "scorecard") {
         loadScorecard();  // lazy — only when shown (/api/scorecard is cheap)
+    } else if (acctSubView === "options") {
+        loadOptions();    // lazy — only when shown
     }
 }
 
@@ -754,6 +758,85 @@ async function loadReserves() {
         </tr>`).join("")
         : `<tr><td colspan="6" class="text-center text-slate-500 py-6">No reserves.</td></tr>`;
 }
+
+// ── Options tab ────────────────────────────────────────────────────────────────
+async function loadOptions() {
+    try {
+        const data = await api("/api/portfolio/options");
+        const tb = $("options-body");
+        tb.innerHTML = data.length ? data.map((o) => `
+            <tr>
+                <td class="font-bold text-blue-400">${o.symbol}</td>
+                <td>${o.qty}</td>
+                <td class="font-semibold text-slate-300">$${o.strike.toFixed(2)}</td>
+                <td class="text-slate-400">$${o.underlying_price.toFixed(2)}</td>
+                <td class="text-green-400 font-semibold">$${o.premium.toFixed(2)}</td>
+                <td>${o.expiration_date}</td>
+                <td>${(o.sigma * 100).toFixed(1)}%</td>
+                <td><span class="badge text-xs bg-emerald-950 text-emerald-400 border border-emerald-800/40">ACTIVE WRITE</span></td>
+            </tr>
+        `).join("")
+        : `<tr><td colspan="8" class="text-center text-slate-500 py-6">No active written options contracts. We write weekly Covered Calls against protected winners!</td></tr>`;
+    } catch (e) {
+        $("options-body").innerHTML = `<tr><td colspan="8" class="text-center text-red-500 py-6">Error loading options: ${e}</td></tr>`;
+    }
+}
+
+async function runOptionsAdviser() {
+    const sym = ($("adviser-sym-input").value || "").trim().toUpperCase();
+    if (!sym) return;
+    const container = $("adviser-container");
+    container.innerHTML = `<div class="text-center text-slate-500 py-4"><span class="animate-pulse">Synthesizing Black-Scholes chains for ${sym}...</span></div>`;
+    
+    try {
+        const data = await api(`/api/options/adviser?symbol=${sym}`);
+        const spot = data.underlying_price;
+        const recs = data.recommendations || [];
+        
+        container.innerHTML = `
+            <div class="flex justify-between items-center bg-slate-900/60 p-3 rounded border border-slate-800/60">
+                <div>
+                    <span class="text-xs text-slate-500 uppercase font-bold">Underlying Ticker</span>
+                    <h4 class="text-lg font-extrabold text-blue-400">${data.symbol}</h4>
+                </div>
+                <div class="text-right">
+                    <span class="text-xs text-slate-500 uppercase font-bold">Spot Price</span>
+                    <h4 class="text-lg font-extrabold text-slate-200">$${spot.toFixed(2)}</h4>
+                </div>
+            </div>
+            
+            <div class="space-y-2">
+                <span class="text-xs text-slate-400 font-bold block">Top Recommended Covered Call Writes (30 Days to Expiry):</span>
+                ${recs.length ? recs.map((r) => `
+                    <div class="flex justify-between items-center bg-slate-900/20 p-2.5 rounded border border-slate-800/20 hover:border-slate-700/60 transition-all">
+                        <div class="space-y-0.5">
+                            <div class="text-sm font-bold text-slate-300">$${r.strike.toFixed(2)} CALL</div>
+                            <div class="text-[10px] text-slate-500">Delta: ${r.delta.toFixed(3)} · Expiry: ${r.expiry}</div>
+                        </div>
+                        <div class="text-right space-y-0.5">
+                            <div class="text-sm font-bold text-green-400">+$${r.premium.toFixed(2)} Premium</div>
+                            <div class="text-[10px] text-emerald-400 font-bold">${r.roi_percentage}% Yield</div>
+                        </div>
+                    </div>
+                `).join("") : `<div class="text-center text-xs text-slate-500 py-2">No recommended strikes (stock is illiquid or priced out).</div>`}
+            </div>
+        `;
+    } catch (e) {
+        container.innerHTML = `<div class="text-center text-red-500 py-4 text-xs">Failed to run Options Advisor: ${e}</div>`;
+    }
+}
+
+// Wire the event listeners after DOM elements are available
+document.addEventListener("DOMContentLoaded", () => {
+    const btn = $("adviser-get-btn");
+    const input = $("adviser-sym-input");
+    if (btn) btn.addEventListener("click", runOptionsAdviser);
+    if (input) {
+        input.addEventListener("keypress", (e) => {
+            if (e.key === "Enter") runOptionsAdviser();
+        });
+    }
+});
 
 // ── History tab ────────────────────────────────────────────────────────────────
 let histOffset = 0;
