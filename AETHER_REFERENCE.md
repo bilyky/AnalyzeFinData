@@ -185,7 +185,43 @@ AETHER's factor weights are fully customizable and backtest-driven:
 
 ---
 
-## 🏁 7. Developer Modification Checklist
+## ⏰ 7. Automated Production Schedulers & Task Execution Timeline
+
+To achieve complete off-market stability and prevent system timeouts, AETHER separates **Lightweight Session Refreshers** (always run first with Priority 1) from **Heavy, Slow Diagnostics** (CIM process sweeps, code compilation checks, and workbook refreshes). Heavy diagnostic tasks are strictly time-locked and run only during active market/preparation hours.
+
+The master execution timeline is structured as follows:
+
+```text
+  [05:15 AM PST] AETHER_Chaikin_Reauth ────────► Proactive token refreshes (Priority 1)
+  [05:30 AM PST] AETHER_Morning ───────────────► Pre-market data-fetching pipeline
+  [06:45 AM PST] AETHER_StopMonitor ───────────► Active session trailing stop watchdog
+  [07:00 AM PST] AETHER_ExecuteTrades ─────────► Market-open rebalancing & trade manager
+  [07:05 AM PST] AETHER_DailyDriver ───────────► AI qualitative scoring & re-qualification
+  [01:30 PM PST] AETHER_PostMarketSync ────────► Finalized daily close backfiller (No-pollution)
+  [02:00 PM PST] AETHER_PostMarketReporter ────► Closing portfolio valuation audit
+  [03:00 PM PST] AETHER_Data_Backup ───────────► Off-market Robocopy UNC sync (Pristine)
+  [09:30 PM PST] AETHER_PreFlight_Audit ───────► Nightly API and email gateway diagnostic
+  [Hourly 24/7]  AETHER_Watchdog ──────────────► Proactive keep-alive & session keeper (2h limit)
+```
+
+### 📋 Schedulers Execution & Timeout Registry
+
+| Task Name | Active Time | Priority / Role | Key Dependencies | Expected Duration | Task Timeout |
+| :--- | :---: | :--- | :--- | :---: | :---: |
+| **`AETHER_Watchdog`** | Hourly (24/7) | **CRITICAL (P1)** / Keeps OAuth cookies and Chaikin logins warm; executes self-healing. | Active network gateway; E*TRADE production tokens. | $< 3$ seconds (Overnight); $< 10$ seconds (Market Hours) | **2 Hours** (`New-TimeSpan -Hours 2`) |
+| **`AETHER_Morning`** | 05:30 AM PST | **HIGH (P2)** / Scrapes Chaikin ratings, parses email newsletters, and backfills history. | Validated E*TRADE/Chaikin cookies; fresh email ideas. | 4 – 6 minutes (Throttled API) | **2 Hours** (`New-TimeSpan -Hours 2`) |
+| **`AETHER_StopMonitor`** | 06:45 AM PST | **CRITICAL (P1)** / Interday real-time stop-loss monitoring; repeats every 30 mins for 7 hours. | E*TRADE real-time streaming quotes. | 15 – 30 seconds | **30 Minutes** |
+| **`AETHER_ExecuteTrades`**| 07:00 AM PST | **CRITICAL (P1)** / Opens opening rebalancing; executes trailing stop ratchets & buy entries. | Completed 5:30 AM workbook; fresh E*TRADE tokens. | 10 – 20 seconds | **30 Minutes** |
+| **`AETHER_DailyDriver`** | 07:05 AM PST | **MEDIUM** / AI qualitative reasoning and position re-qualification. | Live market quotes; Claude/Gemini API key. | 2 – 3 minutes | **30 Minutes** |
+| **`AETHER_PostMarketSync`**| 01:30 PM PST | **MEDIUM** / Backfills finalized daily closes (15 mins post-close; no intraday pollution). | Alpha Vantage / RapidAPI daily close bars. | 2 – 3 minutes | **1 Hour** |
+| **`AETHER_PostMarketReporter`**| 02:00 PM PST | **LOW** / Computes closing portfolio equity and sends daily performance reports. | Finalized portfolio prices on disk. | 15 – 30 seconds | **30 Minutes** |
+| **`AETHER_Data_Backup`** | 03:00 PM PST | **LOW** / Robocopy syncs local Data/ folder to backup network drive. | Network storage online. | 30 – 90 seconds | **1 Hour** |
+| **`AETHER_PreFlight_Audit`**| 09:30 PM PST | **MEDIUM** / Nightly connection diagnostics and gateway check. | Centralized API, email, and directory gateways. | 10 – 15 seconds | **30 Minutes** |
+| **`AETHER_Chaikin_Reauth`**| Sunday 08:00 AM | **LOW** / Proactive headed Playwright Chrome login cookie refresh. | Logged-on user session (No-S4U). | 2 – 3 minutes (Supervised) | **30 Minutes** |
+
+---
+
+## 🏁 8. Developer Modification Checklist
 
 Use this checklist whenever you want to **add, remove, or modify** any system asset or parameter:
 
