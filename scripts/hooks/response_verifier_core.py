@@ -87,7 +87,38 @@ HEALTH_CLAIMS = (
     "etrade is online",
     "everything is green",
     "everything's green",
+    "maintenance reset",
+    "server maintenance",
+    "standard reset",
+    "daily reset",
+    "token reset",
+    "tokens expired",
+    "token expired",
+    "session expired",
+    "sessions expired",
+    "api downtime",
+    "server outage",
+    "network blockage",
+    "dns blockage",
+    "chaikin outage",
+    "etrade outage",
 )
+
+# Semantic-relevancy mapping: specific health/infra claims are strictly coupled
+# to their relevant diagnostic tools. An unrelated tool call (like Get-Date) can
+# never satisfy these claims (R&D #34).
+RELEVANT_TOOL_KEYWORDS = {
+    "etrade": ["etrade", "preflight_validator.py", "test_etrade.py", "verify_live_etrade_token.py"],
+    "e*trade": ["etrade", "preflight_validator.py", "test_etrade.py", "verify_live_etrade_token.py"],
+    "token": ["etrade", "preflight_validator.py", "test_etrade.py", "verify_live_etrade_token.py", "token"],
+    "session": ["etrade", "preflight_validator.py", "test_etrade.py", "verify_live_etrade_token.py", "token", "chaikin", "session"],
+    "chaikin": ["chaikin", "powergauge", "preflight_validator.py"],
+    "powergauge": ["chaikin", "powergauge", "preflight_validator.py"],
+    "outage": ["etrade", "chaikin", "powergauge", "preflight_validator.py", "ping", "curl"],
+    "downtime": ["etrade", "chaikin", "powergauge", "preflight_validator.py", "ping", "curl"],
+    "reset": ["etrade", "chaikin", "powergauge", "preflight_validator.py"],
+    "blockage": ["etrade", "chaikin", "powergauge", "preflight_validator.py", "ping", "curl"],
+}
 
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 
@@ -149,6 +180,34 @@ def ran_diagnostic(transcript_path):
     return any(m in turn for m in _TOOL_MARKERS) or "functionresponse" in turn or "toolresponse" in turn
 
 
+def get_diagnostic_turn_text(transcript_path) -> str | None:
+    """Read the transcript and return the current turn text if a tool was run,
+    otherwise None. Pure helper for semantic-relevancy verification (R&D #34).
+    """
+    if not transcript_path:
+        return None
+    try:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except Exception:
+        return None
+    if not lines:
+        return None
+    start = 0
+    for i in range(len(lines) - 1, -1, -1):
+        low = lines[i].lower()
+        if "functionresponse" in low or "toolresponse" in low:
+            continue
+        if any(m in low for m in _USER_MARKERS):
+            start = i
+            break
+    turn = "\n".join(lines[start:]).lower()
+    has_tool = any(m in turn for m in _TOOL_MARKERS) or "functionresponse" in turn or "toolresponse" in turn
+    if has_tool:
+        return turn
+    return None
+
+
 def scan(response_text, transcript_path=None):
     """Pure content check. Returns a ``Violation`` or ``None``. Never raises.
 
@@ -167,14 +226,33 @@ def scan(response_text, transcript_path=None):
             )
         low = text.lower()
         claimed = [c for c in HEALTH_CLAIMS if c in low]
-        if claimed and ran_diagnostic(transcript_path) is False:
-            found = ", ".join(sorted(set(claimed)))
-            return Violation(
-                "unsubstantiated-claim",
-                "Response asserts a systems-health claim "
-                f"({found}) but no diagnostic tool was invoked this turn to back it. "
-                "Run the check and cite its output this turn, or drop the claim.",
-            )
+        if claimed:
+            if ran_diagnostic(transcript_path) is False:
+                found = ", ".join(sorted(set(claimed)))
+                return Violation(
+                    "unsubstantiated-claim",
+                    "Response asserts a systems-health claim "
+                    f"({found}) but no diagnostic tool was invoked this turn to back it. "
+                    "Run the check and cite its output this turn, or drop the claim.",
+                )
+            
+            # A tool was run, check relevancy if specific speculative keywords match
+            turn_text = get_diagnostic_turn_text(transcript_path)
+            if turn_text:
+                for c in claimed:
+                    matched_keywords = []
+                    for kw, tool_kws in RELEVANT_TOOL_KEYWORDS.items():
+                        if kw in c:
+                            matched_keywords.extend(tool_kws)
+                    
+                    if matched_keywords:
+                        if not any(tk in turn_text for tk in matched_keywords):
+                            return Violation(
+                                "unsubstantiated-claim",
+                                f"Response asserts a systems-health claim ('{c}') but no relevant "
+                                f"diagnostic tool (matching: {', '.join(sorted(set(matched_keywords)))}) "
+                                "was executed this turn to substantiate it. Run the specific check, or drop the claim."
+                            )
         return None
     except Exception:
         return None
