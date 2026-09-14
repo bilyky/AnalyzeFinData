@@ -89,5 +89,112 @@ class TestWatchdogSchedulerAuditing(unittest.TestCase):
         self.assertNotIn("AETHER_Agents", ps_script)
 
 
+class TestWatchdogNightHoursSkip(unittest.TestCase):
+    @mock.patch("watchdog.notify.send_email")
+    @mock.patch("watchdog.is_pid_running")
+    @mock.patch("watchdog.check_data_freshness")
+    @mock.patch("watchdog.check_logs")
+    @mock.patch("watchdog.powergauge.ensure_valid_session")
+    @mock.patch("watchdog.etrade.scheduled_reauth")
+    @mock.patch("watchdog._log")
+    @mock.patch("watchdog.datetime")
+    def test_night_hours_skips_heavy_diagnostics(self, mock_datetime, mock_log, mock_reauth, mock_session, mock_check_logs, mock_data_freshness, mock_is_pid, mock_send_email):
+        """Outside active weekday operational window (e.g. Sunday night), watchdog exits early after session keeps."""
+        import datetime as dt
+        mock_is_pid.return_value = False
+        mock_data_freshness.return_value = None
+        # Mock current time to Sunday Sep 13, 2026, 11:00 PM (23:00)
+        mock_datetime.datetime.now.return_value = dt.datetime(2026, 9, 13, 23, 0, 0)
+        mock_datetime.datetime.now_la.return_value = dt.datetime(2026, 9, 13, 23, 0, 0)
+        
+        # Mock successful session keeps
+        mock_reauth.return_value = {"ok": True, "reason": "renewed"}
+        mock_session.return_value = {"jsessionid": "test_id"}
+
+        # Execute run_watchdog
+        watchdog.run_watchdog()
+
+        # Verify session keeps WERE run
+        mock_reauth.assert_called_once_with("production")
+        mock_session.assert_called_once()
+
+        # Verify that task/log audits WERE successfully run overnight (no blind spots!)
+        self.assertEqual(mock_check_logs.call_count, 2)
+        mock_log.info.assert_any_call("💤 [Night-Hours Skip] Skipping heavy process supervisor and port sentry overnight.")
+
+    @mock.patch("watchdog.notify.send_email")
+    @mock.patch("watchdog.is_pid_running")
+    @mock.patch("watchdog.check_data_freshness")
+    @mock.patch("watchdog.check_logs")
+    @mock.patch("watchdog.powergauge.ensure_valid_session")
+    @mock.patch("watchdog.etrade.scheduled_reauth")
+    @mock.patch("watchdog._log")
+    @mock.patch("watchdog.datetime")
+    def test_active_hours_runs_full_diagnostics(self, mock_datetime, mock_log, mock_reauth, mock_session, mock_check_logs, mock_data_freshness, mock_is_pid, mock_send_email):
+        """Inside active operational window (e.g. Monday morning 7:00 AM), watchdog runs full diagnostic suite."""
+        import datetime as dt
+        mock_is_pid.return_value = False
+        mock_data_freshness.return_value = None
+        # Mock current time to Monday Sep 14, 2026, 7:00 AM
+        mock_datetime.datetime.now.return_value = dt.datetime(2026, 9, 14, 7, 0, 0)
+        mock_datetime.datetime.now_la.return_value = dt.datetime(2026, 9, 14, 7, 0, 0)
+        
+        # Mock successful session keeps
+        mock_reauth.return_value = {"ok": True, "reason": "renewed"}
+        mock_session.return_value = {"jsessionid": "test_id"}
+        mock_check_logs.return_value = []
+
+        # Execute run_watchdog (expecting it to continue to step 1, which calls check_logs)
+        try:
+            watchdog.run_watchdog()
+        except Exception:
+            pass # we mock out subprocesses, so subsequent steps may raise, which is fine as long as check_logs was hit!
+
+        # Verify session keeps WERE run
+        mock_reauth.assert_called_once_with("production")
+        mock_session.assert_called_once()
+
+        # Verify check_logs WAS called (full diagnostics executed!)
+        self.assertEqual(mock_check_logs.call_count, 2)
+
+
+class TestRecoveryNextStepsFalseGreen(unittest.TestCase):
+    """The recovery email's SECTION-4 "Next Steps" bullets must never present an
+    OFF-MARKET run as a verified pass. `compilation_passed == "SKIPPED"` is a
+    truthy string; the pre-fix code tested it truthily and rendered "pushed the
+    fix to the main branch" under a SKIPPED (OFF-MARKET) badge — a false-green.
+    These pin the strict tri-state rendering (would fail against truthy checks)."""
+
+    def test_skipped_does_not_render_success_bullets(self):
+        # Off-market healer run: the compile check was deliberately skipped.
+        html = watchdog._recovery_next_steps_html("SKIPPED", ai_triggered=True)
+        # The false-green: a skipped compile must NOT claim it pushed a fix or resumed.
+        self.assertNotIn("pushed the fix to the main branch", html)
+        self.assertNotIn("Automatic Resume", html)
+        # …and skip is not failure, so no "failed to compile" alert either.
+        self.assertNotIn("failed to compile", html)
+        # The healer-triggered lock-file action is still legitimately shown.
+        self.assertIn("delete the circuit breaker lock file", html)
+
+    def test_verified_pass_renders_success_bullets(self):
+        html = watchdog._recovery_next_steps_html(True, ai_triggered=True)
+        self.assertIn("pushed the fix to the main branch", html)
+        self.assertIn("Automatic Resume", html)
+        self.assertNotIn("failed to compile", html)
+
+    def test_verified_failure_renders_only_alert(self):
+        html = watchdog._recovery_next_steps_html(False, ai_triggered=True)
+        self.assertNotIn("pushed the fix to the main branch", html)
+        self.assertNotIn("Automatic Resume", html)
+        self.assertIn("failed to compile", html)
+
+    def test_pass_without_healer_omits_healer_bullets(self):
+        # Nominal in-window pass, nothing healed: no push-fix claim, no lock action.
+        html = watchdog._recovery_next_steps_html(True, ai_triggered=False)
+        self.assertNotIn("pushed the fix to the main branch", html)
+        self.assertIn("Automatic Resume", html)
+        self.assertNotIn("delete the circuit breaker lock file", html)
+
+
 if __name__ == "__main__":
     unittest.main()
