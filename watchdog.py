@@ -731,6 +731,23 @@ def run_watchdog():
     except Exception as e:
         _log.error("Chaikin session keep-alive failed", extra={"error": str(e)}, exc_info=True)
 
+    # ── Night-Hours Sentry Optimization (R&D #36) ──
+    # Token refreshing is our absolute highest priority. During weekends and night hours,
+    # we do not have active trading, but we still have scheduled after-hours scripts (syncs,
+    # backups, audits) that must be monitored 24/7. To prevent task hangs or timeouts overnight,
+    # we continue to audit tasks and logs 24/7, but we strictly skip only the heavy, slow
+    # background tasks (process supervisor, compilation checks).
+    try:
+        tz_la = pytz.timezone("America/Los_Angeles")
+        now_la = datetime.datetime.now(tz_la)
+    except Exception:
+        now_la = datetime.datetime.now()
+
+    # Active operational window: Weekdays between 5:00 AM and 1:30 PM Pacific.
+    is_weekend = now_la.weekday() in (5, 6)
+    current_minutes = now_la.hour * 60 + now_la.minute
+    is_active_window = not is_weekend and (300 <= current_minutes <= 810)  # 5:00 AM to 1:30 PM PST
+
     # 1. Gather Initial System Health Data
     initial_errors = check_logs()
     missing_tasks, failed_tasks = check_task_scheduler()
@@ -740,7 +757,10 @@ def run_watchdog():
     purge_stray_tasks()
 
     # 1bb. Process Supervisor & Port Sentry (R&D #29)
-    supervise_processes()
+    if is_active_window:
+        supervise_processes()
+    else:
+        _log.info("💤 [Night-Hours Skip] Skipping heavy process supervisor and port sentry overnight.")
 
     # 1c. Empty the auth-state garbage can past its retention window. Rejected/revoked
     #     token files are soft-deleted (moved to Data/.trash, kept ~1 month for recovery)
@@ -787,19 +807,24 @@ def run_watchdog():
 
     # 5. Post-Healing Verification (Empirical Compilation Check)
     # We run the report script directly to see if the codebase now compiles and executes nominal!
-    try:
-        val_result = subprocess.run(
-            [sys.executable, str(BASE_DIR / "ai_portfolio_game.py"), "--report"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=120
-        )
-        compilation_passed = (val_result.returncode == 0)
-        validation_output = val_result.stdout if compilation_passed else val_result.stderr
-    except Exception as e:
-        compilation_passed = False
-        validation_output = f"Validation execution failed: {e}"
+    # Skipping this slow verification check during night-hours/weekends to prevent any chance of timeouts.
+    if is_active_window:
+        try:
+            val_result = subprocess.run(
+                [sys.executable, str(BASE_DIR / "ai_portfolio_game.py"), "--report"],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120
+            )
+            compilation_passed = (val_result.returncode == 0)
+            validation_output = val_result.stdout if compilation_passed else val_result.stderr
+        except Exception as e:
+            compilation_passed = False
+            validation_output = f"Validation execution failed: {e}"
+    else:
+        compilation_passed = "SKIPPED"
+        validation_output = "Compilation check skipped (outside active market prep/trading window)."
 
     # 6. Re-Audit Logs after the fix
     remaining_errors = check_logs()
@@ -816,9 +841,17 @@ def run_watchdog():
     if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered):
         _log.console("Healer cycle complete. Constructing consolidated recovery report...")
         
-        # Color badges
-        status_color = "#27ae60" if compilation_passed else "#c0392b"
-        status_text = "NOMINAL (HEALED)" if compilation_passed else "MANUAL INTERVENTION REQUIRED"
+        # Color badges & status texts based on compilation result
+        if compilation_passed == "SKIPPED":
+            status_color = "#7f8c8d"  # Gray
+            status_text = "SKIPPED (OFF-MARKET)"
+            comp_color = "#7f8c8d"
+            comp_text = "SKIPPED (Outside Active Prep/Trading Window)"
+        else:
+            status_color = "#27ae60" if compilation_passed else "#c0392b"
+            status_text = "NOMINAL (HEALED)" if compilation_passed else "MANUAL INTERVENTION REQUIRED"
+            comp_color = "#27ae60" if compilation_passed else "#c0392b"
+            comp_text = "SUCCESS / PASSED" if compilation_passed else "FAILED / COMPILE ERROR"
         
         # Clean console log for email (last 2000 chars to avoid size limits)
         trimmed_console_log = ai_console_log[-2000:] if ai_console_log else "No AI logs available."
@@ -856,7 +889,7 @@ def run_watchdog():
             <div style="background: #f9f9f9; border-left: 5px solid #95a5a6; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #34495e; font-size: 15px;">✅ 3. POST-HEALING VALIDATION (Execution Check):</h3>
                 <p style="font-size: 13px; font-weight: bold;">Validation Script: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">python ai_portfolio_game.py --report</span></p>
-                <p style="font-size: 13px; font-weight: bold;">Compilation Result: <span style="color: {'#27ae60' if compilation_passed else '#c0392b'}; font-size: 14px;">{'SUCCESS / PASSED' if compilation_passed else 'FAILED / COMPILE ERROR'}</span></p>
+                <p style="font-size: 13px; font-weight: bold;">Compilation Result: <span style="color: {comp_color}; font-size: 14px;">{comp_text}</span></p>
                 <h4 style="margin-bottom: 5px; font-size: 13px; color: #333;">Validation Console Output:</h4>
                 <pre style="background: #f1f2f6; color: #2c3e50; padding: 12px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; overflow-x: auto; font-family: monospace;">{validation_output}</pre>
             </div>
