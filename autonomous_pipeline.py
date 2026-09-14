@@ -8,6 +8,7 @@ import subprocess
 import openpyxl
 import notify
 import watchdog
+from watchdog import is_market_hours
 import html
 from aether import trash
 from aether.run_guard import DailyRunGuard, RunSkipped
@@ -403,6 +404,31 @@ def main():
     no_history = "--no-history" in sys.argv[1:]
     report_only = "--report-only" in sys.argv[1:] or "--cached" in sys.argv[1:]
 
+    cached_freshness = None
+    cached_sheets = None
+
+    # ── Freshness & Market-Hours Sentry Guards (R&D #37) ──
+    # To completely prevent intraday price pollution during active trading hours, we
+    # enforce two strict checks:
+    # 1. If today's workbook is already fresh and valid, skip all heavy refreshes.
+    # 2. If NYSE is currently open and --force is not passed, gracefully downgrade to
+    #    report-only/cached mode, skipping all data-modifying backfills and PG refreshes.
+    if not report_only:
+        is_fresh, freshness_msg = verify_data_freshness()
+        cached_freshness = (is_fresh, freshness_msg)
+        if is_fresh:
+            valid_sheets, sheets_msg = validate_sheets()
+            cached_sheets = (valid_sheets, sheets_msg)
+            if valid_sheets:
+                log("⚡ [Freshness Sentry] Today's workbook is already fresh and valid. Skipping email intel, history backfills, and Chaikin PG refreshes!")
+                report_only = True
+                
+    if not report_only:
+        # Check active market hours to protect daily price history from intraday pollution
+        if is_market_hours() and "--force" not in sys.argv:
+            log("⚠️ [Market Hours Sentry] NYSE is currently open. Gracefully downgrading to cached report-only mode to prevent intraday price pollution!")
+            report_only = True
+
     # ── Pillar 1: Centralized Pre-Flight Diagnostics (R&D #21) ──
     # Actively test connections and fail-loud early before doing any write operations
     if not report_only:
@@ -519,7 +545,11 @@ def main():
         log("Skipping OHLCV recovery pass (moved to evening daily_task.py)...")
 
     # 3. Verify data freshness
-    fresh, msg = verify_data_freshness()
+    # If we skipped refreshes in report-only mode, reuse our cached sentry result to avoid double workbook IO.
+    if report_only and cached_freshness is not None:
+        fresh, msg = cached_freshness
+    else:
+        fresh, msg = verify_data_freshness()
     log(msg)
     if not fresh:
         if not no_email:
@@ -527,7 +557,11 @@ def main():
         return
 
     # 4. Validate sheets
-    valid, v_msg = validate_sheets()
+    # If we skipped refreshes in report-only mode, reuse our cached sentry result to avoid double workbook open.
+    if report_only and cached_sheets is not None:
+        valid, v_msg = cached_sheets
+    else:
+        valid, v_msg = validate_sheets()
     log(v_msg)
     if not valid:
         if not no_email:
