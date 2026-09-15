@@ -50,7 +50,24 @@ _FAIL_STATE_PATH = os.path.join(_DATA_DIR, "etrade_fail_state.json")
 
 
 
-_ET = ZoneInfo("America/New_York")
+def _load_eastern_tz():
+    """Resolve America/New_York, preferring the OS tz database via ``zoneinfo`` and falling
+    back to pytz's bundled zone database when the OS lacks tzdata (stripped-down Docker image
+    or minimal OS). BOTH tiers are DST-aware. There is deliberately no fixed UTC-5 tier: a
+    fixed offset is EST year-round and would be an hour wrong for the ~8 months the Eastern
+    zone is on EDT — and since ``pytz`` (a hard top-level dependency) bundles the zone, the
+    pytz tier cannot fail for this valid name, so a third tier would be unreachable anyway."""
+    try:
+        return ZoneInfo("America/New_York")
+    except Exception:
+        _log.warning(
+            "zoneinfo tzdata unavailable; falling back to pytz for America/New_York "
+            "(DST-aware). Install the 'tzdata' package to use the OS zone database."
+        )
+        return pytz.timezone("America/New_York")
+
+
+_ET = _load_eastern_tz()
 _RENEW_URL = {
     "sandbox":    "https://apisb.etrade.com/oauth/renew_access_token",
     "production": "https://api.etrade.com/oauth/renew_access_token",
@@ -542,7 +559,6 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
         ctx = p.chromium.launch_persistent_context(
             _CHROME_PROFILE_DIR,
             headless=headless,
-            channel="chrome",
             proxy=pw_proxy,
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

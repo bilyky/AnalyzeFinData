@@ -784,7 +784,6 @@ def _login_via_browser(headless: bool = False) -> dict:
     proxy_url = _resolve_proxy()
     launch_kwargs = dict(
         headless=headless,
-        channel='chrome',
         args=['--disable-blink-features=AutomationControlled'],
     )
     if proxy_url:
