@@ -138,11 +138,11 @@ if not _os.getenv("AETHER_LIVE_TESTS"):
         # Apply the blocks directly to the module-level local references inside etrade and powergauge
         try:
             _etrade.sync_playwright = _blocked_playwright
-        except Exception:
+        except (ImportError, AttributeError):
             pass
         try:
             _powergauge = _importlib.import_module("powergauge")
             _powergauge.sync_playwright = _blocked_playwright
-        except Exception:
+        except (ImportError, AttributeError):
             pass
 
