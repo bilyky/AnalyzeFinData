@@ -70,6 +70,16 @@ class _Config:
         self.chaikin_password = os.environ.get("CHAIKIN_PASSWORD") or chaikin.get("password", "")
         self.chaikin_uid      = os.environ.get("CHAIKIN_UID")      or chaikin.get("uid",      "")
         self.chaikin_api_key  = os.environ.get("CHAIKIN_API_KEY")  or chaikin.get("api_key",  "")
+        # Proxy mode for Chaikin HTTP calls (env CHAIKIN_PROXY overrides config chaikin.proxy):
+        #   a URL             -> always route through that proxy
+        #   "" / "direct"     -> never use a proxy (direct connection)
+        #   "auto" (default)  -> use the E*TRADE/Intel proxy ONLY when it is reachable, so the
+        #                        same config runs on-network (proxy required) and off-network
+        #                        (direct works). Resolved in powergauge._resolve_proxy().
+        _chaikin_proxy = os.environ.get("CHAIKIN_PROXY")
+        if _chaikin_proxy is None:
+            _chaikin_proxy = chaikin.get("proxy")   # None when absent, "" when explicitly direct
+        self.chaikin_proxy = "auto" if _chaikin_proxy is None else _chaikin_proxy
 
         # ── E*TRADE ──────────────────────────────────────────────────────────
         etrade     = raw.get("etrade") or {}
