@@ -559,7 +559,6 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
         ctx = p.chromium.launch_persistent_context(
             _CHROME_PROFILE_DIR,
             headless=headless,
-            channel="chrome",
             proxy=pw_proxy,
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
