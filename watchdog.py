@@ -34,16 +34,17 @@ TASKS = ["AnalyzeFinData_Morning", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_
 SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
 
 python_exe = sys.executable
+run_agent = BASE_DIR / "run_agent.cmd"
 _TASK_DEFS = {
-    "AnalyzeFinData_Morning":  (f"'{python_exe}' '{BASE_DIR / 'autonomous_pipeline.py'}'", "daily", "05:30"),
-    "AnalyzeFinData_Evening":  (f"'{python_exe}' '{BASE_DIR / 'daily_task.py'}'",           "daily", "17:00"),
-    "AnalyzeFinData_AI_Game":  (f"'{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --run", "daily", "07:00"),
-    "AnalyzeFinData_AI_Summary": (f"'{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --summary", "daily", "18:00"),
+    "AnalyzeFinData_Morning":  (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'autonomous_pipeline.py'}'", "daily", "05:30"),
+    "AnalyzeFinData_Evening":  (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'daily_task.py'}'",           "daily", "17:00"),
+    "AnalyzeFinData_AI_Game":  (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --run", "daily", "07:00"),
+    "AnalyzeFinData_AI_Summary": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --summary", "daily", "18:00"),
     # Unattended daily E*TRADE re-auth at 05:15 — just before the 05:30 Morning pipeline so the
     # token is fresh for it. Renew-first + trusted-profile-only + once/day: ≤1 browser/day, and
     # none at all once trust lapses (it latches sms_required and emails/pushes for a human).
-    "AnalyzeFinData_ETrade_Reauth": (f"'{python_exe}' '{BASE_DIR / 'server.py'}' etrade-reauth --scheduled", "daily", "05:15"),
-    "Project_AETHER_Watchdog": (f"'{python_exe}' '{BASE_DIR / 'watchdog.py'}'",              "hourly", None),
+    "AnalyzeFinData_ETrade_Reauth": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'server.py'}' etrade-reauth --scheduled", "daily", "05:15"),
+    "Project_AETHER_Watchdog": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'watchdog.py'}'",              "hourly", None),
 }
 
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
@@ -54,8 +55,8 @@ SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 # Placeholders: {prompt} (inline text) or {prompt_file} (safe text file path, highly recommended for Windows).
 _CLAUDE_EXE = os.path.expandvars(r"%USERPROFILE%\.gnai\claude\claude.exe")
 _DEFAULT_HEALER = (
-    f'"{_CLAUDE_EXE}" --allowedTools "Bash,Read,Edit,Write,Glob,Grep"'
-    ' --approval-mode acceptEdits'
+    f'"{_CLAUDE_EXE}" --allowedTools "Read,Glob,Grep"'
+    ' --approval-mode plan'
     ' -p "{prompt_file}"'
 )
 HEALER_CMD_TEMPLATE = os.environ.get("AETHER_HEALER_CMD", _DEFAULT_HEALER)
@@ -109,7 +110,7 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
     try:
         with open(AETHER_JSONL, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
-        for line in lines[-200:]:  # recent enough window for structured log
+        for line in reversed(lines):  # Scan backwards to handle high volume log files efficiently
             line = line.strip()
             if not line:
                 continue
@@ -117,9 +118,24 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            
+            ts_str = entry.get("ts", "")
+            # Since the log is chronological, if we encounter an entry older than 2 hours,
+            # we can stop scanning backwards.
+            if ts_str:
+                parsed_t = None
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+                    try:
+                        parsed_t = datetime.datetime.strptime(ts_str[:19], fmt)
+                        break
+                    except ValueError:
+                        continue
+                if parsed_t and (now - parsed_t).total_seconds() > 7200:
+                    break
+
             if entry.get("level", "").upper() != "ERROR":
                 continue
-            if not _within_window(entry.get("ts", ""), now):
+            if not _within_window(ts_str, now):
                 continue
             module = entry.get("module", "")
             msg = entry.get("msg", "")
@@ -130,6 +146,8 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
                 # Include just the last line of the traceback
                 detail += f" | {exc.strip().splitlines()[-1]}"
             errors.append(f"[{module}] {msg}{detail}")
+        
+        errors.reverse()  # Restore chronological order
     except Exception as e:
         _log.warning("Failed to scan structured log", extra={"error": str(e)})
     return errors
@@ -190,6 +208,7 @@ def trigger_ai_self_healing(traceback):
             prompt_file=str(SELF_HEAL_PROMPT_FILE)
         )
         _log.console(f"🚀 [AETHER BRAIN] Dispatching self-healing command (prompt written to file)")
+        
         result = subprocess.run(
             cmd,
             shell=True,
@@ -221,11 +240,26 @@ def trigger_ai_self_healing(traceback):
         return False, f"Execution failure: {e}", str(e)
 
 def check_task_scheduler():
-    """Verify all AETHER tasks are present and active."""
+    """Verify all AETHER tasks are present, and audit each for a failed last execution.
+
+    Returns (missing, failed):
+      missing = tasks absent from Task Scheduler (or unqueryable) -> safe to re-register.
+      failed  = tasks that exist but whose last run exited with a real failure code ->
+                alert only. Re-registering a crashed task does not fix the crash and would
+                churn/reset it (and re-fire the alert) every hourly cycle, so failed tasks
+                are surfaced for manual review, not routed through heal_tasks.
+    """
     missing = []
+    failed = []
     for task in TASKS:
         # Use absolute task path starting with backslash to prevent folder-relative lookup failures
         abs_task = f"\\{task}" if not task.startswith("\\") else task
+        # Split abs_task into (name, folder) so the PowerShell audit below queries the SAME
+        # location schtasks did — a root task ("\Name") -> TaskPath "\"; a foldered task
+        # ("\AETHER_Agents\Name") -> TaskPath "\AETHER_Agents\". Hardcoding a folder here
+        # would make Get-ScheduledTask find nothing and the audit silently never fire.
+        task_name = abs_task.rsplit("\\", 1)[-1]
+        task_path = abs_task[: len(abs_task) - len(task_name)] or "\\"
         try:
             result = subprocess.run(["schtasks", "/query", "/tn", abs_task], capture_output=True, text=True, errors="replace")
             if result.returncode != 0:
@@ -234,9 +268,182 @@ def check_task_scheduler():
                 output = f"{result.stdout or ''} {result.stderr or ''}".lower()
                 if "cannot find" in output or "not find" in output:
                     missing.append(task)
+            else:
+                # Query LastTaskResult via PowerShell to catch silent crashes/terminations.
+                ps_cmd = [
+                    "powershell.exe", "-NoProfile", "-Command",
+                    f"(Get-ScheduledTask -TaskName '{task_name}' -TaskPath '{task_path}' -ErrorAction SilentlyContinue | Get-ScheduledTaskInfo).LastTaskResult"
+                ]
+                ps_res = subprocess.run(ps_cmd, capture_output=True, text=True, errors="replace")
+                if ps_res.returncode == 0:
+                    try:
+                        res_code = int(ps_res.stdout.strip())
+                        # Benign LastTaskResult codes (WinError.h SCHED_S_*): 0=Success,
+                        # 267008=READY, 267009=RUNNING, 267011=HAS_NOT_RUN, 267012=NO_MORE_RUNS,
+                        # 267035=SOME_TRIGGERS_FAILED, 267045=QUEUED. Anything else (a real app exit code,
+                        # or 267014=TERMINATED) is a genuine execution failure.
+                        benign = (0, 267008, 267009, 267011, 267012, 267035, 267045)
+                        if res_code not in benign:
+                            _log.error(f"🛑 [Scheduler Audit] Task '{task}' failed on its last execution (Exit Code: {res_code}).")
+                            failed.append(task)
+                    except ValueError:
+                        pass
         except OSError:
             missing.append(task)
-    return missing
+    return missing, failed
+
+# Only console processes whose command line references THIS repo are AETHER-owned
+# and therefore safe to purge. 30-minute minimum age matches roadmap #29(b).
+_ORPHAN_MIN_AGE_MIN = 30
+
+
+def _parse_listener_pids_8888(netstat_stdout: str) -> set[int]:
+    """Pure: extract PIDs of processes *listening* on port 8888 from `netstat -ano`
+    output. Identifies a listener by the invariant socket shape (TCP, local address
+    ends in :8888, foreign address is the null endpoint) rather than the word
+    "LISTENING", which is localized on non-English Windows.
+    """
+    pids: set[int] = set()
+    for line in netstat_stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0].upper() != "TCP":
+            continue
+        local, foreign, pid = parts[1], parts[2], parts[-1]
+        if not local.endswith(":8888"):
+            continue
+        # A listening socket has no bound peer; an established connection does.
+        if foreign not in ("0.0.0.0:0", "[::]:0", "*:*"):
+            continue
+        if pid.isdigit() and int(pid) > 0:
+            pids.add(int(pid))
+    return pids
+
+
+def _select_stale_server_pids(server_processes: list) -> list:
+    """Pure: given [(pid, creation_date_str), ...] for the duplicate server.py
+    binders, return the PIDs to terminate — every one except the newest (latest
+    creation date). Keeping the newest preserves the just-started server.
+    """
+    if len(server_processes) <= 1:
+        return []
+    ordered = sorted(server_processes, key=lambda x: x[1])
+    return [pid for pid, _ in ordered[:-1]]
+
+
+def check_port_8888_sentry():
+    """Verify if multiple processes are trying to bind to port 8888 (the Web UI port)
+    and automatically terminate any duplicate server.py processes.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        # Run netstat to find listening processes on port 8888
+        res = subprocess.run(["cmd.exe", "/c", "netstat -ano | findstr :8888"], capture_output=True, text=True, errors="ignore")
+        pids = _parse_listener_pids_8888(res.stdout)
+
+        if len(pids) > 1:
+            _log.warning(f"⚠️ Port Sentry: Multiple processes ({pids}) binding to port 8888!")
+            server_processes = []
+            for pid in pids:
+                cmd = ["powershell.exe", "-NoProfile", "-Command", f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' | Select-Object CreationDate, CommandLine | ConvertTo-Json"]
+                proc_res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
+                if proc_res.returncode == 0 and proc_res.stdout.strip():
+                    try:
+                        proc_data = json.loads(proc_res.stdout)
+                        cmdline = proc_data.get("CommandLine") or ""
+                        if "server.py" in cmdline.lower():
+                            creation_date = proc_data.get("CreationDate") or ""
+                            server_processes.append((pid, creation_date))
+                    except Exception:
+                        pass
+
+            for pid in _select_stale_server_pids(server_processes):
+                _log.warning(f"🧹 Port Sentry: Terminating duplicate older server.py process (PID={pid})")
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+    except Exception as e:
+        _log.warning(f"Port Sentry check failed (non-fatal): {e}")
+
+
+def _select_orphans_to_purge(procs: list, repo_path: str,
+                             min_age_min: float = _ORPHAN_MIN_AGE_MIN) -> list:
+    """Pure: from the PowerShell process snapshot (a list of dicts with keys
+    ProcessId, AgeMinutes, CommandLine, ChildCount), return the PIDs that are
+    SAFE to force-kill.
+
+    Safety contract (this is the whole point of the function): a process is
+    purged only if it is **AETHER-owned** — its command line references this
+    repo's directory — AND it is childless AND older than the TTL. A process we
+    cannot attribute to AETHER is never returned, no matter how old or idle, so
+    the sweep can never touch the user's own shells or unrelated console hosts.
+    """
+    repo = (repo_path or "").replace("\\", "/").lower()
+    victims: list = []
+    if not repo:
+        return victims
+    for p in procs:
+        cmdline = (p.get("CommandLine") or "").replace("\\", "/").lower()
+        if repo not in cmdline:
+            continue  # not AETHER-owned → never kill (non-invasive)
+        try:
+            if int(p.get("ChildCount") or 0) != 0:
+                continue
+            if float(p.get("AgeMinutes") or 0) <= min_age_min:
+                continue
+            victims.append(int(p["ProcessId"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    return victims
+
+
+def clean_orphaned_containers():
+    """Force-terminate ONLY AETHER-owned orphaned powershell.exe/conhost.exe
+    processes — childless, older than 30 minutes, and whose command line points at
+    this repo. PowerShell only *snapshots* the process table (PID, age, child
+    count, command line); the kill decision is made by the pure, tested
+    `_select_orphans_to_purge` in Python. This keeps the sweep "non-invasive" per
+    roadmap #29(b): it can never kill the user's own shells, unrelated console
+    hosts, or a non-AETHER job.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        # Snapshot only — no Stop-Process here; Python decides and kills.
+        ps_cmd = (
+            "Get-CimInstance Win32_Process -Filter \"Name = 'powershell.exe' or Name = 'conhost.exe'\" | "
+            "ForEach-Object { "
+            "  $p = $_; "
+            "  $kids = @(Get-CimInstance Win32_Process -Filter \"ParentProcessId = $($p.ProcessId)\").Count; "
+            "  [PSCustomObject]@{ "
+            "    ProcessId = $p.ProcessId; "
+            "    AgeMinutes = ((Get-Date) - $p.CreationDate).TotalMinutes; "
+            "    CommandLine = $p.CommandLine; "
+            "    ChildCount = $kids "
+            "  } "
+            "} | ConvertTo-Json -Depth 2"
+        )
+        cmd = ["powershell.exe", "-NoProfile", "-Command", ps_cmd]
+        res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
+        if not res.stdout.strip():
+            return
+        data = json.loads(res.stdout)
+        if isinstance(data, dict):   # ConvertTo-Json emits a bare object for a single row
+            data = [data]
+        for pid in _select_orphans_to_purge(data, str(BASE_DIR)):
+            _log.warning(f"🧹 Process Sentry: purging orphaned AETHER console process PID={pid} "
+                         f"(childless, >{_ORPHAN_MIN_AGE_MIN}min)")
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+    except Exception as e:
+        _log.warning(f"Orphaned process cleanup failed (non-fatal): {e}")
+
+
+def supervise_processes():
+    """R&D #29: Autonomous Process Supervisor & Port Sentry.
+    Detects and cleans up port 8888 socket duplicates and orphaned console host processes.
+    """
+    _log.console("🔍 Running Autonomous Process Supervisor & Port Sentry (R&D #29)...")
+    check_port_8888_sentry()
+    clean_orphaned_containers()
+
 
 def purge_stray_tasks():
     """Detect Task Scheduler entries in our namespace that are not in the TASKS white-list.
@@ -350,13 +557,27 @@ def heal_tasks(missing_tasks, force=False):
         tr, sc, st = _TASK_DEFS[task]
         # Use absolute task path starting with backslash to prevent folder-relative registration failures
         abs_task = f"\\{task}" if not task.startswith("\\") else task
-        args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/np", "/ru", run_as]
+        # E*TRADE re-auth MUST run headed in an interactive desktop session (no /np, use /it)
+        if "etrade_reauth" in task.lower():
+            args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/it", "/ru", run_as]
+        else:
+            args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/np", "/ru", run_as]
         if st:
             args += ["/st", st]
         try:
             result = subprocess.run(args, capture_output=True)
             if result.returncode == 0:
                 _log.info(f"✅ Task {task} successfully registered with native UTF-8 environment.")
+                # Apply advanced reliability settings (WakeToRun, StartWhenAvailable, IgnoreNew, ExecutionTimeLimit) via PowerShell.
+                # IgnoreNew: if an instance is already running, skip the new trigger — never run two
+                # instances of a state-mutating pipeline concurrently (racing writes to the portfolio
+                # JSON / xlsx, duplicate emails). ('StopExisting' is invalid for New-ScheduledTaskSettingsSet;
+                # 'IgnoreNew' also avoids interrupting an in-flight state write, unlike 'Queue'.)
+                ps_cmd = [
+                    "powershell.exe", "-NoProfile", "-Command",
+                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) -ErrorAction SilentlyContinue"
+                ]
+                subprocess.run(ps_cmd, capture_output=True)
             else:
                 _log.error(f"❌ schtasks failed for {task} (rc={result.returncode}): {result.stderr.decode(errors='replace').strip()}")
         except Exception as e:
@@ -417,9 +638,14 @@ def sync_data_folder() -> bool:
         dst_path.mkdir(parents=True, exist_ok=True)
         _log.console(f"🔄 Syncing Data folder to: {dst} ...")
         # Use /E (recursive copy, NO DELETIONS) instead of /MIR to prevent data loss on backup drive.
-        # Exclude the massive 'Symbol' cache subdirectory (500k+ files) via /XD to avoid network hangs.
-        cmd = ["robocopy", str(src), dst, "/E", "/XD", "Symbol", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS"]
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=120)
+        # Exclude only the live chrome profile: robocopy locks/fails on its open files
+        # (Default/Crashpad/GPUPersistentCache). The Symbol/Symbol_full caches stay in the
+        # backup — the raised 600s timeout (PR #64) absorbs their volume.
+        cmd = [
+            "robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS",
+            "/XD", "etrade_chrome_profile"
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=600)
         if result.returncode < 8:
             _log.info(f"✅ Data folder successfully synchronized to {dst}.")
             return True
@@ -427,21 +653,43 @@ def sync_data_folder() -> bool:
             _log.error(f"❌ Robocopy sync failed (rc={result.returncode}). Stderr: {result.stderr.strip()}")
             return False
     except subprocess.TimeoutExpired:
-        _log.warning("⚠️ Data folder sync timed out (120s limit reached). Skipping sync to prevent hanging.")
-        return True # Treat timeout as a safe skip, not a fatal crash of the watchdog
+        _log.warning("⚠️ Data folder sync timed out (600s limit reached). This is an incomplete backup.")
+        return False # Treat timeout as a failure, not a success, per mandatory backup policy
     except Exception as e:
         _log.error(f"❌ Failed to sync Data folder to Z: drive: {e}", exc_info=True)
         return False
 
 def is_pid_running(pid: int) -> bool:
-    """Return True if a process with the given PID is actively running on Windows."""
+    """Return True if a python process with the given PID is actively running on Windows."""
     if pid <= 0:
         return False
     try:
         res = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, errors="replace")
-        return "No tasks" not in res.stdout and str(pid) in res.stdout
+        return "No tasks" not in res.stdout and str(pid) in res.stdout and "python" in res.stdout.lower()
     except Exception:
         return False
+
+def _recovery_next_steps_html(compilation_passed, ai_triggered) -> str:
+    """Render the SECTION-4 "Next Steps" <li> bullets for the recovery email.
+
+    ``compilation_passed`` is tri-state: ``True`` (validation ran and passed),
+    ``False`` (ran and failed), or the string ``"SKIPPED"`` (off-market — the
+    compile check was deliberately not run). Only a *verified* ``True`` may emit
+    the success bullets: ``"SKIPPED"`` is a truthy string, so testing it truthily
+    printed "pushed the fix to the main branch" under an OFF-MARKET badge — a
+    false-green. Hence the strict ``is True`` / ``is False`` identity checks.
+    """
+    items = []
+    if compilation_passed is True and ai_triggered:
+        items.append('<li><b>AETHER Self-Healer:</b> Surgically patched the codebase and pushed the fix to the main branch.</li>')
+    if compilation_passed is True:
+        items.append('<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>')
+    if ai_triggered:
+        items.append('<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>')
+    if compilation_passed is False:
+        items.append('<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>')
+    return "\n                    ".join(items)
+
 
 def run_watchdog():
     # Enforce a strict cross-process execution singleton to prevent 2 watchdogs from running concurrently
@@ -505,13 +753,36 @@ def run_watchdog():
     except Exception as e:
         _log.error("Chaikin session keep-alive failed", extra={"error": str(e)}, exc_info=True)
 
+    # ── Night-Hours Sentry Optimization (R&D #36) ──
+    # Token refreshing is our absolute highest priority. During weekends and night hours,
+    # we do not have active trading, but we still have scheduled after-hours scripts (syncs,
+    # backups, audits) that must be monitored 24/7. To prevent task hangs or timeouts overnight,
+    # we continue to audit tasks and logs 24/7, but we strictly skip only the heavy, slow
+    # background tasks (process supervisor, compilation checks).
+    try:
+        tz_la = pytz.timezone("America/Los_Angeles")
+        now_la = datetime.datetime.now(tz_la)
+    except Exception:
+        now_la = datetime.datetime.now()
+
+    # Active operational window: Weekdays between 5:00 AM and 1:30 PM Pacific.
+    is_weekend = now_la.weekday() in (5, 6)
+    current_minutes = now_la.hour * 60 + now_la.minute
+    is_active_window = not is_weekend and (300 <= current_minutes <= 810)  # 5:00 AM to 1:30 PM PST
+
     # 1. Gather Initial System Health Data
     initial_errors = check_logs()
-    missing_tasks = check_task_scheduler()
+    missing_tasks, failed_tasks = check_task_scheduler()
     data_issue = check_data_freshness()
     
     # 1b. Clean up any stray/duplicate AETHER tasks (Pillar 1 Self-Sanitation)
     purge_stray_tasks()
+
+    # 1bb. Process Supervisor & Port Sentry (R&D #29)
+    if is_active_window:
+        supervise_processes()
+    else:
+        _log.info("💤 [Night-Hours Skip] Skipping heavy process supervisor and port sentry overnight.")
 
     # 1c. Empty the auth-state garbage can past its retention window. Rejected/revoked
     #     token files are soft-deleted (moved to Data/.trash, kept ~1 month for recovery)
@@ -534,6 +805,14 @@ def run_watchdog():
         heal_tasks(missing_tasks)
         recovery_actions.append(f"Healed missing tasks: {', '.join(missing_tasks)}")
 
+    # 2b. Tasks that exist but failed their last run: alert (the email fires on a non-empty
+    #     recovery_actions) but do NOT re-register — a crash isn't cured by re-registration,
+    #     and re-registering every hourly cycle would churn the task and reset manual tuning.
+    if failed_tasks:
+        recovery_actions.append(
+            f"⚠️ Tasks failed their last execution (manual review — NOT auto-re-registered): {', '.join(failed_tasks)}"
+        )
+
     # 3. Heal resource locks if permission error is logged
     if any("PERMISSION" in str(err).upper() for err in initial_errors):
         kill_ghost_processes()
@@ -550,25 +829,27 @@ def run_watchdog():
 
     # 5. Post-Healing Verification (Empirical Compilation Check)
     # We run the report script directly to see if the codebase now compiles and executes nominal!
-    try:
-        val_result = subprocess.run(
-            [sys.executable, str(BASE_DIR / "ai_portfolio_game.py"), "--report"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15
-        )
-        compilation_passed = (val_result.returncode == 0)
-        validation_output = val_result.stdout if compilation_passed else val_result.stderr
-    except Exception as e:
-        compilation_passed = False
-        validation_output = f"Validation execution failed: {e}"
+    # Skipping this slow verification check during night-hours/weekends to prevent any chance of timeouts.
+    if is_active_window:
+        try:
+            val_result = subprocess.run(
+                [sys.executable, str(BASE_DIR / "ai_portfolio_game.py"), "--report"],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120
+            )
+            compilation_passed = (val_result.returncode == 0)
+            validation_output = val_result.stdout if compilation_passed else val_result.stderr
+        except Exception as e:
+            compilation_passed = False
+            validation_output = f"Validation execution failed: {e}"
+    else:
+        compilation_passed = "SKIPPED"
+        validation_output = "Compilation check skipped (outside active market prep/trading window)."
 
     # 6. Re-Audit Logs after the fix
     remaining_errors = check_logs()
-    
-    # 6.5. Run Backup Sync and Monitor Success/Errors
-    sync_success = sync_data_folder()
     
     # Check if there are any active issues left
     issues = []
@@ -576,17 +857,23 @@ def run_watchdog():
         issues.append("REMAINING LOG ERRORS:\n" + "\n".join(remaining_errors))
     if data_issue: 
         issues.append(data_issue)
-    if not sync_success:
-        issues.append("CRITICAL: Network Backup Data Sync Failed!")
 
     # 7. Construct the Consolidated HTML Recovery Report (The Final Step!)
-    # We send an email if a healing action occurred, an AI healer triggered, there are active code errors in the logs, or the backup sync failed.
-    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered) or not sync_success:
+    # We send an email if a healing action occurred, an AI healer triggered, or there are active code errors in the logs.
+    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered):
         _log.console("Healer cycle complete. Constructing consolidated recovery report...")
         
-        # Color badges
-        status_color = "#27ae60" if compilation_passed and sync_success else "#c0392b"
-        status_text = "NOMINAL (HEALED)" if compilation_passed and sync_success else "MANUAL INTERVENTION REQUIRED"
+        # Color badges & status texts based on compilation result
+        if compilation_passed == "SKIPPED":
+            status_color = "#7f8c8d"  # Gray
+            status_text = "SKIPPED (OFF-MARKET)"
+            comp_color = "#7f8c8d"
+            comp_text = "SKIPPED (Outside Active Prep/Trading Window)"
+        else:
+            status_color = "#27ae60" if compilation_passed else "#c0392b"
+            status_text = "NOMINAL (HEALED)" if compilation_passed else "MANUAL INTERVENTION REQUIRED"
+            comp_color = "#27ae60" if compilation_passed else "#c0392b"
+            comp_text = "SUCCESS / PASSED" if compilation_passed else "FAILED / COMPILE ERROR"
         
         # Clean console log for email (last 2000 chars to avoid size limits)
         trimmed_console_log = ai_console_log[-2000:] if ai_console_log else "No AI logs available."
@@ -624,27 +911,16 @@ def run_watchdog():
             <div style="background: #f9f9f9; border-left: 5px solid #95a5a6; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #34495e; font-size: 15px;">✅ 3. POST-HEALING VALIDATION (Execution Check):</h3>
                 <p style="font-size: 13px; font-weight: bold;">Validation Script: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">python ai_portfolio_game.py --report</span></p>
-                <p style="font-size: 13px; font-weight: bold;">Compilation Result: <span style="color: {'#27ae60' if compilation_passed else '#c0392b'}; font-size: 14px;">{'SUCCESS / PASSED' if compilation_passed else 'FAILED / COMPILE ERROR'}</span></p>
+                <p style="font-size: 13px; font-weight: bold;">Compilation Result: <span style="color: {comp_color}; font-size: 14px;">{comp_text}</span></p>
                 <h4 style="margin-bottom: 5px; font-size: 13px; color: #333;">Validation Console Output:</h4>
                 <pre style="background: #f1f2f6; color: #2c3e50; padding: 12px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; overflow-x: auto; font-family: monospace;">{validation_output}</pre>
-            </div>
-
-            <!-- SECTION 3b: DATA BACKUP SYNC STATUS -->
-            <div style="background: {'#f9f9f9' if sync_success else '#fdf2f2'}; border-left: 5px solid {'#34495e' if sync_success else '#ec5b5b'}; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
-                <h3 style="margin-top: 0; color: {'#34495e' if sync_success else '#c0392b'}; font-size: 15px;">📁 3b. DATA BACKUP SYNC STATUS:</h3>
-                <p style="font-size: 13px; font-weight: bold;">Backup Location: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">\\\\10.0.0.156\\Storage\\Yura\\Develop\\StockTrading\\AnalyzeFinData\\Data</span></p>
-                <p style="font-size: 13px; font-weight: bold;">Sync Status: <span style="color: {'#27ae60' if sync_success else '#c0392b'}; font-size: 14px;">{'SUCCESS / NOMINAL' if sync_success else 'FAILED / SYNC ERROR'}</span></p>
             </div>
 
             <!-- SECTION 4: NEXT STEPS -->
             <div style="background: #fff9db; border-left: 5px solid #f59f00; padding: 15px; margin-bottom: 30px; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #f08c00; font-size: 15px;">🏁 4. RESULTS & NEXT STEPS:</h3>
                 <ul style="font-size: 13px; padding-left: 20px; color: #555; line-height: 1.6;">
-                    {'<li><b>AETHER Self-Healer:</b> Surgically patched the codebase and pushed the fix to the main branch.</li>' if compilation_passed and ai_triggered else ''}
-                    {'<li><b>Automatic Resume:</b> Normal scheduled trading tasks will continue on their next hourly trigger.</li>' if compilation_passed else ''}
-                    {'<li><b>Action Required:</b> Please delete the circuit breaker lock file at <span style="font-family: monospace; background: #ffe0b2; padding: 2px 4px;">Data/self_healing.lock</span> to enable future self-healing runs once you are satisfied with this fix.</li>' if ai_triggered else ''}
-                    {'<li><b>Alert:</b> The codebase failed to compile after the self-healing attempt. Immediate manual developer intervention is required.</li>' if not compilation_passed else ''}
-                    {f'<li><b>Backup Status:</b> Robocopy sync completed successfully.</li>' if sync_success else '<li><b>Backup Status Alert:</b> robocopy was unable to push updates to \\\\10.0.0.156\\Storage\\ - check server connection.</li>'}
+                    {_recovery_next_steps_html(compilation_passed, ai_triggered)}
                 </ul>
             </div>
 

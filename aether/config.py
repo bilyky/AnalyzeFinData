@@ -49,6 +49,16 @@ class _Config:
         self.chaikin_password = os.environ.get("CHAIKIN_PASSWORD") or chaikin.get("password", "")
         self.chaikin_uid      = os.environ.get("CHAIKIN_UID")      or chaikin.get("uid",      "")
         self.chaikin_api_key  = os.environ.get("CHAIKIN_API_KEY")  or chaikin.get("api_key",  "")
+        # Proxy mode for Chaikin HTTP calls (env CHAIKIN_PROXY overrides config chaikin.proxy):
+        #   a URL             -> always route through that proxy
+        #   "" / "direct"     -> never use a proxy (direct connection)
+        #   "auto" (default)  -> use the E*TRADE/Intel proxy ONLY when it is reachable, so the
+        #                        same config runs on-network (proxy required) and off-network
+        #                        (direct works). Resolved in powergauge._resolve_proxy().
+        _chaikin_proxy = os.environ.get("CHAIKIN_PROXY")
+        if _chaikin_proxy is None:
+            _chaikin_proxy = chaikin.get("proxy")   # None when absent, "" when explicitly direct
+        self.chaikin_proxy = "auto" if _chaikin_proxy is None else _chaikin_proxy
 
         # ── E*TRADE ──────────────────────────────────────────────────────────
         etrade     = raw.get("etrade") or {}
@@ -196,6 +206,12 @@ class _Config:
         self.system_pyramiding_cash_ratio = float(os.environ.get("AETHER_PYRAMIDING_CASH_RATIO") or system.get("pyramiding_cash_ratio", 0.10))
         self.system_pyramiding_s10_floor  = float(os.environ.get("AETHER_PYRAMIDING_S10_FLOOR")  or system.get("pyramiding_s10_floor", 0.0))
         self.system_pyramiding_l60_floor  = float(os.environ.get("AETHER_PYRAMIDING_L60_FLOOR")  or system.get("pyramiding_l60_floor", 2.0))
+
+        # Covered-call flower exclusion (R&D #26 follow-up, Item 1): winners with L60 >= this
+        # ceiling are NOT written against — their upside is protected. Seeded at the strong-long
+        # zone (+6.0) from covered_call_winner_study.py (the >50%-momentum cohort loses -0.488%/
+        # write to the cap vs -0.046% mid-conviction). Tunable via AETHER_CC_L60_CEILING.
+        self.system_covered_call_l60_ceiling = float(os.environ.get("AETHER_CC_L60_CEILING") or system.get("cc_l60_ceiling", 6.0))
 
         # ── Configuration Health Checks ───────────────────────────────────────
         self.verify_config_health()

@@ -4,6 +4,7 @@ import re
 import requests
 import json
 import os
+import shutil
 import time
 import urllib3
 import pytz
@@ -105,6 +106,11 @@ from aether.token_renewer import TokenRenewer as _TokenRenewer
 _SESSION_VALID_TTL   = 300   # seconds to trust a validated session without re-checking
 _session_valid_until = 0.0   # monotonic timestamp; avoids HTTP validation on every call
 
+_AUTH_BREAKER_COOLDOWN = 900  # seconds to suspend browser re-auth AND throttle alert email after a failure
+_auth_circuit_breaker_until = 0.0            # monotonic timestamp; 0.0 = breaker open (monotonic() is always >= 0)
+_last_email_alert_time      = float("-inf")  # monotonic timestamp; -inf so the FIRST alert always sends
+                                             # (monotonic() counts from boot, so 0.0 would suppress alerts in the first cooldown after a reboot)
+
 _chaikin_renewer = _TokenRenewer(
     lock_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "chaikin_reauth.lock"),
     renew_fn=lambda: login(interactive=False),
@@ -113,6 +119,10 @@ _chaikin_renewer = _TokenRenewer(
     wait_timeout=90,
 )
 
+
+import threading
+
+_jwt_auth_lock = threading.Lock()
 
 def ensure_valid_session() -> dict:
     """Return a valid Chaikin session, refreshing headlessly if expired.
@@ -135,28 +145,48 @@ def ensure_valid_session() -> dict:
         # also fail when Chaikin is unreachable.
         _pg_log.warning("Chaikin unreachable (network/proxy/5xx) — keeping existing session, skipping re-auth.")
         return session or {}
+        
     # status == "invalid": genuinely expired/rejected — try the cheap refresh path first.
     # API-based JWT Token Refresh (Bypasses Browser/Turnstile completely in 0.2 seconds!)
     if session and session.get("jwttoken"):
-        try:
-            new_sid = _jwt_to_session_id(session["jwttoken"])
-            if new_sid:
-                # Mutation Hygiene: Copy dict before modifying to prevent in-place corruption
-                test_session = session.copy()
-                test_session["jsessionid"] = new_sid
-                if _validate_session(test_session):
-                    _save_session_to_file(test_session)
+        with _jwt_auth_lock:
+            # Check if another thread successfully renewed the session while we were waiting for the lock
+            latest_session = _load_session_from_file()
+            if latest_session and latest_session.get("jsessionid") != session.get("jsessionid"):
+                if _probe_session(latest_session) == "valid":
                     _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
-                    _pg_log.info("Successfully refreshed Chaikin session using saved JWT token (API bypass).")
-                    return test_session
+                    _pg_log.info("Another thread already renewed Chaikin session. Reusing cached session.")
+                    return latest_session
+
+            try:
+                new_sid = _jwt_to_session_id(session)
+                if new_sid:
+                    # Mutation Hygiene: Copy dict before modifying to prevent in-place corruption
+                    test_session = session.copy()
+                    test_session["jsessionid"] = new_sid
+                    if _validate_session(test_session):
+                        _save_session_to_file(test_session)
+                        _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
+                        _pg_log.info("Successfully refreshed Chaikin session using saved JWT token (API bypass).")
+                        return test_session
+                    else:
+                        _pg_log.warning("JWT exchanged session ID failed active validation check.")
                 else:
-                    _pg_log.warning("JWT exchanged session ID failed active validation check.")
-        except Exception as e:
-            # Security Best Practice: Sanitize and redact raw JWT token from exception logs to prevent exposure
-            err_msg = str(e)
-            if "jwtToken=" in err_msg:
-                err_msg = re.sub(r"jwtToken=[^&\s]+", "jwtToken=REDACTED", err_msg)
-            _pg_log.warning(f"Failed to refresh session using JWT token (will fall back to browser): {err_msg}")
+                    # 200-but-empty => the sessionToken itself has expired. No in-window
+                    # refresh is possible; fall through to the browser re-auth path below.
+                    _pg_log.info("sessionToken expired (empty JWT exchange) — falling back to browser re-auth.")
+            except Exception as e:
+                # Security Best Practice: Sanitize and redact raw JWT token from exception logs to prevent exposure
+                err_msg = str(e)
+                if "jwtToken=" in err_msg:
+                    err_msg = re.sub(r"jwtToken=[^&\s]+", "jwtToken=REDACTED", err_msg)
+                _pg_log.warning(f"Failed to refresh session using JWT token (will fall back to browser): {err_msg}")
+
+    # --- CIRCUIT BREAKER: Check if we are currently locked out of browser attempts ---
+    global _auth_circuit_breaker_until
+    if time.monotonic() < _auth_circuit_breaker_until:
+        _pg_log.warning("Chaikin automated re-auth is currently suspended (Circuit Breaker active). Wait %d minutes before next attempt.", _AUTH_BREAKER_COOLDOWN // 60)
+        raise EnvironmentError("Chaikin automated re-auth suspended (Circuit Breaker).")
 
     # Expired — delegate to the cross-process singleton (protected by try-except to send email outside of lock duration)
     try:
@@ -165,16 +195,20 @@ def ensure_valid_session() -> dict:
             _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
         return new_session or session or {}
     except EnvironmentError as e:
+        _auth_circuit_breaker_until = time.monotonic() + _AUTH_BREAKER_COOLDOWN # Suspend further browser launches
+        global _last_email_alert_time
         # We are now OUTSIDE the cross-process lock! We can safely send the email alert
-        # without adding any 30s SMTP latency to other waiting background tasks.
-        try:
-            session_abs_path = os.path.abspath(SESSION_FILE)
-            send_email(
-                subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
-                body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
-            )
-        except Exception as mail_err:
-            _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
+        # ONLY if we haven't already sent one within the cooldown window to prevent massive spam.
+        if time.monotonic() > _last_email_alert_time + _AUTH_BREAKER_COOLDOWN:
+            try:
+                session_abs_path = os.path.abspath(SESSION_FILE)
+                send_email(
+                    subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
+                    body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
+                )
+                _last_email_alert_time = time.monotonic()
+            except Exception as mail_err:
+                _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
         raise
 
 
@@ -238,6 +272,13 @@ def _build_cache_index():
 
 
 SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
+
+# Persistent Chrome profile for browser re-auth. Its long-lived `cf_clearance` cookie
+# (~355-day exp, re-minted on each login) is the durable credential that lets Cloudflare
+# Turnstile auto-pass in a real (headed) browser with NO human — a throwaway context has
+# no cf_clearance, hits a cold Turnstile, and fails headless. (verified live 2026-09-09;
+# see plans/chaikin_api.md "Credential model" and memory project_chaikin_auto_reauth.)
+_CHAIKIN_PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "chaikin_chrome_profile")
 
 _http_session: requests.Session | None = None
 _resolved_proxy: str | None = None   # process-level memo: "" (direct) or a proxy URL
@@ -473,7 +514,7 @@ class PowerGauge:
                 if key not in cl:
                     warnings.append(f"checklist_stocks missing key '{key}'")
         if warnings:
-            print(f"  [SCHEMA WARNING] {self.symbol}: " + "; ".join(warnings))
+            _pg_log.warning(f"  [SCHEMA WARNING] {self.symbol}: " + "; ".join(warnings))
 
     def init_from_ohlcv(self, entry: dict):
         """Populate price fields from an Alpha Vantage OHLCV daily entry."""
@@ -505,7 +546,7 @@ class PowerGauge:
                     with open(path, "r") as f:
                         data_jsn = json.load(f)
                 except (json.JSONDecodeError, OSError) as e:
-                    print(f"  [CACHE] {self.symbol}: skipping corrupt cache {path}: {e}")
+                    _pg_log.error(f"  [CACHE] {self.symbol}: skipping corrupt cache {path}: {e}")
                     continue
                 self.prevPG = PowerGauge(self.symbol, prev_date)
                 self.prevPG.init_from_json(data_jsn, check_schema=False)
@@ -671,21 +712,41 @@ def _validate_session(session_data: dict) -> bool:
     return _probe_session(session_data) == "valid"
 
 
-def _jwt_to_session_id(jwt_token: str) -> str:
-    url = ("https://members-backend.chaikinanalytics.com/CPTRestSecure/app"
+def _jwt_to_session_id(session: dict) -> str:
+    """Mint a fresh sessionKey from a still-valid sessionToken WITHOUT a browser.
+
+    Calls the OMNI Fastify refresh endpoint on the NEW backend (the legacy
+    /CPTRestSecure/* path 503s for everyone — see plans/chaikin_api.md). Verified live
+    contract (2026-09-09): the call mints a session ONLY when acquireSessionForcibly=Yes
+    AND the current session headers (jwttoken/jsessionid/x-session-id/uuid) are all
+    present — apikey+appid alone returns HTTP 200 with EMPTY sessionId/omniSessionKey.
+    The response's `sessionId` == `omniSessionKey` and is the new `jsessionid`.
+
+    A 200-but-empty response means the sessionToken itself has expired: there is no
+    in-window refresh possible and the caller must fall through to a browser re-auth.
+    That is signalled by returning "" (not by raising), so ensure_valid_session moves
+    on to the browser path instead of tripping the circuit breaker on an "error".
+    """
+    jwt_token = session.get("jwttoken") or ""
+    sid = session.get("jsessionid") or ""
+    url = ("https://members-backend.chaikinanalytics.com/api"
            "/authenticate/getJWTAuthorization?acquireSessionForcibly=Yes"
            f"&jwtToken={jwt_token}")
     headers = {
         'X-Api-Key': _CHAIKIN_API_KEY,
         'X-App-Id': 'omni',
+        'User-Agent': _CHAIKIN_UA,
+        'jwttoken': jwt_token,
+        'jsessionid': sid,
+        'x-session-id': sid,
+        'uuid': session.get('uuid') or _chaikin_uuid(),
     }
     r = _get_http_session().get(url, headers=headers, timeout=(5, 15))
     if not r.ok:
         raise EnvironmentError(f"JWT exchange failed: HTTP {r.status_code}")
-    session_id = r.json().get('sessionId')
-    if not session_id:
-        raise EnvironmentError(f"No sessionId in JWT exchange response: {r.text[:200]}")
-    return session_id
+    data = r.json()
+    # sessionId and omniSessionKey are the same 24-char value; either is the new jsessionid.
+    return data.get('sessionId') or data.get('omniSessionKey') or ""
 
 
 def _load_credentials() -> tuple[str, str]:
@@ -719,94 +780,161 @@ def _login_via_browser(headless: bool = False) -> dict:
                     "uuid": uuid
                 }
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=headless,
-            channel='chrome',
-            args=['--disable-blink-features=AutomationControlled'],
-        )
-        global _CHAIKIN_UA
-        _CHAIKIN_UA = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{browser.version} Safari/537.36"
-        context = browser.new_context(user_agent=_CHAIKIN_UA)
-        page = context.new_page()
-        if Stealth is not None:
+    global _CHAIKIN_UA
+    proxy_url = _resolve_proxy()
+    launch_kwargs = dict(
+        headless=headless,
+        args=['--disable-blink-features=AutomationControlled'],
+    )
+    if proxy_url:
+        launch_kwargs['proxy'] = {"server": proxy_url}
+
+    try:
+        with sync_playwright() as p:
+            # Persistent context reuses Data/chaikin_chrome_profile, whose long-lived
+            # cf_clearance cookie lets Turnstile auto-pass in a real (headed) browser with no
+            # human. A throwaway launch()+new_context() has no cf_clearance -> cold Turnstile
+            # -> headless can't solve it (why prod re-auth had been failing). (see
+            # _CHAIKIN_PROFILE_DIR note; verified live 2026-09-09)
+            os.makedirs(_CHAIKIN_PROFILE_DIR, exist_ok=True)
+            context = p.chromium.launch_persistent_context(_CHAIKIN_PROFILE_DIR, **launch_kwargs)
             try:
-                Stealth().apply_stealth_sync(page)
-            except Exception as e:
-                _pg_log.warning(f"Failed to apply playwright-stealth: {e}")
-        page.on('request', on_request)
+                page = context.pages[0] if context.pages else context.new_page()
+                if Stealth is not None:
+                    try:
+                        Stealth().apply_stealth_sync(page)
+                    except Exception as e:
+                        _pg_log.warning(f"Failed to apply playwright-stealth: {e}")
+                page.on('request', on_request)
 
-        page.goto('https://members.chaikinanalytics.com/login', wait_until='domcontentloaded', timeout=60000)
+                page.goto('https://members.chaikinanalytics.com/login', wait_until='domcontentloaded', timeout=60000)
+                # Pin the requests-based UA to the real browser's UA so downstream /api/* calls
+                # present a consistent fingerprint with the profile that just authenticated.
+                try:
+                    _CHAIKIN_UA = page.evaluate("() => navigator.userAgent") or _CHAIKIN_UA
+                except Exception:
+                    pass
 
-        email, password = _load_credentials()
-        page.fill('input[name="email"]', email)
-        page.fill('input[name="password"]', password)
+                email, password = _load_credentials()
+                page.fill('input[name="email"]', email)
+                page.fill('input[name="password"]', password)
 
-        # Wait for Turnstile to enable the submit button (auto-verifies or user clicks widget)
-        print("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
-        page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=60000)
-        page.click('button[type="submit"]')
+                # Wait for Turnstile to enable the submit button (auto-verifies with a warm
+                # profile; a human can click the widget in the rare cold-profile case).
+                # Shorten timeout in headless mode to enforce a true fast-fail and prevent hangs.
+                _pg_log.console("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
+                turnstile_timeout = 10000 if headless else 60000
+                page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=turnstile_timeout)
+                page.click('button[type="submit"]')
 
-        print("Waiting for login to complete (up to 60s)...")
-        try:
-            page.wait_for_function(
-                "window.location.pathname !== '/login'",
-                timeout=60000
+                _pg_log.console("Waiting for login to complete (up to 60s)...")
+                try:
+                    login_timeout = 10000 if headless else 60000
+                    page.wait_for_function(
+                        "window.location.pathname !== '/login'",
+                        timeout=login_timeout
+                    )
+                except Exception:
+                    pass
+
+                # Stay on members.* and let the app fire its members-backend /api/* calls so
+                # on_request captures the live jsessionid/jwttoken/uuid contract.
+                page.wait_for_timeout(6000)
+            finally:
+                context.close()
+
+        if not session_data[0]:
+            raise EnvironmentError(
+                "Browser login completed but session ID was not captured. "
+                "Fall back to manual session: " + SESSION_FILE
             )
-        except Exception:
-            pass
-
-        # Navigate to app.chaikinanalytics.com to fully activate the session
-        print("Navigating to app.chaikinanalytics.com to activate the session...")
+    except Exception as e:
+        # A genuine failure here can mean a *poisoned* persistent profile: a stale or
+        # Cloudflare-flagged cf_clearance/aws-waf cookie makes Turnstile keep returning
+        # error 600010 ("generic challenge failure / suspected bot"). Clearing the profile
+        # forces a fresh challenge on the next login and can self-heal that case.
+        #
+        # But that SAME cf_clearance cookie is the durable ~355-day credential, and a fresh
+        # (cold) Turnstile can only be solved in a HEADED browser — headless is *expected*
+        # to fail (that is exactly what the 10s fast-fail above is for). So we must NEVER
+        # wipe the profile on a headless failure: doing so throws away a good credential and
+        # leaves the next cold challenge unsolvable headless, making things strictly worse.
+        # Only self-heal (back up, then clear) when we ran headed and can re-solve.
+        if headless:
+            _pg_log.warning(
+                "Chaikin headless login failed (expected when Turnstile challenges a "
+                f"headless browser); keeping the persistent profile intact: {e}"
+            )
+            raise
+        _pg_log.warning(f"Chaikin headed login failed; backing up and clearing persistent Chrome profile to self-heal: {e}")
         try:
-            page.goto('https://app.chaikinanalytics.com', timeout=30000)
-            page.wait_for_timeout(5000)
-        except Exception as e:
-            print(f"Warning: Navigation to app.chaikinanalytics.com failed or timed out: {e}")
-
-        browser.close()
-
-    if not session_data[0]:
-        raise EnvironmentError(
-            "Browser login completed but session ID was not captured. "
-            "Fall back to manual session: " + SESSION_FILE
-        )
+            backup_dir = os.path.join(os.path.dirname(_CHAIKIN_PROFILE_DIR), "Backup")
+            os.makedirs(backup_dir, exist_ok=True)
+            stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_dst = os.path.join(backup_dir, f"chaikin_profile_backup_{stamp}")
+            # Back up the profile before deletion (Mandatory Backup Policy).
+            # (copytree has no ignore_errors kwarg — that's rmtree; any partial-copy
+            # error is caught below and we proceed with the clear as best-effort.)
+            shutil.copytree(_CHAIKIN_PROFILE_DIR, backup_dst, dirs_exist_ok=True)
+            _pg_log.info(f"Persistent Chrome profile backed up to: {backup_dst}")
+        except Exception as backup_err:
+            _pg_log.warning(f"Failed to back up Chrome profile before clearing: {backup_err}")
+        shutil.rmtree(_CHAIKIN_PROFILE_DIR, ignore_errors=True)
+        raise
 
     _save_session_to_file(session_data[0])
-    print(f"Session saved to {SESSION_FILE}")
+    _pg_log.console(f"Session saved to {SESSION_FILE}")
     return session_data[0]
 
 
 def login(interactive=True) -> dict:
     session_data = _load_session_from_file()
     if session_data:
-        print("Loaded session from file, validating...")
+        _pg_log.console("Loaded session from file, validating...")
         status = _probe_session(session_data)
         if status == "valid":
-            print("Session is valid.")
+            _pg_log.console("Session is valid.")
             return session_data
         if status == "unreachable":
             # Can't reach Chaikin (network/proxy/5xx) — the session may well be fine.
             # Don't discard it and don't launch a browser that also can't reach the site.
-            print("Chaikin unreachable (network/proxy/5xx) — keeping existing session; skipping browser re-auth.")
+            _pg_log.warning("Chaikin unreachable (network/proxy/5xx) — keeping existing session; skipping browser re-auth.")
             return session_data
-        print("Saved session has expired — re-authenticating via browser.")
+        _pg_log.warning("Saved session has expired — re-authenticating via browser.")
 
-    # Run headless if we are non-interactive or stdin is not a tty to prevent hanging
-    is_tty = sys.stdin and sys.stdin.isatty()
-    headless_run = not interactive or not is_tty
+    # Headless decision (env override wins, else gate on `interactive`):
+    #   * Interactive / desktop run (a human, or a run with a real desktop) -> HEADED.
+    #     The persistent profile's cf_clearance lets Turnstile auto-pass in a real browser
+    #     with no human, whereas headless trips the fingerprint even WITH cf_clearance
+    #     present (verified live 2026-09-09). Headed needs a desktop but no interaction.
+    #   * Automated renewer path (`login(interactive=False)`, the 500-thread ranking
+    #     fallback) -> HEADLESS. That context has no guaranteed desktop, so headed would
+    #     hang ~60s on Turnstile before the circuit breaker trips; headless FAST-FAILS
+    #     instead. Headless can't actually solve Turnstile, so this reactive path is a
+    #     best-effort fast-fail — the proactive, desktop-bound chaikin_reauth.py task
+    #     (which calls _login_via_browser(headless=False) directly) is what really
+    #     re-mints the token.
+    # Override either way with CHAIKIN_HEADLESS_LOGIN: 1/true/yes forces headless,
+    # 0/false/no forces headed (e.g. a desktop-bound scheduled task through login()).
+    _hl_env = os.environ.get("CHAIKIN_HEADLESS_LOGIN", "").strip().lower()
+    if _hl_env in ("1", "true", "yes"):
+        headless_run = True
+    elif _hl_env in ("0", "false", "no"):
+        headless_run = False
+    else:
+        headless_run = not interactive
 
     try:
         return _login_via_browser(headless=headless_run)
     except Exception as e:
-        print(f"Browser login failed: {e}")
+        _pg_log.error(f"Browser login failed: {e}")
         if not interactive or not sys.stdin or not sys.stdin.isatty():
             raise EnvironmentError(f"Chaikin browser login failed: {e}") from e
 
     if not interactive or not sys.stdin or not sys.stdin.isatty():
         return {}
 
-    print(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
+    _pg_log.console(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
     try:
         raw = input("Or paste a JSESSIONID here and press Enter (leave blank to abort): ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -818,7 +946,7 @@ def login(interactive=True) -> dict:
             "uuid": _chaikin_uuid()
         }
         _save_session_to_file(data)
-        print(f"Session saved to {SESSION_FILE}")
+        _pg_log.console(f"Session saved to {SESSION_FILE}")
         return data
     raise EnvironmentError(
         f"No valid session available. Save a JSESSIONID to: {SESSION_FILE}"
@@ -936,22 +1064,6 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
     if not _SYMBOL_RE.match(symbol):
         raise ValueError(f"Invalid symbol format: {symbol!r}")
 
-    session_data = ensure_valid_session()
-
-    # New Fastify backend: a single GET returns the full symbol bundle (PGR + checklist
-    # + meta); the legacy getSymbolData/getChecklistStocks pair (and its ?components=…)
-    # is gone. _adapt_suggestions_to_legacy() reshapes the response to the old schema.
-    url = f"https://members-backend.chaikinanalytics.com/api/suggestions/{symbol}"
-
-    headers = {
-        'jsessionid': session_data.get('jsessionid', ''),
-        'x-session-id': session_data.get('jsessionid', ''),
-        'uuid': session_data.get('uuid') or _chaikin_uuid(),
-        'jwttoken': session_data.get('jwttoken', ''),
-        'x-api-key': _CHAIKIN_API_KEY,
-        'x-app-id': 'omni',
-        'User-Agent': _CHAIKIN_UA
-    }
     pg = PowerGauge(symbol, date)
     data_jsn = {}
 
@@ -965,6 +1077,22 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
                 data_jsn = json.load(f)
 
     if not data_jsn:
+        session_data = ensure_valid_session()
+
+        # New Fastify backend: a single GET returns the full symbol bundle (PGR + checklist
+        # + meta); the legacy getSymbolData/getChecklistStocks pair (and its ?components=…)
+        # is gone. _adapt_suggestions_to_legacy() reshapes the response to the old schema.
+        url = f"https://members-backend.chaikinanalytics.com/api/suggestions/{symbol}"
+
+        headers = {
+            'jsessionid': session_data.get('jsessionid', ''),
+            'x-session-id': session_data.get('jsessionid', ''),
+            'uuid': session_data.get('uuid') or _chaikin_uuid(),
+            'jwttoken': session_data.get('jwttoken', ''),
+            'x-api-key': _CHAIKIN_API_KEY,
+            'x-app-id': 'omni',
+            'User-Agent': _CHAIKIN_UA
+        }
         response = _get_http_session().get(url, headers=headers, timeout=(5, 20))
         if response.ok:
             raw_jsn = response.json()
@@ -1021,10 +1149,10 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
                 fresh = ensure_valid_session()
                 if fresh and fresh.get("jsessionid"):
                     return get_symbol_data(symbol, date, prefer_cache=False, session_id=fresh, _allow_reauth=False)
-            print(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
+            _pg_log.console(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
             raise EnvironmentError(f"Session rejected (HTTP {response.status_code}). Update {SESSION_FILE}.")
         else:
-            print(f"Warning: API error for {symbol} (HTTP {response.status_code}) — row will be skipped")
+            _pg_log.warning(f"Warning: API error for {symbol} (HTTP {response.status_code}) — row will be skipped")
             pg.price = -1
     if data_jsn:
         pg.init_from_json(data_jsn)
@@ -1067,13 +1195,13 @@ def check_from_file(prefer_cache: bool, date=None):
                 continue
             symbol = split_line[-1]
             if not _SYMBOL_RE.match(symbol):
-                print(f"  [SKIP] invalid symbol format: {symbol!r}")
+                _pg_log.warning(f"  [SKIP] invalid symbol format: {symbol!r}")
                 continue
             symbol_line = f"{split_line[0]},{symbol}"
             valid_entries.append((symbol_line, symbol))
 
     unique_syms = list(dict.fromkeys(sym for _, sym in valid_entries))
-    print(f"Fetching {len(unique_syms)} unique symbols ({_FETCH_WORKERS} workers)...")
+    _pg_log.console(f"Fetching {len(unique_syms)} unique symbols ({_FETCH_WORKERS} workers)...")
 
     # ── Phase 2: parallel fetch ──
     pg_results: dict[str, PowerGauge] = {}
@@ -1092,11 +1220,11 @@ def check_from_file(prefer_cache: bool, date=None):
                 pool.shutdown(wait=False, cancel_futures=True)
                 raise
             except Exception as e:
-                print(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
+                _pg_log.error(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
                 sentinel = PowerGauge(sym, date)
                 sentinel.price = -1
                 pg_results[sym] = sentinel
-    print(f"Fetch complete ({len(unique_syms)} symbols).")
+    _pg_log.console(f"Fetch complete ({len(unique_syms)} symbols).")
 
     # ── Phase 3: serial compute + write ──
     ohlcv_cache: dict = {}
@@ -1112,7 +1240,7 @@ def check_from_file(prefer_cache: bool, date=None):
                 except FileNotFoundError:
                     ohlcv_cache[symbol] = None
                 except (json.JSONDecodeError, OSError) as e:
-                    print(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
+                    _pg_log.warning(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
                     ohlcv_cache[symbol] = None
             ohlcv_ts = ohlcv_cache[symbol]
 
@@ -1147,7 +1275,7 @@ def check_from_file(prefer_cache: bool, date=None):
                   f"{f_fields['pgr_delta']},{percentage_delta * (-1)},{percentage_delta_plus}," \
                   f"{power_g.lt_trend},{power_g.money_flow},{power_g.over_bt_sl}"
 
-            print(msg)
+            _pg_log.console(msg)
             fw.write(f"{msg}\n")
 
 
@@ -1267,7 +1395,7 @@ def _append_ohlcv_entry(symbol: str, date_str: str, power_g: "PowerGauge", ohlcv
             json.dump(ohlcv_full, f)
         os.replace(tmp, path)
     except Exception as e:
-        print(f"  [OHLCV] {symbol}: could not append today's entry: {e}")
+        _pg_log.warning(f"  [OHLCV] {symbol}: could not append today's entry: {e}")
 
 
 def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
@@ -1427,12 +1555,12 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         wb = openpyxl.load_workbook(base_path)
     except Exception as e:
         alt = SRC_XLSX if base_path == XLSX_FILE else XLSX_FILE
-        print(f"  [ERROR] Failed to load {base_path}: {e}")
-        print(f"  [INFO] Attempting to load {alt} instead...")
+        _pg_log.error(f"  [ERROR] Failed to load {base_path}: {e}")
+        _pg_log.console(f"  [INFO] Attempting to load {alt} instead...")
         try:
             wb = openpyxl.load_workbook(alt)
         except Exception:
-            print(f"  [FATAL] Both source and output files missing or corrupt.")
+            _pg_log.error("  [FATAL] Both source and output files missing or corrupt.")
             return
     
     ws = wb['Research']
@@ -1452,13 +1580,13 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         if filter_set and symbol.upper() not in filter_set:
             continue
         if not _SYMBOL_RE.match(symbol):
-            print(f"  [SKIP] invalid symbol format: {symbol!r}")
+            _pg_log.warning(f"  [SKIP] invalid symbol format: {symbol!r}")
             continue
         valid_rows.append((symbol, row))
 
     total = len(valid_rows)
     unique_syms = list(dict.fromkeys(s for s, _ in valid_rows))
-    print(f"Fetching {len(unique_syms)} unique symbols ({_FETCH_WORKERS} workers)...")
+    _pg_log.console(f"Fetching {len(unique_syms)} unique symbols ({_FETCH_WORKERS} workers)...")
 
     # ── Phase 2: parallel fetch ───────────────────────────────────────────────
     pg_results: dict[str, PowerGauge] = {}
@@ -1477,11 +1605,11 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
                 pool.shutdown(wait=False, cancel_futures=True)
                 raise
             except Exception as e:
-                print(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
+                _pg_log.error(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
                 sentinel = PowerGauge(sym, date)
                 sentinel.price = -1
                 pg_results[sym] = sentinel
-    print(f"Fetch complete ({len(unique_syms)} symbols).")
+    _pg_log.console(f"Fetch complete ({len(unique_syms)} symbols).")
 
     # ── Phase 3: serial compute + write ──────────────────────────────────────
     updated = 0
@@ -1493,7 +1621,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         power_g = pg_results[symbol]
 
         if power_g.price == -1:
-            print(f"[{n}/{total}] {symbol}: no market data - row skipped (existing values preserved)")
+            _pg_log.warning(f"[{n}/{total}] {symbol}: no market data - row skipped (existing values preserved)")
             skipped += 1
             continue
 
@@ -1506,7 +1634,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
             except FileNotFoundError:
                 ohlcv_cache[symbol] = None
             except (json.JSONDecodeError, OSError) as e:
-                print(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
+                _pg_log.warning(f"  [OHLCV] {symbol}: could not load {ohlcv_path}: {e}")
                 ohlcv_cache[symbol] = None
         ohlcv_ts = ohlcv_cache[symbol].get('Time Series (Daily)') if ohlcv_cache[symbol] else None
 
@@ -1586,7 +1714,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         })
 
         flag = "OK" if setup_ok else ("--" if setup_ok is False else "??")
-        print(f"[{n}/{total}] {symbol}: pgr={f['pgr']}, price={power_g.price}, "
+        _pg_log.console(f"[{n}/{total}] {symbol}: pgr={f['pgr']}, price={power_g.price}, "
               f"stop={f['stop_price']}, target={f['prev_move_price']}, "
               f"rr={f['risk_ratio']}, setup={flag}, br={f['buying_ratio']}, "
               f"s10={f['short_score']}, l60={f['long_score']}")
@@ -1611,11 +1739,11 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
             _qts  = _et.fetch_quotes(_tok, _syms, "production")
             _update_short_long_scores(wb, _lk, _qts, _pos, ohlcv_cache)
             _touched_sheets.add("Short_Long")
-            print(f"Short_Long sheet synced: {len(_pos)} positions.")
+            _pg_log.console(f"Short_Long sheet synced: {len(_pos)} positions.")
         else:
-            print("[E*TRADE] Short_Long skipped (no valid silent token session available).")
+            _pg_log.warning("[E*TRADE] Short_Long skipped (no valid silent token session available).")
     except Exception as _e:
-        print(f"[E*TRADE] Short_Long skipped: {_e}")
+        _pg_log.warning(f"[E*TRADE] Short_Long skipped: {_e}")
 
     if picks_data:
         _update_replacements_sheet(wb, picks_data, date.date() if hasattr(date, "date") else date)
@@ -1626,7 +1754,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         _fix_comment_shape_ids(XLSX_FILE,
                                original_xlsx=_orig_backup,
                                touched_sheet_names=_touched_sheets)
-        print(f"Research sheet updated ({updated} rows written, {skipped} skipped) -> {XLSX_FILE}")
+        _pg_log.console(f"Research sheet updated ({updated} rows written, {skipped} skipped) -> {XLSX_FILE}")
     except PermissionError:
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
         alt = os.path.join(os.path.dirname(XLSX_FILE), f"investment_pending_{ts}.xlsx")
@@ -1634,6 +1762,6 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         _fix_comment_shape_ids(alt,
                                original_xlsx=_orig_backup,
                                touched_sheet_names=_touched_sheets)
-        print(f"ERROR: {XLSX_FILE} is open in another application.")
-        print(f"Changes saved to: {alt}")
-        print(f"Close Excel and rename/copy that file to state_of_the_day.xlsx")
+        _pg_log.error(f"ERROR: {XLSX_FILE} is open in another application.")
+        _pg_log.error(f"Changes saved to: {alt}")
+        _pg_log.error("Close Excel and rename/copy that file to state_of_the_day.xlsx")

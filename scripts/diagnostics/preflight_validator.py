@@ -25,6 +25,7 @@ sys.path.insert(0, str(BASE_DIR))
 import notify
 import powergauge
 from aether import etrade
+from aether import trash
 from aether.config import CFG
 from aether_logger import get_logger as _get_logger
 
@@ -177,7 +178,7 @@ def check_chaikin_api() -> bool:
         return False
 
 
-def check_etrade_api() -> bool:
+def check_etrade_api() -> bool | str:
     """Validate live E*TRADE API OAuth session token validity.
     On weekends (Saturdays and Sundays), since the stock market is closed,
     verification failures are waived to allow reporting/summaries to run.
@@ -192,13 +193,13 @@ def check_etrade_api() -> bool:
         else:
             if is_weekend:
                 _log.console("  ⚠️ E*TRADE: Verification failed, but waiving requirement because today is the weekend (market closed).")
-                return True
+                return "WAIVED"
             _log.console("  ❌ E*TRADE: No valid cached session or headless Playwright login failed.")
             return False
     except Exception as e:
         if is_weekend:
             _log.console(f"  ⚠️ E*TRADE: Active OAuth verification failed ({e}), but waiving requirement because today is the weekend (market closed).")
-            return True
+            return "WAIVED"
         _log.console(f"  ❌ E*TRADE: Active OAuth verification failed: {e}")
         return False
 
@@ -253,7 +254,23 @@ def check_active_locks(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
             locks.append("Pipeline Active Lock (pipeline_run.lock)")
 
     if rapidapi_lock.exists():
-        locks.append("RapidAPI Active Lock (rapidapi.lock)")
+        # rapidapi.lock is a content-less O_EXCL mutex (see rapidapi.py: it is
+        # created with os.open(..., O_CREAT|O_EXCL|O_WRONLY) and nothing is written
+        # to it). It therefore holds NO pid, so a liveness cross-check like the one
+        # pipeline_run.lock uses above is impossible here — mtime is the only
+        # staleness signal. Mirror rapidapi.py's OWN self-clear exactly (same 9000s
+        # / 2.5h TTL; a recovery pass can legitimately run up to ~2h) so preflight
+        # doesn't false-alarm on a lock a crashed run left behind. The producer
+        # would clear the same stale lock on its next pass regardless; this only
+        # avoids blocking preflight in the interim.
+        try:
+            if time.time() - os.path.getmtime(rapidapi_lock) > 9000:
+                trash.soft_delete(str(rapidapi_lock), reason="rapidapi-lock-stale-preflight", force=True)
+                _log.console("  ✅ Cleared stale RapidAPI lock (>2.5h old; no live producer possible).")
+            else:
+                locks.append("RapidAPI Active Lock (rapidapi.lock)")
+        except OSError:
+            locks.append("RapidAPI Active Lock (rapidapi.lock)")
 
     # Detect an exclusive lock (e.g. the workbook open in Excel) without mutating
     # the file: renaming a path to itself raises PermissionError/OSError when the
@@ -311,7 +328,8 @@ def check_watchdog_health(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
                         except ValueError:
                             last_result = 0
                             
-                        if last_result != 0 and last_result != 267009:
+                        # Allow 0 (success), 267009 (SCHED_S_TASK_RUNNING), and 267011 (SCHED_S_TASK_HAS_NOT_RUN) as valid
+                        if last_result not in (0, 267009, 267011):
                             issues.append(f"Task Scheduler: 'AETHER_Watchdog' last run failed (Exit Code: {last_result_str} / {hex(last_result)}).")
             else:
                 issues.append("Task Scheduler: 'AETHER_Watchdog' task is not found or schtasks query failed.")
@@ -389,7 +407,9 @@ def check_scheduled_tasks_integrity() -> tuple[bool, list[str]]:
                 script_key = None
                 if "autonomous_pipeline.py" in to_run:
                     script_key = "autonomous_pipeline.py"
-                elif "ai_portfolio_game.py" in to_run or "daily-run.md" in to_run:
+                elif "daily-run.md" in to_run:
+                    script_key = "AETHER_DailyDriver (AI-Qualitative)"
+                elif "ai_portfolio_game.py" in to_run:
                     script_key = "ai_portfolio_game.py (Trading Desk)"
                 elif "watchdog.py" in to_run or "watchdog.md" in to_run:
                     script_key = "watchdog.py (Watchdog)"
@@ -471,8 +491,9 @@ def send_preflight_email(checks, missing_items, active_locks, duration, all_ok, 
         subject = f"🔔 AETHER Pre-Flight Status Briefing: {today}"
 
         def _badge(ok):
+            if ok == "WAIVED":
+                return '<span style="color: #db6d28; font-weight: bold;">[WAIVED]</span>'
             return '<span style="color: #2ea043; font-weight: bold;">[PASS]</span>' if ok else '<span style="color: #f85149; font-weight: bold;">[FAIL]</span>'
-
         def _lock_badge(ok):
             return '<span style="color: #2ea043; font-weight: bold;">[CLEAN]</span>' if ok else '<span style="color: #db6d28; font-weight: bold;">[LOCKED]</span>'
 
@@ -595,7 +616,10 @@ def run_preflight_diagnostics() -> bool:
     _log.console(f"PRE-FLIGHT DIAGNOSTIC SUMMARY (Duration: {duration:.2f}s)")
     _log.console("-" * 70)
     for i, (label, ok, kind) in enumerate(checks, 1):
-        word = ("CLEAN" if ok else "LOCKED") if kind == "lock" else ("PASS" if ok else "FAIL")
+        if ok == "WAIVED":
+            word = "WAIVED"
+        else:
+            word = ("CLEAN" if ok else "LOCKED") if kind == "lock" else ("PASS" if ok else "FAIL")
         _log.console(f"  [{i}] {label:<28}: {word}")
     _log.console("=" * 70)
 

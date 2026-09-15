@@ -40,6 +40,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from config import CFG
+from external_intel import dedup_rd_topics
 import data_api
 import uvicorn
 import ai_portfolio_game
@@ -187,6 +188,19 @@ def create_app():
             with open(roadmap_path, encoding="utf-8") as f:
                 return {"markdown": f.read()}
         raise HTTPException(status_code=404, detail="plans/roadmap.md not found")
+
+    @app.get("/api/intel-ideas")
+    def get_intel_ideas():
+        cache_path = _DIR / "Data" / "intel_ideas_cache.json"
+        if not cache_path.exists():
+            return {"ideas": []}
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                records = json.load(f)
+            raw = ((r.get("intel") or {}).get("rd_topics", []) for r in records)
+            return {"ideas": dedup_rd_topics(raw)}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read intel ideas cache: {e}")
 
     @app.get("/api/wiki")
     async def get_wiki():

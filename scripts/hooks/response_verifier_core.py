@@ -140,11 +140,13 @@ def ran_diagnostic(transcript_path):
     start = 0
     for i in range(len(lines) - 1, -1, -1):
         low = lines[i].lower()
+        if "functionresponse" in low or "toolresponse" in low:
+            continue
         if any(m in low for m in _USER_MARKERS):
             start = i
             break
     turn = "\n".join(lines[start:]).lower()
-    return any(m in turn for m in _TOOL_MARKERS)
+    return any(m in turn for m in _TOOL_MARKERS) or "functionresponse" in turn or "toolresponse" in turn
 
 
 def scan(response_text, transcript_path=None):

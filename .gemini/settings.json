@@ -1,4 +1,7 @@
 {
+  "model": {
+    "name": "gemini-3.8-flash"
+  },
   "tools": {
     "enableHooks": true
   },

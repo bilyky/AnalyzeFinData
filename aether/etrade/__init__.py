@@ -51,7 +51,24 @@ _FAIL_STATE_PATH = os.path.join(_DATA_DIR, "etrade_fail_state.json")
 
 
 
-_ET = ZoneInfo("America/New_York")
+def _load_eastern_tz():
+    """Resolve America/New_York, preferring the OS tz database via ``zoneinfo`` and falling
+    back to pytz's bundled zone database when the OS lacks tzdata (stripped-down Docker image
+    or minimal OS). BOTH tiers are DST-aware. There is deliberately no fixed UTC-5 tier: a
+    fixed offset is EST year-round and would be an hour wrong for the ~8 months the Eastern
+    zone is on EDT — and since ``pytz`` (a hard top-level dependency) bundles the zone, the
+    pytz tier cannot fail for this valid name, so a third tier would be unreachable anyway."""
+    try:
+        return ZoneInfo("America/New_York")
+    except Exception:
+        _log.warning(
+            "zoneinfo tzdata unavailable; falling back to pytz for America/New_York "
+            "(DST-aware). Install the 'tzdata' package to use the OS zone database."
+        )
+        return pytz.timezone("America/New_York")
+
+
+_ET = _load_eastern_tz()
 _RENEW_URL = {
     "sandbox":    "https://apisb.etrade.com/oauth/renew_access_token",
     "production": "https://api.etrade.com/oauth/renew_access_token",
@@ -229,6 +246,8 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
             r = session.get(_RENEW_URL[env], proxies=_proxies(), verify=False, timeout=10)
             if r.ok:
                 tokens["saved_at"] = time.time()
+                # A successful renewal across midnight officially promotes the token to the new day
+                tokens["issued_date_et"] = _et_today()
                 _save_tokens(tokens, env)
                 return tokens
             _log.warning(f"Renew failed: HTTP {r.status_code} — {r.text[:120]}")
@@ -719,10 +738,21 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
         # (launch_persistent_context returns the context and owns the browser).
         os.makedirs(_CHROME_PROFILE_DIR, exist_ok=True)
         _log.info("  [Auth] Using persistent Chrome profile: %s", _CHROME_PROFILE_DIR)
+
+        # Defensively clean up any stale Chrome lock file (SingletonLock) before launching.
+        # This completely prevents BrowserType.launch_persistent_context from crashing with
+        # exitCode=21 (RESULT_CODE_PROFILE_IN_USE) on Windows if a previous session crashed.
+        lock_file = os.path.join(_CHROME_PROFILE_DIR, "SingletonLock")
+        if os.path.exists(lock_file):
+            try:
+                os.remove(lock_file)
+                _log.info("  [Auth] Removed stale Chrome SingletonLock file to prevent profile-in-use errors.")
+            except Exception as le:
+                _log.warning("  [Auth] Could not remove stale SingletonLock (might be locked by an active process): %s", le)
+
         ctx = p.chromium.launch_persistent_context(
             _CHROME_PROFILE_DIR,
             headless=headless,
-            channel="chrome",
             proxy=pw_proxy,
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -1166,14 +1196,14 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
         stale = _load_tokens_any_date(env)
         if stale:
             _log.info("Attempting renewal of previous-day E*TRADE tokens...")
-            # Attempt renewal unless the broker explicitly rejects the token (401/403);
-            # a transient probe failure (None) should not block the renewal attempt.
-            if _probe_token_auth(stale, env) is not False:
-                renewed = renew_tokens(stale, env)
-                if renewed:
-                    _log.info("Previous-day token renewed successfully.")
-                    check_etrade_cookie_freshness()
-                    return renewed
+            # We explicitly bypass the data probe here. The broker will ALWAYS reject a data
+            # probe (401/403) on a yesterday token, which would falsely kill the token before
+            # we can renew it across midnight. We blindly fire the pure HTTP renewal instead.
+            renewed = renew_tokens(stale, env)
+            if renewed:
+                _log.info("Previous-day token renewed successfully.")
+                check_etrade_cookie_freshness()
+                return renewed
 
     # Silent renewal exhausted — try headless Playwright with saved browser state.
     # Uses the same cross-process file lock as renew_tokens() to guarantee only ONE

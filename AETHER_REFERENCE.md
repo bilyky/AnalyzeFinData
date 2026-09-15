@@ -181,12 +181,50 @@ AETHER's factor weights are fully customizable and backtest-driven:
     *   **Market Summarization Skill Development (`watchdog.py` & `server.py`):** Develop a custom, un-compromised Gemini CLI Agent Skill (and matching dashboard API) that headlessly ingests live intraday index ticks, parses daily newsletter text blocks, and generates a cohesive, data-grounded macro market summary (explaining exact indices catalysts and relative strength sector shifts) to completely eliminate generic RAG lists.
     *   **Model-Agnostic Token Optimizer (`prompt_optimizer.py`):** Research and build a dynamic token and prompt optimizer that dynamically prunes, compresses, or stashes verbose skill instructions and references based on the active LLM provider (Gemini, Claude, etc.) and available context-window limits. Employs lightweight truncation heuristics or semantic-similarity slicing to ensure extreme context token efficiency.
     *   **Unified Agent Skills Registry (`skills_registry.py`):** Design an extensible Skills Registry that automatically indexes, catalogs, and manages all active agent skills inside `.gemini/skills/` (and other directories). Provides a programmatic query interface allowing the Chat Agent and Daily Driver to selectively trigger and load *only the specific skills* relevant to the active user inquiry, completely eliminating massive prompt bloating.
-    *   **Option Trading & Volatility Patterns (R&D #26):** Research and design a quantitative modeling layer for option pricing, implied volatility (IV) rank/percentile, and options-based hedging/income strategies (e.g. covered calls, cash-secured puts, iron condors). Define high-reliability volatility-squeeze breakout patterns (like Bollinger Band + Keltner Channel squeezes) and backtest options delta-hedging heuristics head-to-head under our strict risk rules.
+    *   **Option Trading & Volatility Patterns (R&D #26):** 🚀 **COVERED-CALL INCOME ENGINE IMPLEMENTED, TESTED, AND DEPLOYED!** Shipped the first income strategy of the R&D #26 layer: a weekly covered-call writer (`aether/options.py` — Black-Scholes-Merton pricing, `select_covered_call` strike ladder, `execute_weekly_covered_call_pass`) that sells calls against risk-locked winners and books the premium to the ledger. Two backtest-gated refinements landed on top (Jul-18 optimizer discipline): **(1) per-symbol ATR-implied volatility** — `atr_implied_vol()` replaces the flat IV=0.30 with `clamp((ATR/price)·√252·K, floor, ceiling)` (K=0.67, floor 0.18, ceiling 0.64, calibrated in `scripts/backtesting/covered_call_iv_study.py`), the stored `sigma` reused at buy-to-close so writes and unwinds price against the same model; **(2) high-conviction flower exclusion** — winners whose `L60 ≥ CFG.system_covered_call_l60_ceiling` (default 6.0, env `AETHER_CC_L60_CEILING`) are left uncapped, gated by `scripts/backtesting/covered_call_winner_study.py` (GATE PASS: >50%-momentum cohort covered-vs-held edge −0.49%, t≤−1.96), honoring the CLAUDE.md Flower-Protection rule. Remaining R&D #26 scope (cash-secured puts, iron condors, IV rank/percentile, Bollinger+Keltner squeeze patterns, delta-hedging backtests) is still open/design.
     *   **Dynamic Momentum Rotation Engine (R&D #27):** 🚀 **FULLY IMPLEMENTED, TESTED, AND DEPLOYED!** Successfully built and shipped the regime-adaptive slot-swapping mechanism inside AGGRESSIVE mode. It automatically monitors slots, identifies elite breakouts (combined score >= 12.0), and swaps out the lowest-scoring, mature (profit-locked/breakeven) positions to maximize compounding velocity and capital efficiency.
 
 ---
 
-## 🏁 7. Developer Modification Checklist
+## ⏰ 7. Automated Production Schedulers & Task Execution Timeline
+
+To achieve complete off-market stability and prevent system timeouts, AETHER separates **Lightweight Session Refreshers** (always run first with Priority 1) from **Heavy, Slow Diagnostics** (CIM process sweeps, code compilation checks, and workbook refreshes). Heavy diagnostic tasks are strictly time-locked and run only during active market/preparation hours.
+
+The master execution timeline is structured as follows:
+
+```text
+  [05:15 AM PST] AETHER_Chaikin_Reauth ────────► Proactive token refreshes (Priority 1)
+  [05:30 AM PST] AETHER_Morning ───────────────► Pre-market data-fetching pipeline
+  [06:45 AM PST] AETHER_StopMonitor ───────────► Active session trailing stop watchdog
+  [07:00 AM PST] AETHER_ExecuteTrades ─────────► Market-open rebalancing & trade manager
+  [07:05 AM PST] AETHER_DailyDriver ───────────► AI qualitative scoring & re-qualification
+  [01:30 PM PST] AETHER_PostMarketSync ────────► Finalized daily close backfiller (No-pollution)
+  [02:00 PM PST] AETHER_PostMarketReporter ────► Closing portfolio valuation audit
+  [03:00 PM PST] AETHER_Data_Backup ───────────► Off-market Robocopy UNC sync (Pristine)
+  [09:30 PM PST] AETHER_PreFlight_Audit ───────► Nightly API and email gateway diagnostic
+  [Hourly 24/7]  AETHER_Watchdog ──────────────► Proactive keep-alive & session keeper (2h limit)
+```
+
+### 📋 Schedulers Execution & Timeout Registry
+
+> ℹ️ **Single Source of Truth Note:** To prevent documentation drift, the authoritative parameters (triggers, schedules, and active execution timeouts) for all tasks are defined programmatically inside the system source code (specifically `watchdog.py`'s `_TASK_DEFS` dictionary and the task-registration PowerShell scripts). The table below serves as a high-level operational map for developer reference.
+
+| Task Name | Active Time | Priority / Role | Key Dependencies | Expected Duration | Task Timeout |
+| :--- | :---: | :--- | :--- | :---: | :---: |
+| **`AETHER_Watchdog`** | Hourly (24/7) | **CRITICAL (P1)** / Keeps OAuth cookies and Chaikin logins warm; executes self-healing. | Active network gateway; E*TRADE production tokens. | < 3 seconds (Overnight); < 10 seconds (Market Hours) | **2 Hours** (`New-TimeSpan -Hours 2`) |
+| **`AETHER_Morning`** | 05:30 AM PST | **HIGH (P2)** / Scrapes Chaikin ratings, parses email newsletters, and backfills history. | Validated E*TRADE/Chaikin cookies; fresh email ideas. | 4 – 6 minutes (Throttled API) | **2 Hours** (`New-TimeSpan -Hours 2`) |
+| **`AETHER_StopMonitor`** | 06:45 AM PST | **CRITICAL (P1)** / Interday real-time stop-loss monitoring; repeats every 30 mins for 7 hours. | E*TRADE real-time streaming quotes. | 15 – 30 seconds | **30 Minutes** |
+| **`AETHER_ExecuteTrades`**| 07:00 AM PST | **CRITICAL (P1)** / Opens opening rebalancing; executes trailing stop ratchets & buy entries. | Completed 5:30 AM workbook; fresh E*TRADE tokens. | 10 – 20 seconds | **30 Minutes** |
+| **`AETHER_DailyDriver`** | 07:05 AM PST | **MEDIUM** / AI qualitative reasoning and position re-qualification. | Live market quotes; Claude/Gemini API key. | 2 – 3 minutes | **30 Minutes** |
+| **`AETHER_PostMarketSync`**| 01:30 PM PST | **MEDIUM** / Backfills finalized daily closes (15 mins post-close; no intraday pollution). | Alpha Vantage / RapidAPI daily close bars. | 2 – 3 minutes | **1 Hour** |
+| **`AETHER_PostMarketReporter`**| 02:00 PM PST | **LOW** / Computes closing portfolio equity and sends daily performance reports. | Finalized portfolio prices on disk. | 15 – 30 seconds | **30 Minutes** |
+| **`AETHER_Data_Backup`** | 03:00 PM PST | **LOW** / Robocopy syncs local Data/ folder to backup network drive. | Network storage online. | 30 – 90 seconds | **1 Hour** |
+| **`AETHER_PreFlight_Audit`**| 09:30 PM PST | **MEDIUM** / Nightly connection diagnostics and gateway check. | Centralized API, email, and directory gateways. | 10 – 15 seconds | **30 Minutes** |
+| **`AETHER_Chaikin_Reauth`**| Sunday 08:00 AM | **LOW** / Proactive headed Playwright Chrome login cookie refresh. | Logged-on user session (No-S4U). | 2 – 3 minutes (Supervised) | **30 Minutes** |
+
+---
+
+## 🏁 8. Developer Modification Checklist
 
 Use this checklist whenever you want to **add, remove, or modify** any system asset or parameter:
 

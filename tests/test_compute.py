@@ -267,6 +267,44 @@ class TestSymbolValidation(unittest.TestCase):
             # Save must never be called: the JWT-exchanged session failed validation.
             mock_save.assert_not_called()
 
+    @mock.patch("powergauge._jwt_to_session_id")
+    @mock.patch("powergauge._get_http_session")
+    def test_jwt_empty_falls_through_to_browser_without_tripping_breaker(
+            self, mock_get_session, mock_jwt):
+        # PR #71 review: a 200-but-empty getJWTAuthorization means the sessionToken itself
+        # expired. _jwt_to_session_id returns "" (NOT raise), so ensure_valid_session must
+        # (a) skip the in-window save, (b) fall through to the browser renewer, and
+        # (c) NOT trip the circuit breaker (the breaker only trips on an EnvironmentError
+        # from the renewer, never on the empty-exchange signal).
+        mock_jwt.return_value = ""  # 200-but-empty => sessionToken expired
+
+        # 403 => the (unmocked) _probe_session returns "invalid", entering the refresh path.
+        mock_response = mock.MagicMock()
+        mock_response.ok = False
+        mock_response.status_code = 403
+        mock_session = mock.MagicMock()
+        mock_session.get.return_value = mock_response
+        mock_get_session.return_value = mock_session
+
+        fresh = {"jsessionid": "browser_sid", "jwttoken": "fresh_jwt", "uuid": "e@x.com"}
+        session = {"jsessionid": "old_sid", "jwttoken": "expired_jwt", "uuid": "e@x.com"}
+        with mock.patch("powergauge._session_valid_until", 0.0), \
+             mock.patch("powergauge._auth_circuit_breaker_until", 0.0), \
+             mock.patch("powergauge._load_session_from_file", return_value=session), \
+             mock.patch("powergauge._save_session_to_file") as mock_save, \
+             mock.patch("powergauge._chaikin_renewer") as mock_renewer, \
+             mock.patch("powergauge.login", return_value=fresh):
+            mock_renewer.ensure.return_value = fresh
+            result = ensure_valid_session()
+
+            mock_jwt.assert_called_once()                 # in-window exchange was attempted
+            mock_save.assert_not_called()                 # empty sid => no in-window save
+            mock_renewer.ensure.assert_called_once()      # fell through to the browser path
+            self.assertEqual(result, fresh)               # returned the fresh browser session
+            # Breaker not tripped: it stays at the mocked 0.0 (only an EnvironmentError sets it).
+            import powergauge as _pg
+            self.assertEqual(_pg._auth_circuit_breaker_until, 0.0)
+
     def test_invalid_symbol_bundle_not_cached(self):
         # PR #48 review (Finding 2): a 200 the adapter classifies as "invalid symbol"
         # must NOT be persisted. Caching a transient/degraded response poisons the disk
