@@ -1656,6 +1656,38 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         pos["stop_loss"] = cost_basis
                         _log.info(f"[Breakeven Lock] {sym} stop raised to cost basis: ${old_stop:.2f} -> ${cost_basis:.2f}")
                         _log.info(f"🛡️ [Breakeven Lock] {sym} stop bumped to Cost Basis: ${old_stop:.2f} ➡️ ${cost_basis:.2f}")
+            # ── Bank-As-You-Go scale-out (Defensive Overlay — Rule B) ──
+            # Take PARTIAL profit as a winner runs through ATR tiers — distinct from
+            # the full, pop-based liquidation loop below. This only ever removes risk
+            # (never scales a loser, never adds exposure), reduces pos["qty"] rather
+            # than popping the position, and persists pos["banked_pct"] (the cumulative
+            # fraction sold) so each tier fires exactly once. Executes only in market
+            # hours; if a tier is crossed after-hours it fires on the next live cycle.
+            if atr and atr > 0 and price and price > 0 and pos.get("qty", 0) > 1 and is_market_hours():
+                banked_pct = float(pos.get("banked_pct", 0.0) or 0.0)
+                so_frac, so_reason = risk_utils.scale_out_plan(
+                    price, pos.get("cost", 0.0), atr, banked_pct)
+                if so_frac > 0 and banked_pct < 1.0:
+                    # banked_pct is a fraction of the ORIGINAL lot; recover the original
+                    # size (works for legacy positions with no banked_pct) to size the sale.
+                    original_qty = pos["qty"] / (1.0 - banked_pct)
+                    sell_qty = int(round(so_frac * original_qty))
+                    # Keep at least one share so the trailing-stop exit path owns the
+                    # final close (log_closed_trade_dna / option unwind live there).
+                    sell_qty = max(0, min(sell_qty, pos["qty"] - 1))
+                    if sell_qty >= 1:
+                        proceeds = sell_qty * price
+                        state["balance"] += proceeds
+                        pos["qty"] -= sell_qty
+                        pos["banked_pct"] = round(banked_pct + so_frac, 6)
+                        tx = {"date": today, "time": now_time, "type": "SELL",
+                              "symbol": sym, "price": price, "qty": sell_qty,
+                              "pnl": round((price - pos.get("cost", 0.0)) * sell_qty, 2),
+                              "details": f"Scale-out (Bank-As-You-Go): {so_reason}"}
+                        state["history"].append(tx)
+                        new_transactions.append(tx)
+                        _log.info(f"🏦 [Scale-Out] {sym}: banked {sell_qty} sh at "
+                                  f"${price:.2f} — {so_reason}; {pos['qty']} sh left trailing")
             # ────────────────────────────────────────────────────────────────
 
             # Check Idiosyncratic Single-Stock Gap-Down Guard (Whipsaw protection)

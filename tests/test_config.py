@@ -120,6 +120,55 @@ class TestConfigWeb(unittest.TestCase):
         self.assertEqual(cfg.web_admins, [])
 
 
+class TestConfigOverlay(unittest.TestCase):
+    """Defensive Risk-Management Overlay namespace (Rule B scale-out keys this pass)."""
+
+    def test_scale_out_defaults(self):
+        cfg = _make_cfg({})
+        self.assertEqual(cfg.overlay_scale_out_tiers, [1.5, 3.0])
+        self.assertEqual(cfg.overlay_scale_out_fracs, [0.30, 0.30])
+
+    def test_scale_out_from_file(self):
+        cfg = _make_cfg({"overlay": {"scale_out_tiers": [1.0, 2.0, 4.0],
+                                     "scale_out_fracs": [0.25, 0.25, 0.25]}})
+        self.assertEqual(cfg.overlay_scale_out_tiers, [1.0, 2.0, 4.0])
+        self.assertEqual(cfg.overlay_scale_out_fracs, [0.25, 0.25, 0.25])
+
+    def test_scale_out_env_override(self):
+        cfg = _make_cfg({"overlay": {"scale_out_tiers": [1.5, 3.0]}},
+                        env={"AETHER_OVERLAY_SCALE_OUT_TIERS": "[2.0, 4.0]"})
+        self.assertEqual(cfg.overlay_scale_out_tiers, [2.0, 4.0])
+
+    def test_scale_out_null_block_safe(self):
+        cfg = _make_cfg({"overlay": None})
+        self.assertEqual(cfg.overlay_scale_out_tiers, [1.5, 3.0])
+        self.assertEqual(cfg.overlay_scale_out_fracs, [0.30, 0.30])
+
+    def test_scale_out_values_are_float(self):
+        cfg = _make_cfg({"overlay": {"scale_out_tiers": ["1.5", "3.0"],
+                                     "scale_out_fracs": ["0.3", "0.3"]}})
+        self.assertTrue(all(isinstance(x, float) for x in cfg.overlay_scale_out_tiers))
+        self.assertTrue(all(isinstance(x, float) for x in cfg.overlay_scale_out_fracs))
+
+    def test_scale_out_malformed_env_falls_back(self):
+        # A bad env override must never crash config load — fall back to the default ladder.
+        cfg = _make_cfg({}, env={"AETHER_OVERLAY_SCALE_OUT_TIERS": "not json"})
+        self.assertEqual(cfg.overlay_scale_out_tiers, [1.5, 3.0])
+
+    def test_scale_out_mismatched_lengths_fall_back(self):
+        # tiers and fracs must be parallel; a mismatch reverts BOTH to defaults.
+        cfg = _make_cfg({"overlay": {"scale_out_tiers": [1.0, 2.0, 3.0],
+                                     "scale_out_fracs": [0.5]}})
+        self.assertEqual(cfg.overlay_scale_out_tiers, [1.5, 3.0])
+        self.assertEqual(cfg.overlay_scale_out_fracs, [0.30, 0.30])
+
+    def test_scale_out_over_100pct_falls_back(self):
+        # Cumulative bank fraction > 1.0 is nonsensical -> defaults.
+        cfg = _make_cfg({"overlay": {"scale_out_tiers": [1.0, 2.0],
+                                     "scale_out_fracs": [0.7, 0.7]}})
+        self.assertEqual(cfg.overlay_scale_out_fracs, [0.30, 0.30])
+
+
 class TestConfigMissingFile(unittest.TestCase):
     # Note: "mocked empty file -> empty attrs" is already covered by
     # TestConfigNullSafety.test_empty_config_returns_empty_strings. This class
