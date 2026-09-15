@@ -6,15 +6,23 @@ Set the connection URL in config.json under "database.url", or via the
 DATABASE_URL environment variable:
     DATABASE_URL=postgresql://user:pass@host:port/dbname
 """
+import importlib
 import json
+import os
+
 import sqlalchemy as db
 
+from aether.logger import get_logger
+
 try:
-    from config import CFG as _CFG
-    _DB_URL = _CFG.database_url
+    # Optional dependency: pull the DB URL from config if importable, else fall
+    # back to the environment. import_module (a call, not an `import` statement)
+    # keeps this guard out of the module's top-level import block.
+    _DB_URL = importlib.import_module("config").CFG.database_url
 except Exception:
-    import os
     _DB_URL = os.environ.get("DATABASE_URL", "")
+
+_log = get_logger("database")
 
 
 def connect_to_db():
@@ -23,7 +31,7 @@ def connect_to_db():
     engine = db.create_engine(_DB_URL)
     conn = engine.connect()
     output = conn.execute("SELECT * FROM test_table")
-    print(output.fetchall())
+    _log.console(str(output.fetchall()))
     conn.close()
 
 
@@ -59,7 +67,7 @@ def update_daily_ohlcv(symbol: str):
                         {"sym": symbol, "d": date, "o": ss[0], "h": ss[1],
                          "l": ss[2], "c": ss[3], "v": ss[4]}
                     )
-                    print(f"Inserted {symbol} {date}")
+                    _log.console(f"Inserted {symbol} {date}")
                 elif float(output[0][3]) != float(ss[0]):
                     conn.execute(
                         "UPDATE public.daily_ohlcv "
@@ -68,9 +76,9 @@ def update_daily_ohlcv(symbol: str):
                         {"o": ss[0], "h": ss[1], "l": ss[2], "c": ss[3],
                          "v": ss[4], "d": date, "s": symbol.upper()}
                     )
-                    print(f"Updated {symbol} {date}")
+                    _log.console(f"Updated {symbol} {date}")
     except Exception as ex:
-        print(ex)
+        _log.error(str(ex))
     finally:
         conn.close()
 
