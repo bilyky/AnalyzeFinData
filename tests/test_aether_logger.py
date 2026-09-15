@@ -41,7 +41,7 @@ class TestLoggerInit(unittest.TestCase):
         aether_logger._init()
         root = logging.getLogger("aether")
         handler_types = {type(h).__name__ for h in root.handlers}
-        self.assertIn("RotatingFileHandler", handler_types)
+        self.assertIn("SafeRotatingFileHandler", handler_types)
         self.assertIn("StreamHandler", handler_types)
         # Two rotating files (txt + jsonl) = two RotatingFileHandler instances
         rotating = [h for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)]
