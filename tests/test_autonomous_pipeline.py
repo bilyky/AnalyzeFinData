@@ -50,3 +50,34 @@ class TestFormatHtmlReport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMarketHoursPipelineDowngrade(unittest.TestCase):
+
+    @mock.patch("autonomous_pipeline.is_market_hours")
+    @mock.patch("autonomous_pipeline.run_preflight_diagnostics")
+    @mock.patch("autonomous_pipeline.verify_data_freshness")
+    @mock.patch("autonomous_pipeline.validate_sheets")
+    @mock.patch("autonomous_pipeline.get_top_5_picks")
+    @mock.patch("autonomous_pipeline.get_replacement_pairs")
+    def test_market_hours_without_force_gracefully_downgrades(self, mock_rep, mock_picks, mock_val, mock_fresh, mock_pre, mock_is_market):
+        """Regression: when is_market_hours() is True and no --force is present,
+        the pipeline must gracefully downgrade to report-only/cached mode.
+        """
+        mock_is_market.return_value = True
+        mock_fresh.return_value = (True, "OK")
+        mock_val.return_value = (True, "OK")
+        mock_picks.return_value = []
+        mock_rep.return_value = []
+        
+        # Run main and ensure it doesn't run preflight (since it downgrades to report_only)
+        with mock.patch("sys.exit") as mock_exit, \
+             mock.patch("autonomous_pipeline.DailyRunGuard") as mock_guard, \
+             mock.patch("autonomous_pipeline.notify.send_email") as mock_email, \
+             mock.patch("autonomous_pipeline.watchdog.sync_data_folder") as mock_sync, \
+             mock.patch("sys.argv", ["autonomous_pipeline.py"]):
+            
+            ap.main()
+            
+            # Since report_only was set, run_preflight_diagnostics must NOT have been called!
+            mock_pre.assert_not_called()
