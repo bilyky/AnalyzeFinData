@@ -492,6 +492,12 @@ def get_staged_python_files() -> list:
 
 def check_no_direct_main_commit() -> bool:
     """Verify that we are not committing directly to the stable main/master production branches."""
+    # This is a LOCAL developer safeguard (block an accidental `git commit` on main). In CI the
+    # commit has already happened and the validator only re-checks the staged diff — and the
+    # post-merge `push` job legitimately runs *on* the `main` branch, where this guard would
+    # otherwise fail the run spuriously. Exempt any GitHub Actions run.
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        return True
     try:
         res = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True, errors="replace")
         branch = res.stdout.strip()
