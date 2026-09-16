@@ -230,11 +230,19 @@ class _Config:
         # write to the cap vs -0.046% mid-conviction). Tunable via AETHER_CC_L60_CEILING.
         self.system_covered_call_l60_ceiling = float(os.environ.get("AETHER_CC_L60_CEILING") or system.get("cc_l60_ceiling", 6.0))
 
-        # ── Defensive Risk-Management Overlay (generalized A/B/C capability family) ──
-        # One shared namespace so every member of the capital-preservation family reads
-        # the same knobs. Rule B (Bank-As-You-Go scale-out) keys this pass; Rule C
-        # (credit-spread) and Rule A (principal-floor) keys land on their own branches.
+        # ── Defensive Risk-Management Overlay (generalized A/B/C family) ─────────
+        # ONE shared namespace so the three capital-preservation rules read as a single
+        # capability, each key consumed at exactly one home: Rule C -> the credit-spread
+        # builders in aether/options_adviser.py; Rule B -> risk_utils.scale_out_plan;
+        # Rule A -> circuit_breaker's principal floor (A keys land on its own branch).
+        # Env AETHER_OVERLAY_* -> config.json "overlay" -> default. Every default is
+        # backtest-gated; see scripts/backtesting/*_study.py.
         overlay = raw.get("overlay") or {}
+        # Rule C — bull-put / bear-call OTM vertical credit spreads. Short strike OTM
+        # distance and spread width as fractions of spot. Defaults = the credit_spread_study.py
+        # best cell (bull-put otm=0.15, width=0.05: win 86.5%, E[ror] +0.041, t=36.3, n=114,679).
+        self.overlay_credit_spread_otm_pct   = float(os.environ.get("AETHER_OVERLAY_CREDIT_SPREAD_OTM_PCT")   or overlay.get("credit_spread_otm_pct",   0.15))
+        self.overlay_credit_spread_width_pct = float(os.environ.get("AETHER_OVERLAY_CREDIT_SPREAD_WIDTH_PCT") or overlay.get("credit_spread_width_pct", 0.05))
         # Rule B — scale-out ladder: bank a fraction of a winning lot at each ATR-scaled
         # profit tier, trail the residual. `tiers` (ATR multiples) and `fracs` (fraction
         # of the ORIGINAL lot banked at that tier) are parallel lists; defaults are the
@@ -253,6 +261,7 @@ class _Config:
                 or sum(self.overlay_scale_out_fracs) > 1.0 + 1e-9):
             self.overlay_scale_out_tiers = [1.5, 3.0]
             self.overlay_scale_out_fracs = [0.30, 0.30]
+
 
         # ── Configuration Health Checks ───────────────────────────────────────
         self.verify_config_health()

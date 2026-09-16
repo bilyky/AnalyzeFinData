@@ -121,8 +121,36 @@ class TestConfigWeb(unittest.TestCase):
 
 
 class TestConfigOverlay(unittest.TestCase):
-    """Defensive Risk-Management Overlay namespace (Rule B scale-out keys this pass)."""
+    """Defensive Risk-Management Overlay namespace (Rule C credit-spread + Rule B scale-out keys)."""
 
+    # ── Rule C — credit-spread keys ──
+    def test_overlay_defaults(self):
+        cfg = _make_cfg({})
+        self.assertAlmostEqual(cfg.overlay_credit_spread_otm_pct, 0.15)
+        self.assertAlmostEqual(cfg.overlay_credit_spread_width_pct, 0.05)
+
+    def test_overlay_from_file(self):
+        cfg = _make_cfg({"overlay": {"credit_spread_otm_pct": 0.10,
+                                     "credit_spread_width_pct": 0.075}})
+        self.assertAlmostEqual(cfg.overlay_credit_spread_otm_pct, 0.10)
+        self.assertAlmostEqual(cfg.overlay_credit_spread_width_pct, 0.075)
+
+    def test_overlay_env_override(self):
+        cfg = _make_cfg({"overlay": {"credit_spread_otm_pct": 0.10}},
+                        env={"AETHER_OVERLAY_CREDIT_SPREAD_OTM_PCT": "0.20"})
+        self.assertAlmostEqual(cfg.overlay_credit_spread_otm_pct, 0.20)
+
+    def test_overlay_null_block_safe(self):
+        cfg = _make_cfg({"overlay": None})
+        self.assertAlmostEqual(cfg.overlay_credit_spread_otm_pct, 0.15)
+        self.assertAlmostEqual(cfg.overlay_credit_spread_width_pct, 0.05)
+
+    def test_overlay_is_float(self):
+        cfg = _make_cfg({"overlay": {"credit_spread_otm_pct": "0.12"}})   # string coerced
+        self.assertIsInstance(cfg.overlay_credit_spread_otm_pct, float)
+        self.assertAlmostEqual(cfg.overlay_credit_spread_otm_pct, 0.12)
+
+    # ── Rule B — scale-out ladder keys ──
     def test_scale_out_defaults(self):
         cfg = _make_cfg({})
         self.assertEqual(cfg.overlay_scale_out_tiers, [1.5, 3.0])
