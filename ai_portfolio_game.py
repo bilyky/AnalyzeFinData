@@ -2186,10 +2186,13 @@ if __name__ == "__main__":
         # execute exactly once. A deliberate manual --force bypasses the day-stamp
         # (human override) but never the mutex — overlap is never allowed.
         try:
+            # Set wait_timeout=0 to fail-fast instantly. If another process holds the lock
+            # (e.g. AETHER_ExecuteTrades vs AnalyzeFinData_AI_Game, or a manual rerun),
+            # the second process will abort immediately instead of waiting in queue to run afterward.
             with DailyRunGuard(
                 "portfolio_state",
                 stamp=None if args.force else "trade_execution",
-                wait_timeout=7200,
+                wait_timeout=0,
             ):
                 run_daily_ai_management(force=args.force, manual_profile=args.profile)
                 send_consolidated_morning_report()

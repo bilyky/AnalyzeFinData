@@ -96,6 +96,34 @@ class TestEvidenceGate(_TranscriptMixin):
         payload = {"prompt_response": "all systems nominal", "transcript_path": None}
         self.assertEqual(core.decide_gemini(payload)["decision"], "allow")
 
+    def test_unrelated_tool_call_for_speculative_claim_denies(self):
+        # Specific claim (e.g. etrade token expired) made, but unrelated tool call (e.g. get-date) run -> deny!
+        tpath = self._write("t.jsonl", [
+            '{"role":"user","content":"status?"}',
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"get-date"}]}}',
+            '{"role":"assistant","content":"checked"}',
+        ])
+        payload = {
+            "prompt_response": "E*TRADE token expired, so we bypassed login.",
+            "transcript_path": tpath,
+        }
+        out = core.decide_gemini(payload)
+        self.assertEqual(out["decision"], "deny")
+        self.assertIn("substantiate", out["reason"])
+
+    def test_relevant_tool_call_for_speculative_claim_allows(self):
+        # Specific claim (e.g. etrade token expired) made, and relevant tool (e.g. test_etrade.py) run -> allow!
+        tpath = self._write("t.jsonl", [
+            '{"role":"user","content":"status?"}',
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"test_etrade.py"}]}}',
+            '{"role":"assistant","content":"checked"}',
+        ])
+        payload = {
+            "prompt_response": "E*TRADE token expired, so we bypassed login.",
+            "transcript_path": tpath,
+        }
+        self.assertEqual(core.decide_gemini(payload)["decision"], "allow")
+
     def test_ran_diagnostic_tri_state(self):
         with_tool = self._write("a.jsonl", [
             '{"role":"user","content":"x"}',

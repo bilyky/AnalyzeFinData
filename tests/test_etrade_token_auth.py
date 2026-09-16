@@ -5,8 +5,13 @@ Red-green anchor: `_probe_token_auth` replaced the old boolean `_test_tokens_val
 On the pre-fix code this import fails and the transient case deleted the cache, so
 `test_transient_probe_does_not_delete_token` fails; on the fixed code both pass.
 """
+import os
+import sys
 import unittest
 from unittest import mock
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import tests  # globally locks hermeticity and redirects prod Data/ to temp
 
 from aether import etrade
 
