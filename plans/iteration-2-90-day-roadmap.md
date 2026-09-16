@@ -55,15 +55,17 @@ To prevent data-pollution and ensure we can cleanly compare Iteration 1 and Iter
 
 To eliminate the exact bottleneck and drag factors identified in Iteration 1, we establish three new **Stability and Performance R&D Tasks**:
 
-### 🎯 R&D #38: Dynamic Cash-Drag Pyramiding & Scale-In (Performance)
+> **⚠️ R&D numbering — canonical IDs live in `plans/roadmap.md`** (single-source rule). The sprint labels below were minted locally and **collide** with `roadmap.md`'s own #38/#39/#40; each is mapped to its canonical roadmap number here so the two docs no longer disagree.
+
+### 🎯 Sprint 1 — Dynamic Cash-Drag Pyramiding & Scale-In (Performance) → Roadmap #31 (SHIPPED 2026-08-14)
 *   **Problem:** Holding large cash buffers (40%+) in a flat market dilutes our compounding rate.
 *   **Solution:** Upgrade `risk_utils.py` with an advanced position-sizing algorithm. When the regime is `BALANCED` and cash swells above 20%, the system will automatically calculate "Pyramiding Scale-Ins" on existing, protected winners (positions with trailed, break-even stops) rather than letting cash sit idle. This maximizes capital deployment efficiency while keeping risk hard-capped.
 
-### 🔐 R&D #39: Headless Playwright TOTP Auto-Bypass (Anti-Fragility)
+### 🔐 Sprint 2 — Headless Playwright TOTP Auto-Bypass (Anti-Fragility) → Roadmap #41 (SHIPPED via PR #55)
 *   **Problem:** E*TRADE session tokens expire after 2 hours. Morning rebalancing tasks fail pre-flight when they hit E*TRADE's interactive MFA/TOTP SMS verification challenge.
 *   **Solution:** Integrate a secure local TOTP generator (`pyotp`) inside the headless Playwright re-auth flow (`token_renewer.py`). When E*TRADE demands a 2FA token, Playwright will automatically query our encrypted secret key, generate the live 6-digit TOTP, fill the input, and complete the handshake cleanly with **zero human intervention required on Monday mornings**.
 
-### 📉 R&D #40: Optimal Entry Limit-Order Shaver (Execution)
+### 📉 Sprint 3 — Optimal Entry Limit-Order Shaver (Execution) → Roadmap #42 (BACKLOG)
 *   **Problem:** Buying breakouts at the market open using market orders exposes us to "opening gap-ups," where we buy at the day's highest price and suffer immediate pullback drawdowns.
 *   **Solution:** Implement a limit-order entry shaver. Instead of submitting market orders at 7:00 AM PST, the execution block will shave a calibrated percentage (e.g., `0.25% to 0.50%` or `0.1 ATR`) off the opening price and place a limit order valid for the first 30 minutes of trading. If the morning whipsaw dips to trigger our limit, we secure a superior cost-basis; if it gaps up and never pulls back, the order is cancelled and capital is preserved.
 
