@@ -397,7 +397,8 @@ def build_cash_secured_put(pos: Position, levels: Levels, quotes: list,
 
 def _build_vertical_credit(pos: Position, quotes: list, *, option_type: str,
                            name: str, kind: str, contracts: int,
-                           otm_pct: float, width_pct: float) -> Optional[Strategy]:
+                           otm_pct: float, width_pct: float,
+                           expectancy_note: str = "") -> Optional[Strategy]:
     """Shared core for the two OTM vertical credit spreads.
 
     Sells a short leg ~``otm_pct`` out of the money and buys a long leg one
@@ -405,6 +406,12 @@ def _build_vertical_credit(pos: Position, quotes: list, *, option_type: str,
     can't furnish two distinct, correctly-ordered strikes on the right side, or when
     the modeled net is not a genuine credit (0 < credit < width) — refusing rather
     than emitting an inverted / negative-risk spread.
+
+    ``expectancy_note`` is a plain-language expectancy caveat appended to the
+    user-facing ``notes`` so the reader always sees the study's verdict *in the
+    report* — the bull-put's edge is regime-conditional and the bear-call carries
+    no edge at all (see ``credit_spread_study.py`` / the roadmap). Without it a
+    reader on a down-trending symbol could infer an edge the study never earned.
     """
     if otm_pct <= 0 or width_pct <= 0:
         return None
@@ -454,6 +461,8 @@ def _build_vertical_credit(pos: Position, quotes: list, *, option_type: str,
                f"on a ${width:g}-wide spread. Breakeven ~${breakeven:,.2f}. "
                f"{contracts:g} contract(s)."],
     )
+    if expectancy_note:
+        s.notes.append(expectancy_note)
     return s
 
 
@@ -462,8 +471,15 @@ def build_bull_put_spread(pos: Position, levels: Levels, quotes: list,
                           otm_pct: Optional[float] = None,
                           width_pct: Optional[float] = None) -> Optional[Strategy]:
     """Bull-put credit spread: sell an OTM put, buy a further-OTM put — a defined-risk
-    net credit that profits if the stock holds above the short strike. The
-    positive-expectancy structure per ``credit_spread_study.py`` (up-regime bars).
+    net credit that profits if the stock holds above the short strike.
+
+    Positive-expectancy per ``credit_spread_study.py`` **only in an up-regime**
+    (entry bars with price >= the 50-day SMA); the study did *not* validate an edge
+    on down-trending bars, so on a weak symbol this is a defined-risk credit with no
+    expectancy claim, not a positive-EV trade. The regime caveat is surfaced in the
+    strategy ``notes`` (this builder has no price history to gate on directly — it
+    runs on a single position snapshot — so it labels the condition rather than
+    silently assuming it).
 
     ``levels`` / ``select`` are accepted for the uniform builder contract; the strikes
     anchor on the overlay OTM/width config, not the AETHER stop/target levels. Sized
@@ -473,7 +489,11 @@ def build_bull_put_spread(pos: Position, levels: Levels, quotes: list,
     width = CFG.overlay_credit_spread_width_pct if width_pct is None else width_pct
     return _build_vertical_credit(
         pos, quotes, option_type="PUT", name="Bull-put spread",
-        kind="bull_put_spread", contracts=contracts, otm_pct=otm, width_pct=width)
+        kind="bull_put_spread", contracts=contracts, otm_pct=otm, width_pct=width,
+        expectancy_note=(
+            "Expectancy: positive ONLY in an up-regime (price >= 50-day SMA) per "
+            "credit_spread_study.py; on a down-trending symbol treat this as a "
+            "defined-risk credit with no expectancy edge, not a positive-EV trade."))
 
 
 def build_bear_call_spread(pos: Position, levels: Levels, quotes: list,
@@ -492,7 +512,13 @@ def build_bear_call_spread(pos: Position, levels: Levels, quotes: list,
     width = CFG.overlay_credit_spread_width_pct if width_pct is None else width_pct
     return _build_vertical_credit(
         pos, quotes, option_type="CALL", name="Bear-call spread",
-        kind="bear_call_spread", contracts=contracts, otm_pct=otm, width_pct=width)
+        kind="bear_call_spread", contracts=contracts, otm_pct=otm, width_pct=width,
+        expectancy_note=(
+            "Expectancy: NEGATIVE at every combo tested in credit_spread_study.py "
+            "(selling calls above spot loses on the upside tail in a rising market — "
+            "the study's honest null). Ships as a defined-risk menu tool ONLY; it "
+            "carries no positive-expectancy claim — use for defined-risk positioning, "
+            "not for edge."))
 
 
 # ---------------------------------------------------------------------------

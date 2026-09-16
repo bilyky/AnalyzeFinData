@@ -162,6 +162,11 @@ class TestStrategyEconomics(unittest.TestCase):
         self.assertAlmostEqual(s.breakevens[0], 89.40)     # 90 - 0.60
         self.assertIsNone(s.downside_floor)
         self.assertIsNone(s.upside_cap)
+        # Expectancy is surfaced in the user-facing notes as regime-conditional, so a
+        # reader on a down-trending symbol is not shown an unqualified positive-EV label.
+        joined = " ".join(s.notes).lower()
+        self.assertIn("up-regime", joined)
+        self.assertIn("50-day sma", joined)
 
     def test_bear_call_spread(self):
         # otm 0.10 @ spot 100 -> short CALL 110 (bid 1.55), long CALL 115 (ask 1.00).
@@ -177,6 +182,11 @@ class TestStrategyEconomics(unittest.TestCase):
         self.assertAlmostEqual(s.max_gain, 55.0)
         self.assertAlmostEqual(s.max_loss, 445.0)          # (5 - 0.55) * 100
         self.assertAlmostEqual(s.breakevens[0], 110.55)    # 110 + 0.55
+        # The study's negative-expectancy null is surfaced where the user reads it,
+        # not just in the docstring/roadmap — no positive-EV claim on the bear-call.
+        joined = " ".join(s.notes).lower()
+        self.assertIn("negative", joined)
+        self.assertIn("defined-risk", joined)
 
     def test_credit_spread_refuses_when_legs_collapse(self):
         # A width so tight both legs round to the same strike -> no spread (returns None),
