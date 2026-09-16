@@ -8,6 +8,8 @@ protection / income strategies —
     * protective put        (long put only)
     * covered call          (short call only)
     * cash-secured put      (short put to add shares)
+    * bull-put spread       (short put + long lower put — defined-risk credit)
+    * bear-call spread      (short call + long higher call — defined-risk credit)
 
 — and attaches to each its economics (net cost, max loss/gain, protection floor,
 upside cap, breakevens) *and* its U.S.-tax considerations (LTCG/STCG holding period,
@@ -30,6 +32,7 @@ import datetime
 from dataclasses import dataclass, field
 from typing import Optional
 
+from aether.config import CFG
 from aether.logger import get_logger as _get_logger
 
 
@@ -383,6 +386,142 @@ def build_cash_secured_put(pos: Position, levels: Levels, quotes: list,
 
 
 # ---------------------------------------------------------------------------
+# Defined-risk vertical credit spreads  (Rule C — Defensive Risk-Management Overlay)
+# ---------------------------------------------------------------------------
+# Generic, symbol-agnostic capital-preservation primitives: sell a near-the-money
+# leg, buy a further-OTM leg of the same type, for a net *credit* whose loss is
+# capped at (width − credit). Defaults come from ``CFG.overlay_credit_spread_*`` —
+# the shared overlay namespace — and were gated by ``credit_spread_study.py``
+# (bull-put is the positive-expectancy structure in up-regimes; the bear-call ships
+# as a defined-risk menu tool but carries no positive-expectancy claim — see roadmap).
+
+def _build_vertical_credit(pos: Position, quotes: list, *, option_type: str,
+                           name: str, kind: str, contracts: int,
+                           otm_pct: float, width_pct: float,
+                           expectancy_note: str = "") -> Optional[Strategy]:
+    """Shared core for the two OTM vertical credit spreads.
+
+    Sells a short leg ~``otm_pct`` out of the money and buys a long leg one
+    ``width_pct`` further OTM (fractions of spot). Returns ``None`` when the chain
+    can't furnish two distinct, correctly-ordered strikes on the right side, or when
+    the modeled net is not a genuine credit (0 < credit < width) — refusing rather
+    than emitting an inverted / negative-risk spread.
+
+    ``expectancy_note`` is a plain-language expectancy caveat appended to the
+    user-facing ``notes`` so the reader always sees the study's verdict *in the
+    report* — the bull-put's edge is regime-conditional and the bear-call carries
+    no edge at all (see ``credit_spread_study.py`` / the roadmap). Without it a
+    reader on a down-trending symbol could infer an edge the study never earned.
+    """
+    if otm_pct <= 0 or width_pct <= 0:
+        return None
+    spot = pos.price
+    if not spot or spot <= 0:
+        return None
+    contracts = max(int(contracts), 1)
+    if option_type == "PUT":
+        # Bull-put: short the higher put, long the lower put (both below spot).
+        short_anchor = spot * (1.0 - otm_pct)
+        long_anchor = spot * (1.0 - otm_pct - width_pct)
+    else:
+        # Bear-call: short the lower call, long the higher call (both above spot).
+        short_anchor = spot * (1.0 + otm_pct)
+        long_anchor = spot * (1.0 + otm_pct + width_pct)
+    short_q = nearest_strike(quotes, short_anchor, option_type)
+    long_q = nearest_strike(quotes, long_anchor, option_type)
+    if short_q is None or long_q is None or short_q.strike == long_q.strike:
+        return None
+    # Enforce credit-spread ordering (short nearer the money than long). If the
+    # chain's strike coverage collapses the legs onto the wrong side, refuse.
+    if option_type == "PUT" and not short_q.strike > long_q.strike:
+        return None
+    if option_type == "CALL" and not short_q.strike < long_q.strike:
+        return None
+    short_prem = short_q.bid or short_q.mid       # we SELL the short leg -> its bid
+    long_prem = long_q.ask or long_q.mid          # we BUY the long leg  -> its ask
+    credit = short_prem - long_prem               # per share
+    width = abs(short_q.strike - long_q.strike)
+    if credit <= 0 or credit >= width:
+        return None
+    short_leg = StrategyLeg("sell", option_type, short_q.strike, short_prem, contracts, short_q.expiry)
+    long_leg = StrategyLeg("buy", option_type, long_q.strike, long_prem, contracts, long_q.expiry)
+    shares = contracts * SHARES_PER_CONTRACT
+    max_gain = credit * shares                    # full credit kept if it expires OTM
+    max_loss = (width - credit) * shares          # width − credit = capital at risk
+    breakeven = (short_q.strike - credit) if option_type == "PUT" else (short_q.strike + credit)
+    net_cost = -(short_leg.cash() + long_leg.cash())   # <0 => net credit received
+    otype = option_type.lower()
+    s = Strategy(
+        name=name, kind=kind, legs=[short_leg, long_leg],
+        net_cost=_round(net_cost), max_loss=_round(max_loss), max_gain=_round(max_gain),
+        downside_floor=None, upside_cap=None,
+        breakevens=[_round(breakeven)],
+        notes=[f"Sells the {short_q.strike:g} {otype} / buys the {long_q.strike:g} {otype} "
+               f"for a ${credit:.2f}/sh net credit; risk capped at ${width - credit:.2f}/sh "
+               f"on a ${width:g}-wide spread. Breakeven ~${breakeven:,.2f}. "
+               f"{contracts:g} contract(s)."],
+    )
+    if expectancy_note:
+        s.notes.append(expectancy_note)
+    return s
+
+
+def build_bull_put_spread(pos: Position, levels: Levels, quotes: list,
+                          contracts: int = 1, *, select: str = "level",
+                          otm_pct: Optional[float] = None,
+                          width_pct: Optional[float] = None) -> Optional[Strategy]:
+    """Bull-put credit spread: sell an OTM put, buy a further-OTM put — a defined-risk
+    net credit that profits if the stock holds above the short strike.
+
+    Positive-expectancy per ``credit_spread_study.py`` **only in an up-regime**
+    (entry bars with price >= the 50-day SMA); the study did *not* validate an edge
+    on down-trending bars, so on a weak symbol this is a defined-risk credit with no
+    expectancy claim, not a positive-EV trade. The regime caveat is surfaced in the
+    strategy ``notes`` (this builder has no price history to gate on directly — it
+    runs on a single position snapshot — so it labels the condition rather than
+    silently assuming it).
+
+    ``levels`` / ``select`` are accepted for the uniform builder contract; the strikes
+    anchor on the overlay OTM/width config, not the AETHER stop/target levels. Sized
+    independently of the share lot (default 1 contract) — like ``build_cash_secured_put``.
+    """
+    otm = CFG.overlay_credit_spread_otm_pct if otm_pct is None else otm_pct
+    width = CFG.overlay_credit_spread_width_pct if width_pct is None else width_pct
+    return _build_vertical_credit(
+        pos, quotes, option_type="PUT", name="Bull-put spread",
+        kind="bull_put_spread", contracts=contracts, otm_pct=otm, width_pct=width,
+        expectancy_note=(
+            "Expectancy: positive ONLY in an up-regime (price >= 50-day SMA) per "
+            "credit_spread_study.py; on a down-trending symbol treat this as a "
+            "defined-risk credit with no expectancy edge, not a positive-EV trade."))
+
+
+def build_bear_call_spread(pos: Position, levels: Levels, quotes: list,
+                           contracts: int = 1, *, select: str = "level",
+                           otm_pct: Optional[float] = None,
+                           width_pct: Optional[float] = None) -> Optional[Strategy]:
+    """Bear-call credit spread: sell an OTM call, buy a further-OTM call — a defined-risk
+    net credit that profits if the stock stays below the short strike.
+
+    Ships as a defined-risk menu tool; unlike the bull-put it carries **no**
+    positive-expectancy claim (``credit_spread_study.py`` found selling calls above
+    spot loses on the upside tail in a rising market — the study's honest null).
+    ``levels`` / ``select`` accepted for the uniform contract; strikes anchor on config.
+    """
+    otm = CFG.overlay_credit_spread_otm_pct if otm_pct is None else otm_pct
+    width = CFG.overlay_credit_spread_width_pct if width_pct is None else width_pct
+    return _build_vertical_credit(
+        pos, quotes, option_type="CALL", name="Bear-call spread",
+        kind="bear_call_spread", contracts=contracts, otm_pct=otm, width_pct=width,
+        expectancy_note=(
+            "Expectancy: NEGATIVE at every combo tested in credit_spread_study.py "
+            "(selling calls above spot loses on the upside tail in a rising market — "
+            "the study's honest null). Ships as a defined-risk menu tool ONLY; it "
+            "carries no positive-expectancy claim — use for defined-risk positioning, "
+            "not for edge."))
+
+
+# ---------------------------------------------------------------------------
 # Tax considerations  (pure)  — see TAX_DISCLAIMER
 # ---------------------------------------------------------------------------
 
@@ -433,7 +572,10 @@ def tax_considerations(strategy: Strategy, pos: Position, spot: float,
             flags.append("§1259: collar band looks wide enough to likely avoid constructive-sale "
                          "treatment, but confirm it retains meaningful risk & upside.")
 
-    if call is not None:  # covered call, standalone or the short leg of a collar
+    # Qualified-covered-call framing applies only where the short call is written
+    # *against the shares* (covered call / collar) — NOT to the short call leg of a
+    # bear-call credit spread, which is a defined-risk options position, not a cover.
+    if kind in ("covered_call", "collar") and call is not None:
         itm = call.strike < spot
         dte = (call.expiry - today).days if call.expiry else None
         near_dated = dte is not None and dte <= _QCC_MIN_DTE
@@ -451,6 +593,16 @@ def tax_considerations(strategy: Strategy, pos: Position, spot: float,
     if kind == "cash_secured_put" and pos.cost_basis and spot < pos.cost_basis:
         flags.append("§1091 wash sale: if you've recently sold this name at a loss, selling a put "
                      "(a contract to reacquire) can trigger the wash-sale rule and defer that loss.")
+
+    if kind in ("bull_put_spread", "bear_call_spread"):
+        flags.append("§1092 straddle: a two-leg vertical spread is a pair of offsetting "
+                     "positions — a loss on one leg can be *deferred* while the other holds "
+                     "unrealized gain, and the holding period can be tolled. Track each leg's "
+                     "basis and close/adjust with the straddle rules in mind.")
+        if kind == "bull_put_spread" and pos.cost_basis and spot < pos.cost_basis:
+            flags.append("§1091 wash sale: the short put is a contract to reacquire this name — "
+                         "if you've recently realized a loss on it, selling the put can trigger "
+                         "the wash-sale rule and defer that loss.")
 
     return flags
 
@@ -471,7 +623,8 @@ def build_report(position: Position, levels: Levels, quotes: list, spot: float,
     OTM strikes (falling back to level anchoring when the chain carries no greeks).
     """
     today = today or datetime.date.today()
-    builders = (build_collar, build_protective_put, build_covered_call, build_cash_secured_put)
+    builders = (build_collar, build_protective_put, build_covered_call, build_cash_secured_put,
+                build_bull_put_spread, build_bear_call_spread)
     strategies: list = []
     for b in builders:
         s = b(position, levels, quotes, select=select)
