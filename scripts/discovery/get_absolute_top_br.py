@@ -9,6 +9,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
 
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("get_absolute_top_br")
+
 def get_absolute_top_br():
     date = datetime.date(2026, 5, 26)
     session_id = "dummy"
@@ -23,7 +27,7 @@ def get_absolute_top_br():
                 cached_symbols.append(f.rsplit('_', 1)[0])
     
     cached_symbols = list(set(cached_symbols))
-    print(f"Found {len(cached_symbols)} symbols with cache for {date}")
+    _log.console(f"Found {len(cached_symbols)} symbols with cache for {date}")
 
     results = []
     for symbol in cached_symbols:
@@ -52,10 +56,10 @@ def get_absolute_top_br():
 
     # Rank by BR
     top_br = sorted(results, key=lambda x: x['br'], reverse=True)[:10]
-    print("\nAbsolute Top 10 by Buying Ratio (Across all cached symbols):")
+    sys.stdout.write("\nAbsolute Top 10 by Buying Ratio (Across all cached symbols):\n")
     for i, r in enumerate(top_br, 1):
         setup_str = "OK" if r['setup'] else ("--" if r['setup'] is False else "??")
-        print(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']}, Setup: {setup_str})")
+        sys.stdout.write(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']}, Setup: {setup_str})\n")
 
 if __name__ == "__main__":
     get_absolute_top_br()

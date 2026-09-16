@@ -3,10 +3,16 @@ import os
 import sys
 import json
 
+import openpyxl
+
 # Add current dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
+
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("get_final_best")
 
 def get_best():
     date = datetime.date(2026, 5, 26)
@@ -14,7 +20,6 @@ def get_best():
     powergauge._build_cache_index()
     
     # Load symbols from Research sheet
-    import openpyxl
     wb = openpyxl.load_workbook('Data/state_of_the_day.xlsx', data_only=True)
     ws = wb['Research']
     
@@ -50,25 +55,25 @@ def get_best():
             # print(f"Error for {symbol}: {e}")
             continue
 
-    print(f"Total results with data: {len(results)}")
-    
+    sys.stdout.write(f"Total results with data: {len(results)}\n")
+
     # Filter for Bullish (4 or 5) and Setup OK (1)
     bullish = [r for r in results if r['pgr_val'] >= 4 and r['setup'] == 1]
     if not bullish:
-        print("No bullish symbols passed setup filter. Showing all bullish.")
+        _log.warning("[get_final_best] No bullish symbols passed setup filter. Showing all bullish.")
         bullish = [r for r in results if r['pgr_val'] >= 4]
 
     # Sort by short10
     best_short = sorted(bullish, key=lambda x: x['short10'], reverse=True)[:5]
-    print("\nBest 5 Bullish by Short10 (Entry Score):")
+    sys.stdout.write("\nBest 5 Bullish by Short10 (Entry Score):\n")
     for i, r in enumerate(best_short, 1):
-        print(f"{i}. {r['symbol']} (Short10: {r['short10']}, PGR: {r['pgr']}, BR: {r['br']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (Short10: {r['short10']}, PGR: {r['pgr']}, BR: {r['br']})\n")
 
     # Sort by long60
     best_long = sorted(bullish, key=lambda x: x['long60'], reverse=True)[:5]
-    print("\nBest 5 Bullish by Long60 (Position Score):")
+    sys.stdout.write("\nBest 5 Bullish by Long60 (Position Score):\n")
     for i, r in enumerate(best_long, 1):
-        print(f"{i}. {r['symbol']} (Long60: {r['long60']}, PGR: {r['pgr']}, BR: {r['br']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (Long60: {r['long60']}, PGR: {r['pgr']}, BR: {r['br']})\n")
 
 if __name__ == "__main__":
     get_best()

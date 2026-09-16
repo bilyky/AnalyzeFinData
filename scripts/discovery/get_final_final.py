@@ -49,15 +49,15 @@ def get_top_br_with_setup():
 
     # Rank by BR
     top_br = sorted(results, key=lambda x: x['br'], reverse=True)[:5]
-    print("Top 5 by Buying Ratio (Setup OK):")
+    sys.stdout.write("Top 5 by Buying Ratio (Setup OK):\n")
     for i, r in enumerate(top_br, 1):
-        print(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})\n")
 
     # Rank by Short10
     top_s10 = sorted(results, key=lambda x: x['short10'], reverse=True)[:5]
-    print("\nTop 5 by Short10 (Setup OK):")
+    sys.stdout.write("\nTop 5 by Short10 (Setup OK):\n")
     for i, r in enumerate(top_s10, 1):
-        print(f"{i}. {r['symbol']} (S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})\n")
 
 if __name__ == "__main__":
     get_top_br_with_setup()

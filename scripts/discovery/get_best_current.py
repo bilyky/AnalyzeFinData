@@ -9,6 +9,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
 
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("get_best_current")
+
 def get_best(date):
     session_id = "dummy"
     powergauge._build_cache_index()
@@ -48,7 +52,7 @@ def get_best(date):
             continue
 
     if not results:
-        print(f"No results found for {date}")
+        _log.warning(f"[get_best_current] No results found for {date}")
         return
 
     # Filter for Bullish (4 or 5) and Setup OK (1)
@@ -58,24 +62,24 @@ def get_best(date):
 
     # Sort by short10 (best for entry)
     best_short = sorted(bullish, key=lambda x: x['short10'], reverse=True)[:5]
-    print(f"\nBest 5 Stocks for {date} (by Short10 score):")
+    sys.stdout.write(f"\nBest 5 Stocks for {date} (by Short10 score):\n")
     for i, r in enumerate(best_short, 1):
-        print(f"{i}. {r['symbol']} (Short10: {r['short10']}, PGR: {r['pgr']}, BR: {r['br']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (Short10: {r['short10']}, PGR: {r['pgr']}, BR: {r['br']})\n")
 
     # Sort by Buying Ratio
     best_br = sorted(bullish, key=lambda x: x['br'], reverse=True)[:5]
-    print(f"\nBest 5 Stocks for {date} (by Buying Ratio):")
+    sys.stdout.write(f"\nBest 5 Stocks for {date} (by Buying Ratio):\n")
     for i, r in enumerate(best_br, 1):
-        print(f"{i}. {r['symbol']} (BR: {r['br']}, Short10: {r['short10']}, PGR: {r['pgr']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (BR: {r['br']}, Short10: {r['short10']}, PGR: {r['pgr']})\n")
 
     # Combined score (Short10 + BR)
     def combined_score(r):
         return r['short10'] + r['br']
 
     best_combined = sorted(bullish, key=combined_score, reverse=True)[:5]
-    print(f"\nBest 5 Stocks for {date} (Combined Score):")
+    sys.stdout.write(f"\nBest 5 Stocks for {date} (Combined Score):\n")
     for i, r in enumerate(best_combined, 1):
-        print(f"{i}. {r['symbol']} (Score: {combined_score(r):.1f}, S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (Score: {combined_score(r):.1f}, S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})\n")
 
 if __name__ == "__main__":
     # Friday, May 29, 2026

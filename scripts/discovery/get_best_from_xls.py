@@ -34,17 +34,17 @@ for row in ws.iter_rows(min_row=2):
 # Filter for setup = 1
 data = [d for d in data if d['setup'] == 1]
 
-print("Top 5 by Short10 (Setup OK):")
+sys.stdout.write("Top 5 by Short10 (Setup OK):\n")
 top_short = sorted(data, key=lambda x: x['short10'], reverse=True)[:5]
 for i, d in enumerate(top_short, 1):
-    print(f"{i}. {d['symbol']} (Short10: {d['short10']}, Long60: {d['long60']}, PGR: {d['pgr']})")
+    sys.stdout.write(f"{i}. {d['symbol']} (Short10: {d['short10']}, Long60: {d['long60']}, PGR: {d['pgr']})\n")
 
-print("\nTop 5 by Long60 (Setup OK):")
+sys.stdout.write("\nTop 5 by Long60 (Setup OK):\n")
 top_long = sorted(data, key=lambda x: x['long60'], reverse=True)[:5]
 for i, d in enumerate(top_long, 1):
-    print(f"{i}. {d['symbol']} (Long60: {d['long60']}, Short10: {d['short10']}, PGR: {d['pgr']})")
+    sys.stdout.write(f"{i}. {d['symbol']} (Long60: {d['long60']}, Short10: {d['short10']}, PGR: {d['pgr']})\n")
 
-print("\nTop 5 by Buying Ratio (BR Score, Setup OK):")
+sys.stdout.write("\nTop 5 by Buying Ratio (BR Score, Setup OK):\n")
 top_br = sorted(data, key=lambda x: x['br'], reverse=True)[:5]
 for i, d in enumerate(top_br, 1):
-    print(f"{i}. {d['symbol']} (BR: {d['br']}, Short10: {d['short10']}, PGR: {d['pgr']})")
+    sys.stdout.write(f"{i}. {d['symbol']} (BR: {d['br']}, Short10: {d['short10']}, PGR: {d['pgr']})\n")

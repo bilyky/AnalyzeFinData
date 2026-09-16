@@ -4,9 +4,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import openpyxl
 import os
 
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("get_top_stocks")
+
 xlsx_file = 'Data/state_of_the_day.xlsx'
 if not os.path.exists(xlsx_file):
-    print(f"File {xlsx_file} not found")
+    _log.warning(f"[get_top_stocks] File {xlsx_file} not found")
     exit(1)
 
 wb = openpyxl.load_workbook(xlsx_file, data_only=True)
@@ -46,12 +50,12 @@ filtered_data = [d for d in data if d['setup'] == 1]
 if not filtered_data:
     filtered_data = data # Fallback if setup not populated
 
-print("Top 5 by Short10 (Entry Score):")
+sys.stdout.write("Top 5 by Short10 (Entry Score):\n")
 top_short = sorted(filtered_data, key=lambda x: x['short10'], reverse=True)[:5]
 for i, d in enumerate(top_short, 1):
-    print(f"{i}. {d['symbol']} (Short10: {d['short10']}, PGR: {d['pgr']})")
+    sys.stdout.write(f"{i}. {d['symbol']} (Short10: {d['short10']}, PGR: {d['pgr']})\n")
 
-print("\nTop 5 by Long60 (Position Score):")
+sys.stdout.write("\nTop 5 by Long60 (Position Score):\n")
 top_long = sorted(filtered_data, key=lambda x: x['long60'], reverse=True)[:5]
 for i, d in enumerate(top_long, 1):
-    print(f"{i}. {d['symbol']} (Long60: {d['long60']}, PGR: {d['pgr']})")
+    sys.stdout.write(f"{i}. {d['symbol']} (Long60: {d['long60']}, PGR: {d['pgr']})\n")

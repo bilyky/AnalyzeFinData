@@ -47,9 +47,9 @@ def get_top_br():
             continue
 
     top_5 = sorted(results, key=lambda x: x['br'], reverse=True)[:5]
-    print("Top 5 by Buying Ratio (Bullish only):")
+    sys.stdout.write("Top 5 by Buying Ratio (Bullish only):\n")
     for i, r in enumerate(top_5, 1):
-        print(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})\n")
 
 if __name__ == "__main__":
     get_top_br()

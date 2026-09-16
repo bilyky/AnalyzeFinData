@@ -8,11 +8,14 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("reproduce_picks")
 
 def get_picks():
     xlsx_file = 'Data/state_of_the_day.xlsx'
     if not os.path.exists(xlsx_file):
-        print(f"File {xlsx_file} not found")
+        _log.warning(f"[reproduce_picks] File {xlsx_file} not found")
         return
         
     wb = openpyxl.load_workbook(xlsx_file, data_only=True)
@@ -59,27 +62,27 @@ def get_picks():
             # print(f"Error for {symbol}: {e}")
             continue
 
-    print(f"Checked {symbols_checked} symbols, found {len(picks_data)} with data.")
+    _log.info(f"[reproduce_picks] Checked {symbols_checked} symbols, found {len(picks_data)} with data.")
 
     if not picks_data:
-        print("No picks data found")
+        _log.warning("[reproduce_picks] No picks data found")
         return
 
     def top5(data, key, reverse):
         # Filter for setup = 1
         filtered = [d for d in data if d['setup'] == 1]
         if not filtered:
-            print(f"Warning: No symbols passed setup filter for {key}")
+            _log.warning(f"[reproduce_picks] No symbols passed setup filter for {key}")
             filtered = data # Fallback
         return sorted(filtered, key=lambda x: x.get(key, 0), reverse=reverse)[:5]
 
-    print("\nTOP 5 BUY -- Short10 (10-day entry score)")
+    sys.stdout.write("\nTOP 5 BUY -- Short10 (10-day entry score)\n")
     for i, p in enumerate(top5(picks_data, 'short10', True), 1):
-        print(f"{i}. {p['symbol']} (Score: {p['short10']}, PGR: {p['pgr']})")
+        sys.stdout.write(f"{i}. {p['symbol']} (Score: {p['short10']}, PGR: {p['pgr']})\n")
 
-    print("\nTOP 5 BUY -- Long60 (60-day position score)")
+    sys.stdout.write("\nTOP 5 BUY -- Long60 (60-day position score)\n")
     for i, p in enumerate(top5(picks_data, 'long60', True), 1):
-        print(f"{i}. {p['symbol']} (Score: {p['long60']}, PGR: {p['pgr']})")
+        sys.stdout.write(f"{i}. {p['symbol']} (Score: {p['long60']}, PGR: {p['pgr']})\n")
 
 if __name__ == "__main__":
     get_picks()

@@ -9,6 +9,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import powergauge
 
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("get_june1_best")
+
 def get_best(date):
     session_id = "dummy"
     powergauge._build_cache_index()
@@ -22,7 +26,7 @@ def get_best(date):
                 cached_symbols.append(f.rsplit('_', 1)[0])
     
     cached_symbols = list(set(cached_symbols))
-    print(f"Found {len(cached_symbols)} symbols with cache for {date}")
+    _log.console(f"Found {len(cached_symbols)} symbols with cache for {date}")
 
     all_data = []
     for symbol in cached_symbols:
@@ -53,7 +57,7 @@ def get_best(date):
             continue
 
     if not all_data:
-        print(f"No data found for {date}")
+        _log.warning(f"[get_june1_best] No data found for {date}")
         return
 
     # Filter for Bullish and Setup OK
@@ -66,14 +70,14 @@ def get_best(date):
 
     top_5 = sorted(bullish_setup, key=combined_score, reverse=True)[:5]
     
-    print(f"Top 5 Stocks Closing {date} (Based on PGR, Setup, and combined S10+BR):")
+    sys.stdout.write(f"Top 5 Stocks Closing {date} (Based on PGR, Setup, and combined S10+BR):\n")
     for i, r in enumerate(top_5, 1):
-        print(f"{i}. {r['symbol']} (Score: {combined_score(r):.1f}, S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (Score: {combined_score(r):.1f}, S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})\n")
 
     top_long = sorted(bullish_setup, key=lambda x: x['long60'], reverse=True)[:5]
-    print(f"\nTop 5 by Long60 (Position Score):")
+    sys.stdout.write("\nTop 5 by Long60 (Position Score):\n")
     for i, r in enumerate(top_long, 1):
-        print(f"{i}. {r['symbol']} (Long60: {r['long60']}, PGR: {r['pgr']}, S10: {r['short10']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (Long60: {r['long60']}, PGR: {r['pgr']}, S10: {r['short10']})\n")
 
 if __name__ == "__main__":
     target_date = datetime.date(2026, 6, 1)

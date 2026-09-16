@@ -3,6 +3,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("install_hooks")
+
 # Windows consoles/pipes default to cp1252, which raises UnicodeEncodeError on the
 # status emoji below (and on any emoji in re-printed validator output). Reconfigure
 # to UTF-8 defensively so a cosmetic glyph can never abort the install / a commit.
@@ -127,7 +132,7 @@ def install_hooks():
     try:
         hooks_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        print(f"❌ Could not create hooks directory {hooks_dir}: {e}")
+        _log.error(f"[install_hooks] Could not create hooks directory {hooks_dir}: {e}", exc_info=True)
         return False
 
     pre_commit_file = hooks_dir / "pre-commit"
@@ -141,9 +146,9 @@ def install_hooks():
             if "pre_commit_validator.py" not in existing:
                 backup = pre_commit_file.with_suffix(".local.bak")
                 backup.write_text(existing, encoding="utf-8")
-                print(f"ℹ️  Backed up existing unrelated pre-commit hook to: {backup}")
+                _log.info(f"[install_hooks] Backed up existing unrelated pre-commit hook to: {backup}")
     except Exception as e:
-        print(f"⚠️  Could not back up existing pre-commit hook (continuing): {e}")
+        _log.warning(f"[install_hooks] Could not back up existing pre-commit hook (continuing): {e}", exc_info=True)
 
     try:
         with open(pre_commit_file, "w", encoding="utf-8", newline="\n") as f:
@@ -153,12 +158,12 @@ def install_hooks():
         if sys.platform != "win32":
             os.chmod(pre_commit_file, 0o755)
 
-        print(f"✅ Successfully installed defensive pre-commit hook to: {pre_commit_file}")
-        print("   Bypass a single doc-sync block with: "
-              "AETHER_DOCSYNC_ACK=<feature-key> git commit …")
+        sys.stdout.write(f"✅ Successfully installed defensive pre-commit hook to: {pre_commit_file}\n")
+        sys.stdout.write("   Bypass a single doc-sync block with: "
+                         "AETHER_DOCSYNC_ACK=<feature-key> git commit …\n")
         return True
     except Exception as e:
-        print(f"❌ Failed to install pre-commit hook: {e}")
+        _log.error(f"[install_hooks] Failed to install pre-commit hook: {e}", exc_info=True)
         return False
 
 

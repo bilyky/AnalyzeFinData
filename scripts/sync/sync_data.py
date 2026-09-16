@@ -12,6 +12,10 @@ import os
 import shutil
 from pathlib import Path
 
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("sync_data")
+
 SRC = Path(r"D:\Develop\AnalyzeFinData_1\Data")
 DST = Path(r"D:\Develop\AnalyzeFinData\Data")
 
@@ -41,13 +45,13 @@ def sync():
         dst_file.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.copy2(src_file, dst_file)
-            print(f"[{reason:6}] {rel}")
+            _log.console(f"[{reason:6}] {rel}")
             copied += 1
         except Exception as e:
-            print(f"[ERROR ] {rel}: {e}")
+            _log.error(f"[sync_data] failed to copy {rel}: {e}", exc_info=True)
             errors += 1
 
-    print(f"\nDone: {copied} copied, {skipped} skipped (up-to-date), {errors} errors")
+    sys.stdout.write(f"\nDone: {copied} copied, {skipped} skipped (up-to-date), {errors} errors\n")
 
 
 if __name__ == "__main__":

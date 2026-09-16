@@ -56,6 +56,6 @@ def score(d):
 
 best_stocks.sort(key=score, reverse=True)
 
-print("Potential Best 5 Stocks based on PGR and signals:")
+sys.stdout.write("Potential Best 5 Stocks based on PGR and signals:\n")
 for i, d in enumerate(best_stocks[:10], 1):
-    print(f"{i}. {d['symbol']} (PGR: {d['pgr']}, Money Flow: {d['money_flow']}, Ind: {d['ind_str']}, OB/OS: {d['ob_os']})")
+    sys.stdout.write(f"{i}. {d['symbol']} (PGR: {d['pgr']}, Money Flow: {d['money_flow']}, Ind: {d['ind_str']}, OB/OS: {d['ob_os']})\n")

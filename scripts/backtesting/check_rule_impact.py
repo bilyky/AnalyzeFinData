@@ -3,13 +3,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from aether import etrade
 import json
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("check_rule_impact")
 
 def check_accounts():
     try:
         env = "production"
         tokens = etrade.get_tokens(env)
         if not tokens:
-            print("Failed to get tokens.")
+            _log.error("[check_rule_impact] Failed to get tokens.")
             return
 
         accts_api = etrade.get_accounts(tokens, env)
@@ -19,8 +22,8 @@ def check_accounts():
         if isinstance(accounts, dict):
             accounts = [accounts]
 
-        print(f"\n{'Account ID':<15} {'Type':<15} {'Margin Status':<15} {'Affected?'}")
-        print("-" * 60)
+        sys.stdout.write(f"\n{'Account ID':<15} {'Type':<15} {'Margin Status':<15} {'Affected?'}\n")
+        sys.stdout.write("-" * 60 + "\n")
 
         for acct in accounts:
             account_id = acct.get("accountId", "N/A")
@@ -36,10 +39,10 @@ def check_accounts():
             is_margin = "MARGIN" in account_type.upper() or bal_data.get("marginLevel", "") != ""
             affected = "YES (PDT Removed)" if is_margin else "NO (Cash Account)"
             
-            print(f"{account_id:<15} {account_type:<15} {'Margin' if is_margin else 'Cash':<15} {affected}")
+            sys.stdout.write(f"{account_id:<15} {account_type:<15} {'Margin' if is_margin else 'Cash':<15} {affected}\n")
 
     except Exception as e:
-        print(f"Error checking accounts: {e}")
+        _log.error(f"[check_rule_impact] Error checking accounts: {e}", exc_info=True)
 
 if __name__ == "__main__":
     check_accounts()

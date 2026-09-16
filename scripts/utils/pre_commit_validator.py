@@ -133,20 +133,20 @@ def check_feature_doc_sync() -> bool:
     ok = True
     for key, srcs in sorted(touched.items()):
         if key in ack:
-            print(f"[GIT PRE-COMMIT] doc-sync: '{key}' code changed - acknowledged via "
-                  f"AETHER_DOCSYNC_ACK (no documentation update).")
+            sys.stdout.write(f"[GIT PRE-COMMIT] doc-sync: '{key}' code changed - acknowledged via "
+                             f"AETHER_DOCSYNC_ACK (no documentation update).\n")
             continue
         missing = [(p, desc) for (p, desc) in DOC_SYNC_SURFACES.get(key, []) if p not in staged]
         if missing:
             ok = False
-            print(f"🚨 [GIT PRE-COMMIT] BLOCK - Feature-doc-sync: '{key}' logic changed "
-                  f"({', '.join(sorted(srcs))}),")
-            print(f"   but these documentation surfaces are NOT staged in this commit:")
+            sys.stderr.write(f"🚨 [GIT PRE-COMMIT] BLOCK - Feature-doc-sync: '{key}' logic changed "
+                             f"({', '.join(sorted(srcs))}),\n")
+            sys.stderr.write(f"   but these documentation surfaces are NOT staged in this commit:\n")
             for (p, desc) in missing:
-                print(f"     - {p}  ({desc})")
-            print(f"   Action: update the surface(s) above and `git add` them, OR - if no doc")
-            print(f"   change is truly needed - acknowledge it explicitly:")
-            print(f"       AETHER_DOCSYNC_ACK={key} git commit ...")
+                sys.stderr.write(f"     - {p}  ({desc})\n")
+            sys.stderr.write(f"   Action: update the surface(s) above and `git add` them, OR - if no doc\n")
+            sys.stderr.write(f"   change is truly needed - acknowledge it explicitly:\n")
+            sys.stderr.write(f"       AETHER_DOCSYNC_ACK={key} git commit ...\n")
     return ok
 
 
@@ -165,8 +165,8 @@ def check_wiki_about_sync() -> bool:
     surfaces = {"Data/wiki.json", "web/index.html"}
     if not (staged & surfaces):
         return True
-    print("[GIT PRE-COMMIT] Wiki surface staged - running About/wiki drift guard "
-          "(tests/test_about_wiki_sync.py)...")
+    sys.stdout.write("[GIT PRE-COMMIT] Wiki surface staged - running About/wiki drift guard "
+                     "(tests/test_about_wiki_sync.py)...\n")
     try:
         # Run the parity test as a STANDALONE SCRIPT, not `-m unittest tests.test_about_wiki_sync`.
         # The dotted form imports the tests PACKAGE first (tests/__init__.py → aether.etrade →
@@ -177,16 +177,16 @@ def check_wiki_about_sync() -> bool:
             [sys.executable, os.path.join(ROOT_DIR, "tests", "test_about_wiki_sync.py")],
             capture_output=True, text=True, errors="replace", cwd=ROOT_DIR)
     except Exception as e:
-        print(f"🚨 [GIT PRE-COMMIT] BLOCK - could not run the wiki drift guard: {e}")
+        sys.stderr.write(f"🚨 [GIT PRE-COMMIT] BLOCK - could not run the wiki drift guard: {e}\n")
         return False
     if res.returncode != 0:
-        print("🚨 [GIT PRE-COMMIT] BLOCK - About-tab <-> Data/wiki.json drift detected:")
-        print((res.stderr or res.stdout).strip())
-        print("-" * 70)
-        print("   Action: reconcile web/index.html data-wiki cards with Data/wiki.json "
-              "(aether-documentation-sentry skill) until the guard is green.")
+        sys.stderr.write("🚨 [GIT PRE-COMMIT] BLOCK - About-tab <-> Data/wiki.json drift detected:\n")
+        sys.stderr.write((res.stderr or res.stdout).strip() + "\n")
+        sys.stderr.write("-" * 70 + "\n")
+        sys.stderr.write("   Action: reconcile web/index.html data-wiki cards with Data/wiki.json "
+                         "(aether-documentation-sentry skill) until the guard is green.\n")
         return False
-    print("   ✅ Wiki/About parity guard passed.")
+    sys.stdout.write("   ✅ Wiki/About parity guard passed.\n")
     return True
 
 
@@ -223,12 +223,12 @@ def check_no_inline_imports(file_path: str) -> bool:
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 if node.col_offset > 0 and node not in guarded:
-                    print(f"[GIT PRE-COMMIT] Inline import in {rel} at line {node.lineno}")
-                    print("   Action required: Move all imports to the top of the file.")
+                    sys.stderr.write(f"[GIT PRE-COMMIT] Inline import in {rel} at line {node.lineno}\n")
+                    sys.stderr.write("   Action required: Move all imports to the top of the file.\n")
                     return False
         return True
     except Exception as e:
-        print(f"Error checking {file_path}: {e}")
+        sys.stderr.write(f"Error checking {file_path}: {e}\n")
         return True
 
 def check_no_silent_exceptions(file_path: str) -> bool:
@@ -242,13 +242,13 @@ def check_no_silent_exceptions(file_path: str) -> bool:
         for idx, line in enumerate(lines, 1):
             stripped = line.strip()
             if silent_except_re.match(line) or stripped == "except: pass" or stripped == "except Exception: pass":
-                print(f"[GIT PRE-COMMIT] BLOCK - Silent exception swallowing detected in {os.path.relpath(file_path, ROOT_DIR)} at line {idx}:")
-                print(f"   Line {idx}: {stripped}")
-                print("   Action required: Add proper logging or raise/traceback! No silent 'except: pass'.")
+                sys.stderr.write(f"[GIT PRE-COMMIT] BLOCK - Silent exception swallowing detected in {os.path.relpath(file_path, ROOT_DIR)} at line {idx}:\n")
+                sys.stderr.write(f"   Line {idx}: {stripped}\n")
+                sys.stderr.write("   Action required: Add proper logging or raise/traceback! No silent 'except: pass'.\n")
                 return False
         return True
     except Exception as e:
-        print(f"Error checking {file_path}: {e}")
+        sys.stderr.write(f"Error checking {file_path}: {e}\n")
         return True
 
 def check_no_print_statements(file_path: str) -> bool:
@@ -271,13 +271,13 @@ def check_no_print_statements(file_path: str) -> bool:
                 continue
             lineno = node.lineno
             raw_line = lines[lineno - 1] if lineno <= len(lines) else ""
-            print(f"[GIT PRE-COMMIT] bare print() in {rel} at line {lineno}: {raw_line.strip()[:80]}")
-            print("   Use _log.console() for progress, _log.info/warning/error() for events.")
-            print("   Print statements are strictly banned with ZERO shortcuts or exemptions.")
+            sys.stderr.write(f"[GIT PRE-COMMIT] bare print() in {rel} at line {lineno}: {raw_line.strip()[:80]}\n")
+            sys.stderr.write("   Use _log.console() for progress, _log.info/warning/error() for events.\n")
+            sys.stderr.write("   Print statements are strictly banned with ZERO shortcuts or exemptions.\n")
             return False
         return True
     except Exception as e:
-        print(f"Error checking {file_path}: {e}")
+        sys.stderr.write(f"Error checking {file_path}: {e}\n")
         return True
 
 
@@ -319,9 +319,9 @@ def check_ruff_standards(file_path: str) -> bool:
     rel = os.path.relpath(file_path, ROOT_DIR).replace("\\", "/")
     ruff_cmd = _resolve_ruff_cmd()
     if ruff_cmd is None:
-        print("🚨 [GIT PRE-COMMIT] BLOCK - Ruff is not installed / not resolvable.")
-        print("   Install it (pip install ruff) or expose it on PATH; the quality gate "
-              "will not pass silently without it.")
+        sys.stderr.write("🚨 [GIT PRE-COMMIT] BLOCK - Ruff is not installed / not resolvable.\n")
+        sys.stderr.write("   Install it (pip install ruff) or expose it on PATH; the quality gate "
+                         "will not pass silently without it.\n")
         return False
     try:
         # Pass the normalized relative path 'rel' and run from ROOT_DIR so Ruff matches the
@@ -329,13 +329,13 @@ def check_ruff_standards(file_path: str) -> bool:
         res = subprocess.run([*ruff_cmd, "check", rel], capture_output=True, text=True,
                              errors="replace", cwd=ROOT_DIR)
     except Exception as e:
-        print(f"🚨 [GIT PRE-COMMIT] BLOCK - could not execute Ruff on {rel}: {e}")
+        sys.stderr.write(f"🚨 [GIT PRE-COMMIT] BLOCK - could not execute Ruff on {rel}: {e}\n")
         return False
     if res.returncode != 0:
-        print(f"🚨 [GIT PRE-COMMIT] BLOCK - Ruff Quality Gate Failed in {rel}!")
-        print(res.stdout.strip())
-        print("-" * 70)
-        print("Action required: Correct the style/logic issues shown above before committing.")
+        sys.stderr.write(f"🚨 [GIT PRE-COMMIT] BLOCK - Ruff Quality Gate Failed in {rel}!\n")
+        sys.stderr.write(res.stdout.strip() + "\n")
+        sys.stderr.write("-" * 70 + "\n")
+        sys.stderr.write("Action required: Correct the style/logic issues shown above before committing.\n")
         return False
     return True
 
@@ -379,16 +379,16 @@ def check_rd_roadmap_sync() -> bool:
         max_road_item = max(int(x) for x in road_items) if road_items else 0
         
         if max_mem_item != max_road_item:
-            print(f"🚨 [GIT PRE-COMMIT] BLOCK - R&D roadmap out of sync: highest item in "
-                  f"MEMORY.md is #{max_mem_item} but plans/roadmap.md is #{max_road_item}. "
-                  f"Reconcile the two ledgers before committing.")
+            sys.stderr.write(f"🚨 [GIT PRE-COMMIT] BLOCK - R&D roadmap out of sync: highest item in "
+                             f"MEMORY.md is #{max_mem_item} but plans/roadmap.md is #{max_road_item}. "
+                             f"Reconcile the two ledgers before committing.\n")
             return False
 
         return True
     except Exception as e:
         # Soft check across heterogeneous environments — don't block on a parse/read error,
         # but say so rather than skipping silently.
-        print(f"[GIT PRE-COMMIT] R&D roadmap sync check skipped (non-fatal): {e}")
+        sys.stderr.write(f"[GIT PRE-COMMIT] R&D roadmap sync check skipped (non-fatal): {e}\n")
         return True
 
 def check_new_features_tested() -> bool:
@@ -442,11 +442,11 @@ def check_new_features_tested() -> bool:
                     signature_found = True
                     break
             except OSError as e:
-                print(f"[GIT PRE-COMMIT] warning: could not read staged file {fpath}: {e}")
+                sys.stderr.write(f"[GIT PRE-COMMIT] warning: could not read staged file {fpath}: {e}\n")
 
         if signature_found:
-            print(f"[GIT PRE-COMMIT] Detected new feature code staged: '{check['name']}'")
-            print(f"   Searching tests/ directory for matching unit test coverage keyword '{check['test_keyword']}'...")
+            sys.stdout.write(f"[GIT PRE-COMMIT] Detected new feature code staged: '{check['name']}'\n")
+            sys.stdout.write(f"   Searching tests/ directory for matching unit test coverage keyword '{check['test_keyword']}'...\n")
             
             test_dir = os.path.join(ROOT_DIR, "tests")
             test_files = [os.path.join(test_dir, f) for f in os.listdir(test_dir) if f.startswith("test_") and f.endswith(".py")]
@@ -458,14 +458,14 @@ def check_new_features_tested() -> bool:
                         test_content = f.read()
                     if check["test_keyword"] in test_content:
                         coverage_found = True
-                        print(f"   ✅ Found test coverage inside: tests/{os.path.basename(t_file)}")
+                        sys.stdout.write(f"   ✅ Found test coverage inside: tests/{os.path.basename(t_file)}\n")
                         break
                 except OSError as e:
-                    print(f"[GIT PRE-COMMIT] warning: could not read test file {t_file}: {e}")
+                    sys.stderr.write(f"[GIT PRE-COMMIT] warning: could not read test file {t_file}: {e}\n")
 
             if not coverage_found:
-                print(f"🚨 [GIT PRE-COMMIT] BLOCK - feature '{check['name']}' is staged but no "
-                      f"test contains '{check['test_keyword']}'. Add a matching unit test in tests/.")
+                sys.stderr.write(f"🚨 [GIT PRE-COMMIT] BLOCK - feature '{check['name']}' is staged but no "
+                                 f"test contains '{check['test_keyword']}'. Add a matching unit test in tests/.\n")
                 return False
 
     return True
@@ -487,7 +487,7 @@ def get_staged_python_files() -> list:
                 files.append(os.path.join(ROOT_DIR, line))
         return files
     except Exception as e:
-        print(f"Warning: Failed to fetch staged files via git: {e}. Falling back to empty list.")
+        sys.stderr.write(f"Warning: Failed to fetch staged files via git: {e}. Falling back to empty list.\n")
         return []
 
 def check_no_direct_main_commit() -> bool:
@@ -503,17 +503,17 @@ def check_no_direct_main_commit() -> bool:
         branch = res.stdout.strip()
         if branch in ("main", "master"):
             if os.environ.get("AETHER_ALLOW_DIRECT_MAIN_COMMIT") != "1":
-                print(f"🚨 [GIT PRE-COMMIT] BLOCK - Direct commits to the stable '{branch}' branch are strictly forbidden.")
-                print(f"   Please checkout a dedicated feature/PR branch (e.g. `git checkout -b feat/my-fix`) to stage your changes.")
-                print(f"   To override this lock for emergency administrative force-resets only, run: ")
-                print(f"       $env:AETHER_ALLOW_DIRECT_MAIN_COMMIT=1 (PowerShell) or SET AETHER_ALLOW_DIRECT_MAIN_COMMIT=1 (CMD)")
+                sys.stderr.write(f"🚨 [GIT PRE-COMMIT] BLOCK - Direct commits to the stable '{branch}' branch are strictly forbidden.\n")
+                sys.stderr.write(f"   Please checkout a dedicated feature/PR branch (e.g. `git checkout -b feat/my-fix`) to stage your changes.\n")
+                sys.stderr.write(f"   To override this lock for emergency administrative force-resets only, run: \n")
+                sys.stderr.write(f"       $env:AETHER_ALLOW_DIRECT_MAIN_COMMIT=1 (PowerShell) or SET AETHER_ALLOW_DIRECT_MAIN_COMMIT=1 (CMD)\n")
                 return False
     except Exception as e:
-        print(f"⚠️ Warning: could not verify current git branch: {e}")
+        sys.stderr.write(f"⚠️ Warning: could not verify current git branch: {e}\n")
     return True
 
 def main():
-    print("Running Project AETHER Pre-Commit Quality Checks...")
+    sys.stdout.write("Running Project AETHER Pre-Commit Quality Checks...\n")
 
     success = True
 
@@ -540,9 +540,9 @@ def main():
     # Scan only staged python files currently being committed!
     python_files = get_staged_python_files()
     if not python_files:
-        print("No staged python files detected for commit. Skipping file scans.")
+        sys.stdout.write("No staged python files detected for commit. Skipping file scans.\n")
     else:
-        print(f"Scanning {len(python_files)} staged python file(s)...")
+        sys.stdout.write(f"Scanning {len(python_files)} staged python file(s)...\n")
         for fpath in python_files:
             # Files fully exempt from all checks (intentional patterns or non-production)
             _skip_all = ("pre_commit_validator.py", "install_hooks.py", "reconcile_prices.py",
@@ -582,10 +582,10 @@ def main():
                     success = False
                 
     if not success:
-        print("[GIT PRE-COMMIT] FAILED. Resolve the issues above before committing.")
+        sys.stderr.write("[GIT PRE-COMMIT] FAILED. Resolve the issues above before committing.\n")
         sys.exit(1)
 
-    print("[GIT PRE-COMMIT] All checks passed.")
+    sys.stdout.write("[GIT PRE-COMMIT] All checks passed.\n")
     sys.exit(0)
 
 if __name__ == "__main__":

@@ -18,6 +18,10 @@ import sys
 import glob
 from collections import defaultdict
 
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("backtest_components")
+
 SYM_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
 
@@ -220,27 +224,27 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
 
 def report(label, groups):
     """groups = {key: [fwd10, ...]}"""
-    print(f"\n  {label}")
-    print(f"  {'Value':<12} {'Count':>7} {'Avg10d':>8} {'Win%':>7}")
-    print(f"  {'-'*40}")
+    sys.stdout.write(f"\n  {label}\n")
+    sys.stdout.write(f"  {'Value':<12} {'Count':>7} {'Avg10d':>8} {'Win%':>7}\n")
+    sys.stdout.write(f"  {'-'*40}\n")
     for key in sorted(groups.keys(), key=lambda x: (isinstance(x, str), x)):
         vals = groups[key]
         if not vals:
             continue
         avg = sum(vals) / len(vals)
         win = 100 * sum(1 for v in vals if v > 0) / len(vals)
-        print(f"  {str(key):<12} {len(vals):>7,} {avg:>+7.2f}% {win:>6.1f}%")
+        sys.stdout.write(f"  {str(key):<12} {len(vals):>7,} {avg:>+7.2f}% {win:>6.1f}%\n")
 
 
 def run(min_year=2023):
-    print(f"\nComponent analysis >= {min_year} ...")
+    sys.stdout.write(f"\nComponent analysis >= {min_year} ...\n")
 
     ohlcv_files = {os.path.basename(f).replace('_daily.json', '')
                    for f in glob.glob(os.path.join(OHLCV_DIR, '*_daily.json'))}
     cache_syms  = {os.path.basename(f).rsplit('_', 1)[0]
                    for f in glob.glob(os.path.join(SYM_DIR, '*.json'))}
     symbols = sorted(ohlcv_files & cache_syms)
-    print(f"  Symbols: {len(symbols)}")
+    sys.stdout.write(f"  Symbols: {len(symbols)}\n")
 
     # Accumulators per component
     pgr_g      = defaultdict(list)
@@ -284,10 +288,10 @@ def run(min_year=2023):
             season_g[s].append(f)
             total += 1
         if i % 50 == 0:
-            print(f"  ... {i}/{len(symbols)}")
+            _log.console(f"  ... {i}/{len(symbols)}")
 
-    print(f"\n  Total: {total:,} observations, {FWD_W}d forward return\n")
-    print("=" * 50)
+    sys.stdout.write(f"\n  Total: {total:,} observations, {FWD_W}d forward return\n\n")
+    sys.stdout.write("=" * 50 + "\n")
 
     report("PGR corrected (1-5)", pgr_g)
     report("PGR delta (vs prev day)", delta_g)

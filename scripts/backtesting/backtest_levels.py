@@ -26,6 +26,10 @@ import sys
 
 import risk_utils
 
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("backtest_levels")
+
 
 def _evaluate(support, resistance, fwd_lows, fwd_highs):
     """Outcome of one prediction against its forward window."""
@@ -145,20 +149,20 @@ def backtest_universe(symbols, horizon=20, step=10, start_after=200):
 def _print_report(agg):
     sym = agg.get("symbol", "?")
     if agg.get("error"):
-        print(f"{sym}: {agg['error']}")
+        sys.stdout.write(f"{sym}: {agg['error']}\n")
         return
-    print(f"\n=== {sym} — {agg['samples']} predictions (horizon per sample) ===")
+    sys.stdout.write(f"\n=== {sym} — {agg['samples']} predictions (horizon per sample) ===\n")
     s = agg.get("support")
     if s:
-        print(f"  SUPPORT (stop):  n={s['n']}  held={s['hold_rate']}%  "
-              f"tested<=1%={s['tested_within_1pct']}%  median gap={s['median_gap_pct']}%")
+        sys.stdout.write(f"  SUPPORT (stop):  n={s['n']}  held={s['hold_rate']}%  "
+                         f"tested<=1%={s['tested_within_1pct']}%  median gap={s['median_gap_pct']}%\n")
     r = agg.get("resistance")
     if r:
-        print(f"  RESISTANCE (tgt): n={r['n']}  hit={r['hit_rate']}%  median gap={r['median_gap_pct']}%")
+        sys.stdout.write(f"  RESISTANCE (tgt): n={r['n']}  hit={r['hit_rate']}%  median gap={r['median_gap_pct']}%\n")
     o = agg.get("outcome")
     if o:
-        print(f"  OUTCOME: target-first={o['target_first']} stop-first={o['stop_first']} "
-              f"neither={o['neither']}  ->  win-rate={o['win_rate']}%")
+        sys.stdout.write(f"  OUTCOME: target-first={o['target_first']} stop-first={o['stop_first']} "
+                         f"neither={o['neither']}  ->  win-rate={o['win_rate']}%\n")
 
 
 if __name__ == "__main__":
@@ -175,15 +179,15 @@ if __name__ == "__main__":
         import glob, os
         cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
         all_syms = sorted(os.path.basename(p)[:-11] for p in glob.glob(os.path.join(cache, "*_daily.json")))
-        print(f"[backtest] universe over {len(all_syms)} cached symbols (step={step or 10})...")
+        _log.console(f"[backtest] universe over {len(all_syms)} cached symbols (step={step or 10})...")
         agg = backtest_universe(all_syms, horizon=horizon, step=(step if "--step" in args else 10))
         _print_report(agg)
         wr = [p["win_rate"] for p in agg["per_symbol"] if p["win_rate"] is not None]
         if wr:
-            print(f"  per-symbol win-rate: min={min(wr)}% median={statistics.median(wr)}% max={max(wr)}%")
+            sys.stdout.write(f"  per-symbol win-rate: min={min(wr)}% median={statistics.median(wr)}% max={max(wr)}%\n")
     elif syms:
         for sym in syms:
             _print_report(backtest_symbol(sym, horizon=horizon, step=step))
     else:
-        print("usage: python backtest_levels.py SYMBOL [...] [--all] [--horizon 20] [--step 5]")
+        sys.stdout.write("usage: python backtest_levels.py SYMBOL [...] [--all] [--horizon 20] [--step 5]\n")
         sys.exit(1)

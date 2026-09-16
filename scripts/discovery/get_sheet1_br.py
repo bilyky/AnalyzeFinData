@@ -38,9 +38,9 @@ def get_sheet1_br():
         except Exception:
             continue
 
-    print("Sheet1 Symbols Stats:")
+    sys.stdout.write("Sheet1 Symbols Stats:\n")
     for r in sorted(results, key=lambda x: x['br'], reverse=True):
-        print(f"{r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})")
+        sys.stdout.write(f"{r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})\n")
 
 if __name__ == "__main__":
     get_sheet1_br()
