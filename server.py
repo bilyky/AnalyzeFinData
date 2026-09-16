@@ -252,17 +252,19 @@ def create_app():
             if not spot:
                 spot = _price_cache.get(symbol, {}).get("price", 100.0)
             
-            # Synthesize modeled call chain
-            quotes = op.synthesize_chain(spot, volatility=0.30, days_to_expiry=30)
+            # Synthesize modeled call chain (30-day expiry, modeled 30% vol)
+            today = datetime.date.today()
+            expiry = today + datetime.timedelta(days=30)
+            quotes = op.synthesize_chain(spot, expiry, today, 0.30)
             recommendations = []
             for q in quotes:
                 if q.option_type == "CALL" and q.strike > spot:
                     recommendations.append({
                         "strike": q.strike,
-                        "premium": q.price,
+                        "premium": q.mid,
                         "delta": q.delta,
-                        "expiry": (datetime.date.today() + datetime.timedelta(days=30)).strftime("%Y-%m-%d"),
-                        "roi_percentage": round((q.price / spot) * 100, 2)
+                        "expiry": expiry.strftime("%Y-%m-%d"),
+                        "roi_percentage": round((q.mid / spot) * 100, 2)
                     })
             # Sort by strike ascending (closest to spot first)
             recommendations.sort(key=lambda x: x["strike"])
