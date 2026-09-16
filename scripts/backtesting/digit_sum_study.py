@@ -19,6 +19,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import console_safe
+console_safe.install()
 from scripts.backtesting._study_utils import window_analysis
 
 from aether_logger import get_logger as _get_logger

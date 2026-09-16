@@ -19,6 +19,8 @@ backtest_symbol() loads from the local cache.
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import console_safe
+console_safe.install()
 
 
 import statistics

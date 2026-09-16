@@ -11,6 +11,8 @@ import time
 import glob as _glob
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import console_safe
+console_safe.install()
 import powergauge
 
 DATE             = datetime.datetime(2026, 2, 26)
