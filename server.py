@@ -48,6 +48,7 @@ import ai_client
 import watchdog
 import sell_eval
 from aether import stock_compare
+import aether.option_pricing as op
 from aether import etrade
 from aether import notify
 from aether_logger import get_logger
@@ -215,6 +216,65 @@ def create_app():
     @app.get("/api/portfolio")
     async def portfolio():
         return data_api.read_portfolio()
+
+    @app.get("/api/portfolio/options")
+    async def portfolio_options():
+        try:
+            active_options = []
+            portfolio_data = data_api.read_portfolio()
+            positions = portfolio_data.get("positions", {})
+            for symbol, details in positions.items():
+                written_call = details.get("written_call")
+                if written_call:
+                    active_options.append({
+                        "symbol": symbol,
+                        "qty": written_call.get("qty"),
+                        "strike": written_call.get("strike"),
+                        "premium": written_call.get("premium"),
+                        "expiration_date": written_call.get("expiration_date"),
+                        "sigma": written_call.get("sigma"),
+                        "underlying_price": details.get("price") or details.get("cost")
+                    })
+            return active_options
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/options/adviser")
+    async def options_adviser_endpoint(symbol: str = Query(..., description="Target stock ticker")):
+        try:
+            symbol = symbol.strip().upper()
+            # Fetch the current price of the underlying from our active portfolio or cache
+            portfolio_data = data_api.read_portfolio()
+            positions = portfolio_data.get("positions", {})
+            spot = None
+            if symbol in positions:
+                spot = positions[symbol].get("price") or positions[symbol].get("cost")
+            if not spot:
+                spot = _price_cache.get(symbol, {}).get("price", 100.0)
+            
+            # Synthesize modeled call chain (30-day expiry, modeled 30% vol)
+            today = datetime.date.today()
+            expiry = today + datetime.timedelta(days=30)
+            quotes = op.synthesize_chain(spot, expiry, today, 0.30)
+            recommendations = []
+            for q in quotes:
+                if q.option_type == "CALL" and q.strike > spot:
+                    recommendations.append({
+                        "strike": q.strike,
+                        "premium": q.mid,
+                        "delta": q.delta,
+                        "expiry": expiry.strftime("%Y-%m-%d"),
+                        "roi_percentage": round((q.mid / spot) * 100, 2)
+                    })
+            # Sort by strike ascending (closest to spot first)
+            recommendations.sort(key=lambda x: x["strike"])
+            return {
+                "symbol": symbol,
+                "underlying_price": spot,
+                "recommendations": recommendations[:3] # Top 3 recommended covered calls
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     # ── Live prices ───────────────────────────────────────────────────────────
 
