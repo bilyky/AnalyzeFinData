@@ -4,10 +4,14 @@ Covers the TOTP mint added on top of the persistent-profile engine — the reboo
 door that self-completes MFA with a Symantec VIP software code instead of hitting an SMS wall:
 
   * `_get_verifier_via_totp` types the 6-digit code into E*TRADE's DEDICATED #securityCode field
-    (never appended to the password) and returns the scraped OAuth verifier;
-  * `_login_headless` routes to the TOTP getter (NOT the legacy Chrome path) whenever a secret is
-    configured — including auto-reading CFG.etrade_totp_secret when the arg is omitted — and still
-    exchanges + saves through the one breaker/trust choke point;
+    (never appended to the password) and returns the scraped OAuth verifier — the residential
+    fallback getter (throwaway Firefox), still exercised directly here;
+  * `_login_headless` runs the ONE persistent-profile path (`_get_tokens_via_playwright`) for
+    every mint — the profile's device-trust is what clears the bot-managed edge on corporate
+    egress — and passes the software-VIP secret through as `totp_secret=` so that path self-fills
+    the login-page security-code field (auto-reading CFG.etrade_totp_secret when the arg is
+    omitted); no secret ⇒ `totp_secret=None`. It still exchanges + saves through the one
+    breaker/trust choke point;
   * `scheduled_reauth()` treats a TOTP-configured env as trusted (so an 'unseeded' profile no
     longer blocks the door) while the anti-ban circuit breaker STILL gates it.
 
@@ -159,19 +163,18 @@ class TestLoginHeadlessTotpRouting(unittest.TestCase):
             "pye": mock.patch.object(etrade, "pyetrade"),
         }
 
-    def test_explicit_secret_uses_totp_path_not_chrome(self):
+    def test_explicit_secret_passes_totp_into_persistent_profile_path(self):
         patches = self._exchange_patches()
         started = {k: p.start() for k, p in patches.items()}
         self.addCleanup(lambda: [p.stop() for p in patches.values()])
         started["pye"].ETradeOAuth.return_value.get_request_token.return_value = "http://auth"
         started["pye"].ETradeOAuth.return_value.get_access_token.return_value = {"oauth_token": "t"}
-        with mock.patch.object(etrade, "_get_verifier_via_totp", return_value="V") as m_totp, \
-             mock.patch.object(etrade, "_get_tokens_via_playwright") as m_chrome:
+        with mock.patch.object(etrade, "_get_tokens_via_playwright", return_value="V") as m_chrome:
             out = etrade._login_headless("ck", "cs", "u", "pw", "production",
                                          headless=True, totp_secret="SECRET")
         self.assertEqual(out, {"oauth_token": "t"})
-        m_totp.assert_called_once()                        # TOTP getter drove the mint
-        m_chrome.assert_not_called()                       # legacy Chrome path NOT used
+        m_chrome.assert_called_once()                      # the ONE persistent-profile path drove it
+        self.assertEqual(m_chrome.call_args.kwargs.get("totp_secret"), "SECRET")  # code self-fill armed
         started["save"].assert_called_once()               # token persisted
         started["reset"].assert_called_once_with("production")   # breaker retracted on success
 
@@ -182,24 +185,22 @@ class TestLoginHeadlessTotpRouting(unittest.TestCase):
         started["pye"].ETradeOAuth.return_value.get_request_token.return_value = "http://auth"
         started["pye"].ETradeOAuth.return_value.get_access_token.return_value = {"oauth_token": "t"}
         with mock.patch.object(etrade.CFG, "etrade_totp_secret", "CFGSECRET"), \
-             mock.patch.object(etrade, "_get_verifier_via_totp", return_value="V") as m_totp, \
-             mock.patch.object(etrade, "_get_tokens_via_playwright") as m_chrome:
+             mock.patch.object(etrade, "_get_tokens_via_playwright", return_value="V") as m_chrome:
             etrade._login_headless("ck", "cs", "u", "pw", "production", headless=True)
-        m_totp.assert_called_once()                        # picked up the CFG secret with no arg
-        m_chrome.assert_not_called()
+        m_chrome.assert_called_once()
+        self.assertEqual(m_chrome.call_args.kwargs.get("totp_secret"), "CFGSECRET")  # picked up CFG secret
 
-    def test_no_secret_falls_back_to_chrome_path(self):
+    def test_no_secret_runs_profile_path_without_totp(self):
         patches = self._exchange_patches()
         started = {k: p.start() for k, p in patches.items()}
         self.addCleanup(lambda: [p.stop() for p in patches.values()])
         started["pye"].ETradeOAuth.return_value.get_request_token.return_value = "http://auth"
         started["pye"].ETradeOAuth.return_value.get_access_token.return_value = {"oauth_token": "t"}
         with mock.patch.object(etrade.CFG, "etrade_totp_secret", ""), \
-             mock.patch.object(etrade, "_get_verifier_via_totp") as m_totp, \
              mock.patch.object(etrade, "_get_tokens_via_playwright", return_value="V") as m_chrome:
             etrade._login_headless("ck", "cs", "u", "pw", "production", headless=True)
-        m_chrome.assert_called_once()                      # no secret → legacy device-trust path
-        m_totp.assert_not_called()
+        m_chrome.assert_called_once()                      # same path, no code self-fill
+        self.assertIsNone(m_chrome.call_args.kwargs.get("totp_secret"))   # no secret → totp_secret=None
 
 
 class TestScheduledReauthTotpTrustBypass(unittest.TestCase):

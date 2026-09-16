@@ -454,18 +454,21 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str,
                     headless: bool = False, totp_secret: str | None = None) -> dict | None:
     """Fully automatic Playwright login. Returns token dict on success, None on failure.
 
-    Two mints share this one choke point:
-      * TOTP path (totp_secret set) — a headless Firefox login that self-completes MFA with a
-        software VIP code (no SMS wall, no persistent-profile device-trust needed). Reboot-proof.
-      * legacy path (no totp_secret) — the persistent-Chrome device-trust flow, kept for the
-        supervised human bootstrap and any env without a TOTP secret.
+    ONE persistent-profile browser path serves every mint (_get_tokens_via_playwright): the
+    profile's device-trust is what clears E*TRADE's bot-managed edge (Akamai) on corporate /
+    datacenter egress — a throwaway browser context is refused there even with a valid code,
+    and survives only on a residential IP. When a software-VIP secret is configured it is passed
+    through as totp_secret= so that same path self-fills the login-page security-code field,
+    completing MFA with no SMS and no human. No secret ⇒ totp_secret=None (device-trust alone,
+    for the supervised human bootstrap or an env without a token). Proxy is honoured from
+    HTTPS_PROXY/HTTP_PROXY, so the identical path runs on a proxied and a direct network.
 
     This is the SINGLE choke point for the automated browser path: the anti-ban circuit
     breaker is enforced here, so no retry loop or second caller can bypass it. The human
     interactive login in get_tokens() does NOT pass through here and is never blocked.
 
     totp_secret defaults to None → read CFG.etrade_totp_secret, so every caller automatically
-    takes the TOTP path once a secret is configured, with no call-site change.
+    self-fills the code once a secret is configured, with no call-site change.
     """
     if totp_secret is None:
         totp_secret = getattr(CFG, "etrade_totp_secret", "") or ""
@@ -487,15 +490,17 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str,
     try:
         oauth = pyetrade.ETradeOAuth(ck, cs)
         auth_url = oauth.get_request_token()
-        if totp_secret:
-            verifier_code = _get_verifier_via_totp(
-                auth_url, username, password, totp_secret, headless=headless,
-            )
-        else:
-            verifier_code = _get_tokens_via_playwright(
-                auth_url, username, password,
-                headless=headless,
-            )
+        # Both mints run through the ONE persistent-profile browser path. The profile's
+        # device-trust is what gets the automated browser past the bot-managed edge (Akamai)
+        # on corporate/datacenter egress — a throwaway context is refused there even with the
+        # right TOTP code (it survives only on a residential IP). When a software-VIP secret is
+        # configured, that same path also self-fills the login-page security-code field, so MFA
+        # completes with no SMS and no human. One path ⇒ works on both an Intel-proxied network
+        # and a direct home network (proxy is honoured from HTTPS_PROXY/HTTP_PROXY either way).
+        verifier_code = _get_tokens_via_playwright(
+            auth_url, username, password,
+            headless=headless, totp_secret=(totp_secret or None),
+        )
         if verifier_code:
             tokens = oauth.get_access_token(verifier_code)
             _save_tokens(tokens, env)
@@ -690,7 +695,7 @@ def _get_verifier_via_totp(auth_url, username, password, totp_secret, headless=T
                 pass
 
 
-def _get_tokens_via_playwright(auth_url, username, password, headless=False):
+def _get_tokens_via_playwright(auth_url, username, password, headless=False, totp_secret=None):
     """Open the E*TRADE auth URL, log in, accept, and return the verifier code.
 
     Runs a PERSISTENT real-Chrome profile (_CHROME_PROFILE_DIR) rather than a throwaway
@@ -703,6 +708,17 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
     storage_state= — the profile jar supersedes it — so no caller passes a cookie snapshot.)
     headless: run the browser without a window. Default False (headed) for the supervised
     bootstrap / human path; a proven-trusted profile can later drive a headless daily run.
+
+    totp_secret: when set (software VIP token configured), the login is auto-driven — headless
+    (the daily run) OR headed (the supervised verification the user WATCHES self-fill) — ticking
+    the login page's "Use security code" checkbox and typing the current 6-digit TOTP into the
+    dedicated #securityCode field BEFORE submit — completing MFA without SMS. This is the piece
+    that makes the daily door work behind a bot-managed edge (Akamai) on ANY network: the
+    persistent profile's device-trust gets the automated browser PAST the bot-check (a throwaway
+    context is refused on corporate/datacenter egress even though it survives on a residential
+    IP), and the TOTP field removes the SMS wall — so no phone and no human are ever needed.
+    Proxy is honoured from HTTPS_PROXY/HTTP_PROXY (set on a proxied network, unset for direct
+    egress), so the same code path runs on both a corporate and a home network.
     """
     _USER_SELECTORS = ["input#USER", "input[name='USER']", "input[name='username']",
                        "input[type='text']", "input[autocomplete='username']"]
@@ -797,13 +813,43 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
             # How the login form gets filled depends on WHO drives it. Programmatic keystrokes
             # (page.type / page.press) carry a behavioral fingerprint E*TRADE's Akamai bot-check
             # flags — the "Log on" button then spins forever on the .../pxy/login URL and the flow
-            # stalls. A HUMAN typing on a trusted device passes cleanly (and, device-trust intact,
-            # is never even asked for SMS). So:
-            #   * headless (automated daily run on an already-PROVEN profile) -> auto-fill + submit
-            #   * headed  (supervised bootstrap / re-seed)                    -> the HUMAN types
-            if headless:
+            # stalls. That fingerprint only trips on an UNTRUSTED context; on this persistent,
+            # already-PROVEN profile (device-trust cookie present) the script's own typing passes
+            # cleanly and — with a software-VIP code entered on the login page — is never sent to
+            # the SMS wall. So auto-drive whenever we CAN complete the login unattended, i.e.
+            # whenever a TOTP secret is available (headless daily run OR the headed verification
+            # the user WATCHES self-fill); fall back to human typing only for a headed re-seed
+            # with no secret configured (bootstrapping a fresh, not-yet-trusted profile).
+            auto_drive = bool(headless or totp_secret)
+            if auto_drive:
                 user_ok = _try_fill(page, _USER_SELECTORS, username, "username")
                 pass_ok = _try_fill(page, _PASS_SELECTORS, password, "password")
+                # Software-VIP MFA on the login page itself: tick "Use security code" and type the
+                # current 6-digit TOTP into the DEDICATED #securityCode field (NOT appended to the
+                # password) before submit — E*TRADE's own hardware/software-token logon flow. This
+                # keeps the mint off the SMS wall entirely. Best-effort: if the control isn't shown
+                # (device already fully trusted, no code demanded) we just submit without it.
+                if totp_secret:
+                    try:
+                        box = page.locator(
+                            "input#useSecurityCode, input[name='useSecurityCode'], "
+                            "[for='useSecurityCode']").first
+                        box.wait_for(state="visible", timeout=6000)
+                        try:
+                            if not box.is_checked():
+                                box.check(timeout=4000)
+                        except Exception:
+                            box.click(timeout=4000)   # label / non-checkbox fallback
+                        page.wait_for_selector(
+                            "input#securityCode, input[name='securityCode']", timeout=6000)
+                        _try_fill(
+                            page, ["input#securityCode", "input[name='securityCode']"],
+                            pyotp.TOTP(totp_secret).now(), "security-code")
+                        page.wait_for_timeout(300)
+                    except Exception:
+                        # No security-code control on this render — device already trusted / no MFA
+                        # prompt. Proceed to submit; the login may complete without a code.
+                        _log.console("  [Auth] Security-code field not shown — submitting without a code.")
                 _snap("02_filled")
             else:
                 user_ok = pass_ok = False   # skip the auto-submit + 30s auto-wait blocks below
