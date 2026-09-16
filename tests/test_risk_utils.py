@@ -275,6 +275,47 @@ class TestScaleOut(unittest.TestCase):
         self.assertEqual(frac, 0.0)
         self.assertEqual(reason, "invalid inputs")
 
+    # ── Conviction guard — a high-conviction flower is never trimmed ──
+    def test_high_conviction_flower_is_not_scaled(self):
+        # A crossed tier that WOULD bank 0.30, but L60 at/above the ceiling holds it.
+        frac, reason = risk_utils.scale_out_plan(
+            115.0, 100.0, 10.0, l60=6.5, l60_ceiling=6.0)  # +1.5xATR
+        self.assertEqual(frac, 0.0)
+        self.assertIn("high-conviction flower", reason)
+
+    def test_conviction_boundary_is_inclusive(self):
+        # l60 == ceiling holds (>=), matching the covered-call flower exclusion.
+        frac, reason = risk_utils.scale_out_plan(
+            115.0, 100.0, 10.0, l60=6.0, l60_ceiling=6.0)
+        self.assertEqual(frac, 0.0)
+        self.assertIn("high-conviction flower", reason)
+
+    def test_below_ceiling_still_banks(self):
+        # A winner below the conviction ceiling scales out normally.
+        frac, reason = risk_utils.scale_out_plan(
+            115.0, 100.0, 10.0, l60=5.9, l60_ceiling=6.0)
+        self.assertAlmostEqual(frac, 0.30)
+        self.assertIn("bank", reason)
+
+    def test_conviction_guard_only_fires_on_a_crossed_tier(self):
+        # Below the first tier there is nothing to bank, so a flower reports the
+        # ordinary "below first tier" reason, NOT a spurious conviction hold.
+        frac, reason = risk_utils.scale_out_plan(
+            110.0, 100.0, 10.0, l60=9.0, l60_ceiling=6.0)  # +1.0xATR < 1.5
+        self.assertEqual(frac, 0.0)
+        self.assertNotIn("high-conviction", reason)
+
+    def test_conviction_guard_inert_without_args(self):
+        # Legacy callers (no l60/ceiling) are unchanged — the guard stays dormant.
+        frac, _ = risk_utils.scale_out_plan(115.0, 100.0, 10.0)
+        self.assertAlmostEqual(frac, 0.30)
+
+    def test_conviction_guard_ignores_only_ceiling(self):
+        # Ceiling given but l60 missing -> guard inert (needs both to engage).
+        frac, _ = risk_utils.scale_out_plan(
+            115.0, 100.0, 10.0, l60=None, l60_ceiling=6.0)
+        self.assertAlmostEqual(frac, 0.30)
+
 
 if __name__ == "__main__":
     unittest.main()

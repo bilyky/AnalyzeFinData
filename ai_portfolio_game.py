@@ -1665,8 +1665,17 @@ def run_daily_ai_management(force=False, manual_profile=None):
             # hours; if a tier is crossed after-hours it fires on the next live cycle.
             if atr and atr > 0 and price and price > 0 and pos.get("qty", 0) > 1 and is_market_hours():
                 banked_pct = float(pos.get("banked_pct", 0.0) or 0.0)
+                # Pass the conviction bar into the pure planner: a high-conviction
+                # flower (L60 >= the covered-call ceiling) is never trimmed, mirroring
+                # the covered-call flower exclusion so the two winner-side mechanics
+                # share ONE conviction bar (CLAUDE.md dont-sell-winners). The planner
+                # returns frac 0.0 + a "held: high-conviction flower" reason when it
+                # suppresses a would-be bank; surface that so the hold is visible.
                 so_frac, so_reason = risk_utils.scale_out_plan(
-                    price, pos.get("cost", 0.0), atr, banked_pct)
+                    price, pos.get("cost", 0.0), atr, banked_pct,
+                    l60=l60, l60_ceiling=CFG.system_covered_call_l60_ceiling)
+                if so_frac <= 0 and so_reason.startswith("held: high-conviction"):
+                    _log.info(f"🌺 [Scale-Out] {sym}: {so_reason}")
                 if so_frac > 0 and banked_pct < 1.0:
                     # banked_pct is a fraction of the ORIGINAL lot; recover the original
                     # size (works for legacy positions with no banked_pct) to size the sale.
