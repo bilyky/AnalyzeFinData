@@ -559,8 +559,12 @@ def main():
             #   package to break the circular init — it is imported *from* the package
             #   __init__, so a top-level `from aether import etrade` would hit a
             #   partially-initialised module. See the module's _pkg() docstring.
+            # - aether/scenario/prices.py: same mandatory lazy `_pkg()` idiom — it
+            #   resolves `ai_portfolio_game` collaborators at CALL TIME so the pinned
+            #   mock.patch.object seams keep intercepting after the strangler-fig
+            #   REPLACE step routes the root script through the package.
             _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py",
-                             "etrade/store.py")
+                             "etrade/store.py", "scenario/prices.py")
             if not any(x in fpath for x in _skip_imports):
                 if not check_no_inline_imports(fpath):
                     success = False
