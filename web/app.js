@@ -1217,6 +1217,10 @@ async function loadSystem() {
                         ${needsAdmin ? '<span class="text-[9px] px-1 rounded bg-slate-700 mut">ADMIN</span>' : ""}
                     </div>
                     <p class="text-xs mut flex-1">${t.description}</p>
+                    ${t.help ? `<details class="text-xs">
+                        <summary class="cursor-pointer mut hover:text-blue-400 select-none">Show all commands &amp; arguments</summary>
+                        <pre class="mt-1 whitespace-pre-wrap font-mono text-[11px] leading-snug text-slate-300 bg-slate-900 rounded p-2 overflow-x-auto">${esc(t.help)}</pre>
+                    </details>` : ""}
                     ${inputHtml}
                     <button id="task-btn-${t.id}" title="${title}"
                         onclick="runManualTask(${onclickArgs})"

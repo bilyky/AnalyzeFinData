@@ -1153,7 +1153,30 @@ _KNOWN_TASKS = [
 
 # Registry of manually-runnable scripts exposed in the dashboard.
 # Each entry: id (unique slug), label, description, script, args list,
-# admin_only (requires admin token to run), confirm (prompt user first).
+# admin_only (requires admin token to run), confirm (prompt user first),
+# help (optional multi-line reference of every CLI call/argument the script accepts;
+# the dashboard shows it in a collapsible "Show all commands & arguments" block).
+
+# Shared reference for both Chaikin System buttons (both run chaikin_reauth.py).
+_CHAIKIN_REAUTH_HELP = """scripts/monitoring/chaikin_reauth.py — all commands & arguments
+
+  --cdp                 1-click reauth: opens a real Chrome, you log in by hand once
+                        (one Turnstile), and the fresh ~7-day token is captured over
+                        CDP. The only renewal proven to pass Turnstile.
+  --check               Report token runway only; never launches a browser.
+  --force               Mint a fresh token even if the current one is still valid.
+  --min-days N          Refresh when runway is under N days (default 3.0).
+  --cdp-endpoint URL    Chrome DevTools endpoint for --cdp (default http://localhost:9222).
+  --login-timeout SEC   Seconds to wait for the human login in --cdp mode (default 600).
+  --no-launch           In --cdp mode, attach to an already-running debug Chrome
+                        instead of launching a new one.
+
+Examples:
+  chaikin_reauth.py --check
+  chaikin_reauth.py --cdp --force
+  chaikin_reauth.py --cdp --no-launch --cdp-endpoint http://localhost:9222
+  chaikin_reauth.py --force --min-days 2"""
+
 MANUAL_TASKS = [
     {
         "id": "pipeline",
@@ -1297,6 +1320,32 @@ MANUAL_TASKS = [
         "admin_only": False,
         "confirm": "Run full pattern discovery with validation? This takes ~30 minutes.",
         "category": "research",
+    },
+    {
+        "id": "chaikin_cdp_login",
+        "label": "Chaikin — Login & Refresh Token (opens Chrome)",
+        "description": "Open a real Chrome at the Chaikin login page; log in by hand once (one "
+                       "Turnstile) and the fresh ~7-day token is captured automatically over CDP "
+                       "(scripts/monitoring/chaikin_reauth.py --cdp).",
+        "script": "scripts/monitoring/chaikin_reauth.py",
+        "args": ["--cdp", "--force"],
+        "help": _CHAIKIN_REAUTH_HELP,
+        "admin_only": True,
+        "confirm": "Open Chrome to log into Chaikin and refresh the session token?",
+        "category": "system",
+    },
+    {
+        "id": "chaikin_reauth_check",
+        "label": "Chaikin — Check Token Runway",
+        "description": "Report how many days of runway the current Chaikin sessionToken has and "
+                       "whether it probes valid; never launches a browser "
+                       "(scripts/monitoring/chaikin_reauth.py --check).",
+        "script": "scripts/monitoring/chaikin_reauth.py",
+        "args": ["--check"],
+        "help": _CHAIKIN_REAUTH_HELP,
+        "admin_only": True,
+        "confirm": None,
+        "category": "system",
     },
 ]
 
