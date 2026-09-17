@@ -10,8 +10,9 @@ the root script is untouched until the REPLACE phase, so the full test suite
 cannot regress while the package is assembled. B1 lands the price ports/adapters;
 later steps add ``schema``, ``steps``, and ``runners``.
 
-Re-exports the price surface so scenario code (and, from R1, the root script's
-``get_live_prices``) can compose a ``PriceSource`` without reaching into submodules.
+Re-exports the price surface (B1) and the entity views (B2) so scenario code (and,
+from the REPLACE phase, the root script) can compose a ``PriceSource`` or wrap the
+raw ``state`` dicts without reaching into submodules.
 """
 from aether.scenario.prices import (
     ChainedPriceSource,
@@ -22,8 +23,15 @@ from aether.scenario.prices import (
     WorkbookSource,
     make_price_source,
 )
+from aether.scenario.schema import (
+    Order,
+    Portfolio,
+    Position,
+    Quote,
+)
 
 __all__ = [
+    # prices (B1)
     "PriceSource",
     "JsonCacheSource",
     "GoogleSource",
@@ -31,4 +39,9 @@ __all__ = [
     "WorkbookSource",
     "ChainedPriceSource",
     "make_price_source",
+    # schema (B2)
+    "Portfolio",
+    "Position",
+    "Order",
+    "Quote",
 ]
