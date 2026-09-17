@@ -563,8 +563,10 @@ def main():
             #   resolves `ai_portfolio_game` collaborators at CALL TIME so the pinned
             #   mock.patch.object seams keep intercepting after the strangler-fig
             #   REPLACE step routes the root script through the package.
+            # - aether/scenario/helpers.py: same `_pkg()` idiom (B3) — thin call-time
+            #   delegation to the root's stateless helpers, patch-preserving.
             _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py",
-                             "etrade/store.py", "scenario/prices.py")
+                             "etrade/store.py", "scenario/prices.py", "scenario/helpers.py")
             if not any(x in fpath for x in _skip_imports):
                 if not check_no_inline_imports(fpath):
                     success = False
