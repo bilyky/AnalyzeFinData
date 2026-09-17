@@ -896,6 +896,9 @@ def create_app():
                     [_PYTHON, str(script)] + args,
                     stdout=lf, stderr=subprocess.STDOUT,
                     cwd=str(_DIR),
+                    # Force UTF-8 so a task's non-ASCII output can't crash the streamed
+                    # cp1252 log on Windows (the log file itself is opened utf-8).
+                    env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                 )
             with _runs_lock:
                 _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc}

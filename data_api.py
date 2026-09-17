@@ -1298,6 +1298,30 @@ MANUAL_TASKS = [
         "confirm": "Run full pattern discovery with validation? This takes ~30 minutes.",
         "category": "research",
     },
+    {
+        "id": "chaikin_cdp_login",
+        "label": "Chaikin — Login & Refresh Token (opens Chrome)",
+        "description": "Open a real Chrome at the Chaikin login page; log in by hand once (one "
+                       "Turnstile) and the fresh ~7-day token is captured automatically over CDP "
+                       "(scripts/monitoring/chaikin_reauth.py --cdp).",
+        "script": "scripts/monitoring/chaikin_reauth.py",
+        "args": ["--cdp", "--force"],
+        "admin_only": True,
+        "confirm": "Open Chrome to log into Chaikin and refresh the session token?",
+        "category": "system",
+    },
+    {
+        "id": "chaikin_reauth_check",
+        "label": "Chaikin — Check Token Runway",
+        "description": "Report how many days of runway the current Chaikin sessionToken has and "
+                       "whether it probes valid; never launches a browser "
+                       "(scripts/monitoring/chaikin_reauth.py --check).",
+        "script": "scripts/monitoring/chaikin_reauth.py",
+        "args": ["--check"],
+        "admin_only": True,
+        "confirm": None,
+        "category": "system",
+    },
 ]
 
 
