@@ -161,6 +161,21 @@ $Tasks = @(
         Log       = "chaikin_reauth_agent.log"
         Desc      = "Weekly proactive Chaikin PGR token re-auth (headed, no interaction). Runs only when logged on."
         Principal = (New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited)
+    },
+    @{
+        Name     = "AETHER_Chaikin_Runway_Watch"
+        # Daily 7:00 AM. Runway-watch ONLY: decodes the sessionToken exp and, if fewer than
+        # 2.5 days of runway remain, emails a reminder to click the System "Chaikin - Login &
+        # Refresh Token" button. It NEVER launches a browser, so unlike AETHER_Chaikin_Reauth
+        # it needs no interactive desktop / Principal — a normal non-interactive task is fine.
+        # The script self-throttles to at most one reminder per 20h, so the daily trigger can
+        # never spam (idempotent: >= threshold or already-sent => no email).
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Daily -At "7:00 AM")
+        )
+        Script    = "venv_new\Scripts\python.exe scripts/monitoring/chaikin_reauth.py --notify-days 2.5"
+        Log       = "chaikin_runway_watch.log"
+        Desc      = "Daily Chaikin token runway-watch; emails a reminder under 2.5 days runway. No browser."
     }
 )
 
