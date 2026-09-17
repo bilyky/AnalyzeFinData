@@ -150,6 +150,23 @@ breaker still gates and clears exactly as before.
 > `aether etrade-login` again the next day and confirm no OTP). Until that runs, treat zero-touch as
 > the intended design, not a verified fact.
 
+### 4.2 Login strategy knob (`etrade.login_strategy`) — pick the browser per egress
+
+Whether a headless login clears Akamai depends on the **network egress** it runs from, so the browser
+engine is configurable via `etrade.login_strategy` in `config.json` (env override
+`ETRADE_LOGIN_STRATEGY`). Both the automated door (`_login_headless`) and the interactive verify
+(`get_tokens`) route through one resolver (`_resolve_login_strategy`):
+
+| Value | Engine | When to pick it |
+|-------|--------|-----------------|
+| `auto` *(default)* | `firefox_totp` when a `totp_secret` is set, else `persistent_profile` | Backward-compatible — behavior is unchanged until you set the knob. |
+| `firefox_totp` | Throwaway **Firefox** context + software-VIP TOTP typed into the security-code field (`_get_verifier_via_totp`). **Requires `totp_secret`.** | Residential / clean egress (matches the wetrade recipe). Falls back to `persistent_profile` with a log if no secret is set. |
+| `persistent_profile` | **Chromium** device-trust profile (`_get_tokens_via_playwright`); self-fills the security code when a `totp_secret` is present. | Corporate / VPN egress, betting on accumulated device-trust cookies. |
+
+A configured `totp_secret` lets *either* engine complete 2FA with no SMS: the current 6-digit code is
+typed into the `#securityCode` field (never logged). The knob does **not** relax any §3 rule — the
+automated scheduler still only ever opens the one breaker-gated door.
+
 ---
 
 ## 5. Correct procedures

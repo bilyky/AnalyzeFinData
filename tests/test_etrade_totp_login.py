@@ -149,6 +149,13 @@ class TestGetVerifierViaTotp(unittest.TestCase):
 
 
 class TestLoginHeadlessTotpRouting(unittest.TestCase):
+    """_login_headless dispatch is driven by the CFG.etrade_login_strategy knob.
+
+    Values: auto (firefox_totp when a secret is set, else persistent_profile),
+    firefox_totp (Firefox getter; falls back to Chrome when no secret), and
+    persistent_profile (Chrome getter, self-filling when a secret is present).
+    """
+
     def _exchange_patches(self):
         return {
             "cool": mock.patch.object(etrade, "_reauth_cooldown_remaining", return_value=0.0),
@@ -159,47 +166,65 @@ class TestLoginHeadlessTotpRouting(unittest.TestCase):
             "pye": mock.patch.object(etrade, "pyetrade"),
         }
 
-    def test_explicit_secret_uses_totp_path_not_chrome(self):
+    def _route(self, *, strategy, totp_secret=None, cfg_secret=None):
+        """Run _login_headless under a fixed strategy and return (m_totp, m_chrome, out)."""
         patches = self._exchange_patches()
         started = {k: p.start() for k, p in patches.items()}
         self.addCleanup(lambda: [p.stop() for p in patches.values()])
         started["pye"].ETradeOAuth.return_value.get_request_token.return_value = "http://auth"
         started["pye"].ETradeOAuth.return_value.get_access_token.return_value = {"oauth_token": "t"}
-        with mock.patch.object(etrade, "_get_verifier_via_totp", return_value="V") as m_totp, \
-             mock.patch.object(etrade, "_get_tokens_via_playwright") as m_chrome:
-            out = etrade._login_headless("ck", "cs", "u", "pw", "production",
-                                         headless=True, totp_secret="SECRET")
+        kwargs = {"headless": True}
+        if totp_secret is not None:
+            kwargs["totp_secret"] = totp_secret
+        with mock.patch.object(etrade.CFG, "etrade_login_strategy", strategy), \
+             mock.patch.object(etrade.CFG, "etrade_totp_secret", cfg_secret or ""), \
+             mock.patch.object(etrade, "_get_verifier_via_totp", return_value="V") as m_totp, \
+             mock.patch.object(etrade, "_get_tokens_via_playwright", return_value="V") as m_chrome:
+            out = etrade._login_headless("ck", "cs", "u", "pw", "production", **kwargs)
+        return m_totp, m_chrome, out, started
+
+    def test_auto_with_secret_uses_firefox(self):
+        m_totp, m_chrome, out, started = self._route(strategy="auto", totp_secret="SECRET")
         self.assertEqual(out, {"oauth_token": "t"})
-        m_totp.assert_called_once()                        # TOTP getter drove the mint
-        m_chrome.assert_not_called()                       # legacy Chrome path NOT used
+        m_totp.assert_called_once()                        # auto + secret → Firefox getter
+        m_chrome.assert_not_called()
         started["save"].assert_called_once()               # token persisted
         started["reset"].assert_called_once_with("production")   # breaker retracted on success
 
-    def test_omitted_secret_auto_reads_cfg(self):
-        patches = self._exchange_patches()
-        started = {k: p.start() for k, p in patches.items()}
-        self.addCleanup(lambda: [p.stop() for p in patches.values()])
-        started["pye"].ETradeOAuth.return_value.get_request_token.return_value = "http://auth"
-        started["pye"].ETradeOAuth.return_value.get_access_token.return_value = {"oauth_token": "t"}
-        with mock.patch.object(etrade.CFG, "etrade_totp_secret", "CFGSECRET"), \
-             mock.patch.object(etrade, "_get_verifier_via_totp", return_value="V") as m_totp, \
-             mock.patch.object(etrade, "_get_tokens_via_playwright") as m_chrome:
-            etrade._login_headless("ck", "cs", "u", "pw", "production", headless=True)
+    def test_auto_omitted_secret_reads_cfg_firefox(self):
+        m_totp, m_chrome, _out, _started = self._route(strategy="auto", cfg_secret="CFGSECRET")
         m_totp.assert_called_once()                        # picked up the CFG secret with no arg
         m_chrome.assert_not_called()
 
-    def test_no_secret_falls_back_to_chrome_path(self):
-        patches = self._exchange_patches()
-        started = {k: p.start() for k, p in patches.items()}
-        self.addCleanup(lambda: [p.stop() for p in patches.values()])
-        started["pye"].ETradeOAuth.return_value.get_request_token.return_value = "http://auth"
-        started["pye"].ETradeOAuth.return_value.get_access_token.return_value = {"oauth_token": "t"}
-        with mock.patch.object(etrade.CFG, "etrade_totp_secret", ""), \
-             mock.patch.object(etrade, "_get_verifier_via_totp") as m_totp, \
-             mock.patch.object(etrade, "_get_tokens_via_playwright", return_value="V") as m_chrome:
-            etrade._login_headless("ck", "cs", "u", "pw", "production", headless=True)
-        m_chrome.assert_called_once()                      # no secret → legacy device-trust path
+    def test_auto_no_secret_uses_persistent_profile(self):
+        m_totp, m_chrome, _out, _started = self._route(strategy="auto", totp_secret="")
+        m_chrome.assert_called_once()                      # auto + no secret → device-trust path
         m_totp.assert_not_called()
+
+    def test_firefox_totp_with_secret_uses_firefox(self):
+        m_totp, m_chrome, _out, _started = self._route(strategy="firefox_totp", totp_secret="SECRET")
+        m_totp.assert_called_once()
+        m_chrome.assert_not_called()
+
+    def test_firefox_totp_no_secret_falls_back_to_chrome(self):
+        m_totp, m_chrome, _out, _started = self._route(strategy="firefox_totp", totp_secret="")
+        m_chrome.assert_called_once()                      # firefox_totp needs a secret → fallback
+        m_totp.assert_not_called()
+
+    def test_persistent_profile_forwards_secret_to_chrome(self):
+        m_totp, m_chrome, _out, _started = self._route(
+            strategy="persistent_profile", totp_secret="SECRET")
+        m_totp.assert_not_called()
+        m_chrome.assert_called_once()                      # explicit Chrome even with a secret
+        # the secret is forwarded so the Chrome path can self-fill the security code
+        self.assertEqual(m_chrome.call_args.kwargs.get("totp_secret"), "SECRET")
+
+    def test_persistent_profile_no_secret_uses_chrome(self):
+        m_totp, m_chrome, _out, _started = self._route(
+            strategy="persistent_profile", totp_secret="")
+        m_totp.assert_not_called()
+        m_chrome.assert_called_once()
+        self.assertIsNone(m_chrome.call_args.kwargs.get("totp_secret"))
 
 
 class TestScheduledReauthTotpTrustBypass(unittest.TestCase):

@@ -62,6 +62,17 @@ def ask_yn(prompt, default=True):
             return False
 
 
+def ask_choice(prompt, options, default=None):
+    default = default or options[0]
+    while True:
+        ans = input(f"{prompt} {'/'.join(options)} [{default}] ").strip().lower()
+        if not ans:
+            return default
+        if ans in options:
+            return ans
+        print(f"   Please choose one of: {', '.join(options)}")
+
+
 def die(msg, code=1):
     print(f"\n❌ {msg}")
     raise SystemExit(code)
@@ -96,6 +107,18 @@ def write_totp_secret(secret):
     etrade["totp_secret"] = secret
     CONFIG_PATH.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
     print("   ✅ Wrote etrade.totp_secret into config.json")
+
+
+def write_login_strategy(strategy):
+    backup_config()
+    cfg = load_config()
+    etrade = cfg.get("etrade")
+    if not isinstance(etrade, dict):
+        etrade = {}
+        cfg["etrade"] = etrade
+    etrade["login_strategy"] = strategy
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    print(f"   ✅ Wrote etrade.login_strategy = {strategy} into config.json")
 
 
 # ── step 1 — provision the software token ──────────────────────────────────────
@@ -204,6 +227,18 @@ def token_issued_date():
 def step3_live_mint(secret):
     banner(3, "One live headless mint (headed the first time so you can watch)")
     write_totp_secret(secret)
+    # Which browser engine clears Akamai depends on this host's network egress, so offer the knob.
+    print("\nLogin strategy (etrade.login_strategy) — which browser the automated door uses:")
+    print("   auto               (default) Firefox+TOTP when a secret is set, else Chromium profile")
+    print("   firefox_totp       throwaway Firefox + software VIP code — residential / clean egress")
+    print("   persistent_profile Chromium device-trust profile — corporate / VPN egress bet")
+    if ask_yn("Set login_strategy now? (No keeps 'auto')", default=False):
+        choice = ask_choice(
+            "   Which strategy?",
+            ["auto", "firefox_totp", "persistent_profile"],
+            default="firefox_totp",
+        )
+        write_login_strategy(choice)
     print("\nAbout to run the REAL automated door once, with the browser VISIBLE, on THIS host.")
     print("Expect: a Firefox window logs in, self-enters the 2FA code, reaches Accept — no SMS,")
     print("no stall on the loading spinner. Run this on your clean-egress host.\n")
