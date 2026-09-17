@@ -145,5 +145,55 @@ class TestNotifyOnFailure(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 
+class TestNotifyDays(unittest.TestCase):
+    """Runway-watch (--notify-days): browser-free, throttled daily nudge before expiry."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self._orig_state = cr._NOTIFY_STATE
+        cr._NOTIFY_STATE = os.path.join(self.tmp, "notify.json")
+
+    def tearDown(self):
+        cr._NOTIFY_STATE = self._orig_state
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run(self, days_runway, threshold, sent):
+        exp = (datetime.datetime.now(tz=datetime.timezone.utc)
+               + datetime.timedelta(days=days_runway))
+        session = {"jwttoken": _make_jwt({"exp": int(exp.timestamp())}),
+                   "jsessionid": "x", "uuid": "u@e.com"}
+        orig_argv = sys.argv
+        sys.argv = ["chaikin_reauth.py", "--notify-days", str(threshold)]
+        try:
+            with mock.patch.object(cr.pg, "_load_session_from_file", return_value=session), \
+                 mock.patch.object(cr.pg, "_probe_session", return_value="valid"), \
+                 mock.patch.object(cr, "send_email",
+                                   side_effect=lambda **kw: sent.append(kw)), \
+                 mock.patch.object(cr.pg, "_login_via_browser",
+                                   side_effect=AssertionError("must NOT launch a browser")):
+                rc = cr.main()
+        finally:
+            sys.argv = orig_argv
+        return rc
+
+    def test_emails_when_below_threshold(self):
+        sent = []
+        rc = self._run(days_runway=1.0, threshold=2.5, sent=sent)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(sent), 1)
+
+    def test_no_email_when_above_threshold(self):
+        sent = []
+        rc = self._run(days_runway=5.0, threshold=2.5, sent=sent)
+        self.assertEqual(rc, 0)
+        self.assertEqual(sent, [])
+
+    def test_throttled_across_two_runs(self):
+        sent = []
+        self._run(days_runway=1.0, threshold=2.5, sent=sent)
+        self._run(days_runway=1.0, threshold=2.5, sent=sent)  # second run within 20h
+        self.assertEqual(len(sent), 1)  # only one email despite two below-threshold runs
+
+
 if __name__ == "__main__":
     unittest.main()

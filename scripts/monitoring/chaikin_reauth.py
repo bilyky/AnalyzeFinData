@@ -268,6 +268,10 @@ def main() -> int:
                     help="Seconds to wait for the human login in --cdp mode (default 600).")
     ap.add_argument("--no-launch", action="store_true",
                     help="In --cdp mode, attach to an already-running debug Chrome; do not launch one.")
+    ap.add_argument("--notify-days", type=float, default=None,
+                    help="Runway-watch mode: if the sessionToken has fewer than this many days of "
+                         "runway, email a reminder to click the System login button. Never launches "
+                         "a browser; throttled to at most one email/day.")
     args = ap.parse_args()
 
     if args.cdp:
@@ -285,6 +289,30 @@ def main() -> int:
     else:
         runway_days = -1.0  # unknown/undecodable -> treat as needing refresh
         _log.warning("sessionToken missing or undecodable — treating as expired.")
+
+    if args.notify_days is not None:
+        # Runway-watch: a browser-free daily nudge before expiry. Never launches Chrome.
+        if runway_days < args.notify_days:
+            if _email_throttled("runway_low", 20.0):
+                _log.info("Runway %.2fd < %.1fd, but reminder already sent within 20h — skipping.",
+                          runway_days, args.notify_days)
+            else:
+                try:
+                    send_email(
+                        subject="Chaikin token expiring soon - refresh it from the System page",
+                        body=(f"The Chaikin sessionToken has {runway_days:.1f} days of runway left "
+                              f"(threshold {args.notify_days:.1f}).\n\n"
+                              "Open the AETHER dashboard System page and click "
+                              "'Chaikin - Login & Refresh Token (opens Chrome)', then log in once "
+                              "(one Turnstile). A fresh ~7-day token is captured automatically."),
+                    )
+                    _log.info("Runway-watch reminder emailed (%.2fd < %.1fd).",
+                              runway_days, args.notify_days)
+                except Exception as mail_err:
+                    _log.warning("Failed to send runway-watch email: %s", mail_err)
+        else:
+            _log.info("Runway %.2fd >= %.1fd — no reminder needed.", runway_days, args.notify_days)
+        return 0
 
     if args.check:
         return 0
