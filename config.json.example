@@ -9,6 +9,8 @@
     "username": "your_etrade_username",
     "password": "your_etrade_password",
     "proxy": "",
+    "totp_secret": "",
+    "login_strategy": "auto",
     "sandbox": {
       "consumer_key": "your_sandbox_consumer_key",
       "consumer_secret": "your_sandbox_consumer_secret"

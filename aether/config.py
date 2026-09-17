@@ -92,6 +92,14 @@ class _Config:
         # (Symantec VIP type SYMZ) and registered under E*TRADE Security Settings. When set, the
         # automated daily door self-completes 2FA headlessly instead of hitting an SMS wall.
         self.etrade_totp_secret = os.environ.get("ETRADE_TOTP_SECRET") or etrade.get("totp_secret", "")
+        # Which browser strategy the automated login uses to clear Akamai. Configurable because
+        # what passes depends on network egress (residential/clean vs corporate/VPN):
+        #   auto               — firefox_totp when a TOTP secret is set, else persistent_profile
+        #   firefox_totp       — throwaway Firefox + software VIP code (residential/clean egress)
+        #   persistent_profile — Chromium device-trust profile (corporate-egress bet)
+        self.etrade_login_strategy = (
+            os.environ.get("ETRADE_LOGIN_STRATEGY") or etrade.get("login_strategy", "auto")
+        ).strip().lower()
         self.etrade_sandbox_key        = os.environ.get("ETRADE_SANDBOX_KEY")        or sandbox.get("consumer_key",    "")
         self.etrade_sandbox_secret     = os.environ.get("ETRADE_SANDBOX_SECRET")     or sandbox.get("consumer_secret", "")
         self.etrade_production_key     = os.environ.get("ETRADE_PRODUCTION_KEY")     or production.get("consumer_key",    "")

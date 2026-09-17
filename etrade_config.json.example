@@ -9,5 +9,7 @@
     },
     "username": "YOUR_ETRADE_USERNAME",
     "password": "YOUR_ETRADE_PASSWORD",
-    "proxy": ""
+    "proxy": "",
+    "totp_secret": "",
+    "login_strategy": "auto"
 }

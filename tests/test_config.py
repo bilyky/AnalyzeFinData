@@ -58,6 +58,33 @@ class TestConfigPriority(unittest.TestCase):
         self.assertEqual(cfg.rapidapi_key, "env_key")
 
 
+class TestConfigEtradeLoginStrategy(unittest.TestCase):
+    """The etrade.login_strategy knob: default 'auto', env-over-file, normalized lowercase."""
+
+    def test_defaults_to_auto(self):
+        cfg = _make_cfg({})
+        self.assertEqual(cfg.etrade_login_strategy, "auto")
+
+    def test_reads_from_file(self):
+        cfg = _make_cfg({"etrade": {"login_strategy": "firefox_totp"}})
+        self.assertEqual(cfg.etrade_login_strategy, "firefox_totp")
+
+    def test_env_overrides_file(self):
+        cfg = _make_cfg(
+            {"etrade": {"login_strategy": "firefox_totp"}},
+            env={"ETRADE_LOGIN_STRATEGY": "persistent_profile"},
+        )
+        self.assertEqual(cfg.etrade_login_strategy, "persistent_profile")
+
+    def test_normalized_lowercase_and_trimmed(self):
+        cfg = _make_cfg({"etrade": {"login_strategy": "  Firefox_TOTP  "}})
+        self.assertEqual(cfg.etrade_login_strategy, "firefox_totp")
+
+    def test_null_etrade_block_defaults_to_auto(self):
+        cfg = _make_cfg({"etrade": None})
+        self.assertEqual(cfg.etrade_login_strategy, "auto")
+
+
 class TestConfigNullSafety(unittest.TestCase):
     def test_explicit_null_blocks_do_not_crash(self):
         # Every top-level block set to JSON null must not crash and must yield safe defaults.
