@@ -6,6 +6,8 @@ import openpyxl
 
 # Add current dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import console_safe
+console_safe.install()
 
 import powergauge
 
@@ -49,19 +51,19 @@ def get_comprehensive_stats():
         except Exception:
             continue
 
-    print(f"Total symbols processed: {len(all_data)}")
+    sys.stdout.write(f"Total symbols processed: {len(all_data)}\n")
 
     # 1. Top 5 by Short10 (Unfiltered)
     top_short = sorted(all_data, key=lambda x: x['short10'], reverse=True)[:5]
-    print("\n--- Top 5 by Short10 (Unfiltered) ---")
+    sys.stdout.write("\n--- Top 5 by Short10 (Unfiltered) ---\n")
     for i, r in enumerate(top_short, 1):
-        print(f"{i}. {r['symbol']} (S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})\n")
 
     # 2. Top 5 by Buying Ratio (Unfiltered)
     top_br = sorted(all_data, key=lambda x: x['br'], reverse=True)[:5]
-    print("\n--- Top 5 by Buying Ratio (Unfiltered) ---")
+    sys.stdout.write("\n--- Top 5 by Buying Ratio (Unfiltered) ---\n")
     for i, r in enumerate(top_br, 1):
-        print(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})\n")
 
     # 3. Check Sheet1 symbols
     ws_sheet1 = wb['Sheet1']
@@ -70,13 +72,13 @@ def get_comprehensive_stats():
         if row[4].value: sheet1_symbols.append(row[4].value) # Col E
         if row[6].value: sheet1_symbols.append(row[6].value) # Col G
     
-    print("\n--- Stats for Sheet1 Symbols ---")
+    sys.stdout.write("\n--- Stats for Sheet1 Symbols ---\n")
     for sym in sheet1_symbols:
         match = next((d for d in all_data if d['symbol'] == sym), None)
         if match:
-            print(f"{sym}: S10: {match['short10']}, BR: {match['br']}, PGR: {match['pgr']}")
+            sys.stdout.write(f"{sym}: S10: {match['short10']}, BR: {match['br']}, PGR: {match['pgr']}\n")
         else:
-            print(f"{sym}: No data found")
+            sys.stdout.write(f"{sym}: No data found\n")
 
 if __name__ == "__main__":
     get_comprehensive_stats()

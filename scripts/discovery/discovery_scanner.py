@@ -1,11 +1,17 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import console_safe
+console_safe.install()
 
 import subprocess
 import openpyxl
 import json
 import datetime
 from pathlib import Path
+
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("discovery_scanner")
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -28,7 +34,7 @@ def get_existing_symbols():
 
 def scan_for_missing_symbols():
     existing = get_existing_symbols()
-    print(f"Current universe: {len(existing)} symbols.")
+    _log.console(f"Current universe: {len(existing)} symbols.")
     
     # This function would ideally use a search tool or API.
     # For now, I will perform a mock scan based on the themes to find candidates
@@ -53,16 +59,16 @@ def scan_for_missing_symbols():
 def report_discovery():
     missing = scan_for_missing_symbols()
     if missing:
-        print("\n--- 🔍 AETHER DISCOVERY: MISSING OPPORTUNITIES ---")
+        sys.stdout.write("\n--- 🔍 AETHER DISCOVERY: MISSING OPPORTUNITIES ---\n")
         for m in missing:
-            print(f"Symbol: {m['symbol']} | Theme: {m['theme']}")
-            print(f"Reason: {m['reason']}")
-            print(f"Prompt: 'Add {m['symbol']} to Research?'\n")
-        
+            sys.stdout.write(f"Symbol: {m['symbol']} | Theme: {m['theme']}\n")
+            sys.stdout.write(f"Reason: {m['reason']}\n")
+            sys.stdout.write(f"Prompt: 'Add {m['symbol']} to Research?'\n\n")
+
         # In a real run, this text is pushed to the user's daily email.
         return missing
     else:
-        print("No new symbols discovered today.")
+        _log.warning("[discovery_scanner] No new symbols discovered today.")
         return []
 
 if __name__ == "__main__":

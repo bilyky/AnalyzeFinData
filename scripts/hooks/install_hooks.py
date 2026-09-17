@@ -2,6 +2,13 @@ import os
 import sys
 import stat
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import console_safe
+console_safe.install()
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("install_hooks")
+
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOKS_DIR = os.path.join(ROOT_DIR, ".git", "hooks")
 
@@ -73,7 +80,7 @@ def make_executable(filepath):
 
 def main():
     if not os.path.exists(HOOKS_DIR):
-        print(f"Error: Git hooks directory not found at {HOOKS_DIR}")
+        _log.error(f"[install_hooks] Git hooks directory not found at {HOOKS_DIR}")
         sys.exit(1)
 
     # 1. Back up and write pre-commit hook
@@ -84,14 +91,14 @@ def main():
             if os.path.exists(backup_path):
                 os.remove(backup_path)
             os.rename(pre_commit_path, backup_path)
-            print(f"⚠️ Warning: Existing pre-commit hook backed up to {backup_path}")
+            _log.warning(f"[install_hooks] Existing pre-commit hook backed up to {backup_path}")
         except Exception as e:
-            print(f"Warning: Could not back up existing pre-commit hook: {e}")
+            _log.warning(f"[install_hooks] Could not back up existing pre-commit hook: {e}", exc_info=True)
 
     with open(pre_commit_path, "w", encoding="utf-8") as f:
         f.write(PRE_COMMIT_CONTENT)
     make_executable(pre_commit_path)
-    print(f"Installed Git pre-commit hook at {pre_commit_path}")
+    sys.stdout.write(f"Installed Git pre-commit hook at {pre_commit_path}\n")
 
     # 2. Back up and write pre-push hook
     pre_push_path = os.path.join(HOOKS_DIR, "pre-push")
@@ -101,16 +108,16 @@ def main():
             if os.path.exists(backup_path):
                 os.remove(backup_path)
             os.rename(pre_push_path, backup_path)
-            print(f"⚠️ Warning: Existing pre-push hook backed up to {backup_path}")
+            _log.warning(f"[install_hooks] Existing pre-push hook backed up to {backup_path}")
         except Exception as e:
-            print(f"Warning: Could not back up existing pre-push hook: {e}")
+            _log.warning(f"[install_hooks] Could not back up existing pre-push hook: {e}", exc_info=True)
 
     with open(pre_push_path, "w", encoding="utf-8") as f:
         f.write(PRE_PUSH_CONTENT)
     make_executable(pre_push_path)
-    print(f"Installed Git pre-push hook at {pre_push_path}")
+    sys.stdout.write(f"Installed Git pre-push hook at {pre_push_path}\n")
 
-    print("Git hooks installation completed successfully!")
+    sys.stdout.write("Git hooks installation completed successfully!\n")
 
 if __name__ == "__main__":
     main()
