@@ -6,6 +6,8 @@ import openpyxl
 
 # Add current dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import console_safe
+console_safe.install()
 
 import powergauge
 
@@ -48,25 +50,25 @@ def get_targeted_stats():
         except Exception:
             continue
 
-    print("--- Top 5 by Short10 ---")
+    sys.stdout.write("--- Top 5 by Short10 ---\n")
     for i, r in enumerate(sorted(results, key=lambda x: x['short10'], reverse=True)[:5], 1):
-        print(f"{i}. {r['symbol']} (S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']})\n")
 
-    print("\n--- Top 5 by Buying Ratio ---")
+    sys.stdout.write("\n--- Top 5 by Buying Ratio ---\n")
     for i, r in enumerate(sorted(results, key=lambda x: x['br'], reverse=True)[:5], 1):
-        print(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})")
+        sys.stdout.write(f"{i}. {r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})\n")
 
-    print("\n--- Sheet1 Symbols (Col E) ---")
+    sys.stdout.write("\n--- Sheet1 Symbols (Col E) ---\n")
     e_syms = ['ARLP', 'MOH', 'GNE', 'LBRT', 'TSLA', 'OXY', 'FNKO']
     for sym in e_syms:
         r = next((x for x in results if x['symbol'] == sym), None)
-        if r: print(f"{sym}: S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']}")
+        if r: sys.stdout.write(f"{sym}: S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']}\n")
 
-    print("\n--- Sheet1 Symbols (Col G) ---")
+    sys.stdout.write("\n--- Sheet1 Symbols (Col G) ---\n")
     g_syms = ['PRTS', 'DY', 'ADBE', 'AGR', 'ALB', 'COP', 'FDX']
     for sym in g_syms:
         r = next((x for x in results if x['symbol'] == sym), None)
-        if r: print(f"{sym}: S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']}")
+        if r: sys.stdout.write(f"{sym}: S10: {r['short10']}, BR: {r['br']}, PGR: {r['pgr']}\n")
 
 if __name__ == "__main__":
     get_targeted_stats()
