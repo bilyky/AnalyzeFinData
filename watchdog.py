@@ -732,15 +732,18 @@ def run_watchdog():
 
     if rr.get("ok"):
         _log.info(f"  [Healer] E*TRADE production session OK ({rr.get('reason')}).")
-    elif rr.get("reason") in ("sms_required", "unseeded", "failed"):
-        # Real human action needed — throttled email + desktop push (once per episode).
+    elif rr.get("reason") in ("sms_required", "unseeded"):
+        # Trust lapsed — a human must re-seed. Throttled email + desktop push (once per episode).
         _log.error(f"  🛑 [Healer] E*TRADE needs manual re-auth (reason: {rr.get('reason')}).")
         try:
             notify.send_reauth_alert("production", rr["reason"])
         except Exception as ne:
             _log.error(f"  ❌ Failed to send E*TRADE re-auth alert: {ne}")
     else:
-        # 'breaker' (cooling) / 'renewed'-miss / transient — normal, not an alarm. Just log.
+        # 'failed' / 'breaker' (cooling) / 'in_progress' / 'renewed'-miss / transient — normal,
+        # not an alarm here. A sustained 'failed' streak self-reports: scheduled_reauth's own
+        # breaker/failure site fires the throttled alert once the count hits the hard-block
+        # threshold (so we don't email on the FIRST failure). Just log.
         _log.info(f"  [Healer] E*TRADE re-auth deferred (reason: {rr.get('reason')}). No action.")
 
     # 0b. Chaikin Proactive Session Keeper — uses cross-process singleton

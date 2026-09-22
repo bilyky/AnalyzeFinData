@@ -16,6 +16,7 @@ Usage:
     fresh = renewer.ensure()  # returns valid token or None
 """
 
+import contextlib
 import logging
 import os
 import threading
@@ -24,6 +25,36 @@ import time
 from aether import trash
 
 _log = logging.getLogger("aether.token_renewer")
+
+
+@contextlib.contextmanager
+def single_flight(lock_path: str, lock_ttl: int = 300):
+    """Non-blocking cross-process single-flight guard, sharing TokenRenewer's file-lock semantics.
+
+    Yields ``True`` to exactly one holder (which must do the guarded work) and ``False`` to any
+    concurrent caller (work is already in flight — the loser must NOT start a second copy). Unlike
+    ``TokenRenewer.ensure`` there is no wait loop: a loser returns immediately. The holder always
+    releases the lock on exit (even on exception); a loser releases nothing. Stale locks (mtime
+    older than ``lock_ttl``) are reclaimed via the same path as ``TokenRenewer._acquire``, so a
+    crashed holder can never wedge the guard forever.
+
+    Usage::
+
+        with single_flight("Data/etrade_reauth.lock", lock_ttl=300) as won:
+            if not won:
+                return {"reason": "in_progress"}
+            do_the_one_browser_mint()
+    """
+    renewer = TokenRenewer(lock_path, renew_fn=lambda: None, load_fn=lambda: None,
+                           lock_ttl=lock_ttl)
+    fd = renewer._acquire()
+    if fd is None:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        renewer._release(fd)
 
 
 class TokenRenewer:

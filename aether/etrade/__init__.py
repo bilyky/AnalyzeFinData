@@ -17,6 +17,7 @@ from aether import notify, paths, trash
 from aether.config import CFG
 from aether.logger import get_logger
 from aether.token_renewer import TokenRenewer as _TokenRenewer
+from aether.token_renewer import single_flight as _single_flight
 
 
 _log = get_logger("aether.etrade")
@@ -144,6 +145,7 @@ class AuthReason:
     SMS_REQUIRED  = "sms_required"   # device trust lapsed — a human SMS bootstrap is required
     UNSEEDED      = "unseeded"       # profile never bootstrapped — a supervised bootstrap is required
     BREAKER       = "breaker"        # the anti-ban circuit breaker is cooling down
+    IN_PROGRESS   = "in_progress"    # a mint is already in flight (single-flight loser) — no 2nd browser
     FAILED        = "failed"         # an automated browser re-auth attempt failed
     LIVE          = "live"           # token present and valid (local record, or probe-confirmed)
     EXPIRED       = "expired"        # token dead (overnight/midnight-ET) or broker-rejected (401/403)
@@ -395,6 +397,33 @@ def _record_reauth_attempt(env: str = "production") -> None:
     )
 
 
+def _reauth_alert_threshold() -> int:
+    """Consecutive-failure count at which the automated door HARD-BLOCKS and alerts. Distinct
+    from the breaker's cooldown escalation: the cooldown only lengthens the wait; this is a true
+    stop, cleared only when a human re-auths (which resets the failure count)."""
+    return int(getattr(CFG, "etrade_reauth_alert_threshold", 3) or 3)
+
+
+def _reauth_blocked(env: str = "production") -> bool:
+    """True once the consecutive-failure streak has reached the hard-block threshold. While
+    blocked the automated mint is suppressed regardless of where the cooldown clock sits, until a
+    human clears the breaker."""
+    return _load_reauth_state(env)["consecutive_failures"] >= _reauth_alert_threshold()
+
+
+def _maybe_alert_reauth_blocked(env: str = "production") -> None:
+    """Fire the throttled 'automated re-auth failed — manual re-auth needed' alert (email +
+    desktop push), but ONLY once the failure streak has reached the hard-block threshold, and at
+    most once per episode (notify throttles on the marker, which clears on the next successful
+    mint). Best-effort: a notification failure must never mask the underlying auth failure."""
+    if not _reauth_blocked(env):
+        return
+    try:
+        notify.send_reauth_alert(env, "failed")
+    except Exception as exc:
+        _log.debug(f"_maybe_alert_reauth_blocked: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Persistent-profile trust state (gates the automated daily re-auth door)
 # ---------------------------------------------------------------------------
@@ -470,6 +499,19 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str,
     if totp_secret is None:
         totp_secret = getattr(CFG, "etrade_totp_secret", "") or ""
 
+    # Hard stop after N consecutive failures (etrade_reauth_alert_threshold, default 3): a true
+    # block, not just a longer cooldown, held until a human re-auths (which resets the count).
+    # Checked BEFORE the cooldown clock so it binds even if the cooldown happens to have elapsed.
+    if _reauth_blocked(env):
+        failures = _load_reauth_state(env)["consecutive_failures"]
+        _log.error(
+            f"E*TRADE: automated re-auth HARD-BLOCKED after {failures} consecutive failures "
+            f"(>= threshold {_reauth_alert_threshold()}). Manual re-auth required: "
+            f"python scripts/diagnostics/test_etrade.py {env}"
+        )
+        _maybe_alert_reauth_blocked(env)
+        return None
+
     remaining = _reauth_cooldown_remaining(env)
     if remaining > 0:
         failures = _load_reauth_state(env)["consecutive_failures"]
@@ -510,6 +552,10 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str,
         raise SmsRequired(env)
     except Exception as e:
         _log.debug(f"_login_headless: {e}")
+    # This attempt failed (no verifier, or an exception that isn't SmsRequired). The breaker was
+    # already bumped up-front; if that pushed the streak to the hard-block threshold, alert now so
+    # even an end-of-day 3rd failure reports without waiting for a 4th (blocked) attempt.
+    _maybe_alert_reauth_blocked(env)
     return None
 
 
@@ -1208,7 +1254,11 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     # Silent renewal exhausted — try headless Playwright with saved browser state.
     # Uses the same cross-process file lock as renew_tokens() to guarantee only ONE
     # process opens a browser even when multiple tasks fire simultaneously.
-    if os.path.exists(_BROWSER_STATE_PATH):
+    # Gate the automated browser path on EITHER a saved browser-state file (legacy device-trust
+    # mint) OR a configured TOTP secret (the headless VIP mint needs no saved browser state). Left
+    # as file-only, a trashed/rotated browser_state.json would silently disable the proven TOTP
+    # path even though it would work fine.
+    if os.path.exists(_BROWSER_STATE_PATH) or bool(getattr(CFG, "etrade_totp_secret", "")):
         # Anti-ban circuit breaker (single source of truth = etrade_reauth_state.json,
         # enforced inside _login_headless). Fast-fail here for a clean log + to skip the
         # renewer setup while the breaker is cooling down; _login_headless self-gates too,
@@ -1232,7 +1282,11 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
                 # login nav); a shorter ttl lets a second process treat a live winner's lock as
                 # stale and launch an overlapping browser (_TokenRenewer._acquire steal path).
                 lock_ttl=300,
-                wait_timeout=150,
+                # A concurrent (loser) caller must not block an inline data request on the rare
+                # overnight browser mint: it waits only this long, then falls back to a stale/None
+                # load and the caller's own soft-fail path. The winner still mints fully inline;
+                # ttl=300 (> browser worst case) guarantees the loser never opens a second browser.
+                wait_timeout=int(getattr(CFG, "etrade_reauth_wait_timeout_sec", 10) or 10),
             )
             try:
                 tokens = reauth_renewer.ensure(current_token=cached)
@@ -1292,6 +1346,9 @@ def _breaker_summary(env: str = "production", *, state: dict | None = None) -> d
     return {
         "consecutive_failures": st["consecutive_failures"],
         "cooldown_remaining_min": round(_cooldown_remaining_from_state(st) / 60, 1),
+        # True once the streak has reached the hard-block threshold: the automated door is stopped
+        # (not merely cooling) until a human re-auths. Flows to /api/health + the web badge.
+        "blocked": st["consecutive_failures"] >= _reauth_alert_threshold(),
     }
 
 
@@ -1358,20 +1415,24 @@ def reauthenticate(env: str = "production", bootstrap: bool = False, headless: b
     return result
 
 
-def _dead_token_gate(trust: str, cooling: bool):
+def _dead_token_gate(trust: str, cooling: bool, blocked: bool = False):
     """Classify why a dead/absent token can't be auto-refreshed right now — the single
     definition of the trust->breaker gate, shared by the read-only classifier auth_status()
     and the acting door scheduled_reauth().
 
     Returns (reason, needs_manual, can_auto):
       * trust lapsed (sms_required/unseeded) -> a human must re-seed the profile.
+      * blocked (>= failure threshold)       -> a true stop; a human must re-auth (resets count).
       * breaker cooling                       -> neither human nor automation acts yet.
       * trusted + breaker clear (reason=None) -> the automated door can refresh unattended.
     trust's non-'trusted' values equal the AuthReason.SMS_REQUIRED/UNSEEDED strings, so they
-    are returned verbatim as the reason.
+    are returned verbatim as the reason. `blocked` outranks a plain `cooling` because it needs a
+    human, not just the passage of time — it reports BREAKER but with needs_manual=True.
     """
     if trust in ("sms_required", "unseeded"):
         return trust, True, False
+    if blocked:
+        return AuthReason.BREAKER, True, False
     if cooling:
         return AuthReason.BREAKER, False, False
     return None, False, True
@@ -1400,6 +1461,10 @@ def _auth_summary(env: str, r: dict) -> str:
     if state == AuthReason.UNSEEDED:
         return f"E*TRADE {env}: profile not seeded — a supervised bootstrap is required ({boot})."
     if state == AuthReason.BREAKER:
+        if r["breaker"].get("blocked"):
+            return (f"E*TRADE {env}: automated re-auth BLOCKED after "
+                    f"{r['breaker']['consecutive_failures']} consecutive failures — manual "
+                    f"re-auth required ({boot}).")
         return (f"E*TRADE {env}: automated re-auth cooling down "
                 f"({r['breaker']['cooldown_remaining_min']} min left).")
     return f"E*TRADE {env}: {state}."
@@ -1430,6 +1495,7 @@ def auth_status(env: str = "production", *, probe: bool = False) -> dict:
     # to 1 decimal, so it reads clear for the last ~3 s of a cooldown that scheduled_reauth still
     # honors) — derived from the same loaded state, so no extra read and no rounding drift.
     cooling = _cooldown_remaining_from_state(_bstate) > 0
+    blocked = _bstate["consecutive_failures"] >= _reauth_alert_threshold()
     tokens  = _load_tokens_any_date(env)
     issued  = tokens.get("issued_date_et") if tokens else None
     is_today = bool(tokens) and issued == _et_today()
@@ -1460,7 +1526,7 @@ def auth_status(env: str = "production", *, probe: bool = False) -> dict:
         # Token is absent or dead. Why it can't be auto-refreshed is the SAME trust->breaker gate
         # scheduled_reauth uses, via the shared _dead_token_gate. reason=None means trusted+clear:
         # report the raw dead-state (missing/expired) and let the automated door fix it.
-        gate_reason, needs_manual, can_auto = _dead_token_gate(trust, cooling)
+        gate_reason, needs_manual, can_auto = _dead_token_gate(trust, cooling, blocked)
         st = gate_reason or state
         return _finalize(st, st, needs_manual=needs_manual, can_auto=can_auto)
 
@@ -1522,7 +1588,8 @@ def scheduled_reauth(env: str = "production") -> dict:
     do not open a second browser.
 
     Returns a JSON-serializable dict: {ok, env, reason, browser_opened, ...}. `reason` is one
-    of: renewed | reauthed | sms_required | unseeded | breaker | failed.
+    of: renewed | reauthed | sms_required | unseeded | breaker | in_progress | failed.
+    (`in_progress` = another mint held the single-flight lock, so this call opened no browser.)
     """
     result = {"ok": False, "env": env, "reason": "", "browser_opened": False,
               "issued_date_et": None, "breaker_state": None}
@@ -1544,33 +1611,51 @@ def scheduled_reauth(env: str = "production") -> dict:
     # Treat a TOTP-configured env as 'trusted' so the door isn't blocked on 'unseeded'. The
     # breaker gate below still applies (ban-safety unchanged).
     trust = "trusted" if (getattr(CFG, "etrade_totp_secret", "") or "") else _profile_trust_state(env)
+    _bstate = _load_reauth_state(env)          # one read, reused for the gate + summary below
+    blocked = _bstate["consecutive_failures"] >= _reauth_alert_threshold()
+    # Cooling via the mockable seam (tests patch _reauth_cooldown_remaining); blocked from the
+    # already-loaded state so the hard-stop is independent of the cooldown clock.
     gate_reason, _needs_manual, _can_auto = _dead_token_gate(
-        trust, _reauth_cooldown_remaining(env) > 0)
+        trust, _reauth_cooldown_remaining(env) > 0, blocked)
     if gate_reason is not None:
+        if blocked:
+            # Hard-blocked: re-surface the throttled alert (no-op if already sent this episode).
+            _maybe_alert_reauth_blocked(env)
         result["reason"] = gate_reason
-        result["breaker_state"] = _breaker_summary(env)
+        result["breaker_state"] = _breaker_summary(env, state=_bstate)
         return result
 
     # All gates passed → the one allowed automated browser open, through the breaker choke point.
+    # Non-blocking single-flight on the SAME lock get_tokens' lazy path uses: a scheduled/CLI/
+    # button trigger and a concurrent lazy mint can never open two browsers. A loser reports
+    # in_progress (not a false failure) and opens nothing; the lock's ttl reclaims a crashed
+    # holder so this can't wedge forever.
     ck, cs, username, password = _load_config(env)
-    try:
-        tokens = _login_headless(ck, cs, username, password, env, headless=_scheduled_headless())
-    except SmsRequired:
-        # Trust lapsed: the browser+login worked but E*TRADE demanded an OTP. Latch the marker
-        # so NO further automated browser opens until a human re-seeds; breaker already cleared.
-        _set_profile_trust(env, "sms_required")
-        result.update(reason=AuthReason.SMS_REQUIRED, browser_opened=True)
+    lock_path = os.path.join(_DATA_DIR, "etrade_reauth.lock")
+    with _single_flight(lock_path, lock_ttl=300) as won:
+        if not won:
+            result.update(reason=AuthReason.IN_PROGRESS)
+            result["breaker_state"] = _breaker_summary(env)
+            return result
+        try:
+            tokens = _login_headless(ck, cs, username, password, env, headless=_scheduled_headless())
+        except SmsRequired:
+            # Trust lapsed: the browser+login worked but E*TRADE demanded an OTP. Latch the marker
+            # so NO further automated browser opens until a human re-seeds; breaker already cleared.
+            _set_profile_trust(env, "sms_required")
+            result.update(reason=AuthReason.SMS_REQUIRED, browser_opened=True)
+            result["breaker_state"] = _breaker_summary(env)
+            return result
+
+        result["browser_opened"] = True
+        if tokens:
+            result.update(ok=True, reason=AuthReason.REAUTHED, issued_date_et=tokens.get("issued_date_et"))
+        else:
+            # _login_headless already escalated the breaker (or was suppressed by it) and, if the
+            # streak reached the threshold, fired the blocked alert at its own failure site.
+            result["reason"] = AuthReason.FAILED
         result["breaker_state"] = _breaker_summary(env)
         return result
-
-    result["browser_opened"] = True
-    if tokens:
-        result.update(ok=True, reason=AuthReason.REAUTHED, issued_date_et=tokens.get("issued_date_et"))
-    else:
-        # _login_headless already escalated the breaker (or was suppressed by it).
-        result["reason"] = AuthReason.FAILED
-    result["breaker_state"] = _breaker_summary(env)
-    return result
 
 
 # ---------------------------------------------------------------------------
