@@ -1,10 +1,16 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import console_safe
+console_safe.install()
 
 import json
 import datetime
 import os
 from pathlib import Path
+
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("archive_manager")
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -18,7 +24,7 @@ def archive_session(session_data):
     
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(session_data, f, indent=4)
-    print(f"📁 Session archived to {file_path.name}")
+    _log.info(f"📁 Session archived to {file_path.name}")
 
 def update_chronicles(summary_text):
     """Append a high-density summary to the master Chronicles file."""
@@ -37,10 +43,9 @@ def update_chronicles(summary_text):
             
     with open(SUMMARY_FILE, "a", encoding="utf-8") as f:
         f.write(entry)
-    print("✍️ Chronicles updated with high-density summary.")
+    _log.info("✍️ Chronicles updated with high-density summary.")
 
 if __name__ == "__main__":
     # Test/Manual use
-    import sys
     if len(sys.argv) > 1:
         update_chronicles(sys.argv[1])

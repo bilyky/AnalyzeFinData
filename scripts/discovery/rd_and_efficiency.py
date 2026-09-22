@@ -1,10 +1,17 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import console_safe
+console_safe.install()
 
+import argparse
 import json
 import datetime
 from pathlib import Path
 import openpyxl
+
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("rd_and_efficiency")
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -27,13 +34,13 @@ def log_daily_costs(tokens_used, api_calls=0, saas_fees=0.0):
         ws = wb["Resource_Costs"]
         ws.append([today, tokens_used, round(token_cost, 4), round(api_fee, 2), round(saas_fees, 2), round(total, 4)])
         wb.save(TRACKER_FILE)
-        print(f"💰 Resource cost logged: ${round(total, 4)}")
+        _log.console(f"💰 Resource cost logged: ${round(total, 4)}")
     except Exception as e:
-        print(f"Cost logging failed: {e}")
+        _log.error(f"[rd_and_efficiency] Cost logging failed: {e}", exc_info=True)
 
 def run_learning_session():
     """Analyze historical wins to find 'Out of the Box' strategies."""
-    print("🧠 Starting R&D Learning Session...")
+    _log.console("🧠 Starting R&D Learning Session...")
     # 1. Load historical performance
     # 2. Cross-reference with detected patterns in patterns.py
     # 3. Output new hypothesis
@@ -53,12 +60,11 @@ def run_learning_session():
         ws = wb["Strategy_R_D"]
         ws.append([hypothesis['date'], hypothesis['hypothesis'], hypothesis['combination'], hypothesis['win_pct'], hypothesis['alpha'], hypothesis['status']])
         wb.save(TRACKER_FILE)
-        print(f"💡 New Strategy Hypothesis Logged: {hypothesis['hypothesis']}")
+        _log.console(f"💡 New Strategy Hypothesis Logged: {hypothesis['hypothesis']}")
     except Exception as e:
-        print(f"R&D logging failed: {e}")
+        _log.error(f"[rd_and_efficiency] R&D logging failed: {e}", exc_info=True)
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--learn", action="store_true", help="Run strategy R&D session")
     parser.add_argument("--log-cost", type=int, help="Log tokens used today")

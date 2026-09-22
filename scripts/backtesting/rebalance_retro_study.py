@@ -8,6 +8,12 @@ from datetime import datetime, date
 
 # Ensure project root is in path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import console_safe
+console_safe.install()
+
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("rebalance_retro_study")
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Data")
 HIST_DIR = os.path.join(DATA_DIR, "History")
@@ -82,18 +88,18 @@ def load_symbol_day_cache(symbol: str, date_str: str) -> dict:
     return {}
 
 def main():
-    print("======================================================================")
-    print("AETHER: RUNNING REBALANCE & DRAWDOWN RETROSPECTIVE STUDY (AUG 2026)")
-    print("======================================================================")
-    
+    sys.stdout.write("======================================================================\n")
+    sys.stdout.write("AETHER: RUNNING REBALANCE & DRAWDOWN RETROSPECTIVE STUDY (AUG 2026)\n")
+    sys.stdout.write("======================================================================\n")
+
     # Restrict to active August 2026 files to run in under 2 seconds!
     csv_paths = sorted(glob.glob(os.path.join(DATA_DIR, "symbols_to_check_2026-08-*.csv")))
-    
+
     if not csv_paths:
-        print("No active August 2026 CSV run files found.")
+        _log.warning("[rebalance_retro_study] No active August 2026 CSV run files found.")
         return
-        
-    print(f"Scanned {len(csv_paths)} active run files from August 2026.")
+
+    _log.console(f"Scanned {len(csv_paths)} active run files from August 2026.")
     
     baseline_trades = []
     filtered_trades = []
@@ -175,12 +181,12 @@ def main():
                 if symbol == "CCL" and date_str == "2026-08-14":
                     ccl_runs.append(trade_record)
                     
-    print("\n----------------------------------------------------------------------")
-    print("📊 QUANTITATIVE BACKTEST COMPARISON (August 2026 Window)")
-    print("----------------------------------------------------------------------")
-    
+    sys.stdout.write("\n----------------------------------------------------------------------\n")
+    sys.stdout.write("📊 QUANTITATIVE BACKTEST COMPARISON (August 2026 Window)\n")
+    sys.stdout.write("----------------------------------------------------------------------\n")
+
     if not baseline_trades:
-        print("No matching completed historical trades recorded.")
+        _log.warning("[rebalance_retro_study] No matching completed historical trades recorded.")
     else:
         def summarize(trades, label):
             n = len(trades)
@@ -189,43 +195,43 @@ def main():
             avg_ret = (sum(t["fwd_return_10d"] for t in trades) / n) * 100.0 if n > 0 else 0.0
             losses = [t["fwd_return_10d"] for t in trades if t["fwd_return_10d"] < 0]
             max_loss = min(losses) * 100.0 if losses else 0.0
-            print(f"  [{label}]")
-            print(f"    - Total Trades Run      : {n}")
-            print(f"    - Win Rate (10d > 0)    : {win_rate:.2f}%")
-            print(f"    - Mean 10-Day Return    : {avg_ret:.2f}%")
-            print(f"    - Maximum Single Loss   : {max_loss:.2f}%")
-            print()
-            
+            sys.stdout.write(f"  [{label}]\n")
+            sys.stdout.write(f"    - Total Trades Run      : {n}\n")
+            sys.stdout.write(f"    - Win Rate (10d > 0)    : {win_rate:.2f}%\n")
+            sys.stdout.write(f"    - Mean 10-Day Return    : {avg_ret:.2f}%\n")
+            sys.stdout.write(f"    - Maximum Single Loss   : {max_loss:.2f}%\n")
+            sys.stdout.write("\n")
+
         summarize(baseline_trades, "BASELINE MOMENTUM SCORING")
         summarize(filtered_trades, "FILTERED WITH EARNINGS-SHOCK & SECTOR GUARDS")
-    
-    print("----------------------------------------------------------------------")
-    print("🔬 CASE STUDY: AUGUST 14, 2026 REBALANCING WINDOW (LIVE STANDING)")
-    print("----------------------------------------------------------------------")
+
+    sys.stdout.write("----------------------------------------------------------------------\n")
+    sys.stdout.write("🔬 CASE STUDY: AUGUST 14, 2026 REBALANCING WINDOW (LIVE STANDING)\n")
+    sys.stdout.write("----------------------------------------------------------------------\n")
     if ke_runs:
         t = ke_runs[0]
         ent, lat, ret = get_current_return_since(t["ohlcv"], t["date"])
-        print(f"  * KE (Kimball Electronics) - Buy Date: {t['date']} | Raw TrendScore: {t['score']:.1f}")
-        print(f"    - Earnings Shock Flagged : {t['earnings_shock']} (Missed EPS by $0.40 on Aug 12)")
-        print(f"    - Cost Basis Close       : ${ent:.2f}")
-        print(f"    - Wednesday Close        : ${lat:.2f}")
-        print(f"    - Current Return Outcome : {ret*100.0:.2f}%")
-        print(f"    - VETO ACTION            : {'✅ FILTER BLOCKED (VETOED!)' if t['earnings_shock'] else 'None'}")
-        print()
+        sys.stdout.write(f"  * KE (Kimball Electronics) - Buy Date: {t['date']} | Raw TrendScore: {t['score']:.1f}\n")
+        sys.stdout.write(f"    - Earnings Shock Flagged : {t['earnings_shock']} (Missed EPS by $0.40 on Aug 12)\n")
+        sys.stdout.write(f"    - Cost Basis Close       : ${ent:.2f}\n")
+        sys.stdout.write(f"    - Wednesday Close        : ${lat:.2f}\n")
+        sys.stdout.write(f"    - Current Return Outcome : {ret*100.0:.2f}%\n")
+        sys.stdout.write(f"    - VETO ACTION            : {'✅ FILTER BLOCKED (VETOED!)' if t['earnings_shock'] else 'None'}\n")
+        sys.stdout.write("\n")
     else:
-        print("  * KE Buy window not captured.")
+        sys.stdout.write("  * KE Buy window not captured.\n")
     if ccl_runs:
         t = ccl_runs[0]
         ent, lat, ret = get_current_return_since(t["ohlcv"], t["date"])
-        print(f"  * CCL (Carnival Corp) - Buy Date: {t['date']} | Raw TrendScore: {t['score']:.1f}")
-        print(f"    - Weak Sector Flagged    : {t['weak_sector']} (0/3 Strength, 0/3 Timing, Weak Industry)")
-        print(f"    - Cost Basis Close       : ${ent:.2f}")
-        print(f"    - Wednesday Close        : ${lat:.2f}")
-        print(f"    - Current Return Outcome : {ret*100.0:.2f}%")
-        print(f"    - VETO ACTION            : {'✅ FILTER BLOCKED (VETOED!)' if t['weak_sector'] else 'None'}")
-        print()
+        sys.stdout.write(f"  * CCL (Carnival Corp) - Buy Date: {t['date']} | Raw TrendScore: {t['score']:.1f}\n")
+        sys.stdout.write(f"    - Weak Sector Flagged    : {t['weak_sector']} (0/3 Strength, 0/3 Timing, Weak Industry)\n")
+        sys.stdout.write(f"    - Cost Basis Close       : ${ent:.2f}\n")
+        sys.stdout.write(f"    - Wednesday Close        : ${lat:.2f}\n")
+        sys.stdout.write(f"    - Current Return Outcome : {ret*100.0:.2f}%\n")
+        sys.stdout.write(f"    - VETO ACTION            : {'✅ FILTER BLOCKED (VETOED!)' if t['weak_sector'] else 'None'}\n")
+        sys.stdout.write("\n")
     else:
-        print("  * CCL Buy window not captured.")
+        sys.stdout.write("  * CCL Buy window not captured.\n")
         
 if __name__ == "__main__":
     main()

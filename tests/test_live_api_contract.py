@@ -15,7 +15,7 @@ class TestLiveApiContract(unittest.TestCase):
     @unittest.skipUnless(_LIVE, "Set AETHER_LIVE_TESTS=1 to run live broker/API tests")
     def test_chaikin_live_connection(self):
         """Verify that the automated Chaikin login and API are 100% online and authenticated."""
-        print("\n[LIVE TEST] Testing Chaikin Analytics API connection...")
+        sys.stdout.write("\n[LIVE TEST] Testing Chaikin Analytics API connection...\n")
         try:
             # Attempts automated login (using the Playwright browser/session.json)
             session_data = powergauge.login(interactive=False)
@@ -29,14 +29,14 @@ class TestLiveApiContract(unittest.TestCase):
             # Fetch real symbol data
             pg = powergauge.get_symbol_data("AAPL", None, False, session_data)
             self.assertGreater(pg.price, 0, "Failed to retrieve a valid price for AAPL from Chaikin API!")
-            print("  [Chaikin] Live connection 100% authenticated and online!")
+            sys.stdout.write("  [Chaikin] Live connection 100% authenticated and online!\n")
         except Exception as e:
             self.fail(f"Chaikin Live Connection Contract failed: {e}")
 
     @unittest.skipUnless(_LIVE, "Set AETHER_LIVE_TESTS=1 to run live broker/API tests")
     def test_etrade_live_connection(self):
         """Verify that the production E*TRADE API is 100% online and authenticated."""
-        print("\n[LIVE TEST] Testing E*TRADE Production API connection...")
+        sys.stdout.write("\n[LIVE TEST] Testing E*TRADE Production API connection...\n")
         try:
             tokens = etrade.get_tokens("production")
             self.assertTrue(tokens, "Failed to retrieve active E*TRADE production tokens!")
@@ -45,14 +45,14 @@ class TestLiveApiContract(unittest.TestCase):
             resp = accts_api.list_accounts(resp_format="json")
             acct_list = resp.get("AccountListResponse", {}).get("Accounts", {}).get("Account", [])
             self.assertTrue(len(acct_list) > 0, "No active accounts returned by E*TRADE, or authorization failed!")
-            print("  [E*TRADE] Live connection 100% authenticated and online!")
+            sys.stdout.write("  [E*TRADE] Live connection 100% authenticated and online!\n")
         except Exception as e:
             self.fail(f"E*TRADE Live Connection Contract failed: {e}")
 
     @unittest.skipUnless(_LIVE, "Set AETHER_LIVE_TESTS=1 to run live broker/API tests")
     def test_accounts_api_contract(self):
         """Verify that the accounts endpoint returns complete, populated, and valid holdings data."""
-        print("\n[LIVE TEST] Testing /api/accounts Data Contract...")
+        sys.stdout.write("\n[LIVE TEST] Testing /api/accounts Data Contract...\n")
         try:
             import data_api
             res = data_api.read_accounts()
@@ -65,7 +65,7 @@ class TestLiveApiContract(unittest.TestCase):
                 acct_id = acct.get("id")
                 label = acct.get("label")
                 holdings = acct.get("holdings", [])
-                print(f"  Validating Account: {label} ({len(holdings)} holdings)...")
+                sys.stdout.write(f"  Validating Account: {label} ({len(holdings)} holdings)...\n")
                 
                 for h in holdings:
                     sym = h.get("symbol")
@@ -93,7 +93,7 @@ class TestLiveApiContract(unittest.TestCase):
                     if acct_id == "game":
                         self.assertIsNotNone(h.get("days_held"), f"Virtual holding {sym} has empty Days Held (None)!")
                         self.assertGreaterEqual(h.get("days_held", -1), 0, f"Virtual holding {sym} has invalid Days Held!")
-            print("  [Accounts API] Data contract is 100% complete with no empty columns!")
+            sys.stdout.write("  [Accounts API] Data contract is 100% complete with no empty columns!\n")
         except Exception as e:
             self.fail(f"Accounts API Data Contract failed: {e}")
 
