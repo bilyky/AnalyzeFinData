@@ -1264,10 +1264,22 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     auth_url = oauth.get_request_token()
     _log.console(f"Auth URL: {auth_url}")
 
-    verifier_code = _get_tokens_via_playwright(
-        auth_url, username, password,
-        headless=headless,
-    )
+    # When a software-VIP TOTP secret is configured, self-complete 2FA through the proven
+    # firefox_totp path (the same choke point the automated door uses via _login_headless)
+    # instead of stalling on a human typing the code into the Chromium profile — this headed
+    # "wait for a person" step was the historic spinner-hang on the interactive verify. Falls
+    # back to the persistent-profile browser only when no secret is set (the supervised monthly
+    # SMS bootstrap / re-seed, which re-proves device trust).
+    totp_secret = getattr(CFG, "etrade_totp_secret", "") or ""
+    if totp_secret:
+        verifier_code = _get_verifier_via_totp(
+            auth_url, username, password, totp_secret, headless=headless,
+        )
+    else:
+        verifier_code = _get_tokens_via_playwright(
+            auth_url, username, password,
+            headless=headless,
+        )
     # Redacted: this is captured to a served task-run log by POST /api/etrade/reauth, so log
     # only whether a verifier was captured, never the one-time-use code itself.
     _log.info("Verifier %s", "captured" if verifier_code else "not captured")
