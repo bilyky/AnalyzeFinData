@@ -1,6 +1,8 @@
 """Move Symbol flat files into per-symbol subdirectories."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import console_safe
+console_safe.install()
 
 
 
@@ -8,6 +10,10 @@ import os
 import shutil
 from pathlib import Path
 from collections import defaultdict
+
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("organize_symbol_files")
 
 SYMBOL_DIR = Path(r"C:\Develop\StockTrading\AnalyzeFinData\Data\Symbol")
 
@@ -28,9 +34,9 @@ def organize():
             shutil.move(str(src), str(dest_dir / src.name))
             moved += 1
             if moved % 10000 == 0:
-                print(f"  {moved}/{total} moved...")
+                _log.console(f"  {moved}/{total} moved...")
 
-    print(f"Done: {moved} files moved into {len(by_symbol)} symbol folders.")
+    _log.info(f"Done: {moved} files moved into {len(by_symbol)} symbol folders.")
 
 
 if __name__ == "__main__":

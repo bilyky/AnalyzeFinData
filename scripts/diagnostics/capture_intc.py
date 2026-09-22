@@ -1,11 +1,17 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import console_safe
+console_safe.install()
 
 import imaplib
 import email
 import datetime
 from email.header import decode_header
 from pathlib import Path
+
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("capture_intc")
 
 try:
     from config import CFG
@@ -22,7 +28,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 def capture_intc_emails():
     if not EMAIL_USER or not EMAIL_PASS:
-        print("Error: Email credentials not configured. Set mailboxes in config.json or SENDER_EMAIL/SMTP_PASSWORD env vars.")
+        _log.error("[capture_intc] Email credentials not configured. Set mailboxes in config.json or SENDER_EMAIL/SMTP_PASSWORD env vars.")
         return
     
     try:
@@ -31,7 +37,7 @@ def capture_intc_emails():
         mail.select("inbox")
         
         today_str = datetime.date.today().strftime("%d-%b-%Y")
-        print(f"Searching inbox for any email containing 'INTC' received today ({today_str})...")
+        _log.console(f"Searching inbox for any email containing 'INTC' received today ({today_str})...")
         status, messages = mail.search(None, f'(SINCE "{today_str}")')
         
         found = False
@@ -57,18 +63,18 @@ def capture_intc_emails():
                     content_upper = (subject + " " + body).upper()
                     
                     if "INTC" in content_upper:
-                        print(f"\n🎉 MATCH FOUND!")
-                        print(f"From: {sender}")
-                        print(f"Subject: {subject}")
-                        print(f"Snippet: {body[:300].strip()}...")
+                        sys.stdout.write(f"\n🎉 MATCH FOUND!\n")
+                        sys.stdout.write(f"From: {sender}\n")
+                        sys.stdout.write(f"Subject: {subject}\n")
+                        sys.stdout.write(f"Snippet: {body[:300].strip()}...\n")
                         found = True
-                        
+
         if not found:
-            print("No emails containing 'INTC' found in today's inbox.")
-            
+            sys.stdout.write("No emails containing 'INTC' found in today's inbox.\n")
+
         mail.logout()
     except Exception as e:
-        print(f"Failed to scan inbox: {e}")
+        _log.error(f"[capture_intc] Failed to scan inbox: {e}", exc_info=True)
 
 if __name__ == "__main__":
     capture_intc_emails()
