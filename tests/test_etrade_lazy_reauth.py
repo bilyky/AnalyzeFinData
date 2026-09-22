@@ -241,6 +241,53 @@ class TestThreeStrikeHardBlock(unittest.TestCase):
         m_verify.assert_called_once()                     # browser path was reached
         m_alert.assert_not_called()                       # streak below threshold → no block alert
 
+    def test_login_headless_alerts_when_failure_crosses_threshold(self):
+        # The exact 2 -> arm -> 3 -> fail transition: entry reads 2 (NOT blocked → mint proceeds
+        # and the breaker arms, bumping the streak to 3), the mint fails (empty verifier), and the
+        # END-of-function alert reads the now-3 streak and fires ONCE. This is how an end-of-day
+        # 3rd failure reports immediately, without waiting for a 4th (blocked) attempt.
+        st = _state(2)
+
+        def _bump(_env="production"):
+            st["consecutive_failures"] += 1
+
+        with mock.patch.object(etrade, "_reauth_alert_threshold", return_value=3), \
+             mock.patch.object(etrade, "_load_reauth_state", side_effect=lambda _e="production": dict(st)), \
+             mock.patch.object(etrade, "_reauth_cooldown_remaining", return_value=0.0), \
+             mock.patch.object(etrade, "_record_reauth_attempt", side_effect=_bump) as m_arm, \
+             mock.patch.object(etrade, "pyetrade") as pye, \
+             mock.patch.object(etrade, "_get_verifier_via_totp", return_value="") as m_verify, \
+             mock.patch.object(etrade.notify, "send_reauth_alert", return_value=True) as m_alert:
+            pye.ETradeOAuth.return_value.get_request_token.return_value = "http://auth"
+            out = etrade._login_headless("ck", "cs", "u", "pw", "production",
+                                         headless=True, totp_secret="SECRET")
+        self.assertIsNone(out)
+        m_arm.assert_called_once()                        # passed the entry gate (streak was 2) and armed
+        m_verify.assert_called_once()                     # browser path was reached
+        m_alert.assert_called_once_with("production", "failed")   # end-alert saw the bumped 3
+
+    def test_scheduled_reauth_blocked_reports_and_alerts(self):
+        # The automated door, at the hard-block threshold: it opens NO browser, reports the distinct
+        # reason "blocked" (not the self-elapsing "breaker"), and re-surfaces the throttled alert.
+        ps = [
+            mock.patch.object(etrade, "keep_alive", return_value=None),
+            mock.patch.object(etrade, "_profile_trust_state", return_value="trusted"),
+            mock.patch.object(etrade, "_reauth_cooldown_remaining", return_value=0.0),
+            mock.patch.object(etrade, "_breaker_summary", return_value={}),
+            mock.patch.object(etrade, "_reauth_alert_threshold", return_value=3),
+            mock.patch.object(etrade, "_load_reauth_state", return_value=_state(3)),
+        ]
+        for p in ps:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in ps])
+        with mock.patch.object(etrade, "_login_headless") as m_lh, \
+             mock.patch.object(etrade, "_maybe_alert_reauth_blocked") as m_alert:
+            res = etrade.scheduled_reauth("production")
+        self.assertEqual(res["reason"], "blocked")
+        self.assertFalse(res["browser_opened"])
+        m_lh.assert_not_called()                          # hard stop — no automated browser
+        m_alert.assert_called_once()                      # blocked alert re-surfaced
+
     def test_reauth_blocked_predicate(self):
         with mock.patch.object(etrade, "_reauth_alert_threshold", return_value=3):
             with mock.patch.object(etrade, "_load_reauth_state", return_value=_state(3)):
@@ -255,14 +302,15 @@ class TestThreeStrikeHardBlock(unittest.TestCase):
 
     def test_auth_status_reports_blocked_needs_manual(self):
         # The read-only classifier every UI surface (/api/health, /api/etrade/status) calls must
-        # report the hard block: state BREAKER, needs_manual_auth True, can_auto_reauth False,
-        # and breaker.blocked True — so the web badge can paint the red "manual re-auth" message.
+        # report the hard block with its OWN state BLOCKED (distinct from the self-elapsing
+        # BREAKER cooldown): needs_manual_auth True, can_auto_reauth False, and breaker.blocked
+        # True — so the web badge can paint the red "manual re-auth" message.
         with mock.patch.object(etrade, "_reauth_alert_threshold", return_value=3), \
              mock.patch.object(etrade, "_load_reauth_state", return_value=_state(3)), \
              mock.patch.object(etrade, "_profile_trust_state", return_value="trusted"), \
              mock.patch.object(etrade, "_load_tokens_any_date", return_value=None):
             res = etrade.auth_status("production", probe=False)
-        self.assertEqual(res["state"], "breaker")
+        self.assertEqual(res["state"], "blocked")
         self.assertTrue(res["needs_manual_auth"])
         self.assertFalse(res["can_auto_reauth"])
         self.assertTrue(res["breaker"]["blocked"])
