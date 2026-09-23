@@ -151,8 +151,9 @@ def _poll_for_login(endpoint: str, deadline: float) -> dict:
 
 
 def _email_throttled(kind: str, min_hours: float) -> bool:
-    """True if an email of `kind` was sent within `min_hours`. On False, stamps 'now' first so
-    callers can simply guard `if not _email_throttled(...): send_email(...)`."""
+    """True if an email of `kind` was sent within `min_hours`. PURE READ — it does NOT stamp.
+    Callers must stamp via `_stamp_email_sent(kind)` only AFTER a successful send, so a transient
+    SMTP failure never burns the window (the reminder is retried on the next run)."""
     now = datetime.datetime.now(tz=datetime.timezone.utc).timestamp()
     state = {}
     try:
@@ -162,8 +163,20 @@ def _email_throttled(kind: str, min_hours: float) -> bool:
     except Exception:
         state = {}
     last = state.get(kind)
-    if isinstance(last, (int, float)) and (now - last) < min_hours * 3600.0:
-        return True
+    return isinstance(last, (int, float)) and (now - last) < min_hours * 3600.0
+
+
+def _stamp_email_sent(kind: str) -> None:
+    """Record that an email of `kind` was just sent. Call ONLY after a successful send so the
+    throttle window opens on delivery, not on the attempt."""
+    now = datetime.datetime.now(tz=datetime.timezone.utc).timestamp()
+    state = {}
+    try:
+        if os.path.exists(_NOTIFY_STATE):
+            with open(_NOTIFY_STATE, encoding="utf-8") as fh:
+                state = json.load(fh) or {}
+    except Exception:
+        state = {}
     state[kind] = now
     try:
         os.makedirs(os.path.dirname(_NOTIFY_STATE), exist_ok=True)
@@ -171,7 +184,6 @@ def _email_throttled(kind: str, min_hours: float) -> bool:
             json.dump(state, fh)
     except Exception:
         _log.warning("Could not persist notify-throttle state to %s", _NOTIFY_STATE)
-    return False
 
 
 def _notify_manual_reauth(reason: str) -> None:
@@ -188,6 +200,7 @@ def _notify_manual_reauth(reason: str) -> None:
                   "'Chaikin - Login & Refresh Token (opens Chrome)', then log in once "
                   "(one Turnstile). A fresh ~7-day token is captured automatically."),
         )
+        _stamp_email_sent("reauth_failed")
         _log.info("Manual-reauth reminder emailed.")
     except Exception as mail_err:
         _log.warning("Failed to send manual-reauth email: %s", mail_err)
@@ -268,6 +281,10 @@ def main() -> int:
                     help="Seconds to wait for the human login in --cdp mode (default 600).")
     ap.add_argument("--no-launch", action="store_true",
                     help="In --cdp mode, attach to an already-running debug Chrome; do not launch one.")
+    ap.add_argument("--notify-days", type=float, default=None,
+                    help="Runway-watch mode: if the sessionToken has fewer than this many days of "
+                         "runway, email a reminder to click the System login button. Never launches "
+                         "a browser; throttled to at most one email/day.")
     args = ap.parse_args()
 
     if args.cdp:
@@ -285,6 +302,31 @@ def main() -> int:
     else:
         runway_days = -1.0  # unknown/undecodable -> treat as needing refresh
         _log.warning("sessionToken missing or undecodable — treating as expired.")
+
+    if args.notify_days is not None:
+        # Runway-watch: a browser-free daily nudge before expiry. Never launches Chrome.
+        if runway_days < args.notify_days:
+            if _email_throttled("runway_low", 20.0):
+                _log.info("Runway %.2fd < %.1fd, but reminder already sent within 20h — skipping.",
+                          runway_days, args.notify_days)
+            else:
+                try:
+                    send_email(
+                        subject="Chaikin token expiring soon - refresh it from the System page",
+                        body=(f"The Chaikin sessionToken has {runway_days:.1f} days of runway left "
+                              f"(threshold {args.notify_days:.1f}).\n\n"
+                              "Open the AETHER dashboard System page and click "
+                              "'Chaikin - Login & Refresh Token (opens Chrome)', then log in once "
+                              "(one Turnstile). A fresh ~7-day token is captured automatically."),
+                    )
+                    _stamp_email_sent("runway_low")
+                    _log.info("Runway-watch reminder emailed (%.2fd < %.1fd).",
+                              runway_days, args.notify_days)
+                except Exception as mail_err:
+                    _log.warning("Failed to send runway-watch email: %s", mail_err)
+        else:
+            _log.info("Runway %.2fd >= %.1fd — no reminder needed.", runway_days, args.notify_days)
+        return 0
 
     if args.check:
         return 0
