@@ -295,13 +295,24 @@ git branch -D <branch>             # squash-merged ⇒ -d refuses ("not fully me
 git worktree prune                 # drop stale administrative refs
 ```
 
-**Classify before touching anything** — build the branch→state map once (`gh api pulls?state=open`
-+ `state=closed`, join on `.head.ref`) and bucket every worktree:
-- **PRUNE** — PR `merged==true` AND worktree clean → remove worktree + `git branch -D`.
-- **KEEP** — PR still **OPEN** (e.g. the print-logger / scenario-plan branches) → leave it; work in flight.
-- **REVIEW (never auto-delete)** — uncommitted changes present, OR PR **CLOSED-unmerged** (work not in
-  `main`), OR the local branch name doesn't match any PR head (possible unpushed work). Hand these to
-  the user with the specifics; do not decide their fate yourself.
+**Use the automated prune tool — it encodes every rule in this section.** The reusable helper does the
+API-state join and the safe removals inside a single script process (outside the Bash classifier), so
+the whole prune runs in one gated call instead of many per-branch ones:
+```bash
+python scripts/utils/prune_merged_worktrees.py            # dry-run FIRST (read-only plan)
+python scripts/utils/prune_merged_worktrees.py --apply    # then apply
+#   --merged-only / --closed-only narrow scope; default prunes both
+```
+Run it **whenever a tracked PR flips to merged OR closed** (the "cleanup on merge and on close" hook)
+and at the end of every campaign. Its buckets, matching this section's contract:
+- **PRUNE** — backing PR is `merged==true` **or** closed-unmerged (`state==closed && merged==false`)
+  AND the worktree is clean → worktree removed (no `--force`) + branch deleted.
+- **KEEP** — PR still **OPEN**. **OPEN dominates a shared head ref**: a branch backing any open PR
+  (e.g. `feat/ruff-linting-minimal`, backing both closed #61 and open #96) is always kept — the script
+  queries open **last** so it wins, a safety guarantee not a cosmetic order.
+- **REVIEW (never auto-delete)** — a clean-vs-dirty check leaves any worktree with uncommitted changes
+  as `KEEP … DIRTY`, and detached/no-branch or unmapped-branch cases are left in place. Hand these to
+  the user; do not decide their fate yourself.
 
 **Scope + permission.** This is destructive to *local* state — the auto-mode classifier flags a batch
 `worktree remove` loop as "Irreversible Local Destruction" and will (correctly) gate it. Do the
@@ -321,6 +332,9 @@ Confirm each before finishing — the full rule lives in the cited section:
   **actually run** with the real `Ran N … OK` reported.
 - **§3 capstone** prod-readiness stated (both gates); no risk-changing PR waved through on green tests.
 - **§6** no unmasked PII in anything hitting a public channel.
+- **§9** once a tracked PR is merged **or** closed, the local footprint is pruned via
+  `scripts/utils/prune_merged_worktrees.py` (dry-run, then `--apply`) — open-PR branches, dirty
+  worktrees, and `.claude/` agent worktrees left untouched.
 - **§5** posted as **comments** (`gh pr comment`, not `--request-changes`).
 - **§7 / §8** reachability proven with `--ssl-no-revoke` before claiming the API up/down; push token
   never scraped (rotation advised if seen).
