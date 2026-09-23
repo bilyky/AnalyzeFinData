@@ -1,10 +1,15 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import console_safe
+console_safe.install()
 
+import argparse
 import json
 import datetime
 import os
 from pathlib import Path
+
+from openpyxl import load_workbook
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,13 +37,13 @@ def pick_stock(symbol):
     # Ensure symbols are tracked in performance_log first
     perf = load_json(PERFORMANCE_LOG)
     if today not in perf:
-        print(f"Error: No picks logged for {today} yet. Run the daily pipeline first.")
+        sys.stdout.write(f"Error: No picks logged for {today} yet. Run the daily pipeline first.\n")
         return
 
     valid_symbols = [p["symbol"].upper() for p in perf[today]]
     if symbol.upper() not in valid_symbols:
-        print(f"Warning: {symbol} is not in today's Top 5 list ({', '.join(valid_symbols)}).")
-        print("You can still pick it, but the odds are against you!")
+        sys.stdout.write(f"Warning: {symbol} is not in today's Top 5 list ({', '.join(valid_symbols)}).\n")
+        sys.stdout.write("You can still pick it, but the odds are against you!\n")
 
     state["current_pick"] = {
         "date": today,
@@ -53,30 +58,29 @@ def pick_stock(symbol):
             break
             
     save_json(GAME_STATE_FILE, state)
-    print(f"🎯 Challenge Accepted! Your pick for {today} is {symbol.upper()}.")
+    sys.stdout.write(f"🎯 Challenge Accepted! Your pick for {today} is {symbol.upper()}.\n")
 
 def evaluate_challenge():
     """Check how yesterday's pick performed."""
     state = load_json(GAME_STATE_FILE)
     pick = state.get("current_pick")
     if not pick:
-        print("No active challenge found. Use --pick <SYM> to start.")
+        sys.stdout.write("No active challenge found. Use --pick <SYM> to start.\n")
         return
 
     today_date = datetime.date.today()
     pick_date = datetime.datetime.strptime(pick["date"], "%Y-%m-%d").date()
     
     if pick_date >= today_date:
-        print(f"Patience! We need to wait for the market to close on {pick['date']} to evaluate.")
+        sys.stdout.write(f"Patience! We need to wait for the market to close on {pick['date']} to evaluate.\n")
         return
 
     # To evaluate, we need today's price for the picked symbol
     # In a real game, this would be called AFTER main.py updates the workbook
-    from openpyxl import load_workbook
     XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
     
     if not XLSX_FILE.exists():
-        print("Workbook not found. Evaluation deferred.")
+        sys.stdout.write("Workbook not found. Evaluation deferred.\n")
         return
 
     wb = load_workbook(XLSX_FILE, data_only=True)
@@ -107,31 +111,30 @@ def evaluate_challenge():
         state["current_pick"] = None # Reset
         
         save_json(GAME_STATE_FILE, state)
-        print(f"🏁 Challenge Complete for {pick['date']} ({pick['symbol']})!")
-        print(f"Result: {round(pct_change, 2)}% | Alpha vs SPY: {round(alpha, 2)}%")
-        print(f"Total Alpha Generated: {state['total_alpha']}%")
+        sys.stdout.write(f"🏁 Challenge Complete for {pick['date']} ({pick['symbol']})!\n")
+        sys.stdout.write(f"Result: {round(pct_change, 2)}% | Alpha vs SPY: {round(alpha, 2)}%\n")
+        sys.stdout.write(f"Total Alpha Generated: {state['total_alpha']}%\n")
     else:
-        print("Could not find required prices for evaluation. Ensure workbook is updated.")
+        sys.stdout.write("Could not find required prices for evaluation. Ensure workbook is updated.\n")
 
 def show_status():
     state = load_json(GAME_STATE_FILE)
-    print("--- 🏆 DAILY ALPHA CHALLENGE STATUS ---")
+    sys.stdout.write("--- 🏆 DAILY ALPHA CHALLENGE STATUS ---\n")
     pick = state.get("current_pick")
     if pick:
-        print(f"Current Pick: {pick['symbol']} (from {pick['date']})")
+        sys.stdout.write(f"Current Pick: {pick['symbol']} (from {pick['date']})\n")
     else:
-        print("Current Pick: None (Ready for a new pick!)")
-    
-    print(f"Total Lifetime Alpha: {state.get('total_alpha', 0)}%")
-    
+        sys.stdout.write("Current Pick: None (Ready for a new pick!)\n")
+
+    sys.stdout.write(f"Total Lifetime Alpha: {state.get('total_alpha', 0)}%\n")
+
     history = state.get("history", [])
     if history:
-        print("\nLast 5 Challenges:")
+        sys.stdout.write("\nLast 5 Challenges:\n")
         for h in history[-5:]:
-            print(f"- {h['date']}: {h['symbol']} ({h['return']}%) | Alpha: {h['alpha']}%")
+            sys.stdout.write(f"- {h['date']}: {h['symbol']} ({h['return']}%) | Alpha: {h['alpha']}%\n")
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--pick", type=str, help="Pick a symbol for today")
     parser.add_argument("--evaluate", action="store_true", help="Evaluate the pending challenge")
