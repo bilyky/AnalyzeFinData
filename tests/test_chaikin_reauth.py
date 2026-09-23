@@ -87,9 +87,12 @@ class TestEmailThrottle(unittest.TestCase):
         cr._NOTIFY_STATE = self._orig
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_first_stamps_then_throttles(self):
-        self.assertFalse(cr._email_throttled("k", 6.0))  # first call stamps 'now'
-        self.assertTrue(cr._email_throttled("k", 6.0))   # immediate re-check is throttled
+    def test_read_is_pure_then_stamp_throttles(self):
+        # _email_throttled is a pure read: repeated checks stay False until a caller stamps.
+        self.assertFalse(cr._email_throttled("k", 6.0))
+        self.assertFalse(cr._email_throttled("k", 6.0))  # still False — read has no side-effect
+        cr._stamp_email_sent("k")                        # only an explicit stamp opens the window
+        self.assertTrue(cr._email_throttled("k", 6.0))   # now throttled
 
     def test_aged_stamp_allows_again(self):
         old = datetime.datetime.now(tz=datetime.timezone.utc).timestamp() - 7 * 3600
@@ -98,7 +101,8 @@ class TestEmailThrottle(unittest.TestCase):
         self.assertFalse(cr._email_throttled("k", 6.0))  # 7h older than the 6h window
 
     def test_kinds_are_independent(self):
-        self.assertFalse(cr._email_throttled("a", 6.0))
+        cr._stamp_email_sent("a")
+        self.assertTrue(cr._email_throttled("a", 6.0))
         self.assertFalse(cr._email_throttled("b", 6.0))  # different kind is not throttled
 
 
@@ -143,6 +147,82 @@ class TestNotifyOnFailure(unittest.TestCase):
             sys.argv = orig_argv
         self.assertEqual(rc, 1)
         self.assertEqual(len(calls), 1)
+
+
+class TestNotifyDays(unittest.TestCase):
+    """Runway-watch (--notify-days): browser-free, throttled daily nudge before expiry."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self._orig_state = cr._NOTIFY_STATE
+        cr._NOTIFY_STATE = os.path.join(self.tmp, "notify.json")
+
+    def tearDown(self):
+        cr._NOTIFY_STATE = self._orig_state
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run(self, days_runway, threshold, sent):
+        exp = (datetime.datetime.now(tz=datetime.timezone.utc)
+               + datetime.timedelta(days=days_runway))
+        session = {"jwttoken": _make_jwt({"exp": int(exp.timestamp())}),
+                   "jsessionid": "x", "uuid": "u@e.com"}
+        orig_argv = sys.argv
+        sys.argv = ["chaikin_reauth.py", "--notify-days", str(threshold)]
+        try:
+            with mock.patch.object(cr.pg, "_load_session_from_file", return_value=session), \
+                 mock.patch.object(cr.pg, "_probe_session", return_value="valid"), \
+                 mock.patch.object(cr, "send_email",
+                                   side_effect=lambda **kw: sent.append(kw)), \
+                 mock.patch.object(cr.pg, "_login_via_browser",
+                                   side_effect=AssertionError("must NOT launch a browser")):
+                rc = cr.main()
+        finally:
+            sys.argv = orig_argv
+        return rc
+
+    def test_emails_when_below_threshold(self):
+        sent = []
+        rc = self._run(days_runway=1.0, threshold=2.5, sent=sent)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(sent), 1)
+
+    def test_no_email_when_above_threshold(self):
+        sent = []
+        rc = self._run(days_runway=5.0, threshold=2.5, sent=sent)
+        self.assertEqual(rc, 0)
+        self.assertEqual(sent, [])
+
+    def test_throttled_across_two_runs(self):
+        sent = []
+        self._run(days_runway=1.0, threshold=2.5, sent=sent)
+        self._run(days_runway=1.0, threshold=2.5, sent=sent)  # second run within 20h
+        self.assertEqual(len(sent), 1)  # only one email despite two below-threshold runs
+
+    def test_send_failure_does_not_burn_throttle(self):
+        # A transient SMTP failure must NOT stamp the throttle — the reminder is retried next run.
+        exp = (datetime.datetime.now(tz=datetime.timezone.utc)
+               + datetime.timedelta(days=1.0))
+        session = {"jwttoken": _make_jwt({"exp": int(exp.timestamp())}),
+                   "jsessionid": "x", "uuid": "u@e.com"}
+        orig_argv = sys.argv
+        sys.argv = ["chaikin_reauth.py", "--notify-days", "2.5"]
+        try:
+            # First run: send raises (transient SMTP failure) — window must stay open.
+            with mock.patch.object(cr.pg, "_load_session_from_file", return_value=session), \
+                 mock.patch.object(cr.pg, "_probe_session", return_value="valid"), \
+                 mock.patch.object(cr, "send_email",
+                                   side_effect=OSError("smtp down")), \
+                 mock.patch.object(cr.pg, "_login_via_browser",
+                                   side_effect=AssertionError("must NOT launch a browser")):
+                self.assertEqual(cr.main(), 0)
+            self.assertFalse(cr._email_throttled("runway_low", 20.0),
+                             "a failed send must not stamp the throttle")
+            # Second run: send succeeds — the reminder that the failure would have burned goes out.
+            sent = []
+            self._run(days_runway=1.0, threshold=2.5, sent=sent)
+            self.assertEqual(len(sent), 1)
+        finally:
+            sys.argv = orig_argv
 
 
 if __name__ == "__main__":
