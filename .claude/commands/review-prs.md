@@ -62,6 +62,28 @@ Map each `<n>` to its branch/head SHA. **Exclude the PR you authored** (the revi
 changes; a self-review has no independent value and `gh pr review --request-changes` is blocked on
 your own PRs anyway).
 
+**MANDATORY — read the existing review conversation BEFORE you review.** A PR is rarely a blank slate:
+prior reviewers (human or a previous agent pass) may have already filed findings, and the author may
+have replied or pushed fixes. Reviewing without reading them re-derives known issues, re-raises items
+already resolved, and misses author sign-offs that are still outstanding. For each PR fetch all three
+comment surfaces (they are distinct endpoints — issue comments, review verdicts, and inline
+line-anchored comments do NOT overlap):
+```bash
+gh api repos/<owner>/<repo>/issues/<n>/comments   --jq '.[] | "\(.user.login): \(.body)"'   # PR-level discussion
+gh api repos/<owner>/<repo>/pulls/<n>/reviews     --jq '.[] | "\(.user.login) [\(.state)]: \(.body)"'  # APPROVED / CHANGES_REQUESTED verdicts
+gh api repos/<owner>/<repo>/pulls/<n>/comments    --jq '.[] | "\(.user.login) \(.path):\(.line): \(.body)"'  # inline code comments
+```
+If `gh` is blocked, use the git-transport / `Invoke-RestMethod` fallback in §5 against the same three
+paths. Then:
+- Treat every prior 🔴/🟠/🟡 finding as a **re-review checklist** — for each one, verify against current
+  branch source (Zero-Trust, §2) whether it is now **fixed**, **still open**, or **was never valid**, and
+  say which in the write-up. Do not silently drop a prior finding.
+- Carry any unresolved **author sign-off** items (risk calls the author must make — ban-safety posture,
+  alert SLA, merge coordination) into the §3 prod-readiness verdict as explicit open questions; they are
+  the author's decision to make, not yours to close.
+- Don't re-file a finding the conversation already resolved; if you disagree with a resolution, reference
+  it explicitly rather than raising it fresh.
+
 ## 2. Review the BRANCH source, not the working tree
 
 The working tree is usually on `main`; the PR isn't. Read the actual changed code from the ref:
@@ -327,6 +349,9 @@ off the irreversible batch.
 Confirm each before finishing — the full rule lives in the cited section:
 - **§0** goal read first; each change judged against the R&D definition, and divergence from the
   canonical gate/helper is itself a finding.
+- **§1** existing review conversation fetched (issue comments + reviews + inline comments) BEFORE
+  reviewing; every prior 🔴/🟠/🟡 resolved as fixed / still-open / never-valid against branch source;
+  unresolved author sign-offs carried into the §3 verdict.
 - **§2 / §4** every finding cites branch-verified `file:line` + quoted code; assumptions labeled.
 - **§3** tests audited — none fully-mocked/valueless, same-contract cases flagged, branch suite
   **actually run** with the real `Ran N … OK` reported.
