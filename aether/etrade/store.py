@@ -39,6 +39,11 @@ DESIGN NOTES
   the *non-secret* rows — circuit-breaker state. OAuth secrets and browser state
   stay in a k8s Secret / envelope-encrypted blob. The port split below marks
   each store SECRET or SHAREABLE.
+* **Cross-process mutual exclusion is a port too** (``LockProvider``): the "only one
+  browser mint ever opens" guarantee — a local ``O_EXCL`` lock file today, a DB
+  row-lease across pods later. The file adapter wraps the *same* ``token_renewer``
+  lock primitive the reauth single-flight already uses, so both share one lock
+  behaviour on one file rather than drifting into two copies.
 * Adapters touch the package lazily (inside methods), never at import time, so
   ``aether.etrade.__init__`` can import this module from its own bottom without a
   circular-import hazard.
@@ -46,6 +51,7 @@ DESIGN NOTES
 from __future__ import annotations
 
 import abc
+import contextlib
 import json
 import os
 from typing import Optional
@@ -130,6 +136,76 @@ class ReauthStateStore(abc.ABC):
 
     @abc.abstractmethod
     def reset(self, env: str = "production") -> None: ...
+
+
+# Default lock lease (seconds). Mirrors ``token_renewer.single_flight``'s own default —
+# kept as a local literal because this module imports ``token_renewer`` lazily (inside
+# methods) to avoid an import-time circular with ``aether.etrade.__init__``.
+_DEFAULT_LOCK_TTL = 300
+
+
+class LockHandle:
+    """Opaque token returned by ``LockProvider.acquire`` and handed back to
+    ``release``. Carries whatever the adapter needs to let go of the lock:
+
+        name  str  the logical lock name the caller asked for
+        path  str  file adapter: the resolved lock-file path
+        fd    int  file adapter: the open O_EXCL descriptor
+
+    A DB row-lease adapter would instead stash a lease id / row key here — the
+    caller never inspects the handle, so the shape is adapter-private.
+    """
+
+    __slots__ = ("name", "path", "fd")
+
+    def __init__(self, name: str, path: Optional[str] = None, fd: Optional[int] = None):
+        self.name = name
+        self.path = path
+        self.fd = fd
+
+
+class LockProvider(abc.ABC):
+    """Cross-process mutual exclusion.  **SHAREABLE (non-secret).**
+
+    The port that guarantees "only one browser mint ever opens" — today via an
+    ``O_EXCL`` lock file on one box, later via a DB row-lease across pods, with
+    **zero call-site changes**. ``acquire`` is *non-blocking*: it hands a
+    :class:`LockHandle` to exactly one winner and ``None`` to every concurrent
+    caller (the loser must NOT start a second copy of the guarded work).
+    """
+
+    @abc.abstractmethod
+    def acquire(self, name: str, ttl: int = _DEFAULT_LOCK_TTL) -> Optional[LockHandle]:
+        """Try to take the named lock. Returns a handle to the single winner,
+        or ``None`` if it is already held. A holder whose lock is provably stale
+        (dead owner / aged past ``ttl``) is reclaimed by the adapter."""
+
+    @abc.abstractmethod
+    def release(self, handle: Optional[LockHandle]) -> None:
+        """Release a lock previously acquired by this provider. A ``None`` handle
+        (i.e. a loser that never won) is a no-op."""
+
+    @contextlib.contextmanager
+    def single_flight(self, name: str, ttl: int = _DEFAULT_LOCK_TTL):
+        """Convenience guard: yields ``True`` to the one holder (which must do the
+        guarded work) and ``False`` to any concurrent caller. The holder always
+        releases on exit, even on exception; a loser releases nothing.
+
+        Usage::
+
+            with store.lock.single_flight("etrade_reauth.lock", ttl=300) as won:
+                if not won:
+                    return {"reason": "in_progress"}
+                do_the_one_browser_mint()
+        """
+        handle = self.acquire(name, ttl)
+        if handle is None:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            self.release(handle)
 
 
 # ===========================================================================
@@ -242,18 +318,64 @@ class FileReauthStateStore(ReauthStateStore):
         self.save({"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}, env)
 
 
+class FileLockProvider(LockProvider):
+    """File-lock adapter over the shared ``O_EXCL`` primitive in ``token_renewer``.
+
+    This wraps the **exact** module-level ``_acquire_lock`` / ``_release_lock`` that
+    ``TokenRenewer`` and ``token_renewer.single_flight`` already use — the one that
+    stamps ``{pid, host}`` on win and reclaims a dead-owner lock immediately (else
+    TTL). So the reauth single-flight door and this port share **one** lock
+    behaviour on one lock file; a future DB row-lease adapter can replace this class
+    with zero call-site changes.
+
+    ``lock_dir`` (default ``"Data"``) is where a *bare* lock name (e.g.
+    ``"etrade_reauth.lock"``) resolves. A name that is already absolute or contains a
+    path separator is used verbatim, so callers may pass a full path when they want one.
+    """
+
+    def __init__(self, lock_dir: str = "Data"):
+        self._lock_dir = lock_dir
+
+    def _resolve(self, name: str) -> str:
+        if os.path.isabs(name) or os.sep in name or (os.altsep and os.altsep in name):
+            return name
+        return os.path.join(self._lock_dir, name)
+
+    def acquire(self, name: str, ttl: int = _DEFAULT_LOCK_TTL) -> Optional[LockHandle]:
+        from aether import token_renewer
+        path = self._resolve(name)
+        fd = token_renewer._acquire_lock(path, ttl)
+        if fd is None:
+            return None
+        return LockHandle(name=name, path=path, fd=fd)
+
+    def release(self, handle: Optional[LockHandle]) -> None:
+        if handle is None:
+            return
+        from aether import token_renewer
+        token_renewer._release_lock(handle.path, handle.fd)
+
+
 # ===========================================================================
 # Store bundle + factory
 # ===========================================================================
 
 class EtradeStore:
-    """Bundle of the three state ports, selected together for one backend."""
+    """Bundle of the state ports, selected together for one backend.
+
+    Every port is required — the same rule the three data stores follow — so a
+    hand-built or DB bundle can never silently fall back to *file* locking by
+    omitting ``lock``. The factories (:func:`_file_store`, ``make_db_store``)
+    supply the adapter that matches the chosen backend.
+    """
 
     def __init__(self, tokens: TokenStore, browser_state: BrowserStateStore,
-                 reauth: ReauthStateStore, backend: str = "file"):
+                 reauth: ReauthStateStore, lock: LockProvider,
+                 backend: str = "file"):
         self.tokens = tokens
         self.browser_state = browser_state
         self.reauth = reauth
+        self.lock = lock
         self.backend = backend
 
 
@@ -262,6 +384,7 @@ def _file_store() -> EtradeStore:
         tokens=FileTokenStore(),
         browser_state=FileBrowserStateStore(),
         reauth=FileReauthStateStore(),
+        lock=FileLockProvider(),
         backend="file",
     )
 
