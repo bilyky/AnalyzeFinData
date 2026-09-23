@@ -15,7 +15,7 @@ SECURITY CONTRACT (enforced when this is implemented):
 from __future__ import annotations
 
 from aether.etrade.store import (
-    EtradeStore, TokenStore, BrowserStateStore, ReauthStateStore,
+    EtradeStore, TokenStore, BrowserStateStore, ReauthStateStore, LockProvider,
 )
 
 _TODO = (
@@ -44,11 +44,19 @@ class _DbReauthStateStore(ReauthStateStore):
     def reset(self, env="production"): raise NotImplementedError(_TODO)
 
 
+class _DbLockProvider(LockProvider):
+    # A DB deployment takes the cross-pod lock as a row-lease (SELECT ... FOR UPDATE /
+    # advisory lock), NOT a local lock file — that is the whole reason this port exists.
+    def acquire(self, name, ttl=300): raise NotImplementedError(_TODO)
+    def release(self, handle): raise NotImplementedError(_TODO)
+
+
 def make_db_store(database_url: str) -> EtradeStore:
     """Return a DB-backed store bundle. STUB — see module docstring / Phase 5."""
     return EtradeStore(
         tokens=_DbTokenStore(),
         browser_state=_DbBrowserStateStore(),
         reauth=_DbReauthStateStore(),
+        lock=_DbLockProvider(),
         backend="db",
     )
