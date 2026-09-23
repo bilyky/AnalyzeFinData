@@ -343,6 +343,35 @@ def read_portfolio() -> dict:
     }
 
 
+def read_written_calls() -> list[dict]:
+    """Active covered calls: game positions carrying a `written_call`.
+
+    Reads the raw game state directly — read_portfolio() returns a flattened
+    display projection (a *list*) that drops the `written_call` field, so the
+    options view must source from the raw positions dict instead."""
+    try:
+        with open(_GAME, encoding="utf-8") as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+    active_options = []
+    for symbol, details in state.get("positions", {}).items():
+        written_call = details.get("written_call")
+        if not written_call:
+            continue
+        active_options.append({
+            "symbol":           symbol,
+            "qty":              written_call.get("qty"),
+            "strike":           written_call.get("strike"),
+            "premium":          written_call.get("premium"),
+            "expiration_date":  written_call.get("expiration_date"),
+            "sigma":            written_call.get("sigma"),
+            "underlying_price": details.get("price") or details.get("cost"),
+        })
+    return active_options
+
+
 # ── Picks & replacements ──────────────────────────────────────────────────────
 
 def read_picks() -> dict:
