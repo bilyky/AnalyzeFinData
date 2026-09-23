@@ -62,6 +62,28 @@ Map each `<n>` to its branch/head SHA. **Exclude the PR you authored** (the revi
 changes; a self-review has no independent value and `gh pr review --request-changes` is blocked on
 your own PRs anyway).
 
+**MANDATORY — read the existing review conversation BEFORE you review.** A PR is rarely a blank slate:
+prior reviewers (human or a previous agent pass) may have already filed findings, and the author may
+have replied or pushed fixes. Reviewing without reading them re-derives known issues, re-raises items
+already resolved, and misses author sign-offs that are still outstanding. For each PR fetch all three
+comment surfaces (they are distinct endpoints — issue comments, review verdicts, and inline
+line-anchored comments do NOT overlap):
+```bash
+gh api repos/<owner>/<repo>/issues/<n>/comments   --jq '.[] | "\(.user.login): \(.body)"'   # PR-level discussion
+gh api repos/<owner>/<repo>/pulls/<n>/reviews     --jq '.[] | "\(.user.login) [\(.state)]: \(.body)"'  # APPROVED / CHANGES_REQUESTED verdicts
+gh api repos/<owner>/<repo>/pulls/<n>/comments    --jq '.[] | "\(.user.login) \(.path):\(.line): \(.body)"'  # inline code comments
+```
+If `gh` is blocked, use the git-transport / `Invoke-RestMethod` fallback in §5 against the same three
+paths. Then:
+- Treat every prior 🔴/🟠/🟡 finding as a **re-review checklist** — for each one, verify against current
+  branch source (Zero-Trust, §2) whether it is now **fixed**, **still open**, or **was never valid**, and
+  say which in the write-up. Do not silently drop a prior finding.
+- Carry any unresolved **author sign-off** items (risk calls the author must make — ban-safety posture,
+  alert SLA, merge coordination) into the §3 prod-readiness verdict as explicit open questions; they are
+  the author's decision to make, not yours to close.
+- Don't re-file a finding the conversation already resolved; if you disagree with a resolution, reference
+  it explicitly rather than raising it fresh.
+
 ## 2. Review the BRANCH source, not the working tree
 
 The working tree is usually on `main`; the PR isn't. Read the actual changed code from the ref:
@@ -119,6 +141,18 @@ For each PR, look for and address every one of these (this is the standing revie
   paths, account/CUSIP ids. Flag every leak AND do not reproduce it unmasked in a public channel
   (see §6).
 - **Documentation** — missing, obsolete, or contradicting the code.
+  - **A doc that *promises* cross-referencing / "so the two files don't drift" must actually CARRY the
+    links — verify the linkage exists, both ways; don't accept the doc's own claim that it's tracked.**
+    A one-way reference (doc→roadmap) with no back-link and no *dedicated* tracked action is a
+    multiple-source-of-truth / drift bug even in a docs-only PR.
+    > **Worked example (PR #84, verified):** `plans/systemic-failure-retro.md` stated its remediation
+    > was "tracked as numbered items in `plans/roadmap.md` … so the two files don't drift," but only
+    > Step 3 → R&D #36 was actually tracked. The open Step 1 (persistent non-interactive scheduling)
+    > had **no dedicated tracked action** — it fell in the *seam* between R&D #30 (scheduler drift
+    > *detection*) and R&D #41 (token minting), owned by neither — and every reference was one-way with
+    > no back-links. Fix folded into the **same PR**: extend an existing R&D item to *own* the orphan
+    > (R&D #30 gained the Step 1 remediation scope), note the §5 open question on R&D #41, and add the
+    > bidirectional links — so the doc's own no-drift promise lands atomically with the doc.
 - **Tests have value** — they test *real behavior*, are **red-green** (would fail against the
   pre-change code), not tautologies that restate the implementation or pass for the wrong reason.
   Three questions to ask of every test file in the diff:
@@ -283,13 +317,24 @@ git branch -D <branch>             # squash-merged ⇒ -d refuses ("not fully me
 git worktree prune                 # drop stale administrative refs
 ```
 
-**Classify before touching anything** — build the branch→state map once (`gh api pulls?state=open`
-+ `state=closed`, join on `.head.ref`) and bucket every worktree:
-- **PRUNE** — PR `merged==true` AND worktree clean → remove worktree + `git branch -D`.
-- **KEEP** — PR still **OPEN** (e.g. the print-logger / scenario-plan branches) → leave it; work in flight.
-- **REVIEW (never auto-delete)** — uncommitted changes present, OR PR **CLOSED-unmerged** (work not in
-  `main`), OR the local branch name doesn't match any PR head (possible unpushed work). Hand these to
-  the user with the specifics; do not decide their fate yourself.
+**Use the automated prune tool — it encodes every rule in this section.** The reusable helper does the
+API-state join and the safe removals inside a single script process (outside the Bash classifier), so
+the whole prune runs in one gated call instead of many per-branch ones:
+```bash
+python scripts/utils/prune_merged_worktrees.py            # dry-run FIRST (read-only plan)
+python scripts/utils/prune_merged_worktrees.py --apply    # then apply
+#   --merged-only / --closed-only narrow scope; default prunes both
+```
+Run it **whenever a tracked PR flips to merged OR closed** (the "cleanup on merge and on close" hook)
+and at the end of every campaign. Its buckets, matching this section's contract:
+- **PRUNE** — backing PR is `merged==true` **or** closed-unmerged (`state==closed && merged==false`)
+  AND the worktree is clean → worktree removed (no `--force`) + branch deleted.
+- **KEEP** — PR still **OPEN**. **OPEN dominates a shared head ref**: a branch backing any open PR
+  (e.g. `feat/ruff-linting-minimal`, backing both closed #61 and open #96) is always kept — the script
+  queries open **last** so it wins, a safety guarantee not a cosmetic order.
+- **REVIEW (never auto-delete)** — a clean-vs-dirty check leaves any worktree with uncommitted changes
+  as `KEEP … DIRTY`, and detached/no-branch or unmapped-branch cases are left in place. Hand these to
+  the user; do not decide their fate yourself.
 
 **Scope + permission.** This is destructive to *local* state — the auto-mode classifier flags a batch
 `worktree remove` loop as "Irreversible Local Destruction" and will (correctly) gate it. Do the
@@ -304,11 +349,17 @@ off the irreversible batch.
 Confirm each before finishing — the full rule lives in the cited section:
 - **§0** goal read first; each change judged against the R&D definition, and divergence from the
   canonical gate/helper is itself a finding.
+- **§1** existing review conversation fetched (issue comments + reviews + inline comments) BEFORE
+  reviewing; every prior 🔴/🟠/🟡 resolved as fixed / still-open / never-valid against branch source;
+  unresolved author sign-offs carried into the §3 verdict.
 - **§2 / §4** every finding cites branch-verified `file:line` + quoted code; assumptions labeled.
 - **§3** tests audited — none fully-mocked/valueless, same-contract cases flagged, branch suite
   **actually run** with the real `Ran N … OK` reported.
 - **§3 capstone** prod-readiness stated (both gates); no risk-changing PR waved through on green tests.
 - **§6** no unmasked PII in anything hitting a public channel.
+- **§9** once a tracked PR is merged **or** closed, the local footprint is pruned via
+  `scripts/utils/prune_merged_worktrees.py` (dry-run, then `--apply`) — open-PR branches, dirty
+  worktrees, and `.claude/` agent worktrees left untouched.
 - **§5** posted as **comments** (`gh pr comment`, not `--request-changes`).
 - **§7 / §8** reachability proven with `--ssl-no-revoke` before claiming the API up/down; push token
   never scraped (rotation advised if seen).
