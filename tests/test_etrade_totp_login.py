@@ -202,6 +202,56 @@ class TestLoginHeadlessTotpRouting(unittest.TestCase):
         m_totp.assert_not_called()
 
 
+class TestGetTokensInteractiveVerifyTotpRouting(unittest.TestCase):
+    """The interactive verify (get_tokens allow_browser=True — the web '+' button and the
+    supervised re-seed) must self-complete 2FA through the proven firefox_totp path when a
+    software-VIP secret is configured, instead of stalling on a human typing into the Chromium
+    profile. With no secret it falls back to the persistent-profile browser (SMS bootstrap)."""
+
+    def _reach_interactive_patches(self):
+        # Drain the renewal ladder so control reaches the interactive mint at the tail of
+        # get_tokens: no cached token, no yesterday token, no saved browser-state file, and a
+        # real TTY so the headless-env guard doesn't raise.
+        return {
+            "cfg":   mock.patch.object(etrade, "_load_config", return_value=("ck", "cs", "u", "pw")),
+            "tok":   mock.patch.object(etrade, "_load_tokens", return_value=None),
+            "tokany": mock.patch.object(etrade, "_load_tokens_any_date", return_value=None),
+            "bstate": mock.patch.object(etrade, "_BROWSER_STATE_PATH", "/nonexistent_browser_state_xyz"),
+            "isatty": mock.patch.object(etrade.sys.stdin, "isatty", return_value=True),
+            "save":  mock.patch.object(etrade, "_save_tokens"),
+            "reset": mock.patch.object(etrade, "reset_reauth_circuit_breaker"),
+            "trust": mock.patch.object(etrade, "_set_profile_trust"),
+            "pye":   mock.patch.object(etrade, "pyetrade"),
+        }
+
+    def _start(self, patches):
+        started = {k: p.start() for k, p in patches.items()}
+        self.addCleanup(lambda: [p.stop() for p in patches.values()])
+        started["pye"].ETradeOAuth.return_value.get_request_token.return_value = "http://auth"
+        started["pye"].ETradeOAuth.return_value.get_access_token.return_value = {"oauth_token": "t"}
+        return started
+
+    def test_secret_routes_interactive_verify_through_totp(self):
+        self._start(self._reach_interactive_patches())
+        with mock.patch.object(etrade.CFG, "etrade_totp_secret", "CFGSECRET"), \
+             mock.patch.object(etrade, "_get_verifier_via_totp", return_value="V") as m_totp, \
+             mock.patch.object(etrade, "_get_tokens_via_playwright") as m_chrome:
+            out = etrade.get_tokens("production", allow_browser=True)
+        self.assertEqual(out, {"oauth_token": "t"})
+        m_totp.assert_called_once()      # self-completed 2FA, no human wait
+        m_chrome.assert_not_called()     # did NOT stall on the Chromium human-types path
+
+    def test_no_secret_interactive_verify_falls_back_to_chrome(self):
+        self._start(self._reach_interactive_patches())
+        with mock.patch.object(etrade.CFG, "etrade_totp_secret", ""), \
+             mock.patch.object(etrade, "_get_verifier_via_totp") as m_totp, \
+             mock.patch.object(etrade, "_get_tokens_via_playwright", return_value="V") as m_chrome:
+            out = etrade.get_tokens("production", allow_browser=True)
+        self.assertEqual(out, {"oauth_token": "t"})
+        m_chrome.assert_called_once()    # no secret → persistent-profile SMS bootstrap
+        m_totp.assert_not_called()
+
+
 class TestScheduledReauthTotpTrustBypass(unittest.TestCase):
     """With TOTP configured, an 'unseeded' profile no longer blocks the door — but the breaker does."""
 
