@@ -119,6 +119,18 @@ For each PR, look for and address every one of these (this is the standing revie
   paths, account/CUSIP ids. Flag every leak AND do not reproduce it unmasked in a public channel
   (see §6).
 - **Documentation** — missing, obsolete, or contradicting the code.
+  - **A doc that *promises* cross-referencing / "so the two files don't drift" must actually CARRY the
+    links — verify the linkage exists, both ways; don't accept the doc's own claim that it's tracked.**
+    A one-way reference (doc→roadmap) with no back-link and no *dedicated* tracked action is a
+    multiple-source-of-truth / drift bug even in a docs-only PR.
+    > **Worked example (PR #84, verified):** `plans/systemic-failure-retro.md` stated its remediation
+    > was "tracked as numbered items in `plans/roadmap.md` … so the two files don't drift," but only
+    > Step 3 → R&D #36 was actually tracked. The open Step 1 (persistent non-interactive scheduling)
+    > had **no dedicated tracked action** — it fell in the *seam* between R&D #30 (scheduler drift
+    > *detection*) and R&D #41 (token minting), owned by neither — and every reference was one-way with
+    > no back-links. Fix folded into the **same PR**: extend an existing R&D item to *own* the orphan
+    > (R&D #30 gained the Step 1 remediation scope), note the §5 open question on R&D #41, and add the
+    > bidirectional links — so the doc's own no-drift promise lands atomically with the doc.
 - **Tests have value** — they test *real behavior*, are **red-green** (would fail against the
   pre-change code), not tautologies that restate the implementation or pass for the wrong reason.
   Three questions to ask of every test file in the diff:
