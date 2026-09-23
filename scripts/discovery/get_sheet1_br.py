@@ -5,6 +5,8 @@ import json
 
 # Add current dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import console_safe
+console_safe.install()
 
 import powergauge
 
@@ -38,9 +40,9 @@ def get_sheet1_br():
         except Exception:
             continue
 
-    print("Sheet1 Symbols Stats:")
+    sys.stdout.write("Sheet1 Symbols Stats:\n")
     for r in sorted(results, key=lambda x: x['br'], reverse=True):
-        print(f"{r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})")
+        sys.stdout.write(f"{r['symbol']} (BR: {r['br']}, S10: {r['short10']}, PGR: {r['pgr']})\n")
 
 if __name__ == "__main__":
     get_sheet1_br()

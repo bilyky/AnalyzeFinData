@@ -37,8 +37,11 @@ class _AuthStatusBase(_EtradeScenarioBase):
             etrade._set_profile_trust("production", state)
 
     def _arm_breaker(self, minutes=30.0):
+        # One failure — a COOLING breaker below the hard-block threshold. (At/over the threshold the
+        # state classifies as BLOCKED, not BREAKER; the hard-block path is covered in
+        # test_etrade_lazy_reauth.py, so these tests must stay in the pure-cooling band.)
         etrade._save_reauth_state(
-            {"consecutive_failures": 3, "last_attempt": time.time(),
+            {"consecutive_failures": 1, "last_attempt": time.time(),
              "cooldown_until": time.time() + minutes * 60},
             "production",
         )

@@ -96,6 +96,18 @@ class _Config:
         self.etrade_sandbox_secret     = os.environ.get("ETRADE_SANDBOX_SECRET")     or sandbox.get("consumer_secret", "")
         self.etrade_production_key     = os.environ.get("ETRADE_PRODUCTION_KEY")     or production.get("consumer_key",    "")
         self.etrade_production_secret  = os.environ.get("ETRADE_PRODUCTION_SECRET")  or production.get("consumer_secret", "")
+        # Lazy-reauth tuning. `wait_timeout_sec` bounds how long a concurrent (loser) caller
+        # waits on the reauth lock before falling back to a stale/None load — kept short so an
+        # inline data request never blocks on the rare overnight browser mint (the lock's own
+        # ttl=300 still guarantees no second browser opens). `alert_threshold` is the number of
+        # consecutive failed mints after which the automated door hard-blocks (independent of the
+        # breaker's cooldown clock) and emails + surfaces a UI alert until a human re-auths.
+        self.etrade_reauth_wait_timeout_sec = int(
+            os.environ.get("ETRADE_REAUTH_WAIT_TIMEOUT_SEC", "") or etrade.get("reauth_wait_timeout_sec", 10)
+        )
+        self.etrade_reauth_alert_threshold = int(
+            os.environ.get("ETRADE_REAUTH_ALERT_THRESHOLD", "") or etrade.get("reauth_alert_threshold", 3)
+        )
 
         # ── RapidAPI / Alpha Vantage ──────────────────────────────────────────
         rapidapi = raw.get("rapidapi") or {}

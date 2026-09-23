@@ -16,6 +16,7 @@ Usage:
     fresh = renewer.ensure()  # returns valid token or None
 """
 
+import contextlib
 import logging
 import os
 import threading
@@ -24,6 +25,62 @@ import time
 from aether import trash
 
 _log = logging.getLogger("aether.token_renewer")
+
+
+def _acquire_lock(lock_path: str, lock_ttl: int) -> int | None:
+    """Atomically create the cross-process lock file. Returns the fd if won, None if already held.
+    A lock whose mtime is older than ``lock_ttl`` is treated as stale (crashed holder) and reclaimed.
+    The single definition of the file-lock acquire, shared by TokenRenewer and single_flight()."""
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    try:
+        return os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        # Clean stale lock from a crashed process
+        try:
+            if time.time() - os.path.getmtime(lock_path) > lock_ttl:
+                trash.soft_delete(lock_path, reason="renew-lock-stale", force=True)
+                _log.warning(f"Removed stale lock: {lock_path}")
+                return os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except (OSError, FileExistsError):
+            pass
+        return None
+
+
+def _release_lock(lock_path: str, fd: int) -> None:
+    """Close the fd and remove the lock file. The single definition of the file-lock release."""
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    trash.soft_delete(lock_path, reason="renew-lock", force=True)
+
+
+@contextlib.contextmanager
+def single_flight(lock_path: str, lock_ttl: int = 300):
+    """Non-blocking cross-process single-flight guard over the shared file-lock primitive.
+
+    Yields ``True`` to exactly one holder (which must do the guarded work) and ``False`` to any
+    concurrent caller (work is already in flight — the loser must NOT start a second copy). Unlike
+    ``TokenRenewer.ensure`` there is no wait loop: a loser returns immediately. The holder always
+    releases the lock on exit (even on exception); a loser releases nothing. Stale locks (mtime
+    older than ``lock_ttl``) are reclaimed by ``_acquire_lock``, so a crashed holder can never
+    wedge the guard forever.
+
+    Usage::
+
+        with single_flight("Data/etrade_reauth.lock", lock_ttl=300) as won:
+            if not won:
+                return {"reason": "in_progress"}
+            do_the_one_browser_mint()
+    """
+    fd = _acquire_lock(lock_path, lock_ttl)
+    if fd is None:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        _release_lock(lock_path, fd)
 
 
 class TokenRenewer:
@@ -106,23 +163,7 @@ class TokenRenewer:
 
     def _acquire(self) -> int | None:
         """Atomically create the lock file. Returns fd if won, None if held."""
-        os.makedirs(os.path.dirname(self._lock_path), exist_ok=True)
-        try:
-            return os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            # Clean stale lock from a crashed process
-            try:
-                if time.time() - os.path.getmtime(self._lock_path) > self._lock_ttl:
-                    trash.soft_delete(self._lock_path, reason="renew-lock-stale", force=True)
-                    _log.warning(f"Removed stale lock: {self._lock_path}")
-                    return os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except (OSError, FileExistsError):
-                pass
-            return None
+        return _acquire_lock(self._lock_path, self._lock_ttl)
 
     def _release(self, fd: int):
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        trash.soft_delete(self._lock_path, reason="renew-lock", force=True)
+        _release_lock(self._lock_path, fd)
