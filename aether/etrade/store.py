@@ -138,6 +138,12 @@ class ReauthStateStore(abc.ABC):
     def reset(self, env: str = "production") -> None: ...
 
 
+# Default lock lease (seconds). Mirrors ``token_renewer.single_flight``'s own default —
+# kept as a local literal because this module imports ``token_renewer`` lazily (inside
+# methods) to avoid an import-time circular with ``aether.etrade.__init__``.
+_DEFAULT_LOCK_TTL = 300
+
+
 class LockHandle:
     """Opaque token returned by ``LockProvider.acquire`` and handed back to
     ``release``. Carries whatever the adapter needs to let go of the lock:
@@ -169,7 +175,7 @@ class LockProvider(abc.ABC):
     """
 
     @abc.abstractmethod
-    def acquire(self, name: str, ttl: int = 300) -> Optional[LockHandle]:
+    def acquire(self, name: str, ttl: int = _DEFAULT_LOCK_TTL) -> Optional[LockHandle]:
         """Try to take the named lock. Returns a handle to the single winner,
         or ``None`` if it is already held. A holder whose lock is provably stale
         (dead owner / aged past ``ttl``) is reclaimed by the adapter."""
@@ -180,7 +186,7 @@ class LockProvider(abc.ABC):
         (i.e. a loser that never won) is a no-op."""
 
     @contextlib.contextmanager
-    def single_flight(self, name: str, ttl: int = 300):
+    def single_flight(self, name: str, ttl: int = _DEFAULT_LOCK_TTL):
         """Convenience guard: yields ``True`` to the one holder (which must do the
         guarded work) and ``False`` to any concurrent caller. The holder always
         releases on exit, even on exception; a loser releases nothing.
@@ -335,7 +341,7 @@ class FileLockProvider(LockProvider):
             return name
         return os.path.join(self._lock_dir, name)
 
-    def acquire(self, name: str, ttl: int = 300) -> Optional[LockHandle]:
+    def acquire(self, name: str, ttl: int = _DEFAULT_LOCK_TTL) -> Optional[LockHandle]:
         from aether import token_renewer
         path = self._resolve(name)
         fd = token_renewer._acquire_lock(path, ttl)
@@ -357,17 +363,19 @@ class FileLockProvider(LockProvider):
 class EtradeStore:
     """Bundle of the state ports, selected together for one backend.
 
-    ``lock`` defaults to a :class:`FileLockProvider` so a bundle built by hand (e.g.
-    in a test) still carries a working single-flight guard without extra ceremony.
+    Every port is required — the same rule the three data stores follow — so a
+    hand-built or DB bundle can never silently fall back to *file* locking by
+    omitting ``lock``. The factories (:func:`_file_store`, ``make_db_store``)
+    supply the adapter that matches the chosen backend.
     """
 
     def __init__(self, tokens: TokenStore, browser_state: BrowserStateStore,
-                 reauth: ReauthStateStore, lock: Optional[LockProvider] = None,
+                 reauth: ReauthStateStore, lock: LockProvider,
                  backend: str = "file"):
         self.tokens = tokens
         self.browser_state = browser_state
         self.reauth = reauth
-        self.lock = lock if lock is not None else FileLockProvider()
+        self.lock = lock
         self.backend = backend
 
 

@@ -132,13 +132,15 @@ class TestSingleFlight(unittest.TestCase):
 
 
 class TestBundleWiring(unittest.TestCase):
-    def test_etrade_store_defaults_lock_to_file_provider(self):
-        store = EtradeStore(
-            tokens=FileTokenStore(),
-            browser_state=FileBrowserStateStore(),
-            reauth=FileReauthStateStore(),
-        )
-        self.assertIsInstance(store.lock, FileLockProvider)
+    def test_lock_is_a_required_port(self):
+        # lock is required like the three data ports — a bundle can't silently fall back
+        # to file locking (e.g. a DB bundle) by forgetting it. Omitting it is a TypeError.
+        with self.assertRaises(TypeError):
+            EtradeStore(
+                tokens=FileTokenStore(),
+                browser_state=FileBrowserStateStore(),
+                reauth=FileReauthStateStore(),
+            )
 
     def test_explicit_lock_is_kept(self):
         sentinel = FileLockProvider(lock_dir="Custom")

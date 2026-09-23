@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from aether.etrade.store import (
     EtradeStore, TokenStore, BrowserStateStore, ReauthStateStore, LockProvider,
+    _DEFAULT_LOCK_TTL,
 )
 
 _TODO = (
@@ -47,7 +48,7 @@ class _DbReauthStateStore(ReauthStateStore):
 class _DbLockProvider(LockProvider):
     # A DB deployment takes the cross-pod lock as a row-lease (SELECT ... FOR UPDATE /
     # advisory lock), NOT a local lock file — that is the whole reason this port exists.
-    def acquire(self, name, ttl=300): raise NotImplementedError(_TODO)
+    def acquire(self, name, ttl=_DEFAULT_LOCK_TTL): raise NotImplementedError(_TODO)
     def release(self, handle): raise NotImplementedError(_TODO)
 
 
