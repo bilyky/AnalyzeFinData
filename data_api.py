@@ -1283,6 +1283,16 @@ MANUAL_TASKS = [
         "category": "system",
     },
     {
+        "id": "preflight",
+        "label": "Pre-Flight Diagnostics",
+        "description": "5-second readiness sweep of all API gateways, mailboxes, and session state before a run (scripts/diagnostics/preflight_validator.py).",
+        "script": "scripts/diagnostics/preflight_validator.py",
+        "args": [],
+        "admin_only": True,
+        "confirm": "Run the pre-flight sweep? It renews the E*TRADE token (no browser) and clears stray automation processes.",
+        "category": "system",
+    },
+    {
         "id": "pattern_discovery",
         "label": "Pattern Discovery",
         "description": "Historical replay: reconstruct scores for a past date, find top winners, identify what the system missed and why. Extracts candidate new scoring factors.",

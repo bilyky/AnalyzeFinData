@@ -212,12 +212,20 @@ class TestGetTokensInteractiveVerifyTotpRouting(unittest.TestCase):
         # Drain the renewal ladder so control reaches the interactive mint at the tail of
         # get_tokens: no cached token, no yesterday token, no saved browser-state file, and a
         # real TTY so the headless-env guard doesn't raise.
+        #
+        # The automated headless rung shares get_tokens' totp_secret gate, so when a secret is
+        # set it runs _login_headless BEFORE the interactive tail. Stub it to None ("automated
+        # mint exhausted") so the ladder always falls through to the interactive path; otherwise
+        # whether _login_headless fires (and calls the verifier a first time) depends on the
+        # ambient Data/etrade_reauth_state.json circuit-breaker state other tests mutate, which
+        # made test_secret_routes_interactive_verify_through_totp order-dependent.
         return {
             "cfg":   mock.patch.object(etrade, "_load_config", return_value=("ck", "cs", "u", "pw")),
             "tok":   mock.patch.object(etrade, "_load_tokens", return_value=None),
             "tokany": mock.patch.object(etrade, "_load_tokens_any_date", return_value=None),
             "bstate": mock.patch.object(etrade, "_BROWSER_STATE_PATH", "/nonexistent_browser_state_xyz"),
             "isatty": mock.patch.object(etrade.sys.stdin, "isatty", return_value=True),
+            "headless": mock.patch.object(etrade, "_login_headless", return_value=None),
             "save":  mock.patch.object(etrade, "_save_tokens"),
             "reset": mock.patch.object(etrade, "reset_reauth_circuit_breaker"),
             "trust": mock.patch.object(etrade, "_set_profile_trust"),
