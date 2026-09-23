@@ -359,3 +359,147 @@ class Portfolio:
     def __repr__(self) -> str:
         return (f"Portfolio(balance={self.balance}, equity={self.equity}, "
                 f"positions={len(self._d.get('positions', {}))})")
+
+
+# ===========================================================================
+# ResearchRow — a positional lens over one Research-sheet row (BUILD phase B4)
+# ===========================================================================
+
+class ResearchRow:
+    """A read view over one row of the workbook **Research** sheet.
+
+    Unlike the other views in this module, the backing store is a **positional
+    tuple**, not a dict: ``ws.iter_rows(min_row=2, values_only=True)`` yields the
+    row as a tuple of cell values, and the game addresses its columns by hard
+    magic indices scattered across ``ai_portfolio_game.py``. This class is the one
+    place those indices are named, so the row-scan sites can read a field by name
+    instead of repeating ``row[24]``. It wraps the tuple by reference (no copy);
+    :meth:`to_row` returns the same object (identity), exactly like the dict views'
+    ``to_dict``.
+
+    THE PREV-CLOSE SPLIT IS DELIBERATE — DO NOT UNIFY
+    -------------------------------------------------
+    The Research sheet stores a previous close that the game reads from **two
+    different columns depending on the call-site**, a verified intentional
+    inconsistency (design doc ``plans/scenario-refactor.md``, constraint 4):
+
+    * :attr:`prev_close_sell` = ``row[8]``  — read only in the SELL-decision loop
+      (``ai_portfolio_game.py`` ~L1626: ``float(row[8] or pos["cost"])``).
+    * :attr:`prev_close_buy`  = ``row[10]`` — read in BUY screening (~L1902), the
+      report/get-live-prices fallback (~L1183) and the after-hours queue (~L2151).
+
+    There is **no** unified ``prev_close`` accessor on purpose: each caller keeps
+    its existing column so the REPLACE phase stays behaviour-preserving. Unifying
+    them would silently change one site's value.
+
+    PURE POSITIONAL, NO COERCION
+    ----------------------------
+    Every field accessor returns the **raw** cell value (or ``None`` when the row
+    is shorter than that index — openpyxl yields ragged rows, which is why the
+    call-sites guard with ``len(row) > 10``). No ``or 0`` / ``or "Neutral"`` /
+    ``_to_float`` coercion is baked in, because the game applies *different*
+    coercions to the same column at different sites (e.g. ``row[9]`` is
+    ``_to_float``'d in BUY screening but ``repr``'d raw in the incomplete-S/R log).
+    Each caller keeps its own coercion. The only exceptions are the two documented
+    *derived* conveniences below, each mirroring exactly one call-site expression.
+
+    The magic indices are Research-sheet specific. The ``Short_Long`` fallback
+    sheet has a different layout (``row[1]``=symbol, ``row[4]``=price) and is **not**
+    modelled here.
+    """
+
+    __slots__ = ("_r",)
+
+    # Column index map (Research sheet). Kept as class constants so the numbers
+    # live in exactly one place and the accessors below read by name.
+    COL_SYMBOL = 3
+    COL_INDUSTRY = 4
+    COL_PGR = 6
+    COL_PREV_CLOSE_SELL = 8
+    COL_STOP = 9
+    COL_PREV_CLOSE_BUY = 10
+    COL_TARGET = 11
+    COL_SETUP = 20
+    COL_S10 = 24
+    COL_L60 = 25
+
+    def __init__(self, raw):
+        self._r = raw
+
+    @classmethod
+    def from_row(cls, raw) -> "ResearchRow":
+        """Wrap ``raw`` (the row tuple; no copy)."""
+        return cls(raw)
+
+    def to_row(self):
+        """Return the backing row itself (identity — never a copy)."""
+        return self._r
+
+    @property
+    def raw(self):
+        """The live backing row tuple."""
+        return self._r
+
+    def _cell(self, i):
+        """The raw cell at index ``i``, or ``None`` when the row is too short."""
+        r = self._r
+        return r[i] if i < len(r) else None
+
+    # --- positional named accessors (raw cell, no coercion) ---
+    @property
+    def symbol(self):
+        return self._cell(self.COL_SYMBOL)
+
+    @property
+    def industry(self):
+        return self._cell(self.COL_INDUSTRY)
+
+    @property
+    def pgr(self):
+        return self._cell(self.COL_PGR)
+
+    @property
+    def prev_close_sell(self):
+        """Previous close as read by the SELL loop (``row[8]``). See class note."""
+        return self._cell(self.COL_PREV_CLOSE_SELL)
+
+    @property
+    def stop(self):
+        return self._cell(self.COL_STOP)
+
+    @property
+    def prev_close_buy(self):
+        """Previous close as read by BUY/report/after-hours (``row[10]``). See class note."""
+        return self._cell(self.COL_PREV_CLOSE_BUY)
+
+    @property
+    def target(self):
+        return self._cell(self.COL_TARGET)
+
+    @property
+    def setup(self):
+        return self._cell(self.COL_SETUP)
+
+    @property
+    def s10(self):
+        return self._cell(self.COL_S10)
+
+    @property
+    def l60(self):
+        return self._cell(self.COL_L60)
+
+    # --- derived conveniences (each mirrors exactly one call-site expression) ---
+    def is_active_setup(self) -> bool:
+        """Whether this row is an active setup — the ``_active_setup_symbols``
+        predicate verbatim (``ai_portfolio_game.py`` ~L302):
+        ``row[3] and str(row[20] or '') in ('1', 'OK', 1)``. Uses the project's
+        ``'OK'``/``''`` Setup-field convention."""
+        return bool(self.symbol) and str(self.setup or "") in ("1", "OK", 1)
+
+    def total_score(self) -> float:
+        """Combined S10+L60 score — the BUY-screening expression verbatim
+        (~L1844): ``(row[24] or 0.0) + (row[25] or 0.0)``."""
+        return (self.s10 or 0.0) + (self.l60 or 0.0)
+
+    def __repr__(self) -> str:
+        return f"ResearchRow(symbol={self.symbol!r}, s10={self.s10}, l60={self.l60})"

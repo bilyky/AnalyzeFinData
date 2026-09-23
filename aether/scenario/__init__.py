@@ -44,6 +44,7 @@ from aether.scenario.schema import (
     Portfolio,
     Position,
     Quote,
+    ResearchRow,
 )
 
 __all__ = [
