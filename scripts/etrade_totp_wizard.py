@@ -28,6 +28,12 @@ from pathlib import Path
 
 import pyotp
 
+# Repo root on sys.path so the root-level console_safe module resolves; then make
+# stdout/stderr emoji-safe on Windows (no-op elsewhere) before any wizard output.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import console_safe
+console_safe.install()
+
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -40,13 +46,13 @@ TASK_NAME = "AnalyzeFinData_ETrade_Reauth"
 
 # ── small console helpers ──────────────────────────────────────────────────────
 def hr():
-    print("─" * 72)
+    sys.stdout.write("─" * 72 + "\n")
 
 
 def banner(step, title):
-    print()
+    sys.stdout.write("\n")
     hr()
-    print(f"  STEP {step}:  {title}")
+    sys.stdout.write(f"  STEP {step}:  {title}\n")
     hr()
 
 
@@ -63,7 +69,7 @@ def ask_yn(prompt, default=True):
 
 
 def die(msg, code=1):
-    print(f"\n❌ {msg}")
+    sys.stdout.write(f"\n❌ {msg}\n")
     raise SystemExit(code)
 
 
@@ -82,7 +88,7 @@ def backup_config():
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = BACKUP_DIR / f"config_{stamp}.json"
     shutil.copy2(CONFIG_PATH, dest)
-    print(f"   🛡️  Backed up config.json → {dest}")
+    sys.stdout.write(f"   🛡️  Backed up config.json → {dest}\n")
     return dest
 
 
@@ -95,19 +101,19 @@ def write_totp_secret(secret):
         cfg["etrade"] = etrade
     etrade["totp_secret"] = secret
     CONFIG_PATH.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-    print("   ✅ Wrote etrade.totp_secret into config.json")
+    sys.stdout.write("   ✅ Wrote etrade.totp_secret into config.json\n")
 
 
 # ── step 1 — provision the software token ──────────────────────────────────────
 def ensure_vipaccess():
     if shutil.which("vipaccess"):
         return True
-    print("   python-vipaccess is not installed.")
+    sys.stdout.write("   python-vipaccess is not installed.\n")
     if not ask_yn("   Install it now with pip?", default=True):
         return False
     rc = subprocess.run([sys.executable, "-m", "pip", "install", "python-vipaccess"]).returncode
     if rc != 0:
-        print("   ⚠️  pip install failed. Install it manually: pip install python-vipaccess")
+        sys.stdout.write("   ⚠️  pip install failed. Install it manually: pip install python-vipaccess\n")
         return False
     return shutil.which("vipaccess") is not None
 
@@ -133,8 +139,8 @@ def parse_vip_file(path):
 
 def step1_provision():
     banner(1, "Provision a Symantec VIP software token (SYMZ)")
-    print("This creates the software equivalent of a VIP hardware fob. The token's SECRET")
-    print("never expires — you do this once and the daily refresh is hands-off forever after.\n")
+    sys.stdout.write("This creates the software equivalent of a VIP hardware fob. The token's SECRET\n")
+    sys.stdout.write("never expires — you do this once and the daily refresh is hands-off forever after.\n\n")
 
     if not ask_yn("Provision a NEW software token now? (choose No if you already have a secret)", default=True):
         secret = input("   Paste your existing base32 TOTP secret: ").strip()
@@ -145,19 +151,19 @@ def step1_provision():
         die("python-vipaccess is required for provisioning. Install it and re-run the wizard.")
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"\n   Running: vipaccess provision -t SYMZ -o {VIP_TOKEN_FILE}\n")
+    sys.stdout.write(f"\n   Running: vipaccess provision -t SYMZ -o {VIP_TOKEN_FILE}\n\n")
     rc = subprocess.run(["vipaccess", "provision", "-t", "SYMZ", "-o", str(VIP_TOKEN_FILE)]).returncode
     if rc != 0:
         die("vipaccess provision failed. Re-run the wizard once the network/tool issue is resolved.")
 
     secret, cred_id = parse_vip_file(VIP_TOKEN_FILE)
     if not secret:
-        print("\n   Could not auto-read the secret from the token file.")
-        print("   Look in the output above for the `otpauth://…?secret=<BASE32>` value.")
+        sys.stdout.write("\n   Could not auto-read the secret from the token file.\n")
+        sys.stdout.write("   Look in the output above for the `otpauth://…?secret=<BASE32>` value.\n")
         secret = input("   Paste the base32 secret: ").strip()
     if not cred_id:
         cred_id = input("   Paste the Credential ID (the VSST…/SYMZ… string shown above): ").strip()
-    print(f"\n   🔒 Token file saved to {VIP_TOKEN_FILE} — keep it private (it holds the secret).")
+    sys.stdout.write(f"\n   🔒 Token file saved to {VIP_TOKEN_FILE} — keep it private (it holds the secret).\n")
     return secret, cred_id
 
 
@@ -165,22 +171,22 @@ def step1_provision():
 def show_live_code(secret):
     totp = pyotp.TOTP(secret)
     remaining = 30 - int(time.time()) % 30
-    print(f"\n   Current 6-digit code:  {totp.now()}   (valid ~{remaining}s more)")
+    sys.stdout.write(f"\n   Current 6-digit code:  {totp.now()}   (valid ~{remaining}s more)\n")
 
 
 def step2_register(secret, cred_id):
     banner(2, "Register the Credential ID at E*TRADE")
-    print("1. Log in to E*TRADE in your normal browser.")
-    print("2. Go to:  My Profile → Security → Manage 2FA / Add authenticator app.")
+    sys.stdout.write("1. Log in to E*TRADE in your normal browser.\n")
+    sys.stdout.write("2. Go to:  My Profile → Security → Manage 2FA / Add authenticator app.\n")
     if cred_id:
-        print(f"3. Enter this Credential ID:  {cred_id}")
+        sys.stdout.write(f"3. Enter this Credential ID:  {cred_id}\n")
     else:
-        print("3. Enter the Credential ID printed during provisioning.")
-    print("4. When E*TRADE asks for a current code to confirm, use the one below.")
+        sys.stdout.write("3. Enter the Credential ID printed during provisioning.\n")
+    sys.stdout.write("4. When E*TRADE asks for a current code to confirm, use the one below.\n")
     show_live_code(secret)
     while not ask_yn("\n   Have you registered the token at E*TRADE?", default=False):
         show_live_code(secret)
-        print("   (Take your time — press Enter for a fresh code, answer y when done.)")
+        sys.stdout.write("   (Take your time — press Enter for a fresh code, answer y when done.)\n")
 
 
 # ── step 3 — live headless mint ─────────────────────────────────────────────────
@@ -204,28 +210,28 @@ def token_issued_date():
 def step3_live_mint(secret):
     banner(3, "One live headless mint (headed the first time so you can watch)")
     write_totp_secret(secret)
-    print("\nAbout to run the REAL automated door once, with the browser VISIBLE, on THIS host.")
-    print("Expect: a Firefox window logs in, self-enters the 2FA code, reaches Accept — no SMS,")
-    print("no stall on the loading spinner. Run this on your clean-egress host.\n")
+    sys.stdout.write("\nAbout to run the REAL automated door once, with the browser VISIBLE, on THIS host.\n")
+    sys.stdout.write("Expect: a Firefox window logs in, self-enters the 2FA code, reaches Accept — no SMS,\n")
+    sys.stdout.write("no stall on the loading spinner. Run this on your clean-egress host.\n\n")
     if not ask_yn("Run the live mint now?", default=True):
-        print("   Skipped. Re-run the wizard when you are on the clean-egress host.")
+        sys.stdout.write("   Skipped. Re-run the wizard when you are on the clean-egress host.\n")
         return False
 
-    print("\n   → python server.py etrade-reauth --scheduled   (AETHER_ETRADE_SCHEDULED_HEADLESS=0)\n")
+    sys.stdout.write("\n   → python server.py etrade-reauth --scheduled   (AETHER_ETRADE_SCHEDULED_HEADLESS=0)\n\n")
     rc = run_server(["etrade-reauth", "--scheduled"], {"AETHER_ETRADE_SCHEDULED_HEADLESS": "0"})
     issued = token_issued_date()
-    print(f"\n   mint exit code: {rc}   |   Data/etrade_tokens.json issued_date_et: {issued}")
+    sys.stdout.write(f"\n   mint exit code: {rc}   |   Data/etrade_tokens.json issued_date_et: {issued}\n")
     if rc != 0:
-        print("   ❌ The mint did not report success. Do NOT install the daily task yet.")
-        print("      Check the Firefox window / logs above; re-run once it reaches Accept cleanly.")
+        sys.stdout.write("   ❌ The mint did not report success. Do NOT install the daily task yet.\n")
+        sys.stdout.write("      Check the Firefox window / logs above; re-run once it reaches Accept cleanly.\n")
         return False
 
-    print("\n   Confirming broker-side auth state (probe)…\n")
+    sys.stdout.write("\n   Confirming broker-side auth state (probe)…\n\n")
     status_rc = run_server(["etrade-status"])
     if status_rc != 0:
-        print("   ⚠️  etrade-status says a human still needs to act — not safe to schedule yet.")
+        sys.stdout.write("   ⚠️  etrade-status says a human still needs to act — not safe to schedule yet.\n")
         return False
-    print("   ✅ Live mint succeeded and the broker accepted the token.")
+    sys.stdout.write("   ✅ Live mint succeeded and the broker accepted the token.\n")
     return True
 
 
@@ -243,9 +249,9 @@ def task_command():
 
 def step4_install_task():
     banner(4, "Install the daily scheduled task (05:15)")
-    print(f"This registers Windows task  \\{TASK_NAME}  to run the daily refresh at 05:15.")
+    sys.stdout.write(f"This registers Windows task  \\{TASK_NAME}  to run the daily refresh at 05:15.\n")
     if not ask_yn("Install the daily task now?", default=True):
-        print("   Skipped. You can install it later by re-running the wizard.")
+        sys.stdout.write("   Skipped. You can install it later by re-running the wizard.\n")
         return
 
     tr = task_command()
@@ -260,26 +266,26 @@ def step4_install_task():
     schtasks += ["/ru", run_as]
 
     if not is_admin():
-        print("\n   ⚠️  Task creation needs an elevated (Administrator) shell.")
-        print("   Open an Administrator terminal and run this exact command:\n")
-        print("      " + " ".join(f'"{a}"' if " " in a else a for a in schtasks))
+        sys.stdout.write("\n   ⚠️  Task creation needs an elevated (Administrator) shell.\n")
+        sys.stdout.write("   Open an Administrator terminal and run this exact command:\n\n")
+        sys.stdout.write("      " + " ".join(f'"{a}"' if " " in a else a for a in schtasks) + "\n")
         return
 
     rc = subprocess.run(schtasks).returncode
     if rc == 0:
-        print(f"   ✅ Task \\{TASK_NAME} registered (daily 05:15).")
+        sys.stdout.write(f"   ✅ Task \\{TASK_NAME} registered (daily 05:15).\n")
     else:
-        print(f"   ❌ schtasks failed (rc={rc}). Register it manually from an elevated shell.")
+        sys.stdout.write(f"   ❌ schtasks failed (rc={rc}). Register it manually from an elevated shell.\n")
 
 
 # ── driver ──────────────────────────────────────────────────────────────────────
 def main():
-    print()
+    sys.stdout.write("\n")
     hr()
-    print("  E*TRADE headless daily-refresh setup wizard  (software TOTP)")
+    sys.stdout.write("  E*TRADE headless daily-refresh setup wizard  (software TOTP)\n")
     hr()
-    print("Four steps: provision → register → live mint → schedule. Config.json is backed up")
-    print("before it is written, and the daily task is only installed after a real mint works.")
+    sys.stdout.write("Four steps: provision → register → live mint → schedule. Config.json is backed up\n")
+    sys.stdout.write("before it is written, and the daily task is only installed after a real mint works.\n")
 
     if not ask_yn("\nBegin?", default=True):
         die("Aborted by user.", code=0)
@@ -287,7 +293,7 @@ def main():
     cfg = load_config()
     existing = (cfg.get("etrade") or {}).get("totp_secret", "")
     if existing:
-        print(f"\n   ℹ️  config.json already has an etrade.totp_secret (…{existing[-4:]}).")
+        sys.stdout.write(f"\n   ℹ️  config.json already has an etrade.totp_secret (…{existing[-4:]}).\n")
         if ask_yn("   Reuse it and skip provisioning/registration?", default=True):
             secret = existing
             if step3_live_mint(secret):
@@ -301,10 +307,10 @@ def main():
     if step3_live_mint(secret):
         step4_install_task()
 
-    print()
+    sys.stdout.write("\n")
     hr()
-    print("  Done. If all four steps are green, the daily refresh is now zero-touch.")
-    print("  Re-run this wizard any time to re-mint, re-register, or install the task.")
+    sys.stdout.write("  Done. If all four steps are green, the daily refresh is now zero-touch.\n")
+    sys.stdout.write("  Re-run this wizard any time to re-mint, re-register, or install the task.\n")
     hr()
 
 
@@ -312,5 +318,5 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\nInterrupted. Nothing was scheduled; re-run the wizard to finish.")
+        sys.stdout.write("\n\nInterrupted. Nothing was scheduled; re-run the wizard to finish.\n")
         raise SystemExit(130)

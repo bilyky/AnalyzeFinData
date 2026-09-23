@@ -32,13 +32,13 @@ _LOG_DIR = _BASE_DIR / "Data" / "logs"
 _MAX_BYTES = 5 * 1024 * 1024
 _BACKUP_COUNT = 5
 
-_TEXT_FMT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_TEXT_FMT = "%(asctime)s [%(levelname)s] [pid:%(process)d] %(name)s: %(message)s"
 _DATE_FMT = "%Y-%m-%d %H:%M:%S"
 
 _initialised = False
 
 # ── Custom CONSOLE level ─────────────────────────────────────────────────────
-# Between DEBUG (10) and INFO (20). Writes to stdout only — not to log files.
+# Between DEBUG (10) and INFO (20). Writes to stderr only — not to log files.
 # Use for interactive progress messages that are useful on screen but should not
 # clutter aether.log / aether.jsonl (e.g. "Scanning mailbox X...", "3/500 done").
 CONSOLE = 15
@@ -62,6 +62,7 @@ class _JsonlFormatter(logging.Formatter):
             "level": record.levelname,
             "module": record.name,
             "msg": record.getMessage(),
+            "pid": record.process,
         }
         # Structured extras passed via log.info("...", extra={"key": val})
         _INTERNAL = frozenset({

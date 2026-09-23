@@ -1114,16 +1114,22 @@ def get_system_health() -> dict:
 
     # E*TRADE auth state — the shared read-only classifier (probe=False: pure-local, no network,
     # no mutation, since /api/health is polled frequently). /api/health is UNAUTHENTICATED, so
-    # embed only the non-sensitive posture (state + whether a human must act); the rich blob
-    # (trust marker, breaker counts, token date, and the bootstrap-command hint in `summary`)
+    # embed only the non-sensitive posture (state + whether a human must act + a coarse failure
+    # count so the UI can say "blocked — manual re-auth required (N fails)"); the rich blob
+    # (trust marker, token date, cooldown minutes, and the bootstrap-command hint in `summary`)
     # stays behind the admin-gated GET /api/etrade/status. Never let a broker read break health.
     etrade_auth = None
     try:
         _st = etrade.auth_status("production", probe=False)
+        _bk = _st.get("breaker") or {}
         etrade_auth = {
-            "state":             _st["state"],
-            "needs_manual_auth": _st["needs_manual_auth"],
-            "can_auto_reauth":   _st["can_auto_reauth"],
+            "state":                _st["state"],
+            "needs_manual_auth":    _st["needs_manual_auth"],
+            "can_auto_reauth":      _st["can_auto_reauth"],
+            # Hard-block posture: how many consecutive automated mints have failed, and whether
+            # that has reached the threshold at which the door is stopped until a human re-auths.
+            "consecutive_failures": _bk.get("consecutive_failures", 0),
+            "blocked":              bool(_bk.get("blocked", False)),
         }
     except Exception:
         etrade_auth = None

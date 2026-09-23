@@ -1116,20 +1116,26 @@ async function loadSystem() {
     ]);
 
     // E*TRADE auth state — the non-sensitive posture embedded in /api/health (state +
-    // needs_manual_auth; the rich detail is admin-only at GET /api/etrade/status). Green = live,
-    // red = a human must run the SMS bootstrap, muted = a self-healing expiry the daily door fixes.
+    // needs_manual_auth + consecutive_failures/blocked; the rich detail is admin-only at GET
+    // /api/etrade/status). Green = live, red = a human must act (SMS bootstrap OR the automated
+    // door is hard-blocked after N consecutive failures), muted = a self-healing expiry the daily
+    // door fixes. `blocked` is the 3-strike stop: distinct message from a plain trust lapse.
     const et = health.etrade;
+    const etBlocked = et && et.blocked;
+    const etFails = et ? (et.consecutive_failures || 0) : 0;
     const etTitle = et
-        ? (et.needs_manual_auth ? "A human must run the one-time SMS bootstrap."
+        ? (etBlocked ? `Automated re-auth blocked after ${etFails} consecutive failures — run the re-auth to clear.`
+           : et.needs_manual_auth ? "A human must run the one-time SMS bootstrap."
            : et.state === "live" ? "Token valid."
            : "Self-healing: the daily automated re-auth will refresh it.")
         : "";
+    const etNote = etBlocked
+        ? ` <span class="neg">— blocked: manual re-auth required (${etFails} fails)</span>`
+        : (et && et.needs_manual_auth ? ' <span class="neg">— manual re-auth needed</span>' : "");
     const etRow = et
         ? `<div title="${etTitle}">E*TRADE auth: <b class="${
-              et.needs_manual_auth ? "neg" : (et.state === "live" ? "pos" : "mut")
-            }">${(et.state || "—").toUpperCase()}</b>${
-              et.needs_manual_auth ? ' <span class="neg">— manual re-auth needed</span>' : ""
-            }</div>`
+              (et.needs_manual_auth || etBlocked) ? "neg" : (et.state === "live" ? "pos" : "mut")
+            }">${(et.state || "—").toUpperCase()}</b>${etNote}</div>`
         : `<div>E*TRADE auth: <span class="mut">—</span></div>`;
 
     $("health-body").innerHTML = `
@@ -1290,6 +1296,27 @@ $("etrade-reauth-btn").addEventListener("click", async () => {
         } else {
             $("action-msg").textContent = d.message || d.status;
         }
+    } catch (e) { $("action-msg").textContent = "Error: " + e.message; }
+});
+
+$("etrade-scheduled-reauth-btn").addEventListener("click", async () => {
+    if (!isAdmin()) { $("login-btn").click(); return; }
+    // The AUTOMATED door (distinct from the headed browser button above): renew-first, then at
+    // most one HEADLESS mint. No browser pops on the operator's screen; returns in <1s on the
+    // common renew path, up to ~20s on the rare overnight mint. Runs inline (no output panel).
+    if (!confirm("Trigger the automated E*TRADE re-auth now?\n\nRenews first (instant); only if " +
+                 "that fails does it run one headless mint on the server. No browser window opens.")) return;
+    $("action-msg").textContent = "E*TRADE auto re-auth… (up to ~20s)";
+    try {
+        const r = await fetch("/api/etrade/scheduled-reauth", { method: "POST", headers: authHeaders() });
+        if (r.status === 401) { logout(); $("action-msg").textContent = "Session expired — log in again."; return; }
+        const d = await r.json();
+        // scheduled_reauth result: {ok, reason, browser_opened, ...}. Surface reason plainly so
+        // the operator sees renewed / reauthed / in_progress / breaker / sms_required / failed.
+        $("action-msg").textContent = d.ok
+            ? `E*TRADE re-auth OK (${d.reason}).`
+            : `E*TRADE re-auth: ${d.reason || "failed"}${d.reason === "in_progress" ? " (a mint is already running)" : ""}.`;
+        loadSystem();
     } catch (e) { $("action-msg").textContent = "Error: " + e.message; }
 });
 

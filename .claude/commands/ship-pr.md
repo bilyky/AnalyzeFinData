@@ -19,6 +19,19 @@ the current repo. Delegate all project-specific pre-flight to the repo's own doc
   green without it): its test suite, linters/formatters, type-checks, and build — whatever
   the repo defines. If it has a pre-commit hook, let it run; **never** `--no-verify` or
   bypass signing. If a hook fails, fix the cause.
+- **No new lint debt — enforce this on every push, without being asked.** The change must
+  not introduce any of: a raw `print()` (route to the project logger — `_log.console` for
+  progress, `_log.info`/`_log.error`/`_log.warning` for operational lines — or, for
+  intentional user-facing CLI output and data tables, `sys.stdout.write`/`sys.stderr.write`,
+  which stay unprefixed); an inline / mid-file import (keep imports at top-of-file); a bare
+  `except`; or a silent `except: … pass`. And **do not add a new lint suppression to buy a
+  green gate** — no fresh `# noqa`, and no new code added to `pyproject.toml`'s ruff `ignore`
+  or `per-file-ignores`. A newly-introduced violation must be *fixed*, never parked. If one
+  genuinely cannot be avoided, **stop and ask the user before adding any suppression**;
+  proceed with an ignore only on their explicit say-so, with the reason in the config comment.
+- **Always actually push — don't stop at a preview.** "Ship" means the full branch → push →
+  auto-PR chain runs; showing a diff and waiting for a nudge is not shipping. Push once the
+  gate above is green (or the user has explicitly waived a specific item).
 - **Stage deliberately** (`git add <paths>`, not `git add -A`) so scratch/generated/secret
   files stay out. Never commit secrets, tokens, or PII.
 - **Follow the repo's commit-message convention** (Conventional Commits + any required

@@ -251,6 +251,19 @@ class ETradeClient:
         self.orders = _OrdersInterface(self)
         self.alerts = _AlertsInterface(self)
 
+    def ensure_authenticated(self) -> dict:
+        """Trigger the sanctioned automated re-auth door and return its result dict.
+
+        The single object-level entry point the web "+" button endpoint, the standalone
+        ``scripts/etrade_reauth.py`` trigger, and tests all call. A thin delegate to
+        ``self.auth.scheduled_reauth()`` (renew-first, then AT MOST one browser mint, gated by
+        the trust marker + circuit breaker + single-flight lock). Auth-role only — the scaled
+        data plane must never trigger a re-auth on the shared credential.
+
+        Returns ``scheduled_reauth``'s JSON-serializable dict
+        ({ok, env, reason, browser_opened, breaker_state, ...})."""
+        return self.auth.scheduled_reauth()
+
     def _tokens(self, tokens: Optional[dict] = None) -> Optional[dict]:
         """Resolve tokens for a read call.
 

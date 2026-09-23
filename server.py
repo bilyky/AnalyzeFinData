@@ -981,6 +981,22 @@ def create_app():
         return await loop.run_in_executor(
             None, lambda: etrade.auth_status("production", probe=probe))
 
+    @app.post("/api/etrade/scheduled-reauth")
+    async def etrade_scheduled_reauth(authorization: str = Header(default="")):
+        """Trigger the automated (unattended) re-auth door — the web "+" button.
+
+        Distinct from POST /api/etrade/reauth (the HEADED human door that spawns the browser
+        CLI): this drives etrade.scheduled_reauth(), which is renew-FIRST (pure HTTP, returns in
+        <1s in the common case) and only opens a headless browser AT MOST once, gated by the
+        trust marker + circuit breaker + a non-blocking single-flight lock. Runs in a worker
+        thread so the rare overnight mint can't block the event loop; the single-flight lock means
+        a concurrent lazy/scheduled mint returns reason='in_progress' rather than a 2nd browser.
+        Admin-only."""
+        _require_admin(authorization)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: etrade.scheduled_reauth("production"))
+
     return app
 
 
@@ -1154,12 +1170,16 @@ def cmd_etrade_reauth() -> None:
     Delegates to etrade.scheduled_reauth(), which is safe by construction: it renews first
     (no browser), opens the ONE allowed automated browser only while the persistent profile is
     trusted, and latches 'sms_required' the instant an OTP wall appears — so nothing here ever
-    hammers the login or risks a ban. On a state that needs a human (sms_required / unseeded /
-    failed) it fires the throttled email + desktop-push alert. Prints the JSON result; exits 0
-    on ok (renewed or reauthed), 1 otherwise so the scheduler/CI can detect it."""
+    hammers the login or risks a ban. On a trust-lapse state (sms_required / unseeded) it fires
+    the throttled email + desktop-push alert. The 'failed' streak alert is NOT fired here: it is
+    centralized in the breaker/failure site (_maybe_alert_reauth_blocked), which alerts once the
+    consecutive-failure count reaches the hard-block threshold — so EVERY door (lazy get_tokens,
+    this scheduled path, the web button, the script) reports a failure streak identically instead
+    of only this one. Prints the JSON result; exits 0 on ok (renewed or reauthed), 1 otherwise so
+    the scheduler/CI can detect it."""
     result = etrade.scheduled_reauth("production")
     _log.info("E*TRADE scheduled re-auth result: %s", json.dumps(result))
-    if not result.get("ok") and result.get("reason") in {"sms_required", "unseeded", "failed"}:
+    if not result.get("ok") and result.get("reason") in {"sms_required", "unseeded"}:
         try:
             notify.send_reauth_alert("production", result["reason"])
         except Exception as e:
