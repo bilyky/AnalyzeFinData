@@ -66,11 +66,12 @@ entering the verifier code — the interactive prompt path does not necessarily 
 Adopted items are tracked in [`plans/roadmap.md`](./roadmap.md); this section records their status
 so the retrospective stays honest.
 
-### Step 1 — Persistent non-interactive scheduling *(OPEN — the real fix for root-cause A)*
+### Step 1 — Persistent non-interactive scheduling *(OPEN — the real fix for root-cause A; tracked under R&D #30)*
 Re-register the schedulers to run **whether the user is logged on or not** so the hourly keep-alive
 watchdog is never suspended overnight. Prior scheduler work rejected elevated/admin `schtasks`
 changes over UAC friction, so the S4U vs. stored-credential trade-off must be reconciled with that
-finding in `plans/roadmap.md` before adopting — do not treat this as settled.
+finding — now folded into the scope of **R&D #30** in [`plans/roadmap.md`](./roadmap.md) — before
+adopting; do not treat this as settled.
 
 ### Step 2 — Keep new-session minting ban-safe *(CONSTRAINT, not "full autonomy")*
 This must **reaffirm**, not weaken, the `ETRADE_AUTH.md` invariants:
@@ -89,8 +90,9 @@ PST) and skips the heavy process supervisor / port sentry outside it. No further
 
 ---
 
-## 5. Open Question (not yet resolved)
+## 5. Open Question (not yet resolved; tracked under R&D #41)
 Whether the overnight token loss is driven primarily by **server-side inactivity** (no keep-alive
 while the scheduler is suspended) or by the **midnight-ET expiry** that happens regardless. The two
 call for different fixes (Step 1 keep-alive persistence vs. a pre-midnight renew), so this needs a
-measured answer before over-investing in either.
+measured answer before over-investing in either. This lifecycle question is carried on **R&D #41**
+in [`plans/roadmap.md`](./roadmap.md) (the E\*TRADE token-refresh item).
