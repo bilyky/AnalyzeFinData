@@ -51,6 +51,9 @@ from aether_logger import get_logger as _get_logger
 
 # Optional heavy deps — guarded at module top (AETHER forbids inline imports). undetected-
 # chromedriver pulls in Selenium, so if `uc` imports, the Selenium names import too.
+# These are INTENTIONALLY research-only and NOT in requirements-lock.txt — do not "fix" the
+# missing lock entry; that would pull undetected-chromedriver + Selenium into the prod env.
+# A missing dep is the expected state and is handled by the SKIP path below (uc = None → exit 3).
 try:
     import undetected_chromedriver as uc
     from selenium.common.exceptions import TimeoutException, WebDriverException
