@@ -1026,9 +1026,10 @@ def is_market_hours():
             
         # 4. Dynamic Live Verification (Clock API + SPY Ticker)
         try:
-            tokens = etrade.get_tokens("production")
+            _et = etrade.ETradeClient("production", role="auth")
+            tokens = _et.auth.get_tokens()
             if tokens:
-                is_open = etrade.is_market_open_now(tokens, "production")
+                is_open = _et.market.is_open_now(tokens)
                 if is_open is not None:
                     if not is_open:
                         _log.console("  [AETHER] Dynamic Market Checks confirm market is CLOSED (Holiday/Weekend).")
@@ -1107,12 +1108,13 @@ def get_live_prices(symbols):
 
         # Call the hardened get_tokens() which is safe and has an active headless safety gate.
         # This ensures we always actively attempt to re-authenticate when tokens expire.
-        tokens = etrade.get_tokens("production")
+        _et = etrade.ETradeClient("production", role="auth")
+        tokens = _et.auth.get_tokens()
         if not tokens:
             _log.warning("  [AETHER] E*TRADE authentication failed. Attempting Google Finance live fallback.")
             return get_google_prices_fallback(symbols)
-            
-        quotes = etrade.fetch_quotes(tokens, symbols, env="production")
+
+        quotes = _et.market.quotes(symbols, tokens)
 
         # Fill only the gaps from Google — keep the E*TRADE quotes we already have.
         # Surface dead/delisted/misaligned tickers loudly instead of discarding
@@ -1656,6 +1658,47 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         pos["stop_loss"] = cost_basis
                         _log.info(f"[Breakeven Lock] {sym} stop raised to cost basis: ${old_stop:.2f} -> ${cost_basis:.2f}")
                         _log.info(f"🛡️ [Breakeven Lock] {sym} stop bumped to Cost Basis: ${old_stop:.2f} ➡️ ${cost_basis:.2f}")
+            # ── Bank-As-You-Go scale-out (Defensive Overlay — Rule B) ──
+            # Take PARTIAL profit as a winner runs through ATR tiers — distinct from
+            # the full, pop-based liquidation loop below. This only ever removes risk
+            # (never scales a loser, never adds exposure), reduces pos["qty"] rather
+            # than popping the position, and persists pos["banked_pct"] (the cumulative
+            # fraction sold) so each tier fires exactly once. Executes only in market
+            # hours; if a tier is crossed after-hours it fires on the next live cycle.
+            if atr and atr > 0 and price and price > 0 and pos.get("qty", 0) > 1 and is_market_hours():
+                banked_pct = float(pos.get("banked_pct", 0.0) or 0.0)
+                # Pass the conviction bar into the pure planner: a high-conviction
+                # flower (L60 >= the covered-call ceiling) is never trimmed, mirroring
+                # the covered-call flower exclusion so the two winner-side mechanics
+                # share ONE conviction bar (CLAUDE.md dont-sell-winners). The planner
+                # returns frac 0.0 + a "held: high-conviction flower" reason when it
+                # suppresses a would-be bank; surface that so the hold is visible.
+                so_frac, so_reason = risk_utils.scale_out_plan(
+                    price, pos.get("cost", 0.0), atr, banked_pct,
+                    l60=l60, l60_ceiling=CFG.system_covered_call_l60_ceiling)
+                if so_frac <= 0 and so_reason.startswith("held: high-conviction"):
+                    _log.info(f"🌺 [Scale-Out] {sym}: {so_reason}")
+                if so_frac > 0 and banked_pct < 1.0:
+                    # banked_pct is a fraction of the ORIGINAL lot; recover the original
+                    # size (works for legacy positions with no banked_pct) to size the sale.
+                    original_qty = pos["qty"] / (1.0 - banked_pct)
+                    sell_qty = int(round(so_frac * original_qty))
+                    # Keep at least one share so the trailing-stop exit path owns the
+                    # final close (log_closed_trade_dna / option unwind live there).
+                    sell_qty = max(0, min(sell_qty, pos["qty"] - 1))
+                    if sell_qty >= 1:
+                        proceeds = sell_qty * price
+                        state["balance"] += proceeds
+                        pos["qty"] -= sell_qty
+                        pos["banked_pct"] = round(banked_pct + so_frac, 6)
+                        tx = {"date": today, "time": now_time, "type": "SELL",
+                              "symbol": sym, "price": price, "qty": sell_qty,
+                              "pnl": round((price - pos.get("cost", 0.0)) * sell_qty, 2),
+                              "details": f"Scale-out (Bank-As-You-Go): {so_reason}"}
+                        state["history"].append(tx)
+                        new_transactions.append(tx)
+                        _log.info(f"🏦 [Scale-Out] {sym}: banked {sell_qty} sh at "
+                                  f"${price:.2f} — {so_reason}; {pos['qty']} sh left trailing")
             # ────────────────────────────────────────────────────────────────
 
             # Check Idiosyncratic Single-Stock Gap-Down Guard (Whipsaw protection)
@@ -2154,10 +2197,13 @@ if __name__ == "__main__":
         # execute exactly once. A deliberate manual --force bypasses the day-stamp
         # (human override) but never the mutex — overlap is never allowed.
         try:
+            # Set wait_timeout=0 to fail-fast instantly. If another process holds the lock
+            # (e.g. AETHER_ExecuteTrades vs AnalyzeFinData_AI_Game, or a manual rerun),
+            # the second process will abort immediately instead of waiting in queue to run afterward.
             with DailyRunGuard(
                 "portfolio_state",
                 stamp=None if args.force else "trade_execution",
-                wait_timeout=7200,
+                wait_timeout=0,
             ):
                 run_daily_ai_management(force=args.force, manual_profile=args.profile)
                 send_consolidated_morning_report()

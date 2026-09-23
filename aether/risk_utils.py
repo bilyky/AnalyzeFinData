@@ -379,4 +379,77 @@ def is_elite_breakout_candidate(total_score: float, short10: float) -> bool:
     return (total_score >= CFG.system_bypass_score_floor) and (short10 >= CFG.system_bypass_s10_floor)
 
 
+def scale_out_plan(price, cost, atr, banked_pct=0.0, l60=None, l60_ceiling=None):
+    """Bank-As-You-Go scale-out — Rule B of the Defensive Risk-Management Overlay.
+
+    Decide what fraction of the ORIGINAL position to bank right now, given how far a
+    winner has run in ATR terms and how much has already been banked. Each ATR profit
+    tier (``CFG.overlay_scale_out_tiers``) fires exactly once, banking its fraction
+    (``CFG.overlay_scale_out_fracs``); passing ``banked_pct`` (the cumulative fraction
+    already scaled out) makes the call idempotent so a tier never re-banks.
+
+    Pure, stateless, and symbol-agnostic. It only ever takes risk OFF the table
+    (never adds exposure) and returns 0.0 for any losing or break-even position — a
+    loser is never scaled. The study behind the default ladder (bank 30% at +1.5xATR
+    and 30% at +3xATR, trail the rest) cut return variance ~76% at ~0 mean cost and
+    reduced realized losses on downside episodes (Data/scale_out_study.json).
+
+    Conviction guard (optional): pass ``l60`` (the position's 60-day momentum score)
+    and ``l60_ceiling`` (typically ``CFG.system_covered_call_l60_ceiling``) and a
+    high-conviction flower — ``l60 >= l60_ceiling`` — is never trimmed even when a
+    tier is crossed. This mirrors the covered-call flower exclusion (``aether/options``)
+    so the two winner-side mechanics share ONE conviction bar: banking a strong flower
+    at an ATR tier is the same "a win that dumps a flower is a mistake" error the
+    covered-call writer already avoids (CLAUDE.md dont-sell-winners). Both args default
+    to ``None`` → the guard is inert and legacy callers are unchanged.
+
+    Returns (fraction, reason): ``fraction`` in [0, 1] of the ORIGINAL lot to sell now
+    (0.0 when no fresh tier is crossed, or when the conviction guard holds a flower)
+    and a short human-readable ``reason``.
+    """
+    try:
+        price = float(price)
+        cost = float(cost)
+        atr = float(atr)
+        banked = float(banked_pct or 0.0)
+    except (TypeError, ValueError):
+        return 0.0, "invalid inputs"
+    if atr <= 0 or cost <= 0 or price <= cost:
+        return 0.0, "not in profit"
+
+    tiers = CFG.overlay_scale_out_tiers or []
+    fracs = CFG.overlay_scale_out_fracs or []
+    profit_atr = (price - cost) / atr
+
+    # Cumulative target banked fraction = the sum of every crossed tier's fraction.
+    # (Summing all crossed tiers — rather than the first uncrossed break — is robust
+    # if a single move jumps through two tiers at once.)
+    target = 0.0
+    crossed = 0
+    highest_mult = None
+    for mult, frac in zip(tiers, fracs):
+        if profit_atr >= mult:
+            target += frac
+            crossed += 1
+            highest_mult = mult if highest_mult is None else max(highest_mult, mult)
+    target = min(target, 1.0)
+
+    to_bank = round(target - banked, 6)
+    if to_bank <= 1e-9:
+        return 0.0, ("all crossed tiers already banked" if crossed else "below first tier")
+    # Conviction guard — a high-conviction flower (60-day momentum at/above the
+    # covered-call ceiling) is NEVER trimmed, even with a tier crossed. Checked
+    # AFTER the tier math so the "held" reason only reports when a bank was
+    # actually suppressed (not on an as-yet-untriggered position).
+    if l60 is not None and l60_ceiling is not None:
+        try:
+            if float(l60) >= float(l60_ceiling):
+                return 0.0, (f"held: high-conviction flower (L60 {float(l60):.1f} "
+                             f">= ceiling {float(l60_ceiling):.1f}); winner left uncut")
+        except (TypeError, ValueError):
+            pass
+    return to_bank, (f"bank {to_bank:.0%} (crossed {crossed} tier(s), highest "
+                     f"+{highest_mult:.1f}xATR, profit {profit_atr:.1f}xATR)")
+
+
 

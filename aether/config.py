@@ -39,6 +39,27 @@ def _load_file() -> dict:
         raise RuntimeError(f"config.json is malformed: {e}") from e
 
 
+def _num_list(env_val, file_val, default):
+    """Parse a numeric list from (in priority order) an env JSON string, a config
+    list, or the hard default. Any malformed / non-numeric source is skipped and the
+    next one tried, so a bad env override can never crash config load."""
+    for candidate in (env_val, file_val):
+        if candidate is None or candidate == "":
+            continue
+        seq = candidate
+        if isinstance(candidate, str):
+            try:
+                seq = json.loads(candidate)
+            except (json.JSONDecodeError, ValueError):
+                continue
+        if isinstance(seq, (list, tuple)) and seq:
+            try:
+                return [float(x) for x in seq]
+            except (TypeError, ValueError):
+                continue
+    return list(default)
+
+
 class _Config:
     def __init__(self):
         raw = _load_file()
@@ -49,6 +70,16 @@ class _Config:
         self.chaikin_password = os.environ.get("CHAIKIN_PASSWORD") or chaikin.get("password", "")
         self.chaikin_uid      = os.environ.get("CHAIKIN_UID")      or chaikin.get("uid",      "")
         self.chaikin_api_key  = os.environ.get("CHAIKIN_API_KEY")  or chaikin.get("api_key",  "")
+        # Proxy mode for Chaikin HTTP calls (env CHAIKIN_PROXY overrides config chaikin.proxy):
+        #   a URL             -> always route through that proxy
+        #   "" / "direct"     -> never use a proxy (direct connection)
+        #   "auto" (default)  -> use the E*TRADE/Intel proxy ONLY when it is reachable, so the
+        #                        same config runs on-network (proxy required) and off-network
+        #                        (direct works). Resolved in powergauge._resolve_proxy().
+        _chaikin_proxy = os.environ.get("CHAIKIN_PROXY")
+        if _chaikin_proxy is None:
+            _chaikin_proxy = chaikin.get("proxy")   # None when absent, "" when explicitly direct
+        self.chaikin_proxy = "auto" if _chaikin_proxy is None else _chaikin_proxy
 
         # ── E*TRADE ──────────────────────────────────────────────────────────
         etrade     = raw.get("etrade") or {}
@@ -57,6 +88,10 @@ class _Config:
         self.etrade_username = os.environ.get("ETRADE_USERNAME") or etrade.get("username", "")
         self.etrade_password = os.environ.get("ETRADE_PASSWORD") or etrade.get("password", "")
         self.etrade_proxy    = os.environ.get("ETRADE_PROXY")    or etrade.get("proxy",    "")
+        # Software TOTP secret (base32) for headless MFA — provisioned once via python-vipaccess
+        # (Symantec VIP type SYMZ) and registered under E*TRADE Security Settings. When set, the
+        # automated daily door self-completes 2FA headlessly instead of hitting an SMS wall.
+        self.etrade_totp_secret = os.environ.get("ETRADE_TOTP_SECRET") or etrade.get("totp_secret", "")
         self.etrade_sandbox_key        = os.environ.get("ETRADE_SANDBOX_KEY")        or sandbox.get("consumer_key",    "")
         self.etrade_sandbox_secret     = os.environ.get("ETRADE_SANDBOX_SECRET")     or sandbox.get("consumer_secret", "")
         self.etrade_production_key     = os.environ.get("ETRADE_PRODUCTION_KEY")     or production.get("consumer_key",    "")
@@ -198,6 +233,39 @@ class _Config:
         # zone (+6.0) from covered_call_winner_study.py (the >50%-momentum cohort loses -0.488%/
         # write to the cap vs -0.046% mid-conviction). Tunable via AETHER_CC_L60_CEILING.
         self.system_covered_call_l60_ceiling = float(os.environ.get("AETHER_CC_L60_CEILING") or system.get("cc_l60_ceiling", 6.0))
+
+        # ── Defensive Risk-Management Overlay (generalized A/B/C family) ─────────
+        # ONE shared namespace so the three capital-preservation rules read as a single
+        # capability, each key consumed at exactly one home: Rule C -> the credit-spread
+        # builders in aether/options_adviser.py; Rule B -> risk_utils.scale_out_plan;
+        # Rule A -> circuit_breaker's principal floor (A keys land on its own branch).
+        # Env AETHER_OVERLAY_* -> config.json "overlay" -> default. Every default is
+        # backtest-gated; see scripts/backtesting/*_study.py.
+        overlay = raw.get("overlay") or {}
+        # Rule C — bull-put / bear-call OTM vertical credit spreads. Short strike OTM
+        # distance and spread width as fractions of spot. Defaults = the credit_spread_study.py
+        # best cell (bull-put otm=0.15, width=0.05: win 86.5%, E[ror] +0.041, t=36.3, n=114,679).
+        self.overlay_credit_spread_otm_pct   = float(os.environ.get("AETHER_OVERLAY_CREDIT_SPREAD_OTM_PCT")   or overlay.get("credit_spread_otm_pct",   0.15))
+        self.overlay_credit_spread_width_pct = float(os.environ.get("AETHER_OVERLAY_CREDIT_SPREAD_WIDTH_PCT") or overlay.get("credit_spread_width_pct", 0.05))
+        # Rule B — scale-out ladder: bank a fraction of a winning lot at each ATR-scaled
+        # profit tier, trail the residual. `tiers` (ATR multiples) and `fracs` (fraction
+        # of the ORIGINAL lot banked at that tier) are parallel lists; defaults are the
+        # study-validated ladder (Data/scale_out_study.json: variance -76%, ~0 mean cost).
+        self.overlay_scale_out_tiers = _num_list(
+            os.environ.get("AETHER_OVERLAY_SCALE_OUT_TIERS"),
+            overlay.get("scale_out_tiers"), [1.5, 3.0])
+        self.overlay_scale_out_fracs = _num_list(
+            os.environ.get("AETHER_OVERLAY_SCALE_OUT_FRACS"),
+            overlay.get("scale_out_fracs"), [0.30, 0.30])
+        # Guard: parallel lists, each fraction in (0, 1], cumulative <= 1.0. A malformed
+        # ladder falls back to the defaults rather than banking a nonsensical amount.
+        if (len(self.overlay_scale_out_tiers) != len(self.overlay_scale_out_fracs)
+                or not self.overlay_scale_out_tiers
+                or any(f <= 0 for f in self.overlay_scale_out_fracs)
+                or sum(self.overlay_scale_out_fracs) > 1.0 + 1e-9):
+            self.overlay_scale_out_tiers = [1.5, 3.0]
+            self.overlay_scale_out_fracs = [0.30, 0.30]
+
 
         # ── Configuration Health Checks ───────────────────────────────────────
         self.verify_config_health()

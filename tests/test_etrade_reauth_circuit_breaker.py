@@ -12,9 +12,13 @@ this whole module fails to run — that is the "red"):
     calls once the token has expired.
 """
 import os
+import sys
 import tempfile
 import unittest
 from unittest import mock
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import tests  # globally locks hermeticity and redirects prod Data/ to temp
 
 from aether import etrade
 

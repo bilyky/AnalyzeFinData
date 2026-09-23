@@ -37,6 +37,18 @@ judge the code against that intent — not against itself.
 > canonical helper. A code-only review passed it; a definition-first review catches the divergence.
 > Start from the definition.
 
+**For a PR whose goal is "protect / decouple / isolate X," trace the actual data flow — don't trust
+the framing.** Follow which file is *written* and which is *read*, end to end, and confirm the
+mechanism achieves the goal instead of relocating the problem.
+> **Worked example (PR #54, verified):** goal = stop `git reset --hard` clobbering the manual-input
+> workbook by splitting an untracked working copy from a git-tracked template. But the code copied the
+> untracked manual file **into** the new *tracked* `…_src.xlsx` and the pipeline then *read the tracked
+> file* — so a hard reset still wiped the manual inputs (vulnerability relocated, not removed). A
+> tracked↔untracked split only works if the **live/read** file is the untracked one; verify the
+> direction, don't accept the title's claim. (Same PR: the `.gitignore` line it added was a literal
+> PowerShell `` `n `` escape written as text — read the *raw added line* of any config/ignore change;
+> a shell-escape baked into a file is a real, feature-breaking bug the diff shows you.)
+
 Only once the goal is understood do you apply the §3 rubric.
 
 ## 1. Enumerate open PRs (works behind a blocked API)
@@ -83,6 +95,16 @@ If a required check is red, **the exact failure IS a finding** — quote the off
 skips the test suite, "CI green" is not "code tested" — say so precisely rather than implying coverage
 the gate never ran. When you can, reproduce the gate locally (run the same validator/linter against
 the change set the way CI does) so your verdict matches what the merge button will do.
+
+**Know which gate catches what — a rule enforced by the *pre-commit hook* is usually NOT in CI.** In
+this repo the AETHER `scripts/utils/pre_commit_validator.py` rules (`check_no_inline_imports`,
+no-silent-except, doc-sync, wiki-drift) run at **commit** time, not in the CI `lint`/`quality-gate`
+jobs — so a green CI does **not** prove a change is inline-import-clean. Also don't conflate rules:
+ruff **`E402` is module-level only** (imports after code at module scope); an import inside a
+*function body* is a *lazy inline import* that E402 ignores but the AETHER validator flags. When you
+cite an inline-import finding, name the **pre-commit validator**, not E402/CI, and say CI-green
+doesn't cover it. (And a branch far behind `main` may predate whole CI jobs — e.g. a 114-behind fork
+with no `lint` check-run at all — so its green set is smaller than today's merge gate.)
 
 ## 3. The fixed rubric — review from ALL these perspectives
 
@@ -173,6 +195,28 @@ body before it goes public. Only batch the loop behind a script if that script r
 file (see below); a blind `for f in reviews/*.md` that mis-maps a filename to the wrong PR number, or
 skips the PII scrub, is worse than posting by hand.
 
+**Fallback when `gh` cannot connect (VERIFIED WORKING on this box, 2026-09-15).** `gh pr comment` is
+the front door, but here `gh`'s Go TLS stack times out dialing api.github.com (`dial tcp …:443
+connectex failed`) even though `git` (schannel) and .NET (WinINET) reach it fine — so §7's
+`HTTPS_PROXY` retry does NOT rescue it. The credential is still recoverable *cleanly*: `gh auth token`
+prints a valid `gho_` OAuth token from gh's own `hosts.yml` (a SANCTIONED store via gh's official
+command — this is NOT the forbidden origin-URL scrape of §8). Post via .NET `Invoke-RestMethod` to the
+**issue-comments** endpoint (works for PRs):
+```powershell
+$tok = (& "C:\Program Files\GitHub CLI\gh.exe" auth token | Select-Object -First 1).Trim()
+$h = @{ Authorization="token $tok"; 'User-Agent'='claude-review'; 'Accept'='application/vnd.github+json' }
+# CRITICAL: read the body as a PURE .NET string. `Get-Content -Raw` returns a string decorated with
+# ETS note-properties (PSPath/PSDrive/…); ConvertTo-Json then serializes {"body":{"value":"…",PSPath:…}}
+# and GitHub rejects it 422 "…is not a string". ReadAllText also fixes em-dash → â€” mojibake.
+$body  = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+$bytes = [System.Text.Encoding]::UTF8.GetBytes((@{ body = $body } | ConvertTo-Json -Depth 3))
+Invoke-RestMethod -Uri "https://api.github.com/repos/<owner>/<repo>/issues/<n>/comments" `
+  -Method Post -Headers $h -Body $bytes -ContentType "application/json; charset=utf-8"
+```
+Error decoder: **400** = you JSON-encoded a raw non-string; **422 "is not a string"** = the ETS-decorated-string
+bug above (fix = `ReadAllText`, not `-Compress`). Read the real error with `$_.ErrorDetails.Message` —
+the response StreamReader comes back empty. The §6 PII scrub still applies before this POST.
+
 ## 6. PII guard before posting to a PUBLIC repo
 
 The reviews **quote** the internal IP / username / UNC path / CUSIP-like id they flag as findings.
@@ -212,7 +256,50 @@ don't hardcode an OS path. Authenticate via one of:
 > runtime's security policy should block this, and correctly so. If you notice such a token, advise
 > **rotating** it and moving to a credential helper — do not print or reuse its value.
 
-## 9. Verification checklist
+## 9. Clean up the local footprint once a PR is MERGED
+
+A review/prepare campaign leaves a trail: a per-PR `_wt_*` worktree, a local branch, and `/tmp`
+scratch (`*.ps1`, `*.txt`). Once the PR is **merged**, that footprint is dead weight — retire it, but
+only the part whose work is provably safe.
+
+**Verify "merged" by the PR API, NOT by git ancestry.** PRs here are **squash-merged**, so the branch
+tip is a *new* commit that is **never an ancestor of `origin/main`** — `git merge-base --is-ancestor
+<tip> origin/main` returns false for a squash-merged branch, which looks identical to "not merged."
+Do not gate cleanup on ancestry. Gate on the PR's own state:
+```bash
+gh api repos/<owner>/<repo>/pulls/<n> --jq '.state,.merged'   # want: closed / true
+```
+(or the .NET `Invoke-RestMethod` fallback of §5 when `gh` can't dial — read `merged==True`).
+
+**Only ever remove a worktree WITHOUT `--force`.** A clean `git worktree remove <path>` *refuses* if
+the worktree has uncommitted changes — that refusal is the safety net, so let it fire. `--force`
+throws away uncommitted work irreversibly; never reach for it to "get past" a refusal. Inspect first
+and leave anything dirty for the user:
+```bash
+git -C <wt> status --porcelain     # non-empty ⇒ uncommitted work ⇒ DO NOT remove; report it
+git worktree remove <wt>           # no --force: clean ones go, dirty ones self-protect
+git branch -D <branch>             # squash-merged ⇒ -d refuses ("not fully merged"); -D is correct
+                                   #   ONLY after the API confirmed merged==true
+git worktree prune                 # drop stale administrative refs
+```
+
+**Classify before touching anything** — build the branch→state map once (`gh api pulls?state=open`
++ `state=closed`, join on `.head.ref`) and bucket every worktree:
+- **PRUNE** — PR `merged==true` AND worktree clean → remove worktree + `git branch -D`.
+- **KEEP** — PR still **OPEN** (e.g. the print-logger / scenario-plan branches) → leave it; work in flight.
+- **REVIEW (never auto-delete)** — uncommitted changes present, OR PR **CLOSED-unmerged** (work not in
+  `main`), OR the local branch name doesn't match any PR head (possible unpushed work). Hand these to
+  the user with the specifics; do not decide their fate yourself.
+
+**Scope + permission.** This is destructive to *local* state — the auto-mode classifier flags a batch
+`worktree remove` loop as "Irreversible Local Destruction" and will (correctly) gate it. Do the
+self-owned, unambiguous removals (the worktree/branch **you** created for the just-merged PR) and,
+for the rest, present the classified table + the exact prune commands and let the user run/approve
+them. `/tmp` scratch (`*.ps1`, `*.txt`) is pure ephemera — safe to `rm` freely; it does not need a
+gate. Per "prepare, you click," cleanup follows the same contract: prepare the safe deletions, hand
+off the irreversible batch.
+
+## 10. Verification checklist
 
 Confirm each before finishing — the full rule lives in the cited section:
 - **§0** goal read first; each change judged against the R&D definition, and divergence from the
@@ -225,3 +312,5 @@ Confirm each before finishing — the full rule lives in the cited section:
 - **§5** posted as **comments** (`gh pr comment`, not `--request-changes`).
 - **§7 / §8** reachability proven with `--ssl-no-revoke` before claiming the API up/down; push token
   never scraped (rotation advised if seen).
+- **§9** merged-PR footprint retired — merge confirmed by PR API (not ancestry), worktrees removed
+  without `--force` (dirty ones left for review), open-PR worktrees kept, irreversible batch handed off.

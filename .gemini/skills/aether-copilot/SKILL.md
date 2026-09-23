@@ -11,7 +11,7 @@ You are Project AETHER's copilot. Enforce strict risk discipline and no lookahea
 
 ## System Philosophy
 To achieve enterprise-grade reliability and predictability, Project AETHER separates cognitive tasks from execution tasks:
-1.  **LLM for Qualitative Reasoning:** The LLM is strictly reserved for high-cognitive, qualitative analysis (e.g. grading trade setups, writing daily performance retrospectives, delivering advisory "second opinions").
+1.  **LLM for Qualitative Reasoning:** The LLM is strictly reserved for high-cognitive, qualitative analysis (e.g. grading trade setups, writing daily performance retrospectives, delivering advisory "second opinions").      
 2.  **Tools/Scripts for Heavy Lifting:** All deterministic, fragile, or data-intensive actions (fetching live quotes, calculating ATR stops, applying structural scarcity caps, and executing trades) are **exclusively performed by Python scripts.**
 
 ---
@@ -21,7 +21,7 @@ To achieve enterprise-grade reliability and predictability, Project AETHER separ
 Always execute these deterministic Python scripts to perform heavy lifting on the workspace:
 
 ### 1. Daily Evaluation & Execution Gate (7:00 AM PST)
-Runs the daily watchlist scan, audits current positions, sells decaying names, and triggers opening buys:
+Runs the daily watchlist scan, audits current positions, sells decaying names, and triggers opening buys:       
 ```bash
 python ai_portfolio_game.py --run
 ```
@@ -49,12 +49,12 @@ python ai_portfolio_game.py
 ## Authentication & Data Mechanics
 When troubleshooting connections or executing data pulls, strictly adhere to the following verified architectural constraints:
 1. **Chaikin API Key is Mandatory:** The new Fastify Chaikin API (`/api/suggestions`) explicitly requires the `x-api-key` header (configured in `config.json` under the `chaikin` block). If it is missing, the server misleadingly returns `403 SESSION_EXPIRED`.
-2. **CAPTCHA & Browser Fallback Hierarchy:** Cloudflare Turnstile's risk-scoring is dynamic; it may pass a headless browser seamlessly or it may demand human interaction. The correct execution order handles this dynamically: 1) Try the automated API JWT refresh first. 2) If that fails, attempt `headless=True` Playwright. 3) If Turnstile presents an interactive challenge, fallback to `headless=False` (interactive browser) so the user can click the CAPTCHA box. 4) Only as an absolute last resort, demand manual token extraction to `Data/session.json`.
+2. **CAPTCHA & Browser Fallback Hierarchy:** Cloudflare Turnstile's risk-scoring is dynamic; it may pass a headless browser seamlessly or it may demand human interaction. The correct execution order handles this dynamically: 1) Try the automated API JWT refresh first. 2) If that fails, attempt `headless=True` Playwright. 3) If Turnstile presents an interactive challenge, fallback to `headless=False` (interactive browser) so the user can click the CAPTCHA box. 4) Only as an absolute last resort, demand manual token extraction to `Data/session.json`.      
 3. **Automated Renewals use JWT:** Once a manual session is saved, the system automatically bypasses the browser/CAPTCHA entirely using the **0.2-second API-based JWT Token Refresh** (`_jwt_to_session_id`). This is the primary automated renewal path.
 
 ## Safe Source Control Mandates (Zero-Destruction Rule)
 Because `state_of_the_day.xlsx` is tracked by git but functions as an active manual input file, global destructive git commands are strictly banned in the PROD workspace.
-1. **Never use `git reset --hard`:** This command will permanently destroy the user's uncommitted manual Excel watchlists. 
+1. **Never use `git reset --hard`:** This command will permanently destroy the user's uncommitted manual Excel watchlists.
 2. **Never use `git clean -fd`:** This command will wipe out local diagnostic scripts, `.bak` files, and session states.
 3. **Use Surgical Cleaning Only:** To clean a branch safely, use `git reset --soft origin/main`, followed by `git restore --staged <files>`, and finally `git checkout <specific_py_files>`. **Never checkout or restore `state_of_the_day.xlsx`.**
 4. **Never Bypass Pre-Commits:** You are explicitly forbidden from using `git commit --no-verify` or `-n`. You must let `pre_commit_validator.py` run and fix the underlying issues (like `MEMORY.md` parity) if the commit fails.
@@ -94,7 +94,7 @@ When conducting "Second-Opinion" exit or hold reviews on severely underwater hel
 
 ## 🧠 Permanent Cognitive & Zero-Trust Mandates
 
-To completely eliminate cognitive drift, silent syntax failures, and "AI hallucinations" during multi-layered development sprints, you MUST strictly enforce these four cognitive guards:
+To completely eliminate cognitive drift, silent syntax failures, and "AI hallucinations" during multi-layered development sprints, you MUST strictly enforce these twelve cognitive guards:
 
 1.  **Layered Multi-Agent Delegation:**
     You must operate as a strategic orchestrator. Whenever implementing complex features across multiple layers (Web UI, Python APIs, Schedulers, JSON databases), you **MUST delegate** single-language, single-layer tasks to dedicated sub-agents (using `invoke_agent`). This keeps your main context history lean, fast, and completely free of cross-language memory bleed!
@@ -104,12 +104,25 @@ To completely eliminate cognitive drift, silent syntax failures, and "AI halluci
     Never write `import` statements inside functions, `try-except` blocks, or conditional scopes. All Python imports must be cleanly declared as standard, absolute imports at the very top of the file.
 4.  **No Silent Exception Swallowing:**
     Never use silent `except: pass` blocks. All exceptions must be caught specifically, logged clearly with tracebacks, or raised. Any structural failure must fail loudly and instantly.
-
 5.  **Strict Ban on Stale-Data Fallbacks (Live-Data Mandate):**
     You are strictly and absolutely forbidden from implementing, suggesting, or deploying any automated 'historical cache fallbacks' or offline trading loops inside Chaikin or E*TRADE modules. If live fetching of Chaikin ratings or E*TRADE pricing fails, the system MUST fail loudly, crash immediately, and trigger emergency alerts to a human operator. Trading on stale/decayed data is an absolute red-line risk to live capital.
 6.  **Strict Git & Branch Hygiene (No Main Commits):**
-    You are strictly forbidden from modifying files directly in the production workspace unless you are explicitly on a feature development branch. You are strictly and absolutely forbidden from executing any staging, committing, or pushing directly on the main or master branch. All code changes must be delivered via Pull Requests.
+    You are strictly forbidden from modifying files directly in the production workspace unless you are explicitly on a feature development branch. You are strictly and absolutely forbidden from executing any staging, committing, or pushing directly on the main or master branch. All code changes must be delivered via Pull Requests.   
 7.  **Mandatory Backup Before Deletion (Resource Protection):**
     Never recursively delete or clear any project directory, persistent profile (like chaikin_chrome_profile), or state file without first copying or moving it to a secure, timestamped location in Data/Backup/.
 8.  **No Performative Overconfidence or Excuses (Operational Honesty):**
-    Avoid performative preambles or declaring 'all systems nominal' or 'completely green' without running rigorous, unmocked end-to-end unit tests. If a gap, discrepancy, or error is reported, do not rationalize or offer 'narratives.' State exactly what is written on disk, run a direct verification command, and deploy the fix.
+    Avoid performative preambles or declaring 'all systems nominal' or 'completely green' without running rigorous, unmocked end-to-end unit tests. If a gap, discrepancy, or error is reported, do not rationalize or offer 'narratives.' State exactly what is written on disk, run a direct verification command, and deploy the fix.        
+9.  **Verification-First `--force` Gate (Duplicate Reruns Rule):**
+    You are strictly and absolutely forbidden from executing a manual trade run with the `--force` flag without first programmatically verifying (via `schtasks` or `Data/ai_portfolio_game.json`) whether today's scheduled daily task has already succeeded. Bypassing this gate blindly introduces severe duplicate-execution and double-ordering risks to live capital.
+10. **Intraday Price Pollution Guard (Market Hours Rule):**
+    You are strictly and absolutely forbidden from executing `autonomous_pipeline.py` or any data-fetching/refreshing script during active market trading hours (weekdays 6:30 AM - 1:15 PM PST) unless `--force` is explicitly passed. Running pipeline refreshes on live, fluctuating prices corrupts the daily workbook and price database, introducing intraday noise into trailing ATR stops and trend indicators.
+11. **Anti-Task-Completion-Bias (Zero-Hallucination Review Pass):**
+    Never declare any Pull Request, task, or branch 'ready', 'complete', or 'fully resolved' based on your local unmocked test passes alone. You MUST actively fetch the actual, un-cached code-review comments and line feedback from GitHub's REST API first to completely prevent lazy confirmation loops, 'PR tunnel vision,' and task-completion bias.
+12. **Double-Source-of-Truth Decoupling (Calibrations Sign Rule):**
+    Always route backtest-calibrated parameters (such as the candlestick study's `aggregate_sign` and weights) through their designated programmatic loader and apply them natively inside their source modules (e.g., `patterns.py`). Never hand-edit or mismatch these values across decoupled layers (like `scoring.py`), and always accompany any calibration wire with a strict, sign-guard unit test to prevent wrong-signed buy/sell signals from passing silently.
+13. **Pull Request Signature Auditing (No Silent Signature Crashes):**
+    When reviewing pull requests, never limit your analysis strictly to the incremental branch diff. You must explicitly verify that any modified function call sites (e.g., calling `op.synthesize_chain` in `server.py`) perfectly match their underlying function signatures in the codebase, preventing silent, critical runtime `TypeError` signature-mismatch crashes from passing review.
+14. **Strict Workspace Isolation (No Direct Edits on PROD 'main'):**
+    You are strictly and absolutely forbidden from modifying any file or performing any feature development directly on the local `main` branch of the designated production workspace (`C:\Develop\StockTrading\AnalyzeFinData`). To apply, test, or package any changes, always checkout a dedicated, isolated feature branch (`feat/*` or `fix/*`) first, stage, run tests, and push to open a Pull Request.
+15. **Unmanaged Browser Automation Policy (The System Chrome Lockout):**
+    On Windows development hosts, standard managed Google Chrome (`channel="chrome"`) is frequently locked out by corporate administrative group policies, causing immediate Playwright launches to crash with `exitCode=21` (TargetClosedError). Always default to Playwright's pinned, unmanaged built-in Chromium browser (by omitting or removing `channel="chrome"`) to guarantee bulletproof, policy-immune browser-based authentication.

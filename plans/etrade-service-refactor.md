@@ -1,6 +1,12 @@
 # Plan: Encapsulate E*TRADE as an extensible `aether/etrade/` package (microservice/k8s + DB-ready)
 
-> Reference plan saved 2026-08-19. Status: **approved, not yet implemented.**
+> Reference plan saved 2026-08-19. **Status (2026-09-16): Phase 1 + 2 LANDED; Phase 3–5 not yet built.**
+> The `aether/etrade/` package is on `main` (`__init__.py` back-compat facade, `client.py`
+> `ETradeClient`, `store.py` Ports/Adapters, `store_db.py` DB adapter stub), the data-plane
+> consumer migration is in progress (PR #46 = step 3/5), and the security cleanup is **done**
+> (orphaned `etrade_config.json` deleted from the repo). Still pending: Phase 3 extension stubs
+> (`orders`/`alerts`/`market.options_chain`), Phase 4 standalone FastAPI service + single-flight/
+> metrics, and Phase 5 container/k8s/Alembic DB migration.
 > Origin: request to "generalize E*TRADE implementation in one separated object … easy to
 > extend, add interfaces for new APIs (microservices approach, k8s, run only etrade service
 > separately and scalable)", extended with an abstracted/DB-ready data layer and a

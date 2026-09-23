@@ -32,13 +32,13 @@ _LOG_DIR = _BASE_DIR / "Data" / "logs"
 _MAX_BYTES = 5 * 1024 * 1024
 _BACKUP_COUNT = 5
 
-_TEXT_FMT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_TEXT_FMT = "%(asctime)s [%(levelname)s] [pid:%(process)d] %(name)s: %(message)s"
 _DATE_FMT = "%Y-%m-%d %H:%M:%S"
 
 _initialised = False
 
 # ── Custom CONSOLE level ─────────────────────────────────────────────────────
-# Between DEBUG (10) and INFO (20). Writes to stdout only — not to log files.
+# Between DEBUG (10) and INFO (20). Writes to stderr only — not to log files.
 # Use for interactive progress messages that are useful on screen but should not
 # clutter aether.log / aether.jsonl (e.g. "Scanning mailbox X...", "3/500 done").
 CONSOLE = 15
@@ -62,6 +62,7 @@ class _JsonlFormatter(logging.Formatter):
             "level": record.levelname,
             "module": record.name,
             "msg": record.getMessage(),
+            "pid": record.process,
         }
         # Structured extras passed via log.info("...", extra={"key": val})
         _INTERNAL = frozenset({
@@ -77,6 +78,25 @@ class _JsonlFormatter(logging.Formatter):
         if record.exc_info:
             obj["exc"] = self.formatException(record.exc_info)
         return json.dumps(obj, default=str)
+
+
+class SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """A RotatingFileHandler that tolerates Windows file-lock PermissionErrors
+    during rollover. On Windows a concurrent reader/AV scanner can hold the log
+    open while another process attempts the rename; the stdlib handler would then
+    raise and drop the record. Here we warn to stderr and keep writing to the
+    current (un-rotated) file rather than crash the caller."""
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except PermissionError as e:
+            sys.stderr.write(
+                f"WARNING: Log rotation failed due to file lock on "
+                f"{self.baseFilename}: {e}. Continuing with current file.\n"
+            )
+            if not self.stream:
+                self.stream = self._open()
 
 
 def _init():
@@ -96,7 +116,7 @@ def _init():
     stdout_level = getattr(logging, level_name, logging.INFO)
 
     # ── 1. Rotating plain text — INFO+ only (no CONSOLE noise) ─────────────
-    txt_handler = logging.handlers.RotatingFileHandler(
+    txt_handler = SafeRotatingFileHandler(
         _LOG_DIR / "aether.log",
         maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8",
     )
@@ -105,7 +125,7 @@ def _init():
     root.addHandler(txt_handler)
 
     # ── 2. Rotating JSON Lines — INFO+ only ─────────────────────────────────
-    jsonl_handler = logging.handlers.RotatingFileHandler(
+    jsonl_handler = SafeRotatingFileHandler(
         _LOG_DIR / "aether.jsonl",
         maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8",
     )

@@ -2,6 +2,8 @@
 
 This document outlines the quantitative research, architectural design, and operational rules for two critical defensive filters designed to eliminate momentum-chasing blindspots on the AETHER quantitative desk.
 
+> **Roadmap status (2026-09-16):** **Filter A** (Earnings-Shock Failure Gate) is registered as **Roadmap R&D #43 — BACKLOG / DOC-ONLY** (not yet wired into `check_failure_rules` on `main`). **Filter B** (Overbought / Weak-Sector Breakout Guard) is **not a distinct item** — it is already **Roadmap #13**'s "Overbought Breakout Guard" (the soft `-1.5` weak-sector penalty). See `plans/roadmap.md`.
+
 ---
 
 ## 📅 1. Historical Post-Mortem (August 14, 2026)
@@ -27,7 +29,7 @@ To prevent buying into a fundamental cliff right after an earnings disappointmen
     *   The `warning_impact` is `"Very Bearish"`,
 *   **The Action:** **Automatically VETO the candidate from purchase**, regardless of how high its momentum score is.
 
-### 🛡️ Filter B: Overbought / Weak-Sector Breakout Guard (R&D #32)
+### 🛡️ Filter B: Overbought / Weak-Sector Breakout Guard (= Roadmap #13 — Overbought Breakout Guard)
 To prevent chasing unconfirmed breakouts inside weak industries:
 *   **The Rule:** Apply a soft **`-1.5` combined score penalty** if:
     *   The symbol has `< 1` positive strength checkmarks in its Chaikin checklist, AND

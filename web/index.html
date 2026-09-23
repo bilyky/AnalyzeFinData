@@ -245,6 +245,44 @@
                 <div class="text-center text-slate-500 py-6">Loading…</div>
             </div>
 
+            <!-- Options sub-view (Both accounts) -->
+            <div id="accounts-options" class="hidden">
+                <h2 class="section-title">Active Written Options Contracts</h2>
+                <div class="overflow-x-auto mb-8">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Underlying</th><th>Qty</th><th>Strike</th><th>Current Underlying Price</th><th>Premium Collected</th><th>Expiration</th><th>Sigma / IV</th><th>Status</th></tr>
+                        </thead>
+                        <tbody id="options-body">
+                            <tr><td colspan="8" class="text-center text-slate-500 py-6">Loading options...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Options Adviser Recommendation -->
+                    <div class="card bg-slate-900/40 border border-slate-800/80">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="font-bold text-slate-200">🔮 AETHER Black-Scholes Options Adviser</h3>
+                            <div class="flex items-center gap-2">
+                                <input type="text" id="adviser-sym-input" class="input py-1 text-xs w-24 uppercase text-center font-bold text-blue-400" placeholder="Ticker" value="ROKU">
+                                <button id="adviser-get-btn" class="btn text-xs py-1 px-3">Analyze</button>
+                            </div>
+                        </div>
+                        <div id="adviser-container" class="space-y-4">
+                            <div class="text-center text-slate-500 py-4">Enter a symbol above to generate recommended Covered Call writes.</div>
+                        </div>
+                    </div>
+
+                    <!-- Options Educational Briefing -->
+                    <div class="card bg-slate-900/40 border border-slate-800/80 text-slate-400 text-sm space-y-3">
+                        <h3 class="font-bold text-slate-200">🧬 Black-Scholes Covered Call Capture (R&D #26)</h3>
+                        <p>Covered calls generate premium yield against risk-locked winner positions (L60 momentum trend &ge; 2.0). Premium collected is credited instantly to your cash balance, accelerating portfolio compounding velocity.</p>
+                        <p><strong>Exclusion Rule:</strong> Winners with extreme high-conviction breakout momentum (L60 &ge; 6.0) are strictly excluded from call-writing (Flower Protection) to keep their unlimited upside uncapped.</p>
+                    </div>
+                </div>
+            </div>
+
             <!-- Rotation sub-view (real accounts) -->
             <div id="accounts-rotation" class="hidden">
                 <h2 class="section-title">Portfolio Rotation Pairs</h2>

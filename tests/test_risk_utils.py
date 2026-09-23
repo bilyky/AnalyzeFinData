@@ -210,5 +210,112 @@ class TestLoaderSplitAdjust(unittest.TestCase):
         self.assertEqual(highs[0], 52.0)
 
 
+class TestScaleOut(unittest.TestCase):
+    """Bank-As-You-Go scale-out (Defensive Overlay Rule B) — table-driven, pure.
+
+    Pins the ladder to the default (bank 30% at +1.5xATR and +3.0xATR) so the test
+    is deterministic regardless of any config.json present. cost=100, atr=10 gives
+    round profit-in-ATR numbers.
+    """
+
+    def setUp(self):
+        self._tiers = risk_utils.CFG.overlay_scale_out_tiers
+        self._fracs = risk_utils.CFG.overlay_scale_out_fracs
+        risk_utils.CFG.overlay_scale_out_tiers = [1.5, 3.0]
+        risk_utils.CFG.overlay_scale_out_fracs = [0.30, 0.30]
+
+    def tearDown(self):
+        risk_utils.CFG.overlay_scale_out_tiers = self._tiers
+        risk_utils.CFG.overlay_scale_out_fracs = self._fracs
+
+    def test_below_first_tier_banks_nothing(self):
+        frac, _ = risk_utils.scale_out_plan(110.0, 100.0, 10.0)  # +1.0xATR < 1.5
+        self.assertEqual(frac, 0.0)
+
+    def test_first_tier_banks_first_fraction(self):
+        frac, reason = risk_utils.scale_out_plan(115.0, 100.0, 10.0)  # +1.5xATR
+        self.assertAlmostEqual(frac, 0.30)
+        self.assertIn("bank", reason)
+
+    def test_between_tiers_after_first_bank_is_idempotent(self):
+        # Already banked 0.30, price at +2.0xATR (2nd tier not reached) -> nothing new.
+        frac, _ = risk_utils.scale_out_plan(120.0, 100.0, 10.0, banked_pct=0.30)
+        self.assertEqual(frac, 0.0)
+
+    def test_second_tier_banks_second_fraction(self):
+        frac, _ = risk_utils.scale_out_plan(130.0, 100.0, 10.0, banked_pct=0.30)  # +3.0xATR
+        self.assertAlmostEqual(frac, 0.30)
+
+    def test_jump_through_both_tiers_banks_cumulative(self):
+        # A single move to +3.5xATR with nothing banked yet -> bank both fractions.
+        frac, _ = risk_utils.scale_out_plan(135.0, 100.0, 10.0, banked_pct=0.0)
+        self.assertAlmostEqual(frac, 0.60)
+
+    def test_fully_banked_returns_zero(self):
+        frac, reason = risk_utils.scale_out_plan(140.0, 100.0, 10.0, banked_pct=0.60)
+        self.assertEqual(frac, 0.0)
+        self.assertIn("already banked", reason)
+
+    def test_loser_never_scales(self):
+        frac, reason = risk_utils.scale_out_plan(95.0, 100.0, 10.0)
+        self.assertEqual(frac, 0.0)
+        self.assertEqual(reason, "not in profit")
+
+    def test_breakeven_never_scales(self):
+        frac, _ = risk_utils.scale_out_plan(100.0, 100.0, 10.0)
+        self.assertEqual(frac, 0.0)
+
+    def test_nonpositive_atr_is_safe(self):
+        frac, reason = risk_utils.scale_out_plan(150.0, 100.0, 0.0)
+        self.assertEqual(frac, 0.0)
+        self.assertEqual(reason, "not in profit")
+
+    def test_invalid_inputs_are_safe(self):
+        frac, reason = risk_utils.scale_out_plan(None, 100.0, 10.0)
+        self.assertEqual(frac, 0.0)
+        self.assertEqual(reason, "invalid inputs")
+
+    # ── Conviction guard — a high-conviction flower is never trimmed ──
+    def test_high_conviction_flower_is_not_scaled(self):
+        # A crossed tier that WOULD bank 0.30, but L60 at/above the ceiling holds it.
+        frac, reason = risk_utils.scale_out_plan(
+            115.0, 100.0, 10.0, l60=6.5, l60_ceiling=6.0)  # +1.5xATR
+        self.assertEqual(frac, 0.0)
+        self.assertIn("high-conviction flower", reason)
+
+    def test_conviction_boundary_is_inclusive(self):
+        # l60 == ceiling holds (>=), matching the covered-call flower exclusion.
+        frac, reason = risk_utils.scale_out_plan(
+            115.0, 100.0, 10.0, l60=6.0, l60_ceiling=6.0)
+        self.assertEqual(frac, 0.0)
+        self.assertIn("high-conviction flower", reason)
+
+    def test_below_ceiling_still_banks(self):
+        # A winner below the conviction ceiling scales out normally.
+        frac, reason = risk_utils.scale_out_plan(
+            115.0, 100.0, 10.0, l60=5.9, l60_ceiling=6.0)
+        self.assertAlmostEqual(frac, 0.30)
+        self.assertIn("bank", reason)
+
+    def test_conviction_guard_only_fires_on_a_crossed_tier(self):
+        # Below the first tier there is nothing to bank, so a flower reports the
+        # ordinary "below first tier" reason, NOT a spurious conviction hold.
+        frac, reason = risk_utils.scale_out_plan(
+            110.0, 100.0, 10.0, l60=9.0, l60_ceiling=6.0)  # +1.0xATR < 1.5
+        self.assertEqual(frac, 0.0)
+        self.assertNotIn("high-conviction", reason)
+
+    def test_conviction_guard_inert_without_args(self):
+        # Legacy callers (no l60/ceiling) are unchanged — the guard stays dormant.
+        frac, _ = risk_utils.scale_out_plan(115.0, 100.0, 10.0)
+        self.assertAlmostEqual(frac, 0.30)
+
+    def test_conviction_guard_ignores_only_ceiling(self):
+        # Ceiling given but l60 missing -> guard inert (needs both to engage).
+        frac, _ = risk_utils.scale_out_plan(
+            115.0, 100.0, 10.0, l60=None, l60_ceiling=6.0)
+        self.assertAlmostEqual(frac, 0.30)
+
+
 if __name__ == "__main__":
     unittest.main()

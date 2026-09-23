@@ -22,12 +22,18 @@ Usage:
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import console_safe
+console_safe.install()
 
 
 
 import json
 import os
 import sys
+
+from aether_logger import get_logger as _get_logger
+
+_log = _get_logger("verify_stops")
 
 OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
 
@@ -180,26 +186,26 @@ def win_pct(b: dict) -> int | None:
 
 def print_results(all_results: dict, lookback_days: int, lookforward_days: int):
     col_w = 22
-    print(f"\n{'='*100}")
-    print(f"  target_lookback={TARGET_LOOKBACK}d  stop=min({STOP_DAYS}d lows)*0.99  "
-          f"sma={SMA_DAYS}d  lookback={lookback_days}d  lookforward={lookforward_days}d")
-    print(f"  Format: n=setups  win=TARGET/(TARGET+STOP)  T=target%  S=stop%")
-    print(f"{'='*100}\n")
+    sys.stdout.write(f"\n{'='*100}\n")
+    sys.stdout.write(f"  target_lookback={TARGET_LOOKBACK}d  stop=min({STOP_DAYS}d lows)*0.99  "
+                     f"sma={SMA_DAYS}d  lookback={lookback_days}d  lookforward={lookforward_days}d\n")
+    sys.stdout.write("  Format: n=setups  win=TARGET/(TARGET+STOP)  T=target%  S=stop%\n")
+    sys.stdout.write(f"{'='*100}\n\n")
 
     hdr = f"  {'':8}"
     for fname in FILTERS:
         hdr += f"  {fname:>{col_w}}"
-    print(hdr)
-    print(f"  {'-'*8}" + f"  {'-'*col_w}" * len(FILTERS))
+    sys.stdout.write(hdr + "\n")
+    sys.stdout.write(f"  {'-'*8}" + f"  {'-'*col_w}" * len(FILTERS) + "\n")
 
     for symbol, res in all_results.items():
         row = f"  {symbol:<8}"
         for fname in FILTERS:
             row += f"  {win_cell(res[fname]):>{col_w}}"
-        print(row)
+        sys.stdout.write(row + "\n")
 
-    print()
-    print(f"  {'='*8}" + f"  {'='*col_w}" * len(FILTERS))
+    sys.stdout.write("\n")
+    sys.stdout.write(f"  {'='*8}" + f"  {'='*col_w}" * len(FILTERS) + "\n")
 
     # Collect per-filter win% lists
     filter_wins = {f: [] for f in FILTERS}
@@ -217,31 +223,31 @@ def print_results(all_results: dict, lookback_days: int, lookforward_days: int):
         return s[m] if len(s) % 2 else (s[m-1] + s[m]) // 2
 
     # Average
-    print(f"  {'avg':8}", end="")
+    sys.stdout.write(f"  {'avg':8}")
     for fname in FILTERS:
         ws = filter_wins[fname]
         v = sum(ws) // len(ws) if ws else 0
-        print(f"  {f'avg={v}%':>{col_w}}", end="")
-    print()
+        sys.stdout.write(f"  {f'avg={v}%':>{col_w}}")
+    sys.stdout.write("\n")
 
     # Median
-    print(f"  {'median':8}", end="")
+    sys.stdout.write(f"  {'median':8}")
     for fname in FILTERS:
         v = med(filter_wins[fname])
-        print(f"  {f'med={v}%':>{col_w}}", end="")
-    print()
+        sys.stdout.write(f"  {f'med={v}%':>{col_w}}")
+    sys.stdout.write("\n")
 
     # % of symbols above 60% win
-    print(f"  {'>60% win':8}", end="")
+    sys.stdout.write(f"  {'>60% win':8}")
     for fname in FILTERS:
         ws = filter_wins[fname]
         n_above = sum(1 for w in ws if w >= 60)
         pct = 100 * n_above // len(ws) if ws else 0
-        print(f"  {f'{n_above}/{len(ws)} syms ({pct}%)':>{col_w}}", end="")
-    print()
+        sys.stdout.write(f"  {f'{n_above}/{len(ws)} syms ({pct}%)':>{col_w}}")
+    sys.stdout.write("\n")
 
     # Lift over baseline (t+d3 focus)
-    print(f"\n  Lift of t+d3 over 'none' per symbol (symbols with n>=20 in both):")
+    sys.stdout.write("\n  Lift of t+d3 over 'none' per symbol (symbols with n>=20 in both):\n")
     lifts = []
     for sym, res in all_results.items():
         base = win_pct(res['none'])
@@ -253,11 +259,11 @@ def print_results(all_results: dict, lookback_days: int, lookforward_days: int):
     for sym, base, filt, lift in lifts:
         bar = "+" * (lift // 2) if lift > 0 else "-" * ((-lift) // 2)
         sign = "+" if lift >= 0 else ""
-        print(f"    {sym:<8}  {base:2d}% -> {filt:2d}%  ({sign}{lift:+d}pp)  {bar}")
+        sys.stdout.write(f"    {sym:<8}  {base:2d}% -> {filt:2d}%  ({sign}{lift:+d}pp)  {bar}\n")
     avg_lift = sum(x[3] for x in lifts) // len(lifts) if lifts else 0
-    print(f"\n    Average lift: {avg_lift:+d}pp  |  "
-          f"Positive: {sum(1 for x in lifts if x[3]>0)}/{len(lifts)} symbols")
-    print()
+    sys.stdout.write(f"\n    Average lift: {avg_lift:+d}pp  |  "
+                     f"Positive: {sum(1 for x in lifts if x[3]>0)}/{len(lifts)} symbols\n")
+    sys.stdout.write("\n")
 
 
 if __name__ == "__main__":
@@ -274,6 +280,6 @@ if __name__ == "__main__":
         all_results[sym] = run_symbol(sym, ts, lookback, lookforward)
 
     if missing:
-        print(f"  No OHLCV data for: {', '.join(missing)}")
+        _log.warning(f"[verify_stops] No OHLCV data for: {', '.join(missing)}")
 
     print_results(all_results, lookback, lookforward)
