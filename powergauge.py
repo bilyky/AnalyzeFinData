@@ -855,18 +855,30 @@ def _login_via_browser(headless: bool = False) -> dict:
         # forces a fresh challenge on the next login and can self-heal that case.
         #
         # But that SAME cf_clearance cookie is the durable ~355-day credential, and a fresh
-        # (cold) Turnstile can only be solved in a HEADED browser — headless is *expected*
-        # to fail (that is exactly what the 10s fast-fail above is for). So we must NEVER
-        # wipe the profile on a headless failure: doing so throws away a good credential and
-        # leaves the next cold challenge unsolvable headless, making things strictly worse.
-        # Only self-heal (back up, then clear) when we ran headed and can re-solve.
+        # (cold) Turnstile can only be solved in a HEADED browser. A headed failure is USUALLY
+        # a transient Turnstile 600010 / network blip, NOT a poisoned profile — and wiping the
+        # profile throws away a good ~355-day credential and makes the next cold challenge
+        # HARDER, not easier (proven live 2026-09-17). So PRESERVE the profile by default and
+        # surface the failure; the destructive back-up-then-clear self-heal for a genuinely
+        # poisoned profile is opt-in via CHAIKIN_PROFILE_RESET=1.
         if headless:
             _pg_log.warning(
                 "Chaikin headless login failed (expected when Turnstile challenges a "
                 f"headless browser); keeping the persistent profile intact: {e}"
             )
             raise
-        _pg_log.warning(f"Chaikin headed login failed; backing up and clearing persistent Chrome profile to self-heal: {e}")
+        if os.environ.get("CHAIKIN_PROFILE_RESET") != "1":
+            _pg_log.warning(
+                "Chaikin headed login failed; PRESERVING the persistent Chrome profile (its "
+                "cf_clearance is the durable ~355-day credential — wiping it makes the next cold "
+                "Turnstile challenge harder, not easier). Set CHAIKIN_PROFILE_RESET=1 to force a "
+                f"backup-then-clear self-heal for a genuinely poisoned profile. Error: {e}"
+            )
+            raise
+        _pg_log.warning(
+            "Chaikin headed login failed; CHAIKIN_PROFILE_RESET=1 set — backing up and clearing "
+            f"the persistent Chrome profile to self-heal a suspected poisoned profile: {e}"
+        )
         try:
             backup_dir = os.path.join(os.path.dirname(_CHAIKIN_PROFILE_DIR), "Backup")
             os.makedirs(backup_dir, exist_ok=True)
