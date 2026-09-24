@@ -222,43 +222,58 @@ class TestNewPreflightFeatures(unittest.TestCase):
         self.assertEqual(issues, [])
 
 class TestPreflightEtradeWaiver(unittest.TestCase):
-    @mock.patch("aether.etrade.get_tokens")
+    # check_etrade_api drives the unattended re-auth door scheduled_reauth() (renew-first,
+    # at most one HEADLESS breaker/trust-gated mint) rather than get_tokens(allow_browser=
+    # False), whose default HEADFUL mint can't launch on a display-less PROD host.
+    @mock.patch("aether.etrade.scheduled_reauth")
     @mock.patch("datetime.datetime")
-    def test_etrade_check_waived_on_weekend(self, mock_datetime, mock_get_tokens):
+    def test_etrade_check_waived_on_weekend(self, mock_datetime, mock_reauth):
         # Mock datetime to a Saturday (weekday 5)
         mock_dt = mock.Mock()
         mock_dt.weekday.return_value = 5
         mock_datetime.now.return_value = mock_dt
 
-        # Mock E*TRADE token retrieval to fail (None)
-        mock_get_tokens.return_value = None
+        # Re-auth could not produce a live session
+        mock_reauth.return_value = {"ok": False, "reason": "failed"}
 
         # Execute check — it should return "WAIVED" on weekends
         res = pf.check_etrade_api()
         self.assertEqual(res, "WAIVED")
+        mock_reauth.assert_called_once_with("production")
 
-    @mock.patch("aether.etrade.get_tokens")
+    @mock.patch("aether.etrade.scheduled_reauth")
     @mock.patch("datetime.datetime")
-    def test_etrade_check_fails_on_weekday(self, mock_datetime, mock_get_tokens):
+    def test_etrade_check_fails_on_weekday(self, mock_datetime, mock_reauth):
         # Mock datetime to a Wednesday (weekday 2)
         mock_dt = mock.Mock()
         mock_dt.weekday.return_value = 2
         mock_datetime.now.return_value = mock_dt
 
-        # Mock E*TRADE token retrieval to fail (None)
-        mock_get_tokens.return_value = None
+        # Re-auth could not produce a live session
+        mock_reauth.return_value = {"ok": False, "reason": "failed"}
 
         # Execute check — it should return False on weekdays
         res = pf.check_etrade_api()
         self.assertFalse(res)
 
-    @mock.patch("aether.etrade.get_tokens")
+    @mock.patch("aether.etrade.scheduled_reauth")
     @mock.patch("datetime.datetime")
-    def test_etrade_check_passes_on_tokens_success(self, mock_datetime, mock_get_tokens):
-        # Mock E*TRADE token retrieval to succeed (valid dict)
-        mock_get_tokens.return_value = {"oauth_token": "valid"}
+    def test_etrade_check_blocked_reason_fails_on_weekday(self, mock_datetime, mock_reauth):
+        # A hard-blocked breaker (needs a human) must fail the check on a weekday.
+        mock_dt = mock.Mock()
+        mock_dt.weekday.return_value = 2
+        mock_datetime.now.return_value = mock_dt
+        mock_reauth.return_value = {"ok": False, "reason": "blocked"}
 
-        # Execute check — it should return True on success
+        res = pf.check_etrade_api()
+        self.assertFalse(res)
+
+    @mock.patch("aether.etrade.scheduled_reauth")
+    @mock.patch("datetime.datetime")
+    def test_etrade_check_passes_on_reauth_ok(self, mock_datetime, mock_reauth):
+        # A live session (renewed or freshly re-authed) passes.
+        mock_reauth.return_value = {"ok": True, "reason": "reauthed"}
+
         res = pf.check_etrade_api()
         self.assertTrue(res)
 

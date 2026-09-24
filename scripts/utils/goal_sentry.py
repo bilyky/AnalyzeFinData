@@ -86,8 +86,13 @@ def run_sentry():
 
     # ── 2. Audit Project 2: The Oracle Project ──
     try:
-        # Load E*TRADE live account balance if tokens are valid
-        tokens = etrade.get_tokens("production", allow_browser=False)
+        # Ensure a live E*TRADE session via the unattended re-auth door: renew-first (no
+        # browser for a live token) and, only if dead, at most one HEADLESS breaker/trust-
+        # gated mint — so this works on a display-less PROD host. get_tokens(allow_browser=
+        # False) would attempt a HEADFUL mint that cannot launch there. read_accounts()
+        # below loads the (now-cached) token itself; this call only gates whether to bother.
+        _auth = etrade.scheduled_reauth("production")
+        tokens = _auth if _auth.get("ok") else None
         real_acct_id = CFG.oracle_account
         
         # Get start equity and target date from config.json

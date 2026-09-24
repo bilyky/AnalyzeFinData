@@ -179,23 +179,35 @@ def check_chaikin_api() -> bool:
 
 
 def check_etrade_api() -> bool | str:
-    """Validate live E*TRADE API OAuth session token validity.
-    On weekends (Saturdays and Sundays), since the stock market is closed,
-    verification failures are waived to allow reporting/summaries to run.
+    """Validate the live E*TRADE OAuth session, minting a fresh token if one is needed.
+
+    Uses the unattended re-auth door ``scheduled_reauth()`` — renew-first (pure HTTP, NO
+    browser for a live same-day token) and, only if the token is dead, AT MOST ONE
+    **headless**, breaker/trust-gated browser mint. This is the SAME door the web button
+    and the daily task use, so preflight succeeds on a display-less PROD host.
+
+    The old path — ``get_tokens(env="production", allow_browser=False)`` — defaulted to a
+    **headful** mint (``get_tokens``' ``headless`` param is False and, unlike
+    ``scheduled_reauth``, it ignores ``AETHER_ETRADE_SCHEDULED_HEADLESS``). A headful
+    Firefox cannot launch on a service/scheduled-task PROD box with no interactive desktop,
+    so a dead token surfaced only as a 401 and preflight failed even though the button
+    (headless) minted fine on the same host.
+
+    On weekends (market closed) a failure is waived so reporting/summaries still run.
     """
     _log.console("  Checking E*TRADE Brokerage OAuth Session Token...")
     is_weekend = datetime.datetime.now().weekday() in (5, 6)
     try:
-        tokens = etrade.get_tokens(env="production", allow_browser=False)
-        if tokens:
-            _log.console("  ✅ E*TRADE: Successfully verified and renewed live OAuth tokens.")
+        result = etrade.scheduled_reauth("production")
+        if result.get("ok"):
+            _log.console(f"  ✅ E*TRADE: Live OAuth session verified (reason: {result.get('reason')}).")
             return True
-        else:
-            if is_weekend:
-                _log.console("  ⚠️ E*TRADE: Verification failed, but waiving requirement because today is the weekend (market closed).")
-                return "WAIVED"
-            _log.console("  ❌ E*TRADE: No valid cached session or headless Playwright login failed.")
-            return False
+        reason = result.get("reason") or "failed"
+        if is_weekend:
+            _log.console(f"  ⚠️ E*TRADE: Re-auth returned '{reason}', but waiving requirement because today is the weekend (market closed).")
+            return "WAIVED"
+        _log.console(f"  ❌ E*TRADE: Re-auth did not yield a live session (reason: {reason}). Manual re-auth may be required.")
+        return False
     except Exception as e:
         if is_weekend:
             _log.console(f"  ⚠️ E*TRADE: Active OAuth verification failed ({e}), but waiving requirement because today is the weekend (market closed).")
