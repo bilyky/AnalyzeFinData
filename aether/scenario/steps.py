@@ -110,3 +110,67 @@ def determine_profile(state, manual_profile=None):
         game._log.info(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive)")
 
     return profile
+
+
+def assemble_symbol_universe(state, ws):
+    """Build the day's symbol universe and pre-heal stale caches (B6).
+
+    Extracted verbatim from the block in ``run_daily_ai_management`` that runs
+    between the profile decision and the live price fetch. It does four things,
+    all unchanged from the root:
+
+    1. **Positions list** — ``symbols_to_check`` = the held-position keys.
+    2. **Pre-flight OHLCV heal** — batch-heal any position whose cache is stale
+       (via ``_cache_stale`` / ``_heal_symbol_cache``) *before* the decision loop,
+       so ``_sma50`` never blocks on a live network call mid-iteration. The
+       per-process ``_HEAL_ATTEMPTED`` guard lives on the root module and is
+       preserved automatically: ``_heal_symbol_cache`` is resolved off the live
+       module via :func:`_pkg`, so it mutates the same global set.
+    3. **Legacy-position scarcity heal** — scans the Research sheet and stamps
+       ``is_scarcity`` onto any held position that predates the scarcity core
+       (mutates ``state["positions"][sym]`` in place).
+    4. **Universe assembly** — the deduped ``all_syms`` set the price source is
+       asked to quote: held + active-setup + queued + SPY (SPY is always included
+       for the circuit breaker).
+
+    Returns the four assembled lists as a dict
+    ``{symbols_to_check, research_symbols, queued_syms, all_syms}`` so the caller
+    (and, later, the B7 ``RunContext``) can thread them into the price gate and
+    the decision loop. The live price fetch and the empty-prices gate stay with
+    the caller — this stage only decides *which* symbols to price.
+    """
+    game = _pkg()
+
+    symbols_to_check = list(state["positions"].keys())
+
+    # Pre-flight: batch-heal stale OHLCV caches before the decision loop so
+    # _sma50 never blocks on a live network call mid-iteration.
+    stale_syms = [s for s in symbols_to_check if game._cache_stale(s, max_stale_days=game._MAX_STALE_DAYS)]
+    if stale_syms:
+        game._log.info(f"[Pre-flight] Healing {len(stale_syms)} stale OHLCV cache(s) before evaluation: {stale_syms}")
+        for _s in stale_syms:
+            game._heal_symbol_cache(_s)
+
+    # Dynamically heal/classify legacy positions
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        sym = row[3]
+        if sym in state["positions"] and "is_scarcity" not in state["positions"][sym]:
+            industry_str = row[4] or ""
+            is_scarcity = game.instruments.is_scarcity_asset(sym, industry_str)
+            state["positions"][sym]["is_scarcity"] = is_scarcity
+            game._log.info(f"  [AETHER State Healer] Classified existing position {sym} as scarcity={is_scarcity}")
+
+    research_symbols = game._active_setup_symbols(ws)
+
+    queued = state.get("queued_orders", [])
+    queued_syms = [q["symbol"] for q in queued]
+
+    # Ensure we always fetch the live price of SPY for our Circuit Breaker
+    all_syms = list(set(symbols_to_check + research_symbols + queued_syms + ["SPY"]))
+
+    return {
+        "symbols_to_check": symbols_to_check,
+        "research_symbols": research_symbols,
+        "queued_syms": queued_syms,
+        "all_syms": all_syms,
+    }
