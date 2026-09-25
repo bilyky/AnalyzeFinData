@@ -203,5 +203,40 @@ class TestKeepAliveIsRenewOnly(unittest.TestCase):
         renew.assert_called_once()
 
 
+class TestReauthStatePortWiring(unittest.TestCase):
+    """The three reauth-state helpers must route their I/O through the configured
+    ``make_etrade_store().reauth`` port (not a hardcoded File adapter), so a DB backend
+    swaps in via ``DATABASE_URL`` with zero call-site change — the same wiring pattern as
+    the lock (#120) and browser_state (#128) ports. Behavior is unchanged on the file
+    backend; this pins the routing so a regression to ``FileReauthStateStore()`` is caught.
+    """
+
+    def _bundle_with_spy_reauth(self):
+        reauth = mock.Mock()
+        reauth.load.return_value = {"consecutive_failures": 0, "cooldown_until": 0.0}
+        return mock.Mock(reauth=reauth), reauth
+
+    def test_load_routes_through_port(self):
+        bundle, reauth = self._bundle_with_spy_reauth()
+        with mock.patch.object(etrade, "make_etrade_store", return_value=bundle) as mk:
+            out = etrade._load_reauth_state("production")
+        mk.assert_called_once_with()
+        reauth.load.assert_called_once_with("production")
+        self.assertIs(out, reauth.load.return_value)
+
+    def test_save_routes_through_port(self):
+        bundle, reauth = self._bundle_with_spy_reauth()
+        state = {"consecutive_failures": 2, "cooldown_until": 123.0}
+        with mock.patch.object(etrade, "make_etrade_store", return_value=bundle):
+            etrade._save_reauth_state(state, "sandbox")
+        reauth.save.assert_called_once_with(state, "sandbox")
+
+    def test_reset_routes_through_port(self):
+        bundle, reauth = self._bundle_with_spy_reauth()
+        with mock.patch.object(etrade, "make_etrade_store", return_value=bundle):
+            etrade.reset_reauth_circuit_breaker("production")
+        reauth.reset.assert_called_once_with("production")
+
+
 if __name__ == "__main__":
     unittest.main()
