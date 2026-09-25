@@ -134,6 +134,20 @@ For each PR, look for and address every one of these (this is the standing revie
 
 - **Corner cases, bad smell, over-engineering.**
 - **Design / architecture / performance / security / simplification / unification.**
+  - **Architecture fit — does the change respect the project's actual seams?** AETHER is a **modular
+    monolith**, not microservices: one `aether/` package, a **ports-and-adapters** boundary where an
+    external dependency is wrapped behind a port + swappable adapter (e.g. the E*TRADE `store` —
+    `LockProvider`/`BrowserStateStore`, file backend today, DB later), a **strangler-fig** extraction
+    in progress (`ai_portfolio_game.py` → `aether/scenario/`), and call-time `_pkg()` lazy resolution
+    so extracted modules don't hard-bind their collaborators. Judge each change against *that* design,
+    and flag: a call site that **bypasses a port** to touch the underlying resource directly (e.g.
+    writing the token/state file inline instead of via `store`); a **reach across a module boundary**
+    into another package's internals rather than its public surface; logic **duplicated** instead of
+    routed through the single existing home (multiple-source-of-truth); a new **eager top-level import**
+    where the codebase uses `_pkg()`/lazy resolution; or a strangler-fig stage that **copies** rather
+    than *moves* behaviour (the old and new path both live, silently diverging). The check is "fits the
+    intended architecture," not "is it microservices" — recommend the seam the project already uses,
+    don't invent a new one.
 - **DB / IO: extra calls, N+1, redundant fetches.**
 - **Anti-patterns, missing patterns, parallelism** left on the table.
 - **Code duplication & multiple sources of truth** — one fact, one home.
@@ -290,6 +304,34 @@ don't hardcode an OS path. Authenticate via one of:
 > runtime's security policy should block this, and correctly so. If you notice such a token, advise
 > **rotating** it and moving to a credential helper — do not print or reuse its value.
 
+## 8b. Bring a PR current with `main` — **merge-in, not rebase**
+
+When `main` advances under an open PR (the compare API shows `behind_by > 0`), a **clean-mergeable**
+branch already satisfies the merge gate — but bringing it to **0-behind** re-runs CI against today's
+`main` and removes any "behind" ambiguity from the verdict. There are two ways to do it, and only one
+survives the sandbox:
+
+- ❌ **`git rebase main`** rewrites the branch's commits, so the update can only reach the remote via
+  `git push --force`/`--force-with-lease`. The auto-mode classifier **blocks that as "Git Destructive"**
+  (correctly — a force-push can clobber). You'll get the rebase done locally and then be stuck unable to
+  publish it.
+- ✅ **`git merge --no-ff <main-sha>`** adds a *new* merge commit on top of the existing pushed head, so
+  the branch only ever moves **forward**. The follow-up `git push` is a plain **fast-forward** (no
+  `--force`), which the classifier allows. Result is the same 0-behind, `mergeable_state: clean` branch.
+
+Recipe (from the PR's worktree):
+```bash
+git fetch <auth-url> main                          # get today's main → FETCH_HEAD
+git merge --no-ff <main-sha> -m "Merge latest main into <branch>"   # forward-only merge commit
+<venv>/Scripts/python.exe -m unittest discover tests               # re-run the suite post-merge
+git push <auth-url> HEAD:<branch>                   # fast-forward, NO --force
+```
+If a local rebase was already done (branch tip rewritten), reset the branch pointer back to the pushed
+remote head first — `git checkout -B <branch> <pushed-sha>` — **then** merge-in, so the push stays a
+fast-forward. Verify with the compare API afterwards: want `behind=0`, `mergeable_state: clean`.
+(Empirically the merge-in flips `unstable` → `clean` too, since the fresh commit repopulates the legacy
+combined-status the `unstable` artifact was missing.)
+
 ## 9. Clean up the local footprint once a PR is MERGED
 
 A review/prepare campaign leaves a trail: a per-PR `_wt_*` worktree, a local branch, and `/tmp`
@@ -361,6 +403,12 @@ Confirm each before finishing — the full rule lives in the cited section:
   `scripts/utils/prune_merged_worktrees.py` (dry-run, then `--apply`) — open-PR branches, dirty
   worktrees, and `.claude/` agent worktrees left untouched.
 - **§5** posted as **comments** (`gh pr comment`, not `--request-changes`).
+- **§3** design judged against the project's real architecture (modular monolith + ports/adapters +
+  strangler-fig) — port bypass, cross-boundary reach-in, duplicated source-of-truth, and copy-not-move
+  strangler stages flagged; no new seam invented.
+- **§8b** a behind-`main` PR brought current with **`git merge --no-ff` + fast-forward push**, never a
+  rebase + force-push (the classifier blocks the force-push); `behind=0` / `mergeable_state: clean`
+  re-verified via the compare API.
 - **§7 / §8** reachability proven with `--ssl-no-revoke` before claiming the API up/down; push token
   never scraped (rotation advised if seen).
 - **§9** merged-PR footprint retired — merge confirmed by PR API (not ancestry), worktrees removed
