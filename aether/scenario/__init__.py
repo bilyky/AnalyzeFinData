@@ -46,6 +46,7 @@ from aether.scenario.schema import (
     Quote,
 )
 from aether.scenario.steps import (
+    assemble_symbol_universe,
     determine_profile,
 )
 
@@ -77,6 +78,7 @@ __all__ = [
     "is_bottom_confirmed",
     "backtrack_verify",
     "evaluate_momentum_rotation",
-    # steps (B5)
+    # steps (B5, B6)
     "determine_profile",
+    "assemble_symbol_universe",
 ]
