@@ -225,57 +225,34 @@ class TestPreflightEtradeWaiver(unittest.TestCase):
     # check_etrade_api drives the unattended re-auth door scheduled_reauth() (renew-first,
     # at most one HEADLESS breaker/trust-gated mint) rather than get_tokens(allow_browser=
     # False), whose default HEADFUL mint can't launch on a display-less PROD host.
-    @mock.patch("aether.etrade.scheduled_reauth")
-    @mock.patch("datetime.datetime")
-    def test_etrade_check_waived_on_weekend(self, mock_datetime, mock_reauth):
-        # Mock datetime to a Saturday (weekday 5)
-        mock_dt = mock.Mock()
-        mock_dt.weekday.return_value = 5
-        mock_datetime.now.return_value = mock_dt
-
-        # Re-auth could not produce a live session
-        mock_reauth.return_value = {"ok": False, "reason": "failed"}
-
-        # Execute check — it should return "WAIVED" on weekends
-        res = pf.check_etrade_api()
-        self.assertEqual(res, "WAIVED")
-        mock_reauth.assert_called_once_with("production")
+    #
+    # The verdict depends on exactly two inputs: whether scheduled_reauth reported a live
+    # session (result["ok"]) and whether today is a weekend (market closed → waive). The
+    # `reason` string never drives control flow — it only decorates the operator log — so
+    # the "blocked" row below documents a hard-blocked breaker without needing its own path.
+    SAT, WED = 5, 2
 
     @mock.patch("aether.etrade.scheduled_reauth")
     @mock.patch("datetime.datetime")
-    def test_etrade_check_fails_on_weekday(self, mock_datetime, mock_reauth):
-        # Mock datetime to a Wednesday (weekday 2)
-        mock_dt = mock.Mock()
-        mock_dt.weekday.return_value = 2
-        mock_datetime.now.return_value = mock_dt
+    def test_check_etrade_api_verdict_matrix(self, mock_datetime, mock_reauth):
+        cases = [
+            # weekday, scheduled_reauth result,               expected verdict
+            (self.SAT, {"ok": False, "reason": "failed"},     "WAIVED"),   # weekend waives a dead session
+            (self.SAT, {"ok": True,  "reason": "renewed"},    True),       # weekend, live session still passes
+            (self.WED, {"ok": False, "reason": "failed"},     False),      # weekday, dead session fails
+            (self.WED, {"ok": False, "reason": "blocked"},    False),      # weekday, hard-blocked breaker fails
+            (self.WED, {"ok": True,  "reason": "reauthed"},   True),       # weekday, freshly re-authed passes
+        ]
+        for weekday, result, expected in cases:
+            with self.subTest(weekday=weekday, ok=result["ok"], reason=result["reason"]):
+                mock_dt = mock.Mock()
+                mock_dt.weekday.return_value = weekday
+                mock_datetime.now.return_value = mock_dt
+                mock_reauth.reset_mock()
+                mock_reauth.return_value = result
 
-        # Re-auth could not produce a live session
-        mock_reauth.return_value = {"ok": False, "reason": "failed"}
-
-        # Execute check — it should return False on weekdays
-        res = pf.check_etrade_api()
-        self.assertFalse(res)
-
-    @mock.patch("aether.etrade.scheduled_reauth")
-    @mock.patch("datetime.datetime")
-    def test_etrade_check_blocked_reason_fails_on_weekday(self, mock_datetime, mock_reauth):
-        # A hard-blocked breaker (needs a human) must fail the check on a weekday.
-        mock_dt = mock.Mock()
-        mock_dt.weekday.return_value = 2
-        mock_datetime.now.return_value = mock_dt
-        mock_reauth.return_value = {"ok": False, "reason": "blocked"}
-
-        res = pf.check_etrade_api()
-        self.assertFalse(res)
-
-    @mock.patch("aether.etrade.scheduled_reauth")
-    @mock.patch("datetime.datetime")
-    def test_etrade_check_passes_on_reauth_ok(self, mock_datetime, mock_reauth):
-        # A live session (renewed or freshly re-authed) passes.
-        mock_reauth.return_value = {"ok": True, "reason": "reauthed"}
-
-        res = pf.check_etrade_api()
-        self.assertTrue(res)
+                self.assertEqual(pf.check_etrade_api(), expected)
+                mock_reauth.assert_called_once_with("production")
 
 
 if __name__ == "__main__":
