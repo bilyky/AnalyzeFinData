@@ -17,7 +17,6 @@ from aether import notify, paths, trash
 from aether.config import CFG
 from aether.logger import get_logger
 from aether.token_renewer import TokenRenewer as _TokenRenewer
-from aether.token_renewer import single_flight as _single_flight
 
 
 _log = get_logger("aether.etrade")
@@ -49,6 +48,9 @@ _DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 _DATA_DIR = paths.data_dir()
 _TOKEN_PATH = os.path.join(_DATA_DIR, "etrade_tokens.json")
 _FAIL_STATE_PATH = os.path.join(_DATA_DIR, "etrade_fail_state.json")
+# The single-flight lock both automated browser doors share (get_tokens' lazy mint and
+# scheduled_reauth). One definition so the two doors can never drift onto different locks.
+_REAUTH_LOCK_PATH = os.path.join(_DATA_DIR, "etrade_reauth.lock")
 
 
 
@@ -1291,7 +1293,7 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
             )
         else:
             _log.info("Attempting automatic re-authentication via saved browser state...")
-            lock_path = os.path.join(_DATA_DIR, "etrade_reauth.lock")
+            lock_path = _REAUTH_LOCK_PATH
             reauth_renewer = _TokenRenewer(
                 lock_path,
                 renew_fn=lambda: _login_headless(ck, cs, username, password, env, headless=headless),
@@ -1664,8 +1666,9 @@ def scheduled_reauth(env: str = "production") -> dict:
     # in_progress (not a false failure) and opens nothing; the lock's ttl reclaims a crashed
     # holder so this can't wedge forever.
     ck, cs, username, password = _load_config(env)
-    lock_path = os.path.join(_DATA_DIR, "etrade_reauth.lock")
-    with _single_flight(lock_path, lock_ttl=300) as won:
+    # Through the LockProvider port (PR #118): a file O_EXCL lock today, a DB row-lease across pods
+    # later, with zero change here. The full path resolves verbatim, honoring AETHER_DATA_DIR.
+    with make_etrade_store().lock.single_flight(_REAUTH_LOCK_PATH, ttl=300) as won:
         if not won:
             result.update(reason=AuthReason.IN_PROGRESS)
             result["breaker_state"] = _breaker_summary(env)

@@ -20,7 +20,6 @@ The circuit-breaker cooldown mechanics live in test_etrade_reauth_circuit_breake
 door's trust/breaker gate lives in test_etrade_scheduled_reauth.py. This file is only the lazy
 hardening + failure reporting.
 """
-import contextlib
 import os
 import sys
 import tempfile
@@ -142,16 +141,16 @@ class TestScheduledReauthSingleFlight(unittest.TestCase):
         ]
 
     def test_lock_held_reports_in_progress_no_browser(self):
-        # A mint already in flight (single_flight yields False) → the loser must report in_progress
-        # and open NO second browser.
-        @contextlib.contextmanager
-        def _loser(*_a, **_k):
-            yield False
+        # A mint already in flight → the loser must report in_progress and open NO second browser.
+        # The door now runs through the LockProvider port (store.lock.single_flight, PR #118);
+        # simulate the lock being HELD at the real O_EXCL primitive (acquire returns None), so the
+        # wired FileLockProvider's single_flight yields False — the same "loser" path, verified
+        # end-to-end through the port instead of a monkeypatched context manager.
         ps = self._patches()
         for p in ps:
             p.start()
         self.addCleanup(lambda: [p.stop() for p in ps])
-        with mock.patch.object(etrade, "_single_flight", _loser), \
+        with mock.patch("aether.token_renewer._acquire_lock", return_value=None), \
              mock.patch.object(etrade, "_login_headless") as m_lh:
             res = etrade.scheduled_reauth("production")
         self.assertEqual(res["reason"], "in_progress")
