@@ -174,3 +174,66 @@ def assemble_symbol_universe(state, ws):
         "queued_syms": queued_syms,
         "all_syms": all_syms,
     }
+
+
+def price_and_settle(state, all_syms, symbols_to_check, today):
+    """Fetch live prices, gate on data availability, and settle the book (B6).
+
+    Extracted verbatim from the block in ``run_daily_ai_management`` that runs
+    between the symbol-universe assembly (:func:`assemble_symbol_universe`) and
+    the queued-order / decision loops. It establishes the day's single source of
+    price truth and settles the portfolio against it — five steps, all unchanged
+    from the root:
+
+    1. **Live price fetch** — ``get_live_prices(all_syms)`` (E*TRADE primary,
+       Google Finance fallback, via the B1 price source).
+    2. **Price Source Gate** — if *no* prices came back at all, raise
+       ``RuntimeError`` rather than proceed on stale workbook prices: with no live
+       source of truth the run must crash, not trade blind.
+    3. **Circuit breaker** — ``circuit_breaker.enforce_circuit_breaker`` (the
+       systemic-crash guard; may de-risk into cash — mutates ``state`` in place).
+    4. **Options settlement** — ``options.resolve_expiring_options`` settles any
+       weekly covered call expiring today (R&D #26; mutates ``state`` in place).
+    5. **Equity mark** — Zero-Trust: *surface* held positions with no live quote
+       via ``_log.console`` but do NOT abort over them (aborting would skip
+       stop-loss enforcement on every other position, violating the Rule of Loss
+       Minimization); then mark ``state["equity"]`` to live prices, unpriced
+       names falling back to cost inside ``_live_equity``.
+
+    Returns the ``prices`` dict for the caller (and, later, the B7
+    ``RunContext``) to thread into the queued-order execution and the decision
+    loops. Every collaborator (``get_live_prices``, ``circuit_breaker``,
+    ``options``, ``_live_equity``, the ``_log`` sink) is resolved off the live
+    root module at call time via :func:`_pkg`, so ``mock.patch.object(game, ...)``
+    still intercepts and the circuit-breaker / options mutations land on the same
+    ``state`` object the caller holds.
+    """
+    game = _pkg()
+
+    prices = game.get_live_prices(all_syms)
+
+    # --- Price Source Gate ---
+    # Primary source: E*TRADE live API. Automatic fallback: Google Finance scraper.
+    # If both fail (prices is empty), crash — no stale workbook prices allowed.
+    if not prices:
+        raise RuntimeError("Critical Data Failure: Both E*TRADE and Google Finance fallback returned no prices. No live source of truth available!")
+
+    # --- Systemic Crash Circuit Breaker Guard ---
+    game.circuit_breaker.enforce_circuit_breaker(state, prices)
+
+    # --- Options Settlement Pass (R&D #26) ---
+    # Settle any active weekly Covered Calls expiring today!
+    game.options.resolve_expiring_options(state, today, prices)
+
+    # Zero-Trust: surface held positions with no live quote, but do NOT abort the
+    # run over them — aborting would skip stop-loss enforcement on every *other*
+    # position too, violating the Rule of Loss Minimization. Unpriced names fall
+    # back to cost for the equity figure (via _live_equity) and are held (their
+    # cost-based price won't trip a stop) until a quote returns.
+    missing_prices = [sym for sym in symbols_to_check if sym not in prices or not prices[sym] or prices[sym] <= 0]
+    if missing_prices:
+        game._log.console(f"  [AETHER] PORTFOLIO ERROR: No live quote found for held positions {missing_prices}! Using cost basis for their equity share and skipping their stop check this run.")
+
+    state["equity"] = round(game._live_equity(state["balance"], state["positions"], prices), 0)
+
+    return prices
