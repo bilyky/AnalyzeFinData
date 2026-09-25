@@ -1110,14 +1110,16 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
         except Exception as e:
             _log.console(f"  [Auth] Browser interaction error: {e}")
         finally:
-            # Save browser state (trusted-device cookies) before closing.
-            # Write via json.dump with utf-8 to avoid Windows cp1252 encoding errors.
+            # Save browser state (trusted-device cookies) before closing — through the
+            # BrowserStateStore port so the write path is swappable (file today, DB
+            # later) with no change to this login flow. The file adapter is
+            # behaviour-identical to the old inline write: makedirs + utf-8
+            # json.dump(indent=2, ensure_ascii=False) to _BROWSER_STATE_PATH, which
+            # avoids Windows cp1252 encoding errors. ctx.storage_state() returns a
+            # dict — no file I/O by Playwright — passed straight to the port.
             if verifier:
                 try:
-                    os.makedirs(os.path.dirname(_BROWSER_STATE_PATH), exist_ok=True)
-                    state = ctx.storage_state()   # returns dict — no file I/O by Playwright
-                    with open(_BROWSER_STATE_PATH, "w", encoding="utf-8") as _f:
-                        json.dump(state, _f, indent=2, ensure_ascii=False)
+                    make_etrade_store().browser_state.save(ctx.storage_state())
                     _log.console("  [Auth] Browser state saved — future logins skip MFA.")
                 except Exception as e:
                     _log.console(f"  [Auth] Could not save browser state: {e}")
