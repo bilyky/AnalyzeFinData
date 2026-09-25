@@ -48,6 +48,7 @@ from aether.scenario.schema import (
 from aether.scenario.steps import (
     assemble_symbol_universe,
     determine_profile,
+    price_and_settle,
 )
 
 __all__ = [
@@ -81,4 +82,5 @@ __all__ = [
     # steps (B5, B6)
     "determine_profile",
     "assemble_symbol_universe",
+    "price_and_settle",
 ]
