@@ -345,14 +345,17 @@ def _load_reauth_state(env: str = "production") -> dict:
     """Circuit-breaker state: {consecutive_failures, last_attempt, cooldown_until}.
 
     A missing/corrupt file reads as a fully-open gate (no active cooldown).
-    Shim → ``store.FileReauthStateStore().load``; the I/O body lives in the store adapter.
+    Routes through ``make_etrade_store().reauth.load`` so the breaker state follows the
+    configured backend (file today; a shared DB under ``DATABASE_URL`` — reauth state is
+    non-secret/shareable, so a DB backend gives every pod one breaker). Behavior-identical
+    to the file adapter today.
     """
-    return FileReauthStateStore().load(env)
+    return make_etrade_store().reauth.load(env)
 
 
 def _save_reauth_state(state: dict, env: str = "production") -> None:
-    """Shim → ``store.FileReauthStateStore().save``; the I/O body lives in the store adapter."""
-    FileReauthStateStore().save(state, env)
+    """Routes through ``make_etrade_store().reauth.save``; the I/O body lives in the store adapter."""
+    make_etrade_store().reauth.save(state, env)
 
 
 def _cooldown_remaining_from_state(state: dict) -> float:
@@ -370,8 +373,8 @@ def reset_reauth_circuit_breaker(env: str = "production") -> None:
     """Clear the breaker. Called automatically on any SUCCESSFUL login (including the
     human `scripts/diagnostics/test_etrade.py` path), so a good re-auth restores normal
     automated operation. Safe to call by hand to force a retry.
-    Shim → ``store.FileReauthStateStore().reset``; the I/O body lives in the store adapter."""
-    FileReauthStateStore().reset(env)
+    Routes through ``make_etrade_store().reauth.reset``; the I/O body lives in the store adapter."""
+    make_etrade_store().reauth.reset(env)
 
 
 def _record_reauth_attempt(env: str = "production") -> None:
@@ -1858,7 +1861,6 @@ from aether.etrade.client import (  # noqa: E402
 from aether.etrade.store import (  # noqa: E402
     BrowserStateStore,
     EtradeStore,
-    FileReauthStateStore,
     FileTokenStore,
     ReauthStateStore,
     TokenStore,
