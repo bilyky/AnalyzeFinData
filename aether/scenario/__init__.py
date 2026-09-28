@@ -48,6 +48,7 @@ from aether.scenario.schema import (
 from aether.scenario.steps import (
     assemble_symbol_universe,
     determine_profile,
+    execute_queued_orders,
     price_and_settle,
 )
 
@@ -83,4 +84,5 @@ __all__ = [
     "determine_profile",
     "assemble_symbol_universe",
     "price_and_settle",
+    "execute_queued_orders",
 ]
