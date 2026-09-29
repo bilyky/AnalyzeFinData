@@ -385,3 +385,242 @@ def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new
                     game._log.info(f"🤖 AI QUEUED BUY EXECUTED: {qty} shares of {sym} at ${price} ({stop_desc})")
 
     state["queued_orders"] = []
+
+
+def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
+    """Run the per-position SELL decision loop; return the symbols to liquidate (B6).
+
+    Extracted verbatim from the ``# SELL logic — unified deterministic exit
+    policy`` block in ``run_daily_ai_management`` — the stage after
+    :func:`execute_queued_orders` and before the live SELL execution loop. For
+    every held position (iterated over a snapshot of the keys), unchanged from the
+    root:
+
+    * **Research-sheet read** — ``row[24]``=s10, ``row[25]``=l60 and the
+      **SELL-side** prev-close ``row[8]`` (falling back to cost). ``row[8]`` is
+      deliberately kept distinct from the BUY-side ``row[10]`` (design constraint
+      2) — do not unify.
+    * **Profit-Lock ratchet** (only with a positive ATR) — tracks
+      ``pos["highest_close_since_acq"]``; once in profit by > 1.0x ATR trails the
+      stop up to ``peak - multiplier*ATR`` (1.5x for scarcity, else the profile's
+      ``atr_multiplier``, default 2.5), never lowering it; past 1.5x ATR the stop
+      is lifted to the cost basis (breakeven lock).
+    * **Bank-As-You-Go scale-out** (Defensive Overlay Rule B, market hours only)
+      — ``risk_utils.scale_out_plan`` sizes a partial sale off the original lot,
+      always keeping >= 1 share, advancing ``pos["banked_pct"]``; the partial SELL
+      is recorded in ``state["history"]`` and ``new_transactions`` here. A
+      high-conviction flower (``l60 >= CFG.system_covered_call_l60_ceiling``) is
+      held and the hold is logged.
+    * **Gap-Down Guard** — ``circuit_breaker.is_single_stock_gap_frozen`` freezes
+      the stop (passes ``stop_loss=None``) so an opening whipsaw can't trip it.
+    * **Exit decision** — ``decision_eval.build_entry`` is the single source of the
+      action (``_sma50`` is read only when ``sell_rules.soft_exit`` fires).
+    * **AI second-opinion override** (R&D #14) — a ``SELL`` is downgraded to
+      ``HOLD`` / ``WATCH`` when a real-time shadow verdict, a stored position
+      verdict key (``shadow_verdict`` / ``ai_verdict`` / ``verdict``), or the
+      stored ``verdicts`` dict says ``HOLD`` / ``FLAG-FOR-REVIEW``, checked in that
+      order.
+    * **Routing** — a surviving ``SELL`` is queued in ``state["queued_orders"]``
+      (deduped) when outside market hours, else collected for liquidation; a
+      ``REVIEW`` is logged as winner-protected. All entries are then written via
+      ``decision_eval.log_decisions`` (skipped when there were no positions).
+
+    Returns ``symbols_to_sell`` — the ordered list the caller's execution loop
+    liquidates; this function sells nothing outright except the partial
+    scale-out. ``is_market_hours`` is still evaluated late and per position, as in
+    the root (design risk 3 — not hoisted). Every collaborator (``_log``,
+    ``risk_utils``, ``is_market_hours``, ``CFG``, ``circuit_breaker``, ``_sma50``,
+    ``sell_rules``, ``decision_eval``) is resolved off the live root module at
+    call time via :func:`_pkg`, so ``mock.patch.object(game, ...)`` still
+    intercepts and every mutation lands on the caller's ``state``.
+    """
+    game = _pkg()
+
+    # SELL logic — unified deterministic exit policy (sell_rules.exit_decision):
+    # hard ATR stop > soft momentum signal (winner-protected) > hold.
+    symbols_to_sell = []
+    decision_entries = []
+    for sym in list(state["positions"].keys()):
+        pos = state["positions"][sym]
+        s10 = l60 = 0
+        prev_close = pos.get("cost", 0.0)
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row[3] == sym:
+                s10 = row[24] or 0
+                l60 = row[25] or 0
+                try:
+                    prev_close = float(row[8] or pos.get("cost", 0.0))
+                except Exception:
+                    prev_close = pos.get("cost", 0.0)
+                break
+        price = prices.get(sym, pos.get("cost"))
+
+        # ── AETHER Profit-Lock Trailing Stop-Loss Ratchet (Priority 1) ──
+        atr = game.risk_utils.calculate_atr(sym)
+        if atr and atr > 0:
+            # 1. Peak Price Tracking: track highest close since acquisition
+            highest_close = pos.get("highest_close_since_acq", 0.0)
+            highest_close = max(highest_close, pos.get("cost", 0.0), price)
+            pos["highest_close_since_acq"] = highest_close
+
+            # Determine trailing multiplier (1.5x for Scarcity, profile rules-based for Standard)
+            is_scarcity = pos.get("is_scarcity", False)
+            multiplier = 1.5 if is_scarcity else rules.get("atr_multiplier", 2.5)
+
+            # 2. Peter Lynch Flower Protection: Only ratchet stop upward once safely in profit by > 1.0x ATR
+            if (price - pos.get("cost", 0.0)) > (1.0 * atr):
+                recalculated_stop = round(highest_close - (multiplier * atr), 2)
+                old_stop = pos.get("stop_loss", 0.0)
+                if recalculated_stop > old_stop:
+                    pos["stop_loss"] = recalculated_stop
+                    game._log.info(f"[Profit-Lock] {sym} stop ratcheted: ${old_stop:.2f} -> ${recalculated_stop:.2f} (peak close ${highest_close:.2f})")
+                    game._log.info(f"🛡️ [Profit-Lock] {sym} stop ratcheted upwards: ${old_stop:.2f} ➡️ ${recalculated_stop:.2f}")
+
+            # 3. Breakeven Trigger: If price has rallied > 1.5x ATR, lock in exact purchase Cost Basis (Breakeven)
+            if (price - pos.get("cost", 0.0)) > (1.5 * atr):
+                old_stop = pos.get("stop_loss", 0.0)
+                cost_basis = pos.get("cost", 0.0)
+                if cost_basis > old_stop:
+                    pos["stop_loss"] = cost_basis
+                    game._log.info(f"[Breakeven Lock] {sym} stop raised to cost basis: ${old_stop:.2f} -> ${cost_basis:.2f}")
+                    game._log.info(f"🛡️ [Breakeven Lock] {sym} stop bumped to Cost Basis: ${old_stop:.2f} ➡️ ${cost_basis:.2f}")
+        # ── Bank-As-You-Go scale-out (Defensive Overlay — Rule B) ──
+        # Take PARTIAL profit as a winner runs through ATR tiers — distinct from
+        # the full, pop-based liquidation loop below. This only ever removes risk
+        # (never scales a loser, never adds exposure), reduces pos["qty"] rather
+        # than popping the position, and persists pos["banked_pct"] (the cumulative
+        # fraction sold) so each tier fires exactly once. Executes only in market
+        # hours; if a tier is crossed after-hours it fires on the next live cycle.
+        if atr and atr > 0 and price and price > 0 and pos.get("qty", 0) > 1 and game.is_market_hours():
+            banked_pct = float(pos.get("banked_pct", 0.0) or 0.0)
+            # Pass the conviction bar into the pure planner: a high-conviction
+            # flower (L60 >= the covered-call ceiling) is never trimmed, mirroring
+            # the covered-call flower exclusion so the two winner-side mechanics
+            # share ONE conviction bar (CLAUDE.md dont-sell-winners). The planner
+            # returns frac 0.0 + a "held: high-conviction flower" reason when it
+            # suppresses a would-be bank; surface that so the hold is visible.
+            so_frac, so_reason = game.risk_utils.scale_out_plan(
+                price, pos.get("cost", 0.0), atr, banked_pct,
+                l60=l60, l60_ceiling=game.CFG.system_covered_call_l60_ceiling)
+            if so_frac <= 0 and so_reason.startswith("held: high-conviction"):
+                game._log.info(f"🌺 [Scale-Out] {sym}: {so_reason}")
+            if so_frac > 0 and banked_pct < 1.0:
+                # banked_pct is a fraction of the ORIGINAL lot; recover the original
+                # size (works for legacy positions with no banked_pct) to size the sale.
+                original_qty = pos["qty"] / (1.0 - banked_pct)
+                sell_qty = int(round(so_frac * original_qty))
+                # Keep at least one share so the trailing-stop exit path owns the
+                # final close (log_closed_trade_dna / option unwind live there).
+                sell_qty = max(0, min(sell_qty, pos["qty"] - 1))
+                if sell_qty >= 1:
+                    proceeds = sell_qty * price
+                    state["balance"] += proceeds
+                    pos["qty"] -= sell_qty
+                    pos["banked_pct"] = round(banked_pct + so_frac, 6)
+                    tx = {"date": today, "time": now_time, "type": "SELL",
+                          "symbol": sym, "price": price, "qty": sell_qty,
+                          "pnl": round((price - pos.get("cost", 0.0)) * sell_qty, 2),
+                          "details": f"Scale-out (Bank-As-You-Go): {so_reason}"}
+                    state["history"].append(tx)
+                    new_transactions.append(tx)
+                    game._log.info(f"🏦 [Scale-Out] {sym}: banked {sell_qty} sh at "
+                              f"${price:.2f} — {so_reason}; {pos['qty']} sh left trailing")
+        # ────────────────────────────────────────────────────────────────
+
+        # Check Idiosyncratic Single-Stock Gap-Down Guard (Whipsaw protection)
+        is_gap_frozen = False
+        if game.circuit_breaker.is_single_stock_gap_frozen(sym, price, prev_close):
+            is_gap_frozen = True
+            gap_pct = round(((price - prev_close) / prev_close) * 100, 2) if prev_close > 0 else 0.0
+            game._log.info(f"❄️ [Gap Guard] {sym} gapped down {gap_pct}% overnight. Holding stop wide to prevent opening whipsaw.")
+
+        # Only pay the OHLCV read when the soft signal actually fires (winner-
+        # protection is the only consumer of sma50); HOLD positions skip the I/O.
+        sma50 = game._sma50(sym) if game.sell_rules.soft_exit(s10, l60) else None
+        # build_entry is the single source of the decision: it runs the exit
+        # policy once, logs it, and (run_shadow=None) shadow-runs AI only for
+        # non-HOLD candidates. The action it returns drives the actual sell.
+        entry = game.decision_eval.build_entry(
+            symbol=sym, price=price, cost=pos.get("cost"),
+            stop_loss=None if is_gap_frozen else pos.get("stop_loss"),
+            s10=s10, l60=l60, sma50=sma50,
+            date=today, run_shadow=None)
+
+        # AI Second-Opinion Exit Override Gate (R&D Item 14)
+        if entry["rules_action"] == "SELL":
+            ai_override = False
+            override_reason = ""
+            override_verdict = ""
+
+            # 1. Check real-time shadow verdicts generated in entry
+            realtime_verdicts = entry.get("verdicts", {})
+            for prov, v_info in realtime_verdicts.items():
+                v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
+                if v in ("FLAG-FOR-REVIEW", "HOLD"):
+                    ai_override = True
+                    override_verdict = v
+                    override_reason = f"Real-time AI Shadow Heuristic ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
+                    break
+
+            # 2. Check stored position shadow verdicts if any
+            if not ai_override:
+                for key in ["shadow_verdict", "ai_verdict", "verdict"]:
+                    if key in pos:
+                        val = pos[key]
+                        if isinstance(val, dict):
+                            v = val.get("verdict", "").upper()
+                            note = val.get("note", "")
+                        else:
+                            v = str(val).upper()
+                            note = ""
+                        if v in ("FLAG-FOR-REVIEW", "HOLD"):
+                            ai_override = True
+                            override_verdict = v
+                            override_reason = f"Stored position {key} returned {v}" + (f": {note}" if note else "")
+                            break
+
+            # 3. Check verdicts dictionary inside the stored position
+            if not ai_override:
+                pos_verdicts = pos.get("verdicts", {})
+                if isinstance(pos_verdicts, dict):
+                    for prov, v_info in pos_verdicts.items():
+                        v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
+                        if v in ("FLAG-FOR-REVIEW", "HOLD"):
+                            ai_override = True
+                            override_verdict = v
+                            override_reason = f"Stored position verdicts ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
+                            break
+
+            if ai_override:
+                old_action = entry["rules_action"]
+                if override_verdict == "HOLD":
+                    new_action = "HOLD"
+                else:
+                    new_action = "WATCH"
+
+                entry["rules_action"] = new_action
+                entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
+
+                game._log.info(
+                    f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
+                    f"Decision downgraded from {old_action} to {new_action}. Reason: {override_reason}"
+                )
+                game._log.info(f"🛡️ [AI Override] Overriding sell of {sym} -> Downgrading to {new_action} due to: {override_reason}")
+
+        decision_entries.append(entry)
+        if entry["rules_action"] == "SELL":
+            if not game.is_market_hours():
+                # Queue the sell instead of executing immediately
+                if not any(q["symbol"] == sym and q["type"] == "SELL" for q in state.get("queued_orders", [])):
+                    state.setdefault("queued_orders", []).append({
+                        "type": "SELL", "symbol": sym, "reason": f"Exit triggered: {entry['rules_reason'] or 'Technical exit'}"
+                    })
+                    game._log.info(f"📝 [Queued] After-hours SELL queued for {sym}: {entry['rules_reason']}")
+            else:
+                symbols_to_sell.append(sym)
+        elif entry["rules_action"] == "REVIEW":
+            # Winner above its 50-DMA on a soft signal — hold, don't dump.
+            game._log.info(f"🌸 AI HOLD (winner-protected): {sym} — {entry['rules_reason']}")
+    if decision_entries:
+        game.decision_eval.log_decisions(decision_entries)
+    return symbols_to_sell
