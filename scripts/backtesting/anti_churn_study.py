@@ -39,11 +39,17 @@ Usage:
 import argparse
 import datetime
 import json
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 SWEEP_DAYS = [5, 10, 14, 21, 30]
 FWD_BARS = [10, 20]
+
+
+def _out(line: str) -> None:
+    """Report table line — intentional CLI output, unprefixed."""
+    sys.stdout.write(line + "\n")
 
 
 def _closes(cache_dir: Path, sym: str) -> list[tuple[str, float]]:
@@ -127,22 +133,22 @@ def main():
     history = json.loads((data / "ai_portfolio_game.json").read_text()).get("history", [])
 
     rot = rotation_study(history, data / "Symbol_full")
-    print("A. MOMENTUM ROTATION sells")
+    _out("A. MOMENTUM ROTATION sells")
     for r in rot["rows"]:
-        print(f"  {r['date']} {r['symbol']:6s} pnl={r['pnl']:>8} px={r['price']:>8} sma50={r['sma50']} "
+        _out(f"  {r['date']} {r['symbol']:6s} pnl={r['pnl']:>8} px={r['price']:>8} sma50={r['sma50']} "
               f"protected={r['protected']!s:5s} fwd10={r['fwd10']} fwd20={r['fwd20']}")
     for k, v in rot["summary"].items():
-        print(f"  {k}: protected mean {v['protected'][0]}% (n={v['protected'][1]}) | "
+        _out(f"  {k}: protected mean {v['protected'][0]}% (n={v['protected'][1]}) | "
               f"unprotected mean {v['unprotected'][0]}% (n={v['unprotected'][1]})")
-    print(f"  GATE A: {'PASS' if rot['gate_pass'] else 'FAIL'}")
+    _out(f"  GATE A: {'PASS' if rot['gate_pass'] else 'FAIL'}")
 
-    print("\nB. RE-ENTRY after a loss exit (counterfactual = skip the re-entry)")
+    _out("\nB. RE-ENTRY after a loss exit (counterfactual = skip the re-entry)")
     sweep = reentry_study(history)
     for n, s in sweep.items():
-        print(f"  N={n:>2}d: blocked {s['n_blocked']} ({s['n_closed']} closed, {s['losers']} losers) "
+        _out(f"  N={n:>2}d: blocked {s['n_blocked']} ({s['n_closed']} closed, {s['losers']} losers) "
               f"re-entry P&L {s['total_pnl']:+.2f}")
     for t in sweep[max(SWEEP_DAYS)]["trades"]:
-        print(f"    {t['buy_date']} {t['symbol']:6s} gap={t['gap_days']:>2}d pnl={t['round_trip_pnl']}")
+        _out(f"    {t['buy_date']} {t['symbol']:6s} gap={t['gap_days']:>2}d pnl={t['round_trip_pnl']}")
 
 
 if __name__ == "__main__":
