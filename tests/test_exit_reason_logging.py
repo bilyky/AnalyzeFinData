@@ -1,8 +1,5 @@
-"""
-The live exit path must record WHY a position closed on its SELL transaction, so the
-ledger can separate stop-outs from momentum exits (anti-churn study, 2026-09-29: 41 of
-55 PROD sells carried no reason and could not be attributed).
-"""
+"""The live exit path records why a position closed (exit reason, stop fill, stop level)
+on its SELL transaction, so the ledger can separate stop-outs from momentum exits."""
 import os
 import sys
 import unittest
@@ -37,7 +34,9 @@ class TestExitReasonLogging(unittest.TestCase):
 
     def _run(self, mock_load_wb, mock_load_game, mock_get_prices, sym, cost, stop, price, s10, l60):
         state = {"balance": 5000.0, "equity": 10000.0, "queued_orders": [], "history": [],
-                 "positions": {sym: {"qty": 10, "cost": cost, "stop_loss": stop}}}
+                 "positions": {sym: {"qty": 10, "cost": cost}}}
+        if stop is not None:
+            state["positions"][sym]["stop_loss"] = stop
         mock_load_game.return_value = state
         mock_get_prices.return_value = {sym: price}
         mock_load_wb.return_value = research_workbook(_row(sym, price, s10, l60))
@@ -58,6 +57,15 @@ class TestExitReasonLogging(unittest.TestCase):
         self.assertIn("[STP LMT fill]", tx["details"])
         self.assertEqual(tx["price"], 80.0)
         self.assertEqual(tx["stop_loss"], 80.0)
+
+    def test_missing_stop_uses_fallback_and_records_none(self, mock_load_wb, _save, mock_load_game, mock_get_prices, _mh):
+        # No stored stop -> exit_decision's cost*(1-8%) fallback (92.0) fires; the tx must not
+        # claim a 0.0 stop or a STP LMT fill it never had.
+        tx = self._run(mock_load_wb, mock_load_game, mock_get_prices, "TSCO", 100.0, None, 90.0, 1.0, 1.0)
+        self.assertIn("stop breached", tx["details"])
+        self.assertNotIn("STP LMT", tx["details"])
+        self.assertIsNone(tx["stop_loss"])
+        self.assertEqual(tx["price"], 90.0)
 
 
 if __name__ == "__main__":

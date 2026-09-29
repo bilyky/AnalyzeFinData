@@ -545,13 +545,13 @@ class TestPersistentProfileModes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             dna_path = Path(td) / "Data" / "trade_history_dna.json"
             dna_path.parent.mkdir(parents=True)
-            orig = game.TRADE_DNA_FILE
-            game.TRADE_DNA_FILE = dna_path
+            orig = game.circuit_breaker.DNA_FILE
+            game.circuit_breaker.DNA_FILE = dna_path
             try:
                 game.log_closed_trade_dna("TEST_SYM", pos, 105.0, "2026-06-05")
                 records = json.loads(dna_path.read_text(encoding="utf-8"))
             finally:
-                game.TRADE_DNA_FILE = orig
+                game.circuit_breaker.DNA_FILE = orig
 
         self.assertEqual(len(records), 1)
         rec = records[0]

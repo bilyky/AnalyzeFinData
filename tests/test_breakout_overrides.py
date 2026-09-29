@@ -80,7 +80,6 @@ class TestPGRWaiverRules(unittest.TestCase):
         if self.had_rules:
             self.old_content = open(self.rules_path, "r", encoding="utf-8").read()
 
-
         test_rules = [
             {
                 "field": "pgr",

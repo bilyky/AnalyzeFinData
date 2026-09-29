@@ -30,8 +30,7 @@ AI_GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 AI_PERF_XLSX = BASE_DIR / "Data" / "ai_portfolio_performance.xlsx"
 SYMBOL_FULL_DIR = BASE_DIR / "Data" / "Symbol_full"   # OHLCV cache — one source of truth
-TRADE_DNA_FILE = BASE_DIR / "Data" / "trade_history_dna.json"      # closed-trade learning ledger
-FAILURE_RULES_FILE = BASE_DIR / "Data" / "failure_dna_rules.json"  # retrospective_analyzer output
+FAILURE_RULES_FILE = BASE_DIR / "Data" / "failure_dna_rules.json"  # written by retrospective_analyzer
 INITIAL_BALANCE = 10000.0
 
 # Import risk utils safely
@@ -135,7 +134,7 @@ def log_closed_trade_dna(sym, pos, price, today_str):
         buy_date = buy_dna.get("buy_date", today_str)
         pnl_pct = round(((price - pos["cost"]) / pos["cost"]) * 100, 2) if pos["cost"] else 0.0
         
-        dna_file = TRADE_DNA_FILE
+        dna_file = circuit_breaker.DNA_FILE  # one ledger path, shared with the breaker backfeed
         dna_list = []
         if dna_file.exists() and dna_file.stat().st_size > 0:
             with open(dna_file, "r", encoding="utf-8") as f:
@@ -1614,8 +1613,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
         # SELL logic — unified deterministic exit policy (sell_rules.exit_decision):
         # hard ATR stop > soft momentum signal (winner-protected) > hold.
-        symbols_to_sell = []
-        sell_reasons = {}  # sym -> exit_decision reason, recorded on the SELL tx
+        symbols_to_sell = {}  # sym -> exit reason, recorded on the SELL tx
         decision_entries = []
         for sym in list(state["positions"].keys()):
             pos = state["positions"][sym]
@@ -1786,23 +1784,23 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
             decision_entries.append(entry)
             if entry["rules_action"] == "SELL":
+                exit_reason = entry["rules_reason"] or "Technical exit"
                 if not is_market_hours():
                     # Queue the sell instead of executing immediately
                     if not any(q["symbol"] == sym and q["type"] == "SELL" for q in state.get("queued_orders", [])):
                         state.setdefault("queued_orders", []).append({
-                            "type": "SELL", "symbol": sym, "reason": f"Exit triggered: {entry['rules_reason'] or 'Technical exit'}"
+                            "type": "SELL", "symbol": sym, "reason": f"Exit triggered: {exit_reason}"
                         })
                         _log.info(f"📝 [Queued] After-hours SELL queued for {sym}: {entry['rules_reason']}")
                 else:
-                    symbols_to_sell.append(sym)
-                    sell_reasons[sym] = entry["rules_reason"] or "Technical exit"
+                    symbols_to_sell[sym] = exit_reason
             elif entry["rules_action"] == "REVIEW":
                 # Winner above its 50-DMA on a soft signal — hold, don't dump.
                 _log.info(f"🌸 AI HOLD (winner-protected): {sym} — {entry['rules_reason']}")
         if decision_entries:
             decision_eval.log_decisions(decision_entries)
 
-        for sym in symbols_to_sell:
+        for sym, exit_reason in symbols_to_sell.items():
             pos = state["positions"][sym]
             price = prices.get(sym, pos["cost"])
             options.unwind_option_liability_if_held(sym, pos, state, price, today)
@@ -1818,11 +1816,9 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 
             proceeds = pos["qty"] * price
             state["balance"] += proceeds
-            # Record WHY the position closed so the ledger can separate stop-outs from
-            # momentum exits (previously this path wrote no reason at all).
             tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2),
-                  "details": f"Exit: {sell_reasons.get(sym, 'Technical exit')}" + (" [STP LMT fill]" if stop_fill else ""),
-                  "stop_loss": stop_loss}
+                  "details": f"Exit: {exit_reason}" + (" [STP LMT fill]" if stop_fill else ""),
+                  "stop_loss": pos.get("stop_loss")}
             state["history"].append(tx)
             new_transactions.append(tx)
             _log.info(f"🤖 AI LIVE SELL: {sym} at ${price} (Time: {now_time})")
