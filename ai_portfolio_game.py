@@ -1613,6 +1613,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
         # SELL logic — unified deterministic exit policy (sell_rules.exit_decision):
         # hard ATR stop > soft momentum signal (winner-protected) > hold.
         symbols_to_sell = []
+        sell_reasons = {}  # sym -> exit_decision reason, recorded on the SELL tx
         decision_entries = []
         for sym in list(state["positions"].keys()):
             pos = state["positions"][sym]
@@ -1792,6 +1793,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         _log.info(f"📝 [Queued] After-hours SELL queued for {sym}: {entry['rules_reason']}")
                 else:
                     symbols_to_sell.append(sym)
+                    sell_reasons[sym] = entry["rules_reason"] or "Technical exit"
             elif entry["rules_action"] == "REVIEW":
                 # Winner above its 50-DMA on a soft signal — hold, don't dump.
                 _log.info(f"🌸 AI HOLD (winner-protected): {sym} — {entry['rules_reason']}")
@@ -1807,13 +1809,18 @@ def run_daily_ai_management(force=False, manual_profile=None):
             # Slippage-Protected Limit Stop (STP LMT - R&D #8): Execute at exactly the stop price
             # if the market close price dropped below our stop-loss floor, preventing slippage leaks.
             stop_loss = pos.get("stop_loss", 0.0)
-            if stop_loss > 0.0 and price <= stop_loss:
+            stop_fill = stop_loss > 0.0 and price <= stop_loss
+            if stop_fill:
                 _log.info(f"🛡️ [STP LMT] Executed {sym} stop-loss at Limit price ${stop_loss:.2f} (protected against market gap ${price:.2f}).")
                 price = stop_loss
                 
             proceeds = pos["qty"] * price
             state["balance"] += proceeds
-            tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2)}
+            # Record WHY the position closed so the ledger can separate stop-outs from
+            # momentum exits (previously this path wrote no reason at all).
+            tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2),
+                  "details": f"Exit: {sell_reasons.get(sym, 'Technical exit')}" + (" [STP LMT fill]" if stop_fill else ""),
+                  "stop_loss": stop_loss}
             state["history"].append(tx)
             new_transactions.append(tx)
             _log.info(f"🤖 AI LIVE SELL: {sym} at ${price} (Time: {now_time})")
