@@ -85,6 +85,7 @@ if not _os.getenv("AETHER_LIVE_TESTS"):
     _etrade._TOKEN_PATH         = str(Path(_test_etrade_dir.name) / "etrade_tokens.json")
     _etrade._BROWSER_STATE_PATH = str(Path(_test_etrade_dir.name) / "etrade_browser_state.json")
     _etrade._REAUTH_STATE_PATH  = str(Path(_test_etrade_dir.name) / "etrade_reauth_state.json")
+    _etrade._REAUTH_LOCK_PATH   = str(Path(_test_etrade_dir.name) / "etrade_reauth.lock")
 
     # Scarcity-classification cache → temp, so a buy-path test that classifies a real
     # symbol never writes the production Data/scarcity_cache.json.
