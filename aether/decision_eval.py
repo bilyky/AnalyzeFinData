@@ -59,10 +59,11 @@ def build_entry(symbol, price, cost, stop_loss, s10, l60, sma50=None,
     return entry
 
 
-def log_decisions(entries, path=LOG):
-    """Append decision records as JSON lines (best-effort; never raises)."""
+def log_decisions(entries, path=None):
+    """Append decision records as JSON lines (best-effort; never raises).
+    path=None resolves LOG at call time so the test harness can redirect it."""
     try:
-        path = Path(path)
+        path = Path(path) if path else LOG
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             for e in entries:
@@ -83,9 +84,10 @@ def _trim_log(path, max_lines=_MAX_LOG_LINES):
         f.writelines(lines[-max_lines:])
 
 
-def read_log(path=LOG):
+def read_log(path=None):
     """Read the append-only log, skipping blank or malformed lines (a crash can
     leave a half-written final line — one bad row must not sink the scorecard)."""
+    path = path or LOG
     entries = []
     try:
         with open(path, encoding="utf-8") as f:

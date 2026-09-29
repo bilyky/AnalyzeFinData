@@ -74,14 +74,13 @@ class TestScoringRegimeConditionalPenalties(unittest.TestCase):
 
 class TestPGRWaiverRules(unittest.TestCase):
     def setUp(self):
-        # Create a temporary failure_dna_rules.json inside the dev Data folder for testing
-        self.rules_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Data")
-        os.makedirs(self.rules_dir, exist_ok=True)
-        self.rules_path = os.path.join(self.rules_dir, "failure_dna_rules.json")
+        # Write the rules to the harness-redirected (temp) path — never the real Data/ file.
+        self.rules_path = str(ai_portfolio_game.FAILURE_RULES_FILE)
         self.had_rules = os.path.exists(self.rules_path)
         if self.had_rules:
             self.old_content = open(self.rules_path, "r", encoding="utf-8").read()
-            
+
+
         test_rules = [
             {
                 "field": "pgr",

@@ -30,6 +30,8 @@ AI_GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 AI_PERF_XLSX = BASE_DIR / "Data" / "ai_portfolio_performance.xlsx"
 SYMBOL_FULL_DIR = BASE_DIR / "Data" / "Symbol_full"   # OHLCV cache — one source of truth
+TRADE_DNA_FILE = BASE_DIR / "Data" / "trade_history_dna.json"      # closed-trade learning ledger
+FAILURE_RULES_FILE = BASE_DIR / "Data" / "failure_dna_rules.json"  # retrospective_analyzer output
 INITIAL_BALANCE = 10000.0
 
 # Import risk utils safely
@@ -67,7 +69,7 @@ def _load_symbol_today_cache(symbol: str, today_str: str) -> dict:
 
 def check_failure_rules(symbol, pgr, score, z_score, industry, s10=0.0) -> tuple[bool, str]:
     """Check if the candidate matches any active toxic rules in Data/failure_dna_rules.json or dynamic filters."""
-    rules_file = BASE_DIR / "Data" / "failure_dna_rules.json"
+    rules_file = FAILURE_RULES_FILE
     
     # ── Earnings-Shock Failure Gate (Pillar 1 Guard) ──
     # Programmatic, un-bypassable veto on any symbol that has just reported a massive earnings miss
@@ -133,7 +135,7 @@ def log_closed_trade_dna(sym, pos, price, today_str):
         buy_date = buy_dna.get("buy_date", today_str)
         pnl_pct = round(((price - pos["cost"]) / pos["cost"]) * 100, 2) if pos["cost"] else 0.0
         
-        dna_file = BASE_DIR / "Data" / "trade_history_dna.json"
+        dna_file = TRADE_DNA_FILE
         dna_list = []
         if dna_file.exists() and dna_file.stat().st_size > 0:
             with open(dna_file, "r", encoding="utf-8") as f:

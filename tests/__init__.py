@@ -75,6 +75,28 @@ for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomou
     # powergauge stores a str (os.path.join), the others a Path — preserve each.
     _mod.XLSX_FILE = _test_xlsx_path if isinstance(_orig_xlsx_const, Path) else str(_test_xlsx_path)
 
+# ---------------------------------------------------------------------------
+# Learning-ledger guard — no test may append to the production decision log or
+# trade-DNA ledger, or overwrite the failure-DNA rules. Fixture runs (P1..P6,
+# TSCO cost 100/stop 80) were found in the PROD copies of decision_log.jsonl
+# (~2/3 of its 5000-line window) and trade_history_dna.json (45 of 52 breaker
+# records), where they skew the decision_eval scorecard and the retrospective
+# analyzer. Unconditional, like the workbook guard: live tests opt into the
+# network, never into writing prod learning state.
+# ---------------------------------------------------------------------------
+import aether.decision_eval as _decision_eval
+import aether.circuit_breaker as _circuit_breaker
+
+_test_ledger_dir = Path(tempfile.mkdtemp(prefix="aether_ledger_"))
+_decision_eval.LOG = _test_ledger_dir / "decision_log.jsonl"
+_circuit_breaker.DNA_FILE = _test_ledger_dir / "trade_history_dna.json"
+try:
+    _game = _importlib.import_module("ai_portfolio_game")
+    _game.TRADE_DNA_FILE = _test_ledger_dir / "trade_history_dna.json"
+    _game.FAILURE_RULES_FILE = _test_ledger_dir / "failure_dna_rules.json"
+except Exception:
+    pass
+
 if not _os.getenv("AETHER_LIVE_TESTS"):
     # -- State side: redirect prod auth-state / cache files to a throwaway temp dir --
     # A test that reaches get_tokens() finds no saved browser state (so the automated
