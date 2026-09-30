@@ -1,4 +1,5 @@
-"""The test harness must keep every learning-ledger write out of the repo's Data/."""
+"""The learning-ledger paths have one home (aether/ledgers.py), and the test harness keeps
+every ledger write out of the repo's Data/."""
 import os
 import sys
 import tempfile
@@ -7,19 +8,20 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import aether.circuit_breaker as circuit_breaker
 import aether.decision_eval as decision_eval
-import retrospective_analyzer
+import aether.ledgers as ledgers
 
-_REPO_DATA = (Path(__file__).resolve().parent.parent / "Data").resolve()
+_REPO = Path(__file__).resolve().parent.parent
+_REPO_DATA = (_REPO / "Data").resolve()
+_LEDGER_NAMES = ("trade_history_dna.json", "failure_dna_rules.json", "retrospective_report.txt")
 
 
 class TestLedgerPathsRedirected(unittest.TestCase):
     def test_no_ledger_path_resolves_into_repo_data(self):
         for name, path in [("decision_eval.LOG", decision_eval.LOG),
-                           ("circuit_breaker.DNA_FILE", circuit_breaker.DNA_FILE),
-                           ("retrospective_analyzer.RULES_FILE", retrospective_analyzer.RULES_FILE),
-                           ("retrospective_analyzer.REPORT_FILE", retrospective_analyzer.REPORT_FILE)]:
+                           ("ledgers.TRADE_DNA_FILE", ledgers.TRADE_DNA_FILE),
+                           ("ledgers.FAILURE_RULES_FILE", ledgers.FAILURE_RULES_FILE),
+                           ("ledgers.RETRO_REPORT_FILE", ledgers.RETRO_REPORT_FILE)]:
             with self.subTest(name=name):
                 self.assertNotEqual(Path(path).resolve().parent, _REPO_DATA, f"{name} -> {path}")
 
@@ -30,6 +32,21 @@ class TestLedgerPathsRedirected(unittest.TestCase):
             with mock.patch.object(decision_eval, "LOG", target):
                 decision_eval.log_decisions([{"symbol": "ZZZ", "rules_action": "HOLD"}])
             self.assertEqual([e["symbol"] for e in decision_eval.read_log(target)], ["ZZZ"])
+
+
+class TestLedgerPathsHaveOneHome(unittest.TestCase):
+    def test_no_production_module_builds_its_own_ledger_path(self):
+        # A second copy is how the harness redirect was bypassed before; quoted filenames
+        # in docstrings/log text are fine, a path expression is not.
+        offenders = []
+        for py in _REPO.rglob("*.py"):
+            rel = py.relative_to(_REPO).as_posix()
+            if rel.startswith(("tests/", "venv", "_wt_", ".claude/")) or rel == "aether/ledgers.py":
+                continue
+            for n, line in enumerate(py.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                if any(f'"{name}")' in line or f'/ "{name}"' in line for name in _LEDGER_NAMES):
+                    offenders.append(f"{rel}:{n}: {line.strip()}")
+        self.assertEqual(offenders, [])
 
 
 if __name__ == "__main__":
