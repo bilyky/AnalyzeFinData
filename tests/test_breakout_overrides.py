@@ -74,8 +74,8 @@ class TestScoringRegimeConditionalPenalties(unittest.TestCase):
 
 class TestPGRWaiverRules(unittest.TestCase):
     def setUp(self):
-        # The harness points RULES_FILE at a temp path — never the real Data/ file.
-        self.rules_path = str(ai_portfolio_game.retrospective_analyzer.RULES_FILE)
+        # The harness points FAILURE_RULES_FILE at a temp path — never the real Data/ file.
+        self.rules_path = str(ai_portfolio_game.ledgers.FAILURE_RULES_FILE)
         test_rules = [
             {
                 "field": "pgr",
