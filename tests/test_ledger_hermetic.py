@@ -1,6 +1,7 @@
 """The learning-ledger paths have one home (aether/ledgers.py), and the test harness keeps
 every ledger write out of the repo's Data/."""
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -36,15 +37,21 @@ class TestLedgerPathsRedirected(unittest.TestCase):
 
 class TestLedgerPathsHaveOneHome(unittest.TestCase):
     def test_no_production_module_builds_its_own_ledger_path(self):
-        # A second copy is how the harness redirect was bypassed before; quoted filenames
-        # in docstrings/log text are fine, a path expression is not.
+        # A second copy is how the harness redirect was bypassed before. Deliberately narrow:
+        # it flags a quoted filename used as a path operand — `/ "x.json"` or `..., "x.json")`
+        # — so filenames quoted in docstrings or log text don't trip it. Tracked files only,
+        # so the result matches CI regardless of local worktrees/venvs/untracked scratch.
+        tracked = subprocess.run(["git", "ls-files", "*.py"], cwd=_REPO, check=True,
+                                 capture_output=True, text=True).stdout.splitlines()
+        operands = [op for name in _LEDGER_NAMES for q in "\"'"
+                    for op in (f"{q}{name}{q})", f"/ {q}{name}{q}")]
         offenders = []
-        for py in _REPO.rglob("*.py"):
-            rel = py.relative_to(_REPO).as_posix()
-            if rel.startswith(("tests/", "venv", "_wt_", ".claude/")) or rel == "aether/ledgers.py":
+        for rel in tracked:
+            if rel.startswith("tests/") or rel == "aether/ledgers.py":
                 continue
-            for n, line in enumerate(py.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-                if any(f'"{name}")' in line or f'/ "{name}"' in line for name in _LEDGER_NAMES):
+            text = (_REPO / rel).read_text(encoding="utf-8", errors="replace")
+            for n, line in enumerate(text.splitlines(), 1):
+                if any(op in line for op in operands):
                     offenders.append(f"{rel}:{n}: {line.strip()}")
         self.assertEqual(offenders, [])
 
