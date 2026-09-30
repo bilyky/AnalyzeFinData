@@ -10,6 +10,7 @@ import json
 import datetime
 from pathlib import Path
 import openpyxl
+import circuit_breaker
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("bootstrap_dna")
@@ -17,7 +18,6 @@ _log = _get_logger("bootstrap_dna")
 BASE_DIR = Path(__file__).resolve().parent
 GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
 BACKUP_DIR = BASE_DIR / "Data" / "Backup"
-OUT_FILE = BASE_DIR / "Data" / "trade_history_dna.json"
 
 def find_backup_for_date(date_str: str) -> Path:
     """Find the first Excel backup file for a specific YYYY-MM-DD date."""
@@ -136,21 +136,22 @@ def bootstrap():
                 })
                 
     _log.info(f"Successfully paired and recovered {len(closed_trades)} completed trades!")
-    OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    out_file = circuit_breaker.DNA_FILE
+    out_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Preserve any non-trade records already in the ledger (e.g. CIRCUIT_BREAKER_TRIGGER entries).
     existing = []
-    if OUT_FILE.exists():
+    if out_file.exists():
         try:
-            with open(OUT_FILE, "r", encoding="utf-8") as f:
+            with open(out_file, "r", encoding="utf-8") as f:
                 existing = json.load(f)
         except Exception:
             existing = []
     non_trade = [r for r in existing if isinstance(r, dict) and r.get("type") == "CIRCUIT_BREAKER_TRIGGER"]
 
-    with open(OUT_FILE, "w", encoding="utf-8") as f:
+    with open(out_file, "w", encoding="utf-8") as f:
         json.dump(closed_trades + non_trade, f, indent=4)
-    _log.info(f"Successfully wrote pre-populated trade ledger to: {OUT_FILE}")
+    _log.info(f"Successfully wrote pre-populated trade ledger to: {out_file}")
 
 if __name__ == "__main__":
     bootstrap()

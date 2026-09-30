@@ -75,6 +75,23 @@ for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomou
     # powergauge stores a str (os.path.join), the others a Path — preserve each.
     _mod.XLSX_FILE = _test_xlsx_path if isinstance(_orig_xlsx_const, Path) else str(_test_xlsx_path)
 
+# ---------------------------------------------------------------------------
+# Learning-ledger guard — no test may write the decision log, the trade-DNA
+# ledger, or the failure-DNA rules. Test fixtures (P1..P6, TSCO cost 100/stop 80)
+# had leaked into these files, skewing the decision_eval scorecard and the
+# retrospective analyzer. Unconditional, like the workbook guard.
+# ---------------------------------------------------------------------------
+import aether.decision_eval as _decision_eval
+import aether.circuit_breaker as _circuit_breaker
+
+_test_ledger_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+_decision_eval.LOG = Path(_test_ledger_dir.name) / "decision_log.jsonl"
+_circuit_breaker.DNA_FILE = Path(_test_ledger_dir.name) / "trade_history_dna.json"
+import retrospective_analyzer as _retro
+
+_retro.RULES_FILE = Path(_test_ledger_dir.name) / "failure_dna_rules.json"
+_retro.REPORT_FILE = Path(_test_ledger_dir.name) / "retrospective_report.txt"
+
 if not _os.getenv("AETHER_LIVE_TESTS"):
     # -- State side: redirect prod auth-state / cache files to a throwaway temp dir --
     # A test that reaches get_tokens() finds no saved browser state (so the automated
