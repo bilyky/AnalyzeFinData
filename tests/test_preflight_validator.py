@@ -5,6 +5,7 @@ lock checks and the status-briefing email verdict.
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -222,45 +223,116 @@ class TestNewPreflightFeatures(unittest.TestCase):
         self.assertEqual(issues, [])
 
 class TestPreflightEtradeWaiver(unittest.TestCase):
-    @mock.patch("aether.etrade.get_tokens")
+    # check_etrade_api drives the unattended re-auth door scheduled_reauth() (renew-first,
+    # at most one HEADLESS breaker/trust-gated mint) rather than get_tokens(allow_browser=
+    # False), whose default HEADFUL mint needs an interactive desktop.
+    #
+    # Market-closed is decided by the ET weekday (token life follows ET midnight). On an ET
+    # weekend it never mints: renew-only keep_alive, else WAIVED. On a weekday the verdict
+    # follows scheduled_reauth's result["ok"]; no reauth lock is held in these cases, so a
+    # breaker/in_progress result fails immediately (the in-flight wait is its own suite).
+    SAT, WED = 5, 2
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        lock = mock.patch.object(pf.etrade, "_REAUTH_LOCK_PATH", os.path.join(self._tmp.name, "reauth.lock"))
+        lock.start()
+        self.addCleanup(lock.stop)
+
+    @mock.patch("time.sleep")
+    @mock.patch("aether.etrade.keep_alive")
+    @mock.patch("aether.etrade.scheduled_reauth")
     @mock.patch("datetime.datetime")
-    def test_etrade_check_waived_on_weekend(self, mock_datetime, mock_get_tokens):
-        # Mock datetime to a Saturday (weekday 5)
-        mock_dt = mock.Mock()
-        mock_dt.weekday.return_value = 5
-        mock_datetime.now.return_value = mock_dt
+    def test_check_etrade_api_verdict_matrix(self, mock_datetime, mock_reauth, mock_keep, mock_sleep):
+        live = {"oauth_token": "t"}
+        cases = [
+            # ET weekday, keep_alive, scheduled_reauth result,        expected, door called
+            (self.SAT, None, None,                                    "WAIVED", False),  # weekend: never mints
+            (self.SAT, live, None,                                    True,     False),  # weekend: live token renewed
+            (self.WED, None, {"ok": False, "reason": "failed"},       False,    True),
+            (self.WED, None, {"ok": False, "reason": "blocked"},      False,    True),
+            (self.WED, None, {"ok": False, "reason": "breaker"},      False,    True),   # cooling, no mint in flight
+            (self.WED, None, {"ok": False, "reason": "in_progress"},  False,    True),   # lock not held -> no wait
+            (self.WED, None, {"ok": True,  "reason": "reauthed"},     True,     True),
+            (self.WED, None, {"ok": True,  "reason": "renewed"},      True,     True),
+        ]
+        for weekday, keep, result, expected, door in cases:
+            with self.subTest(weekday=weekday, keep=bool(keep), result=result):
+                mock_dt = mock.Mock()
+                mock_dt.weekday.return_value = weekday
+                mock_datetime.now.return_value = mock_dt
+                for m in (mock_reauth, mock_keep, mock_sleep):
+                    m.reset_mock()
+                mock_keep.return_value = keep
+                mock_reauth.return_value = result
 
-        # Mock E*TRADE token retrieval to fail (None)
-        mock_get_tokens.return_value = None
+                self.assertEqual(pf.check_etrade_api(), expected)
+                tz = mock_datetime.now.call_args.args[0]
+                self.assertEqual(str(tz), "America/New_York")        # ET date, not host-local
+                if door:
+                    mock_reauth.assert_called_once_with("production")
+                else:
+                    mock_reauth.assert_not_called()                  # no mint on an ET weekend
+                mock_sleep.assert_not_called()
 
-        # Execute check — it should return "WAIVED" on weekends
-        res = pf.check_etrade_api()
-        self.assertEqual(res, "WAIVED")
 
-    @mock.patch("aether.etrade.get_tokens")
-    @mock.patch("datetime.datetime")
-    def test_etrade_check_fails_on_weekday(self, mock_datetime, mock_get_tokens):
-        # Mock datetime to a Wednesday (weekday 2)
-        mock_dt = mock.Mock()
-        mock_dt.weekday.return_value = 2
-        mock_datetime.now.return_value = mock_dt
+class TestPreflightInflightMint(unittest.TestCase):
+    """A weekday preflight that collides with another door's in-flight mint waits for it
+    (renew-only, bounded) instead of aborting the 5:30 pipeline. Real lock-file checks;
+    only the broker door, keep_alive, the clock and sleep are mocked."""
 
-        # Mock E*TRADE token retrieval to fail (None)
-        mock_get_tokens.return_value = None
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.lock = os.path.join(self._tmp.name, "reauth.lock")
+        for p in (mock.patch.object(pf.etrade, "_REAUTH_LOCK_PATH", self.lock),
+                  mock.patch("datetime.datetime"),
+                  mock.patch("time.sleep")):
+            m = p.start()
+            self.addCleanup(p.stop)
+            if p.attribute == "datetime":
+                m.now.return_value.weekday.return_value = 2          # Wednesday ET
+            if p.attribute == "sleep":
+                self.sleep = m
 
-        # Execute check — it should return False on weekdays
-        res = pf.check_etrade_api()
-        self.assertFalse(res)
+    def _hold_lock(self, age_sec=0.0):
+        Path(self.lock).write_text("")
+        t = time.time() - age_sec
+        os.utime(self.lock, (t, t))
 
-    @mock.patch("aether.etrade.get_tokens")
-    @mock.patch("datetime.datetime")
-    def test_etrade_check_passes_on_tokens_success(self, mock_datetime, mock_get_tokens):
-        # Mock E*TRADE token retrieval to succeed (valid dict)
-        mock_get_tokens.return_value = {"oauth_token": "valid"}
+    def test_mint_in_flight_only_for_a_fresh_lock(self):
+        self.assertFalse(pf._mint_in_flight())                       # no lock file
+        self._hold_lock()
+        self.assertTrue(pf._mint_in_flight())                        # fresh lock = live mint
+        self._hold_lock(age_sec=pf._INFLIGHT_MINT_WAIT_SEC + 5)
+        self.assertFalse(pf._mint_in_flight())                       # stale/leaked lock
 
-        # Execute check — it should return True on success
-        res = pf.check_etrade_api()
-        self.assertTrue(res)
+    def test_waits_for_concurrent_mint_then_passes(self):
+        self._hold_lock()
+        for reason in ("in_progress", "breaker"):
+            with self.subTest(reason=reason),                  mock.patch("aether.etrade.scheduled_reauth", return_value={"ok": False, "reason": reason}),                  mock.patch("aether.etrade.keep_alive", side_effect=[None, {"oauth_token": "t"}]) as m_keep:
+                self.sleep.reset_mock()
+                self.assertTrue(pf.check_etrade_api())
+                self.assertEqual(m_keep.call_count, 2)
+                self.sleep.assert_called_once_with(pf._INFLIGHT_MINT_POLL_SEC)
+
+    def test_stops_waiting_when_the_other_mint_ends_without_a_token(self):
+        self._hold_lock()
+        def release_lock(_):
+            os.remove(self.lock)                                     # the other door finished (failed)
+        self.sleep.side_effect = release_lock
+        with mock.patch("aether.etrade.scheduled_reauth", return_value={"ok": False, "reason": "breaker"}),              mock.patch("aether.etrade.keep_alive", return_value=None) as m_keep:
+            self.assertFalse(pf.check_etrade_api())
+        self.assertEqual(m_keep.call_count, 2)                       # one last look after release
+        self.sleep.assert_called_once()
+
+    def test_gives_up_at_the_wait_bound(self):
+        self._hold_lock()
+        clock = iter([0.0, 0.0, pf._INFLIGHT_MINT_WAIT_SEC + 1])
+        with mock.patch("aether.etrade.scheduled_reauth", return_value={"ok": False, "reason": "in_progress"}),              mock.patch("aether.etrade.keep_alive", return_value=None),              mock.patch("time.monotonic", side_effect=lambda: next(clock)):
+            self.assertFalse(pf.check_etrade_api())
+        self.sleep.assert_called_once()
 
 
 if __name__ == "__main__":

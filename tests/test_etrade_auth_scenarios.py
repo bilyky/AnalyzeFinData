@@ -116,20 +116,74 @@ class TestTokenLifecycle(_EtradeScenarioBase):
         m_pw.assert_not_called()
         m_lh.assert_not_called()
 
-    def test_A3_yesterday_token_renewed_survives_midnight(self):
-        # Token from yesterday (but renewable). We explicitly bypass the data probe
-        # (which would return False) and blindly try the pure-HTTP renewal.
+    def test_A3_yesterday_token_renewed_and_verified_is_returned(self):
+        # Token from yesterday. No probe BEFORE the renew (the broker always rejects a yesterday
+        # token), but the RENEWED token is probed once before use; authorized -> returned.
         self._write_token(_yesterday_et(), age_min=90.0)
         m_pw, m_lh = self._no_browser_guard()
         renewed = {"oauth_token": "fresh", "oauth_token_secret": "s2",
                    "env": "production", "issued_date_et": etrade._et_today()}
-        with mock.patch.object(etrade, "_probe_token_auth") as m_probe, \
+        with mock.patch.object(etrade, "_probe_token_auth", return_value=True) as m_probe, \
              mock.patch.object(etrade, "renew_tokens", return_value=renewed):
             out = etrade.get_tokens("production", allow_browser=False)
         self.assertEqual(out, renewed)
-        m_probe.assert_not_called()
+        m_probe.assert_called_once_with(renewed, "production")   # the renewed token, not the stale one
         m_pw.assert_not_called()
         m_lh.assert_not_called()
+
+    def test_A3b_overnight_renew_rejected_is_not_reported_live(self):
+        # The 2026-09-28 21:30 PT false PASS: the renew "succeeds" but the broker rejects the
+        # token (midnight-ET expiry). It must NOT be returned; it is soft-deleted (recoverable)
+        # so the dead token can't pose as today's; with no mint path configured -> soft None.
+        self._write_token(_yesterday_et(), age_min=90.0)
+        m_pw, m_lh = self._no_browser_guard()
+        renewed = {"oauth_token": "dead", "oauth_token_secret": "s2",
+                   "env": "production", "issued_date_et": etrade._et_today()}
+        with mock.patch.object(etrade, "_probe_token_auth", return_value=False), \
+             mock.patch.object(etrade, "renew_tokens", return_value=renewed), \
+             mock.patch.object(etrade.CFG, "etrade_totp_secret", "", create=True):
+            out = etrade.get_tokens("production", allow_browser=False)
+        self.assertIsNone(out)
+        self.assertFalse(os.path.exists(etrade._TOKEN_PATH))            # off the live path
+        trashed = os.listdir(trash.TRASH_DIR)                           # …but recoverable
+        self.assertTrue(any("rejected-after-overnight-renew" in n for n in trashed), trashed)
+        m_pw.assert_not_called()
+        m_lh.assert_not_called()
+
+    def test_A3c_overnight_renew_rejected_falls_through_to_mint(self):
+        # Same rejection, but a mint path exists (saved browser state, breaker clear) -> the
+        # ladder falls through to the automated re-auth instead of returning the dead token.
+        self._write_token(_yesterday_et(), age_min=90.0)
+        self._make_browser_state()
+        etrade.reset_reauth_circuit_breaker("production")
+        m_pw, m_lh = self._no_browser_guard()
+        minted = {"oauth_token": "minted", "oauth_token_secret": "s3",
+                  "env": "production", "issued_date_et": etrade._et_today()}
+        m_lh.return_value = minted
+        renewed = {"oauth_token": "dead", "oauth_token_secret": "s2",
+                   "env": "production", "issued_date_et": etrade._et_today()}
+        with mock.patch.object(etrade, "_probe_token_auth", return_value=False), \
+             mock.patch.object(etrade, "renew_tokens", return_value=renewed):
+            out = etrade.get_tokens("production", allow_browser=False)
+        self.assertEqual(out, minted)
+        m_lh.assert_called_once()
+        m_pw.assert_not_called()
+
+    def test_A3d_overnight_renew_indeterminate_probe_keeps_token_no_browser(self):
+        # Probe None (network/proxy blip) after the renew -> keep the renewed token, open NO
+        # browser: a blip must never trigger an automated login (ban safety).
+        self._write_token(_yesterday_et(), age_min=90.0)
+        self._make_browser_state()
+        m_pw, m_lh = self._no_browser_guard()
+        renewed = {"oauth_token": "fresh", "oauth_token_secret": "s2",
+                   "env": "production", "issued_date_et": etrade._et_today()}
+        with mock.patch.object(etrade, "_probe_token_auth", return_value=None), \
+             mock.patch.object(etrade, "renew_tokens", return_value=renewed):
+            out = etrade.get_tokens("production", allow_browser=False)
+        self.assertEqual(out, renewed)
+        self.assertTrue(os.path.exists(etrade._TOKEN_PATH))
+        m_lh.assert_not_called()
+        m_pw.assert_not_called()
 
     def test_A4_dead_token_not_renewable_returns_none_no_browser(self):
         # Yesterday token, renewal fails, no saved browser state → soft None, NO browser.
