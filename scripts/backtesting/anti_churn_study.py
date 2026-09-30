@@ -1,14 +1,13 @@
 """
 Anti-Churn Study — ledger counterfactual gating two over-trading fixes in the AI game.
 
-Diagnosis (2026-09-29 PROD ledger review): the game turns over fast (median hold
-6 days) through two paths no exit rule governs:
+Hypotheses (2026-09-29 PROD ledger review — the game turns over fast, median hold
+6 days). Both were tested here and REJECTED; see plans/roadmap.md R&D #27.
 
   A. MOMENTUM ROTATION (R&D #27, evaluate_momentum_rotation) sells a "mature"
-     position whenever its S10+L60 < 8.0 (slots full) — while the real soft exit
-     (sell_rules.soft_exit) only fires below 0 and is winner-protected. So the
-     rotation path dumps in-profit names trading above their 50-DMA ("flowers")
-     that sell_rules itself would have kept.
+     position whenever its S10+L60 < 8.0 (slots full), while the soft exit
+     (sell_rules.soft_exit) only fires below 0 and is winner-protected — so it
+     might be dumping in-profit names above their 50-DMA that sell_rules keeps.
   B. RE-ENTRY: nothing keyed on the SYMBOL stops the engine re-buying a name it
      just closed at a loss (LULU: 3 losing round trips from Jul 29 to Sep 29).
 
@@ -18,11 +17,15 @@ Method — replay the actual game ledger (Data/ai_portfolio_game.json history):
      sell date (from the local OHLCV cache, bars <= sell date only — no
      look-ahead for the classification), and what did the stock do over the
      next 10/20 bars (the opportunity cost of selling). A rotation that the
-     winner-protection rule would have blocked is "protected".
-  B. For every BUY of a symbol that was closed at a LOSS within N days before,
-     the realized P&L of that re-entry round trip. Sweep N; the counterfactual
-     of a cooldown is simply not taking those trades (freed cash assumed idle —
-     conservative, since the alternative buy is unknowable).
+     winner-protection rule would have blocked is "protected". Also reported: the
+     same-day replacement BUYs, i.e. where the freed cash went.
+  B. For every round trip (share-count based, see round_trips) opened within N
+     days of the same symbol's previous trip closing at a LOSS, that re-entry
+     trip's realized P&L. Sweep N; the counterfactual of a cooldown is simply not
+     taking those trades (freed cash assumed idle — the alternative is unknowable).
+
+Prices come from the split-adjusted OHLCV cache (risk_utils.split_adjust_ohlcv);
+ledger prices are rescaled onto the same basis before any comparison.
 
 Caveat stated up front: this is ONE portfolio's ledger (tens of trades), not a
 universe backtest. It can show direction and magnitude on the real failure, not
@@ -45,6 +48,8 @@ import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(BASE_DIR))
+from aether.risk_utils import split_adjust_ohlcv
 SWEEP_DAYS = [5, 10, 14, 21, 30]
 FWD_BARS = [10, 20]
 # Rotation only runs in AGGRESSIVE, whose stop is 3.5x ATR (get_strategy_rules); a
@@ -58,14 +63,24 @@ def _out(line: str) -> None:
     sys.stdout.write(line + "\n")
 
 
-def _bars(cache_dir: Path, sym: str) -> list[tuple[str, float, float, float]]:
-    """(date, high, low, close) from the raw (not split-adjusted) OHLCV cache."""
+def _bars(cache_dir: Path, sym: str) -> tuple[list[tuple[str, float, float, float]], list[float]]:
+    """Split-adjusted (date, high, low, close) bars plus each bar's adjusted/raw scale.
+    Ledger prices are nominal on their trade date, so multiply one by that date's
+    scale before comparing it with adjusted bars."""
     path = cache_dir / f"{sym}_daily.json"
     if not path.exists():
-        return []
-    ts = json.loads(path.read_text()).get("Time Series (Daily)", {})
-    return [(d, float(ts[d]["2. high"]), float(ts[d]["3. low"]), float(ts[d]["4. close"]))
-            for d in sorted(ts)]
+        return [], []
+    ts = json.loads(path.read_text(encoding="utf-8")).get("Time Series (Daily)", {})
+    dates = sorted(ts)
+    col = {k: [float(ts[d][k]) for d in dates] for k in ("1. open", "2. high", "3. low", "4. close")}
+    highs, lows, closes = split_adjust_ohlcv(col["1. open"], col["2. high"], col["3. low"], col["4. close"])
+    scale = [a / raw if raw else 1.0 for a, raw in zip(closes, col["4. close"], strict=True)]
+    return list(zip(dates, highs, lows, closes, strict=True)), scale
+
+
+def _index_on_or_before(bars, day: str) -> int:
+    """Index of the last bar dated <= day, or -1."""
+    return max((k for k, b in enumerate(bars) if b[0] <= day), default=-1)
 
 
 _ADDS = ("BUY", "BUY_SCALE_IN")
@@ -121,22 +136,24 @@ def rotation_study(history: list, cache_dir: Path) -> dict:
     for tx in history:
         if tx.get("type") != "SELL" or "MOMENTUM ROTATION" not in str(tx.get("details", "")):
             continue
-        sym, day, px = tx["symbol"], tx["date"], float(tx["price"])
-        bars = _bars(cache_dir, sym)
-        past = [c for d, _, _, c in bars if d <= day]
-        future = [c for d, _, _, c in bars if d > day]
+        sym, day = tx["symbol"], tx["date"]
+        bars, scale = _bars(cache_dir, sym)
+        i = _index_on_or_before(bars, day)
+        px = float(tx["price"]) * (scale[i] if i >= 0 else 1.0)
+        past = [c for _, _, _, c in bars[:i + 1]]
+        future = [c for _, _, _, c in bars[i + 1:]]
         trip = next((t for t in trips if t["symbol"] == sym and t["close_date"] == day), None)
         cost = trip["cost_usd"] / sum(b["qty"] for b in history if b["symbol"] == sym
                                       and b.get("type") in _ADDS
                                       and trip["open_date"] <= b["date"] <= day) if trip else None
-        held = (_held_with_trail(bars, len(past) - 1, cost, trip["open_date"])
-                if trip and past else None)
+        held = (_held_with_trail(bars, i, cost * scale[i], trip["open_date"])
+                if trip and i >= 0 else None)
         sma50 = sum(past[-50:]) / 50 if len(past) >= 50 else None
         in_profit = (tx.get("pnl") or 0) > 0
         protected = in_profit and sma50 is not None and px >= sma50
         fwd = {f"fwd{n}": (round((future[n - 1] / px - 1) * 100, 2) if len(future) >= n else None)
                for n in FWD_BARS}
-        rows.append({"symbol": sym, "date": day, "pnl": tx.get("pnl"), "price": px,
+        rows.append({"symbol": sym, "date": day, "pnl": tx.get("pnl"), "price": round(px, 3),
                      "sma50": round(sma50, 2) if sma50 else None,
                      "in_profit": in_profit, "protected": protected, **fwd,
                      "held_vs_sell": round((held / px - 1) * 100, 2) if held else None})
@@ -150,8 +167,25 @@ def rotation_study(history: list, cache_dir: Path) -> dict:
     summary = {k: {"protected": _mean(k, prot), "unprotected": _mean(k, unprot)}
                for k in [f"fwd{n}" for n in FWD_BARS] + ["held_vs_sell"]}
     mean10 = summary["fwd10"]["protected"][0]
-    return {"rows": rows, "summary": summary,
+    return {"rows": rows, "summary": summary, "replacements": _replacement_buys(history, rows, cache_dir),
             "gate_pass": bool(prot) and mean10 is not None and mean10 >= 0}
+
+
+def _replacement_buys(history: list, rotation_rows: list, cache_dir: Path) -> list[dict]:
+    """New BUYs (not scale-ins) on a rotation date, with their forward 10-bar return —
+    where the freed cash went."""
+    days = {r["date"] for r in rotation_rows}
+    out = []
+    for tx in history:
+        if tx.get("type") != "BUY" or tx["date"] not in days:
+            continue
+        bars, scale = _bars(cache_dir, tx["symbol"])
+        i = _index_on_or_before(bars, tx["date"])
+        n = FWD_BARS[0]
+        px = float(tx["price"]) * (scale[i] if i >= 0 else 1.0)
+        fwd = round((bars[i + n][3] / px - 1) * 100, 2) if i >= 0 and i + n < len(bars) else None
+        out.append({"symbol": tx["symbol"], "date": tx["date"], f"fwd{n}": fwd})
+    return out
 
 
 def reentry_study(history: list) -> dict:
@@ -186,7 +220,7 @@ def main():
     ap.add_argument("--data-dir", default=str(BASE_DIR / "Data"))
     args = ap.parse_args()
     data = Path(args.data_dir)
-    history = json.loads((data / "ai_portfolio_game.json").read_text()).get("history", [])
+    history = json.loads((data / "ai_portfolio_game.json").read_text(encoding="utf-8")).get("history", [])
 
     rot = rotation_study(history, data / "Symbol_full")
     _out("A. MOMENTUM ROTATION sells")
@@ -197,6 +231,11 @@ def main():
     for k, v in rot["summary"].items():
         _out(f"  {k}: protected mean {v['protected'][0]}% (n={v['protected'][1]}) | "
              f"unprotected mean {v['unprotected'][0]}% (n={v['unprotected'][1]})")
+    reps = [b for b in rot["replacements"] if b["fwd10"] is not None]
+    _out("  same-day replacement BUYs (fwd10): "
+         + ", ".join(f"{b['symbol']} {b['fwd10']:+}" for b in rot["replacements"]))
+    if reps:
+        _out(f"  replacement mean fwd10 {sum(b['fwd10'] for b in reps) / len(reps):+.2f}% (n={len(reps)})")
     _out(f"  GATE A: {'PASS' if rot['gate_pass'] else 'FAIL'}")
 
     _out("\nB. RE-ENTRY after a loss exit (counterfactual = skip the re-entry)")
