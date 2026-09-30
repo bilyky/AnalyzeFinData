@@ -17,19 +17,19 @@ from aether_logger import get_logger as _get_logger
 _log = _get_logger("retrospective")
 
 BASE_DIR = Path(__file__).resolve().parent
-DNA_FILE = BASE_DIR / "Data" / "trade_history_dna.json"
 RULES_FILE = BASE_DIR / "Data" / "failure_dna_rules.json"
 REPORT_FILE = BASE_DIR / "Data" / "retrospective_report.txt"
 
 def analyze():
     _log.info("Launching automated Feedback & Pattern Analyzer...")
 
-    if not DNA_FILE.exists() or DNA_FILE.stat().st_size == 0:
+    dna_file = circuit_breaker.DNA_FILE  # single ledger path, shared with the game + breaker
+    if not dna_file.exists() or dna_file.stat().st_size == 0:
         _log.warning("No raw trade DNA history found. Please run bootstrap_dna.py first.")
         return
 
     try:
-        with open(DNA_FILE, "r", encoding="utf-8") as f:
+        with open(dna_file, "r", encoding="utf-8") as f:
             trades = json.load(f)
     except Exception as e:
         _log.error(f"Failed to read DNA file: {e}")

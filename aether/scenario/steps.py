@@ -304,7 +304,8 @@ def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new
                 "date": today, "time": now_time, "type": "SELL",
                 "symbol": sym, "price": price, "qty": pos["qty"],
                 "pnl": round((price - pos["cost"]) * pos["qty"], 2),
-                "details": f"Queued Sell: {order['reason']}"
+                "details": f"Queued Sell: {order['reason']}",
+                "stop_loss": pos.get("stop_loss"),
             }
             state["history"].append(tx)
             new_transactions.append(tx)
