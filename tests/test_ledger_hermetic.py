@@ -7,9 +7,9 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import ai_portfolio_game as game
 import aether.circuit_breaker as circuit_breaker
 import aether.decision_eval as decision_eval
+import retrospective_analyzer
 
 _REPO_DATA = (Path(__file__).resolve().parent.parent / "Data").resolve()
 
@@ -18,7 +18,8 @@ class TestLedgerPathsRedirected(unittest.TestCase):
     def test_no_ledger_path_resolves_into_repo_data(self):
         for name, path in [("decision_eval.LOG", decision_eval.LOG),
                            ("circuit_breaker.DNA_FILE", circuit_breaker.DNA_FILE),
-                           ("game.FAILURE_RULES_FILE", game.FAILURE_RULES_FILE)]:
+                           ("retrospective_analyzer.RULES_FILE", retrospective_analyzer.RULES_FILE),
+                           ("retrospective_analyzer.REPORT_FILE", retrospective_analyzer.REPORT_FILE)]:
             with self.subTest(name=name):
                 self.assertNotEqual(Path(path).resolve().parent, _REPO_DATA, f"{name} -> {path}")
 

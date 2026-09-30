@@ -87,11 +87,10 @@ import aether.circuit_breaker as _circuit_breaker
 _test_ledger_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
 _decision_eval.LOG = Path(_test_ledger_dir.name) / "decision_log.jsonl"
 _circuit_breaker.DNA_FILE = Path(_test_ledger_dir.name) / "trade_history_dna.json"
-try:
-    _importlib.import_module("ai_portfolio_game").FAILURE_RULES_FILE = (
-        Path(_test_ledger_dir.name) / "failure_dna_rules.json")
-except ImportError:
-    pass  # dep-free runner: the game module (and its rules reader) isn't importable
+import retrospective_analyzer as _retro
+
+_retro.RULES_FILE = Path(_test_ledger_dir.name) / "failure_dna_rules.json"
+_retro.REPORT_FILE = Path(_test_ledger_dir.name) / "retrospective_report.txt"
 
 if not _os.getenv("AETHER_LIVE_TESTS"):
     # -- State side: redirect prod auth-state / cache files to a throwaway temp dir --

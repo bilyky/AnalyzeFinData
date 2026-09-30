@@ -10,6 +10,7 @@ import rapidapi
 import sys
 import console_safe
 import circuit_breaker
+import retrospective_analyzer
 from aether import trash
 import aether.notify as notify
 import argparse
@@ -30,7 +31,6 @@ AI_GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 AI_PERF_XLSX = BASE_DIR / "Data" / "ai_portfolio_performance.xlsx"
 SYMBOL_FULL_DIR = BASE_DIR / "Data" / "Symbol_full"   # OHLCV cache — one source of truth
-FAILURE_RULES_FILE = BASE_DIR / "Data" / "failure_dna_rules.json"  # written by retrospective_analyzer
 INITIAL_BALANCE = 10000.0
 
 # Import risk utils safely
@@ -68,7 +68,7 @@ def _load_symbol_today_cache(symbol: str, today_str: str) -> dict:
 
 def check_failure_rules(symbol, pgr, score, z_score, industry, s10=0.0) -> tuple[bool, str]:
     """Check if the candidate matches any active toxic rules in Data/failure_dna_rules.json or dynamic filters."""
-    rules_file = FAILURE_RULES_FILE
+    rules_file = retrospective_analyzer.RULES_FILE  # single path: the analyzer writes it
     
     # ── Earnings-Shock Failure Gate (Pillar 1 Guard) ──
     # Programmatic, un-bypassable veto on any symbol that has just reported a massive earnings miss
@@ -1529,7 +1529,8 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         "date": today, "time": now_time, "type": "SELL", 
                         "symbol": sym, "price": price, "qty": pos["qty"], 
                         "pnl": round((price - pos["cost"]) * pos["qty"], 2),
-                        "details": f"Queued Sell: {order['reason']}"
+                        "details": f"Queued Sell: {order['reason']}",
+                        "stop_loss": pos.get("stop_loss"),
                     }
                     state["history"].append(tx)
                     new_transactions.append(tx)

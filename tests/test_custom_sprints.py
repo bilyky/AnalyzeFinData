@@ -519,8 +519,8 @@ class TestPersistentProfileModes(unittest.TestCase):
             rules_path = Path(td) / "Data" / "failure_dna_rules.json"
             rules_path.parent.mkdir(parents=True)
             rules_path.write_text(json.dumps(test_rules), encoding="utf-8")
-            orig = game.FAILURE_RULES_FILE
-            game.FAILURE_RULES_FILE = rules_path
+            orig = game.retrospective_analyzer.RULES_FILE
+            game.retrospective_analyzer.RULES_FILE = rules_path
             try:
                 is_toxic, reason = game.check_failure_rules("AAPL", "Be-", 9.5, 0.5, "Technology")
                 self.assertTrue(is_toxic)
@@ -534,7 +534,7 @@ class TestPersistentProfileModes(unittest.TestCase):
                 self.assertFalse(is_toxic)
                 self.assertEqual(reason, "")
             finally:
-                game.FAILURE_RULES_FILE = orig
+                game.retrospective_analyzer.RULES_FILE = orig
 
     def test_log_closed_trade_dna_writing(self):
         pos = {

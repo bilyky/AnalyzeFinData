@@ -67,6 +67,19 @@ class TestExitReasonLogging(unittest.TestCase):
         self.assertIsNone(tx["stop_loss"])
         self.assertEqual(tx["price"], 90.0)
 
+    def test_queued_sell_records_stop(self, mock_load_wb, _save, mock_load_game, mock_get_prices, _mh):
+        state = {"balance": 5000.0, "equity": 10000.0, "history": [],
+                 "queued_orders": [{"type": "SELL", "symbol": "TSCO", "reason": "Exit triggered: test"}],
+                 "positions": {"TSCO": {"qty": 10, "cost": 100.0, "stop_loss": 80.0}}}
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"TSCO": 95.0}
+        mock_load_wb.return_value = research_workbook(_row("TSCO", 95.0, 5.0, 5.0))
+        game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+        sells = [t for t in state["history"] if t.get("type") == "SELL"]
+        self.assertEqual(len(sells), 1)
+        self.assertEqual(sells[0]["details"], "Queued Sell: Exit triggered: test")
+        self.assertEqual(sells[0]["stop_loss"], 80.0)
+
 
 if __name__ == "__main__":
     unittest.main()
