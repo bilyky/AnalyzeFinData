@@ -174,6 +174,18 @@ class TestQueuedSell(unittest.TestCase):
         m_unwind.assert_called_once_with("AAA", mock.ANY, state, 60.0, _TODAY)
         m_dna.assert_called_once()
 
+    def test_queued_sell_records_stop_loss(self):
+        # Parity with the root after #136: the SELL tx carries the position's stop
+        # (None when the position never had one).
+        order = {"symbol": "AAA", "type": "SELL", "reason": "x"}
+        for pos_stop, expected in ((45.0, 45.0), (None, None)):
+            with self.subTest(stop=pos_stop):
+                state = _sell_state()
+                if pos_stop is not None:
+                    state["positions"]["AAA"]["stop_loss"] = pos_stop
+                _, new_tx, *_ = _run(state, [order], prices={"AAA": 60.0})
+                self.assertEqual(new_tx[0]["stop_loss"], expected)
+
     def test_queued_sell_symbol_not_held_is_noop(self):
         order = {"symbol": "ZZZ", "type": "SELL", "reason": "x"}
         state = _sell_state()
