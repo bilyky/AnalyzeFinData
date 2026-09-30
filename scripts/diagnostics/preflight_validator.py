@@ -15,6 +15,7 @@ import smtplib
 import subprocess
 import sys
 import time
+import zoneinfo
 from pathlib import Path
 
 
@@ -178,6 +179,42 @@ def check_chaikin_api() -> bool:
         return False
 
 
+# How long a weekday preflight waits for ANOTHER door's in-flight mint (web button, lazy
+# get_tokens, a daily task) before failing, and how often it re-checks. The bound matches the
+# reauth lock's ttl (300 s, the mint's worst case), so a live winner is always outlasted.
+_INFLIGHT_MINT_WAIT_SEC = 300
+_INFLIGHT_MINT_POLL_SEC = 10
+_ET_TZ = zoneinfo.ZoneInfo("America/New_York")
+
+
+def _mint_in_flight() -> bool:
+    """True while another process holds a FRESH reauth lock, i.e. a mint is running now. A lock
+    older than its ttl is a crashed/leaked holder, not a live mint, so it doesn't count."""
+    try:
+        return time.time() - os.path.getmtime(etrade._REAUTH_LOCK_PATH) < _INFLIGHT_MINT_WAIT_SEC
+    except OSError:
+        return False                     # no lock file -> nothing in flight
+
+
+def _await_inflight_mint(env: str) -> bool:
+    """Bounded wait for another door's in-flight mint, never opening a browser itself.
+
+    A concurrent caller of scheduled_reauth() during someone else's mint usually gets
+    ``breaker`` (the winner arms the breaker before its browser opens), and ``in_progress``
+    only in the short window before that. Either way the token may be seconds away. Poll
+    renew-only ``keep_alive`` while the lock is held; the lock state is read BEFORE each
+    keep_alive so a token saved just before release is still seen. Returns True once a live
+    session appears, False when no mint is in flight or the wait bound is reached."""
+    deadline = time.monotonic() + _INFLIGHT_MINT_WAIT_SEC
+    while True:
+        in_flight = _mint_in_flight()
+        if etrade.keep_alive(env):
+            return True
+        if not in_flight or time.monotonic() >= deadline:
+            return False
+        time.sleep(_INFLIGHT_MINT_POLL_SEC)
+
+
 def check_etrade_api() -> bool | str:
     """Validate the live E*TRADE OAuth session, minting a fresh token if one is needed.
 
@@ -186,26 +223,39 @@ def check_etrade_api() -> bool | str:
     **headless**, breaker/trust-gated browser mint. This is the SAME door the web button
     and the daily task use, so preflight succeeds on a display-less PROD host.
 
-    The old path — ``get_tokens(env="production", allow_browser=False)`` — defaulted to a
-    **headful** mint (``get_tokens``' ``headless`` param is False and, unlike
-    ``scheduled_reauth``, it ignores ``AETHER_ETRADE_SCHEDULED_HEADLESS``). A headful
-    Firefox cannot launch on a service/scheduled-task PROD box with no interactive desktop,
-    so a dead token surfaced only as a 401 and preflight failed even though the button
-    (headless) minted fine on the same host.
+    The old path — ``get_tokens(env="production", allow_browser=False)`` — passed
+    ``get_tokens``' default ``headless=False``, so its mint was **headful** (unlike
+    ``scheduled_reauth``, it ignores ``AETHER_ETRADE_SCHEDULED_HEADLESS``); a headful
+    Firefox needs an interactive desktop, which a scheduled-task PROD host may not have.
 
-    On weekends (market closed) a failure is waived so reporting/summaries still run.
+    Market-closed days are decided by the **ET** date (the token's life follows ET midnight,
+    not the host's local date). On an ET weekend preflight never mints: a token minted then
+    expires before the next session, so it only renews a live token (``keep_alive``, no
+    browser) and otherwise waives the check so reporting/summaries still run. The nightly
+    9:30 PM PT audit on Sunday (00:30 ET Monday) therefore still mints Monday's token.
+
+    On a weekday, if another door is minting right now (``breaker``/``in_progress`` while the
+    reauth lock is held), wait for it (bounded, renew-only) instead of aborting the pipeline.
     """
     _log.console("  Checking E*TRADE Brokerage OAuth Session Token...")
-    is_weekend = datetime.datetime.now().weekday() in (5, 6)
+    is_weekend = datetime.datetime.now(_ET_TZ).weekday() in (5, 6)
     try:
+        if is_weekend:
+            if etrade.keep_alive("production"):
+                _log.console("  ✅ E*TRADE: Live OAuth session verified (reason: renewed).")
+                return True
+            _log.console("  ⚠️ E*TRADE: No live session; not minting because it is the weekend in ET (market closed). Waiving requirement.")
+            return "WAIVED"
         result = etrade.scheduled_reauth("production")
         if result.get("ok"):
             _log.console(f"  ✅ E*TRADE: Live OAuth session verified (reason: {result.get('reason')}).")
             return True
         reason = result.get("reason") or "failed"
-        if is_weekend:
-            _log.console(f"  ⚠️ E*TRADE: Re-auth returned '{reason}', but waiving requirement because today is the weekend (market closed).")
-            return "WAIVED"
+        if reason in ("in_progress", "breaker") and _mint_in_flight():
+            _log.console(f"  ⏳ E*TRADE: Another re-auth is in flight (reason: {reason}); waiting up to {_INFLIGHT_MINT_WAIT_SEC}s for it...")
+            if _await_inflight_mint("production"):
+                _log.console("  ✅ E*TRADE: Live OAuth session verified (reason: concurrent re-auth completed).")
+                return True
         _log.console(f"  ❌ E*TRADE: Re-auth did not yield a live session (reason: {reason}). Manual re-auth may be required.")
         return False
     except Exception as e:
