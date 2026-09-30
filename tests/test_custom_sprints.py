@@ -519,8 +519,8 @@ class TestPersistentProfileModes(unittest.TestCase):
             rules_path = Path(td) / "Data" / "failure_dna_rules.json"
             rules_path.parent.mkdir(parents=True)
             rules_path.write_text(json.dumps(test_rules), encoding="utf-8")
-            orig = game.BASE_DIR
-            game.BASE_DIR = Path(td)
+            orig = game.retrospective_analyzer.RULES_FILE
+            game.retrospective_analyzer.RULES_FILE = rules_path
             try:
                 is_toxic, reason = game.check_failure_rules("AAPL", "Be-", 9.5, 0.5, "Technology")
                 self.assertTrue(is_toxic)
@@ -534,7 +534,7 @@ class TestPersistentProfileModes(unittest.TestCase):
                 self.assertFalse(is_toxic)
                 self.assertEqual(reason, "")
             finally:
-                game.BASE_DIR = orig
+                game.retrospective_analyzer.RULES_FILE = orig
 
     def test_log_closed_trade_dna_writing(self):
         pos = {
@@ -545,13 +545,13 @@ class TestPersistentProfileModes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             dna_path = Path(td) / "Data" / "trade_history_dna.json"
             dna_path.parent.mkdir(parents=True)
-            orig = game.BASE_DIR
-            game.BASE_DIR = Path(td)
+            orig = game.circuit_breaker.DNA_FILE
+            game.circuit_breaker.DNA_FILE = dna_path
             try:
                 game.log_closed_trade_dna("TEST_SYM", pos, 105.0, "2026-06-05")
                 records = json.loads(dna_path.read_text(encoding="utf-8"))
             finally:
-                game.BASE_DIR = orig
+                game.circuit_breaker.DNA_FILE = orig
 
         self.assertEqual(len(records), 1)
         rec = records[0]
