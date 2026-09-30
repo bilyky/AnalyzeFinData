@@ -6,7 +6,7 @@ policy`` loop that runs after :func:`execute_queued_orders` and before the live
 SELL execution loop. These tests pin the behaviours it carries over from the
 root, unchanged:
 
-1. **Routing** — a ``SELL`` is returned for liquidation in market hours and
+1. **Routing** — a ``SELL`` is returned (``{sym: exit_reason}``, #136) in market hours and
    queued (deduped) after hours; ``REVIEW`` / ``HOLD`` sell nothing; every entry
    is logged once via ``decision_eval.log_decisions`` (skipped when empty).
 2. **Research-sheet read** — SELL-side prev-close is ``row[8]`` (not ``row[10]``),
@@ -120,24 +120,30 @@ class TestRouting(unittest.TestCase):
         state = {"positions": {}, "history": [], "queued_orders": []}
         with _Harness() as h:
             out, _ = _run(state)
-        self.assertEqual(out, [])
+        self.assertEqual(out, {})
         h.log_decisions.assert_not_called()
 
     def test_sell_in_market_hours_is_returned_not_queued(self):
         state = _state()
         with _Harness(action="SELL") as h:
             out, _ = _run(state)
-        self.assertEqual(out, ["AAA"])
+        self.assertEqual(out, {"AAA": "r"})
         self.assertEqual(state["queued_orders"], [])
         self.assertIn("AAA", state["positions"])  # liquidation is the caller's job
         h.log_decisions.assert_called_once()
         self.assertEqual(len(h.log_decisions.call_args.args[0]), 1)
 
+    def test_market_hours_sell_empty_reason_defaults_to_technical_exit(self):
+        # #136: the returned dict carries the exit reason recorded on the SELL tx.
+        with _Harness(action="SELL", reason=""):
+            out, _ = _run(_state())
+        self.assertEqual(out, {"AAA": "Technical exit"})
+
     def test_sell_after_hours_is_queued_with_reason(self):
         state = _state()
         with _Harness(action="SELL", reason="stop hit", market=False):
             out, _ = _run(state)
-        self.assertEqual(out, [])
+        self.assertEqual(out, {})
         self.assertEqual(state["queued_orders"], [
             {"type": "SELL", "symbol": "AAA", "reason": "Exit triggered: stop hit"}])
 
@@ -158,14 +164,14 @@ class TestRouting(unittest.TestCase):
         state = _state()
         with _Harness(action="REVIEW", reason="above 50dma") as h:
             out, _ = _run(state)
-        self.assertEqual(out, [])
+        self.assertEqual(out, {})
         self.assertIn("winner-protected", h.logged())
 
     def test_hold_sells_nothing(self):
         state = _state()
         with _Harness(action="HOLD"):
             out, txs = _run(state)
-        self.assertEqual((out, txs, state["queued_orders"]), ([], [], []))
+        self.assertEqual((out, txs, state["queued_orders"]), ({}, [], []))
 
 
 class TestResearchRead(unittest.TestCase):
@@ -307,27 +313,27 @@ class TestAiOverride(unittest.TestCase):
         state = _state()
         with _Harness(action="SELL", verdicts={"ai": {"verdict": "hold", "note": "n"}}) as h:
             out, _ = _run(state)
-        self.assertEqual(out, [])
+        self.assertEqual(out, {})
         self.assertEqual(self._entry(h)["rules_action"], "HOLD")
         self.assertIn("Real-time AI Shadow Heuristic (ai) returned HOLD: n", self._entry(h)["rules_reason"])
 
     def test_realtime_flag_downgrades_to_watch(self):
         with _Harness(action="SELL", verdicts={"ai": "FLAG-FOR-REVIEW"}) as h:
             out, _ = _run(_state())
-        self.assertEqual((out, self._entry(h)["rules_action"]), ([], "WATCH"))
+        self.assertEqual((out, self._entry(h)["rules_action"]), ({}, "WATCH"))
 
     def test_stored_verdict_key_overrides(self):
         state = _state(shadow_verdict={"verdict": "HOLD", "note": "x"})
         with _Harness(action="SELL") as h:
             out, _ = _run(state)
-        self.assertEqual(out, [])
+        self.assertEqual(out, {})
         self.assertIn("Stored position shadow_verdict returned HOLD: x", self._entry(h)["rules_reason"])
 
     def test_stored_verdicts_dict_overrides(self):
         state = _state(verdicts={"p": "flag-for-review"})
         with _Harness(action="SELL") as h:
             out, _ = _run(state)
-        self.assertEqual((out, self._entry(h)["rules_action"]), ([], "WATCH"))
+        self.assertEqual((out, self._entry(h)["rules_action"]), ({}, "WATCH"))
 
     def test_realtime_takes_precedence_over_stored(self):
         state = _state(shadow_verdict="HOLD")
@@ -338,7 +344,7 @@ class TestAiOverride(unittest.TestCase):
     def test_non_override_verdict_still_sells(self):
         with _Harness(action="SELL", verdicts={"ai": "SELL"}):
             out, _ = _run(_state())
-        self.assertEqual(out, ["AAA"])
+        self.assertEqual(out, {"AAA": "r"})
 
 
 class TestSeam(unittest.TestCase):

@@ -426,8 +426,11 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
       ``REVIEW`` is logged as winner-protected. All entries are then written via
       ``decision_eval.log_decisions`` (skipped when there were no positions).
 
-    Returns ``symbols_to_sell`` — the ordered list the caller's execution loop
-    liquidates; this function sells nothing outright except the partial
+    Returns ``symbols_to_sell`` — an insertion-ordered ``{symbol: exit_reason}``
+    dict (the ``rules_reason``, or ``"Technical exit"`` when empty) that the
+    caller's execution loop liquidates and records on each SELL tx (#136); the
+    same ``exit_reason`` feeds the after-hours queue entry. This function sells
+    nothing outright except the partial
     scale-out. ``is_market_hours`` is still evaluated late and per position, as in
     the root (design risk 3 — not hoisted). Every collaborator (``_log``,
     ``risk_utils``, ``is_market_hours``, ``CFG``, ``circuit_breaker``, ``_sma50``,
@@ -439,7 +442,7 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
 
     # SELL logic — unified deterministic exit policy (sell_rules.exit_decision):
     # hard ATR stop > soft momentum signal (winner-protected) > hold.
-    symbols_to_sell = []
+    symbols_to_sell = {}  # sym -> exit reason, recorded on the SELL tx
     decision_entries = []
     for sym in list(state["positions"].keys()):
         pos = state["positions"][sym]
@@ -610,15 +613,16 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
 
         decision_entries.append(entry)
         if entry["rules_action"] == "SELL":
+            exit_reason = entry["rules_reason"] or "Technical exit"
             if not game.is_market_hours():
                 # Queue the sell instead of executing immediately
                 if not any(q["symbol"] == sym and q["type"] == "SELL" for q in state.get("queued_orders", [])):
                     state.setdefault("queued_orders", []).append({
-                        "type": "SELL", "symbol": sym, "reason": f"Exit triggered: {entry['rules_reason'] or 'Technical exit'}"
+                        "type": "SELL", "symbol": sym, "reason": f"Exit triggered: {exit_reason}"
                     })
                     game._log.info(f"📝 [Queued] After-hours SELL queued for {sym}: {entry['rules_reason']}")
             else:
-                symbols_to_sell.append(sym)
+                symbols_to_sell[sym] = exit_reason
         elif entry["rules_action"] == "REVIEW":
             # Winner above its 50-DMA on a soft signal — hold, don't dump.
             game._log.info(f"🌸 AI HOLD (winner-protected): {sym} — {entry['rules_reason']}")
