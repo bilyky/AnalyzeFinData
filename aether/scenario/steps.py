@@ -237,3 +237,152 @@ def price_and_settle(state, all_syms, symbols_to_check, today):
     state["equity"] = round(game._live_equity(state["balance"], state["positions"], prices), 0)
 
     return prices
+
+
+def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new_transactions):
+    """Execute queued strategic-override orders, then clear the queue (B6).
+
+    Extracted verbatim from the ``# 0. Execute QUEUED ORDERS`` block in
+    ``run_daily_ai_management`` — the first stage after the price gate / book
+    settlement (:func:`price_and_settle`) and before the SELL decision loop. A
+    queued order is a strategic override placed on a prior run (or by the
+    operator) that fills at today's live price. Everything is unchanged from the
+    root:
+
+    * **Queued SELL** — unwinds any option liability first
+      (``options.unwind_option_liability_if_held``), pops the position, credits
+      the proceeds, appends the transaction to both ``state["history"]`` and
+      ``new_transactions``, and logs the closed-trade DNA. A strategic/stop exit
+      is intentionally NOT freshness-gated — it must always be allowed to run.
+    * **Queued BUY** — re-applies the execution-time **Zero-Trust freshness
+      gate**: a buy queued overnight may now sit on a stale OHLCV cache, and the
+      ATR stop below is derived from that cache, so heal once and *skip* (drop)
+      the order rather than fill on untrustworthy data. Then it sizes against the
+      profile's slot / allocation limits (``calculate_share_qty``), sets a
+      volatility ATR stop (8% fallback), resolves the buy DNA off the Research
+      sheet (``r_row[3]``=symbol, ``[6]``=pgr, ``[4]``=industry, ``[24]``=s10,
+      ``[25]``=l60), opens the position, and records the transaction.
+    * A price of ``<= 0`` skips that order; a SELL for a symbol not held and a
+      BUY for a symbol already held are both no-ops (the ``in`` / ``not in``
+      guards).
+
+    Finally ``state["queued_orders"]`` is reset to ``[]`` — but only when there
+    *were* orders (an empty queue returns early, leaving the key untouched,
+    exactly as the root's ``if queued:`` skip did). ``queued`` is passed in (the
+    list captured before the price fetch) so the caller — and, later, the B7
+    ``RunContext`` — owns the source; ``new_transactions`` is appended in place.
+    Every collaborator (``_log``, ``options``, ``log_closed_trade_dna``,
+    ``_cache_stale`` / ``_heal_symbol_cache`` / ``_MAX_STALE_DAYS``,
+    ``calculate_share_qty``, ``risk_utils.calculate_atr``) is resolved off the
+    live root module at call time via :func:`_pkg`, so ``mock.patch.object(game,
+    ...)`` still intercepts and the mutations land on the caller's ``state``.
+
+    The one non-behavioural change from the root text is cosmetic: the root's
+    ``if price <= 0: continue`` one-liner is split across two lines to satisfy the
+    package's lint gate (the root file predates it). Behaviour is identical.
+    """
+    game = _pkg()
+
+    # 0. Execute QUEUED ORDERS (Strategic Overrides with Volatility Sizing)
+    if not queued:
+        return
+
+    game._log.info("🤖 AI EXECUTING QUEUED STRATEGIC ORDERS...")
+    for order in queued:
+        sym = order["symbol"]
+        price = prices.get(sym, 0)
+        if price <= 0:
+            continue
+
+        if order["type"] == "SELL" and sym in state["positions"]:
+            pos = state["positions"][sym]
+            game.options.unwind_option_liability_if_held(sym, pos, state, price, today)
+            state["positions"].pop(sym)
+            proceeds = pos["qty"] * price
+            state["balance"] += proceeds
+            tx = {
+                "date": today, "time": now_time, "type": "SELL",
+                "symbol": sym, "price": price, "qty": pos["qty"],
+                "pnl": round((price - pos["cost"]) * pos["qty"], 2),
+                "details": f"Queued Sell: {order['reason']}",
+                "stop_loss": pos.get("stop_loss"),
+            }
+            state["history"].append(tx)
+            new_transactions.append(tx)
+            game._log.info(f"🤖 AI QUEUED SELL EXECUTED: {sym} at ${price} (PnL: ${tx['pnl']})")
+            game.log_closed_trade_dna(sym, pos, price, today)
+
+        elif order["type"] == "BUY" and sym not in state["positions"]:
+            # Zero-Trust Freshness Gate (execution-time): a queued BUY may have sat overnight,
+            # so the screen-time gate that cleared it can be stale by now. The ATR stop below is
+            # derived from this cache, so re-verify freshness before filling. Heal once, then
+            # SKIP (drop) the order rather than execute on untrustworthy data — the screener
+            # re-surfaces the name next run if it still qualifies. (Queued SELLs are intentionally
+            # NOT gated: a strategic/stop exit must always be allowed to run.)
+            if game._cache_stale(sym, max_stale_days=game._MAX_STALE_DAYS):
+                game._heal_symbol_cache(sym)
+                if game._cache_stale(sym, max_stale_days=game._MAX_STALE_DAYS):
+                    game._log.warning(f"🛑 QUEUED BUY SKIPPED (Zero-Trust Freshness): {sym} - OHLCV cache stale/missing at execution; refusing to derive an ATR stop from untrustworthy data.")
+                    continue
+            max_positions = rules["max_positions"]
+            available_slots = max_positions - len(state["positions"])
+            if state["balance"] > 500 and available_slots > 0:
+                max_allocation = state["equity"] * rules["max_allocation_pct"]
+                cash_to_use = min(state["balance"] / available_slots, max_allocation)
+
+                qty = game.calculate_share_qty(sym, cash_to_use, price)
+                if qty > 0:
+                    cost = qty * price
+                    state["balance"] -= cost
+
+                    # Volatility-Based Stop Loss customized by profile
+                    atr = game.risk_utils.calculate_atr(sym)
+                    if atr and atr > 0:
+                        stop_loss = round(price - (rules["atr_multiplier"] * atr), 2)
+                        stop_desc = f"ATR-based Stop: ${stop_loss} ({rules['atr_multiplier']} * ATR)"
+                    else:
+                        stop_loss = round(price * 0.92, 2)
+                        stop_desc = f"8% Fallback Stop: ${stop_loss}"
+
+                    # Resolve buy DNA for queued buys
+                    q_pgr = "Neutral"
+                    q_s10 = 0.0
+                    q_l60 = 0.0
+                    q_score = 0.0
+                    q_industry = "Unknown"
+                    for r_row in ws.iter_rows(min_row=2, values_only=True):
+                        if r_row[3] == sym:
+                            q_pgr = r_row[6] or "Neutral"
+                            q_industry = r_row[4] or "Unknown"
+                            try:
+                                q_s10 = float(r_row[24] or 0.0)
+                                q_l60 = float(r_row[25] or 0.0)
+                                q_score = round(q_s10 + q_l60, 1)
+                            except (ValueError, TypeError):
+                                pass
+                            break
+
+                    state["positions"][sym] = {
+                        "qty": qty,
+                        "cost": price,
+                        "stop_loss": stop_loss,
+                        "buy_dna": {
+                            "buy_date": today,
+                            "pgr": q_pgr,
+                            "s10": q_s10,
+                            "l60": q_l60,
+                            "score": q_score,
+                            "z_score": 0.0,
+                            "industry": q_industry
+                        }
+                    }
+                    tx = {
+                        "date": today, "time": now_time, "type": "BUY",
+                        "symbol": sym, "price": price, "qty": qty,
+                        "details": f"Queued Buy: {order['reason']} ({stop_desc})"
+                    }
+                    state["history"].append(tx)
+                    new_transactions.append(tx)
+                    game._log.info(f"🤖 AI QUEUED BUY EXECUTED: {qty} shares of {sym} at ${price} ({stop_desc})")
+
+    state["queued_orders"] = []
