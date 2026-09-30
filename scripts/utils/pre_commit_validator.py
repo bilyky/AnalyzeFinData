@@ -565,8 +565,11 @@ def main():
             #   REPLACE step routes the root script through the package.
             # - aether/scenario/helpers.py: same `_pkg()` idiom (B3) — thin call-time
             #   delegation to the root's stateless helpers, patch-preserving.
+            # - aether/scenario/steps.py: same `_pkg()` idiom (B5) — extracted stateful
+            #   stages resolve the root's collaborators at CALL TIME, patch-preserving.
             _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py",
-                             "etrade/store.py", "scenario/prices.py", "scenario/helpers.py")
+                             "etrade/store.py", "scenario/prices.py", "scenario/helpers.py",
+                             "scenario/steps.py")
             if not any(x in fpath for x in _skip_imports):
                 if not check_no_inline_imports(fpath):
                     success = False
