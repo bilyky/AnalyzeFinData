@@ -42,6 +42,7 @@ import notify
 from aether_logger import get_logger as _get_logger
 import powergauge
 import instruments
+from aether import ledgers
 from aether.scoring import short_score as _short_score, long_score as _long_score
 
 _log = _get_logger("pattern_discovery")
@@ -707,7 +708,7 @@ def generate_report(replay_date: str, s10_result: dict, l60_result: dict,
             _log.info("Failure DNA integration completed successfully -> Data/failure_dna_rules.json updated.")
             
             # Read the newly generated report
-            report_path = os.path.join(BASE_DIR, "Data", "retrospective_report.txt")
+            report_path = ledgers.RETRO_REPORT_FILE
             if os.path.exists(report_path):
                 with open(report_path, "r", encoding="utf-8") as rf:
                     retro_report_text = rf.read()
@@ -834,8 +835,7 @@ def main():
 
     # Build global medians for validation
     global medians_global
-    from collections import defaultdict as _dd
-    fv = _dd(list)
+    fv = defaultdict(list)
     for row in scores:
         for k in ["buying_ratio", "fibonacci", "rsi_divergence",
                   "candlestick", "chart_score", "momentum_score", "digit_sum"]:
