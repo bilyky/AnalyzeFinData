@@ -157,3 +157,13 @@ To guarantee 100% accurate, zero-trust system diagnostics and eliminate any lyin
 *   **The Mandate:** All errors, exceptions, expired sessions, or bypassed locks **MUST** be programmatically captured, logged, and surfaced to the operator with complete, uncompromised truthfulness.
 *   **No Greenwashing:** You are **strictly and absolutely forbidden** from masking any failure, timeout, or expired credential under a generic success badge or reporting 'PASS' when an API check was actually bypassed, failed, or waived.
 *   **Explicit Labeling:** Any waived check (such as E*TRADE session validation on weekends) must be explicitly reported as **`[WAIVED]`** or **`[EXPIRED]`** on both console screens and HTML emails, never as `[PASS]`. All structural exceptions must fail loudly, instantly, and print complete traceback logs so the operator has immediate, uncompromised visibility.
+
+---
+
+## 🧰 9. Reusable Agent Workflows (Skills)
+
+Step-by-step workflows live as plain markdown in `.claude/commands/<name>.md`. They are agent-agnostic: Claude Code runs them as `/<name>`; any other agent (Gemini, Codex, pi, …) opens the file and follows it. Supporting reference material lives under `docs/skills/` and is read only when a skill points to it.
+
+*   `review-prs` — review open PRs against the fixed rubric and post findings as PR comments; includes the merge-in and lossless-cleanup procedures.
+*   `ship-pr` — take a change from branch to pushed PR with CI verified.
+*   `status`, `analyze`, `compare-stocks`, `daily-run`, `intraday-monitor`, `watchdog`, `pattern-discover`, `extract-intel`, `oceanview-adviser` — portfolio and operations workflows (see each file's header).
