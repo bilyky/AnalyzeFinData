@@ -82,15 +82,14 @@ for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomou
 # retrospective analyzer. Unconditional, like the workbook guard.
 # ---------------------------------------------------------------------------
 import aether.decision_eval as _decision_eval
-import aether.circuit_breaker as _circuit_breaker
+import aether.ledgers as _ledgers
 
 _test_ledger_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-_decision_eval.LOG = Path(_test_ledger_dir.name) / "decision_log.jsonl"
-_circuit_breaker.DNA_FILE = Path(_test_ledger_dir.name) / "trade_history_dna.json"
-import retrospective_analyzer as _retro
-
-_retro.RULES_FILE = Path(_test_ledger_dir.name) / "failure_dna_rules.json"
-_retro.REPORT_FILE = Path(_test_ledger_dir.name) / "retrospective_report.txt"
+_ledger_tmp = Path(_test_ledger_dir.name)
+_decision_eval.LOG = _ledger_tmp / "decision_log.jsonl"
+_ledgers.TRADE_DNA_FILE = _ledger_tmp / "trade_history_dna.json"
+_ledgers.FAILURE_RULES_FILE = _ledger_tmp / "failure_dna_rules.json"
+_ledgers.RETRO_REPORT_FILE = _ledger_tmp / "retrospective_report.txt"
 
 if not _os.getenv("AETHER_LIVE_TESTS"):
     # -- State side: redirect prod auth-state / cache files to a throwaway temp dir --

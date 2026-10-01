@@ -10,8 +10,7 @@ import rapidapi
 import sys
 import console_safe
 import circuit_breaker
-import retrospective_analyzer
-from aether import trash
+from aether import ledgers, trash
 import aether.notify as notify
 import argparse
 from pathlib import Path
@@ -68,7 +67,7 @@ def _load_symbol_today_cache(symbol: str, today_str: str) -> dict:
 
 def check_failure_rules(symbol, pgr, score, z_score, industry, s10=0.0) -> tuple[bool, str]:
     """Check if the candidate matches any active toxic rules in Data/failure_dna_rules.json or dynamic filters."""
-    rules_file = retrospective_analyzer.RULES_FILE  # single path: the analyzer writes it
+    rules_file = ledgers.FAILURE_RULES_FILE
     
     # ── Earnings-Shock Failure Gate (Pillar 1 Guard) ──
     # Programmatic, un-bypassable veto on any symbol that has just reported a massive earnings miss
@@ -134,7 +133,7 @@ def log_closed_trade_dna(sym, pos, price, today_str):
         buy_date = buy_dna.get("buy_date", today_str)
         pnl_pct = round(((price - pos["cost"]) / pos["cost"]) * 100, 2) if pos["cost"] else 0.0
         
-        dna_file = circuit_breaker.DNA_FILE  # one ledger path, shared with the breaker backfeed
+        dna_file = ledgers.TRADE_DNA_FILE
         dna_list = []
         if dna_file.exists() and dna_file.stat().st_size > 0:
             with open(dna_file, "r", encoding="utf-8") as f:

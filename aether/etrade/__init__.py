@@ -1257,19 +1257,34 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
                 return renewed
         _log.warning("E*TRADE: today's token renewal failed.")
 
-    # Try yesterday's tokens — sessions renewed within 2h survive midnight
+    # Try yesterday's tokens — a renew attempt, then VERIFIED with the broker before use.
     if not cached:
         stale = _load_tokens_any_date(env)
         if stale:
             _log.info("Attempting renewal of previous-day E*TRADE tokens...")
-            # We explicitly bypass the data probe here. The broker will ALWAYS reject a data
-            # probe (401/403) on a yesterday token, which would falsely kill the token before
-            # we can renew it across midnight. We blindly fire the pure HTTP renewal instead.
+            # The data probe is skipped BEFORE the renew (a yesterday token is expected to be
+            # rejected there, which would kill it before a renew could be tried), but the RENEWED
+            # token must be probed before it is returned: renew_tokens can report success on a
+            # dead token (the <55-min guard-reuse makes no network call; an HTTP-OK renew
+            # re-stamps issued_date_et=today). The overnight test (Data/etrade_overnight_renew.log)
+            # recorded REJECTED in both runs (one post-midnight ET, one on a days-stale token) and
+            # never AUTHORIZED, so trusting the renew unprobed let preflight report a dead token
+            # as live. Only an explicit reject (False) falls
+            # through to the mint; an indeterminate probe (None, network blip) keeps the token,
+            # matching the same-day rung, so a blip can never trigger a browser.
             renewed = renew_tokens(stale, env)
             if renewed:
-                _log.info("Previous-day token renewed successfully.")
-                check_etrade_cookie_freshness()
-                return renewed
+                if _probe_token_auth(renewed, env) is False:
+                    _log.warning(
+                        "E*TRADE: previous-day token renewed but the broker rejected it "
+                        "(likely midnight-ET expiry). Soft-deleting to trash (recoverable) and "
+                        "falling through to re-auth."
+                    )
+                    trash.soft_delete(_TOKEN_PATH, reason="rejected-after-overnight-renew")
+                else:
+                    _log.info("Previous-day token renewed and verified.")
+                    check_etrade_cookie_freshness()
+                    return renewed
 
     # Silent renewal exhausted — try headless Playwright with saved browser state.
     # Uses the same cross-process file lock as renew_tokens() to guarantee only ONE
