@@ -266,22 +266,39 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
     return renewer.ensure(current_token=tokens)
 
 
+def _reactivate_idle_token(tokens, env) -> dict | None:
+    """Try to reactivate a SAME-DAY token the broker just rejected; None if it stays rejected.
+
+    E*TRADE inactivates an access token after 2 hours without requests: it returns 401 until
+    the renew endpoint reactivates it. Only the midnight-ET expiry needs a new login. So a 401
+    on a token issued today is usually an idle token, not a dead one. One renew (pure HTTP, no
+    browser) and a re-probe tell the two apart, instead of discarding a recoverable token and
+    paying for a fresh browser login. An indeterminate re-probe (None, network blip) keeps the
+    token, matching the same-day rung's rule."""
+    renewed = renew_tokens(tokens, env)
+    if renewed and _probe_token_auth(renewed, env) is not False:
+        _log.info("E*TRADE: idle same-day token reactivated by renew.")
+        return renewed
+    return None
+
+
 def keep_alive(env="production") -> dict | None:
     """Ban-safe session keeper for automated/scheduled contexts (watchdog, cron).
 
     Renew-ONLY: never opens a browser, never calls _login_headless. It refreshes a
     still-valid same-day token via the OAuth renew endpoint (pure HTTP) and returns it.
-    If no valid same-day token exists (e.g. after the nightly midnight-ET expiry or a
-    weekend gap), it returns None WITHOUT making any brokerage call — the caller must
-    alert a human to re-auth manually (scripts/diagnostics/test_etrade.py). This is the
-    correct anti-ban contract: a machine may keep a live session warm, but only a human
-    at a browser may create a new one.
+    A same-day token the broker rejects gets one reactivation attempt (it may only be idle
+    for 2 h+, see _reactivate_idle_token). If no valid same-day token exists (e.g. after the
+    nightly midnight-ET expiry or a weekend gap), it returns None WITHOUT making any
+    brokerage call — the caller must alert a human to re-auth manually
+    (scripts/diagnostics/test_etrade.py). This is the correct anti-ban contract: a machine
+    may keep a live session warm, but only a human at a browser may create a new one.
     """
     tokens = _load_tokens(env)          # same-day tokens only; None once expired
     if not tokens:
         return None
-    if _probe_token_auth(tokens, env) is False:   # broker explicitly rejected (401/403)
-        return None
+    if _probe_token_auth(tokens, env) is False:   # broker rejected (401/403): idle or dead
+        return _reactivate_idle_token(tokens, env)
     return renew_tokens(tokens, env)
 
 
@@ -1243,10 +1260,15 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     if cached:
         # Pre-Flight Active Verification (R&D #21 Unification):
         # We actively test the cached token's validity against E*TRADE's server clock.
-        # If it is unauthorized (returns False), we immediately delete the bad token and trigger headless re-auth!
+        # If it is unauthorized (False), first try to reactivate it (a 2 h+ idle token returns 401
+        # until renewed); only if it stays rejected is it soft-deleted and re-auth triggered.
         # If it is authorized (True) or indeterminate (None), we KEEP the token and attempt renewal!
         auth = _probe_token_auth(cached, env)
         if auth is False:
+            reactivated = _reactivate_idle_token(cached, env)
+            if reactivated:
+                check_etrade_cookie_freshness()
+                return reactivated
             _log.warning("🚨 [E*TRADE ALERT] Cached token failed server verification (401 Unauthorized). Soft-deleting to trash (recoverable)...")
             trash.soft_delete(_TOKEN_PATH, reason="rejected-401")
             cached = None

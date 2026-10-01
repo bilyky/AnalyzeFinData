@@ -82,15 +82,33 @@ class TestGetTokensDeletionScoping(unittest.TestCase):
         # is moved to the garbage can (recoverable within retention), NEVER a hard os.remove.
         # With every automated path exhausted get_tokens then fails SOFT to None (documented
         # -> dict | None contract; ETRADE_AUTH.md rule 6), never raising.
+        # The one reactivation attempt (idle-token renew) fails here, so the token is dead.
         with mock.patch.object(etrade, "_probe_token_auth", return_value=False), \
+             mock.patch.object(etrade, "renew_tokens", return_value=None) as renew, \
              mock.patch.object(etrade, "_load_tokens_any_date", return_value=None), \
              mock.patch.object(etrade.os.path, "exists", return_value=False), \
              mock.patch.object(etrade.trash, "soft_delete") as soft, \
              mock.patch.object(etrade.os, "remove") as rm:
             result = etrade.get_tokens(env="production", allow_browser=False)
         self.assertIsNone(result)
+        renew.assert_called_once()
         soft.assert_called_once_with(etrade._TOKEN_PATH, reason="rejected-401")
         rm.assert_not_called()   # soft-delete only — the token is recoverable, not destroyed
+
+    def test_idle_rejection_is_reactivated_not_deleted(self):
+        # A same-day token rejected only because it sat idle 2 h+ is reactivated by one renew:
+        # get_tokens returns it, deletes nothing and opens no browser.
+        renewed = {"oauth_token": "t2", "issued_date_et": etrade._et_today()}
+        with mock.patch.object(etrade, "_probe_token_auth", side_effect=[False, True]), \
+             mock.patch.object(etrade, "renew_tokens", return_value=renewed) as renew, \
+             mock.patch.object(etrade, "check_etrade_cookie_freshness", return_value=None), \
+             mock.patch.object(etrade, "_login_headless") as login, \
+             mock.patch.object(etrade.trash, "soft_delete") as soft:
+            result = etrade.get_tokens(env="production", allow_browser=False)
+        self.assertIs(result, renewed)
+        renew.assert_called_once()
+        soft.assert_not_called()
+        login.assert_not_called()
 
     def test_transient_probe_does_not_delete_token(self):
         # None (transient) must skip deletion (soft OR hard) AND still attempt renewal.
