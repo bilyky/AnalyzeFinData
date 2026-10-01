@@ -94,6 +94,11 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
     prefix) and diff the extracted body against the live source block; a copy that must track a
     still-live source needs a **parity test**, or it drifts silently. Recommend the seam the project
     already uses — don't invent one.
+  - **Config-dependent wiring — check it under PRODUCTION config.** When a change routes calls through a
+    factory or adapter selector, confirm which backend it returns with production's real settings, not
+    only the test/dev default (e.g. a store factory keyed off an app-wide `DATABASE_URL` silently picked
+    an unimplemented backend on PROD — #144). A test that runs the real factory under a prod-like config
+    is the guard.
 - **DB / IO:** extra calls, N+1, redundant fetches.
 - **Anti-patterns, missing patterns, parallelism** left on the table.
 - **Duplication & multiple sources of truth** — one fact, one home (incl. repeated constants: a value
