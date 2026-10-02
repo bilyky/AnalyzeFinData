@@ -329,8 +329,8 @@ def create_app():
         return data_api.read_reserves()
 
     @app.get("/api/ai_buildout")
-    async def ai_buildout():
-        return data_api.read_ai_buildout()
+    async def ai_buildout(theme: str = Query("ai_buildout")):
+        return data_api.read_ai_buildout(theme)
 
     # ── Accounts (2 real + 1 game) ──────────────────────────────────────────────
 

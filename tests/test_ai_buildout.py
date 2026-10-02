@@ -157,6 +157,22 @@ class TestWatchScore(unittest.TestCase):
         self.assertEqual(ab.watch_score({**base, "rpo_yoy": 3585.7}), 0)
         self.assertEqual(ab.watch_score({**base, "rpo_yoy": 75.0}), 2)
 
+    def test_stale_figures_not_scored(self):
+        base = {"revenue_yoy": 362.6, "rpo_yoy": None, "agreements_90d": 0,
+                "rs_60d": None, "cmf_20": None}
+        self.assertEqual(ab.watch_score(base), 2)
+        self.assertEqual(ab.watch_score({**base, "stale": ["revenue_yoy"]}), 0)
+
+    def test_build_row_marks_old_quarters_stale(self):
+        facts = _facts({"Revenues": [_q("2024-10-01", "2024-12-31", 100),
+                                     _q("2025-10-01", "2025-12-31", 400)]})
+        row = ab.build_row("ARBE", "eyes", {}, facts, None, [], "2026-10-02")
+        self.assertEqual(row["stale"], ["revenue_yoy"])
+        self.assertEqual(row["watch_score"], 0)
+        fresh = ab.build_row("ARBE", "eyes", {}, facts, None, [], "2026-03-01")
+        self.assertEqual(fresh["stale"], [])
+        self.assertEqual(fresh["watch_score"], 2)
+
     def test_missing_data_is_neutral(self):
         self.assertEqual(ab.watch_score({"revenue_yoy": None, "rpo_yoy": None,
                                          "agreements_90d": 0, "rs_60d": None,
@@ -194,6 +210,48 @@ class TestScan(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 ab.scan("2026-10-02", universe=["VRT"])
 
+
+
+class TestThemes(unittest.TestCase):
+    def test_robot_vision_buckets_are_seed_only(self):
+        self.assertEqual(ab.bucket_for("OUST", theme="robot_vision"), "eyes")
+        self.assertEqual(ab.bucket_for("LSCC", theme="robot_vision"), "chips")
+        self.assertEqual(ab.bucket_for("MBLY", theme="robot_vision"), "software")
+        # no SIC fallback: a random chip maker is not pulled in
+        self.assertIsNone(ab.bucket_for("XYZ", sic=3674, theme="robot_vision"))
+        # themes do not leak into each other
+        self.assertIsNone(ab.bucket_for("OUST", theme="ai_buildout"))
+        self.assertIsNone(ab.bucket_for("VRT", theme="robot_vision"))
+
+    def test_every_seed_bucket_is_declared(self):
+        for name, t in ab.THEMES.items():
+            self.assertTrue(set(t["seed"].values()) <= set(t["buckets"]), name)
+            self.assertTrue(set(t["sic"].values()) <= set(t["buckets"]), name)
+
+    def test_unknown_theme_raises(self):
+        with self.assertRaises(ValueError):
+            ab.bucket_for("OUST", theme="nope")
+        with self.assertRaises(ValueError):
+            ab.output_path("../evil")
+
+    def test_seed_only_scan_skips_universe_and_saves_per_theme(self):
+        seen = []
+
+        def sub(cik):
+            seen.append(cik)
+            return {"sic": 3674, "name": f"c{cik}"}
+
+        cik = {s: i for i, s in enumerate(ab.ROBOT_VISION_SEED, start=1)}
+        cik["UNIV"] = 999
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.dict(os.environ, {"AETHER_DATA_DIR": d}),                  mock.patch.object(ab, "ticker_cik_map", return_value=cik),                  mock.patch.object(ab, "submissions", side_effect=sub),                  mock.patch.object(ab, "company_facts", return_value={}):
+                rows = ab.scan("2026-10-02", universe=["UNIV"], theme="robot_vision")
+                out = ab.save(rows, "2026-10-02", theme="robot_vision")
+                self.assertEqual(out.name, "robot_vision_watch.json")
+                self.assertEqual(ab.load_latest(theme="robot_vision")["theme"], "robot_vision")
+                self.assertIsNone(ab.load_latest(theme="ai_buildout"))
+        self.assertNotIn(999, seen)   # universe symbol never fetched
+        self.assertEqual({r["symbol"] for r in rows}, set(ab.ROBOT_VISION_SEED))
 
 if __name__ == "__main__":
     unittest.main()
