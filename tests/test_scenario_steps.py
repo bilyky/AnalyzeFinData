@@ -20,6 +20,7 @@ The root's collaborators (``get_market_regime``, ``_has_strong_setups_today``,
 ``_log``) are patched on the module, so no network / disk / real logging — the
 same call-time-differential style as ``test_scenario_helpers``.
 """
+import inspect
 import os
 import sys
 import unittest
@@ -27,6 +28,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game  # noqa: E402
+import aether.scenario as scenario_pkg  # noqa: E402
+from aether.scenario import steps  # noqa: E402
 from aether.scenario.steps import determine_profile  # noqa: E402
 
 
@@ -159,18 +162,14 @@ class TestPackageReexports(unittest.TestCase):
     """Every public stage in steps.py is re-exported, unchanged, from the package root."""
 
     def test_every_public_stage_is_reexported(self):
-        import inspect
-
-        import aether.scenario as pkg
-        from aether.scenario import steps
         stages = sorted(n for n, obj in vars(steps).items()
                         if inspect.isfunction(obj) and obj.__module__ == steps.__name__
                         and not n.startswith("_"))
         self.assertTrue(stages)
         for name in stages:
             with self.subTest(stage=name):
-                self.assertIn(name, pkg.__all__)
-                self.assertIs(getattr(pkg, name), getattr(steps, name))
+                self.assertIn(name, scenario_pkg.__all__)
+                self.assertIs(getattr(scenario_pkg, name), getattr(steps, name))
 
 
 if __name__ == "__main__":
