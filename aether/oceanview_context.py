@@ -226,7 +226,12 @@ def _write_cache(path: str, payload: dict) -> None:
 def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
                             env: str = "production", data_dir: str | None = None,
                             now: datetime.datetime | None = None) -> dict:
-    """Assemble the Context Pack. Always returns a health verdict (ok / degraded / failed)."""
+    """Assemble the Context Pack. Always returns a health verdict (ok / degraded / failed).
+
+    data_dir only relocates the pack's own files (cache, game JSON, studies, OHLCV). The
+    broker token is resolved by aether.etrade via paths.data_dir() ($AETHER_DATA_DIR), so
+    from a worktree set AETHER_DATA_DIR rather than passing data_dir.
+    """
     ddir = data_dir or _default_data_dir()
     now = now or _now()
     cache_path = os.path.join(ddir, CACHE_NAME)
