@@ -188,11 +188,36 @@ class TestKeepAliveIsRenewOnly(unittest.TestCase):
         renew.assert_not_called()
 
     def test_rejected_token_returns_none(self):
+        # A rejected same-day token gets exactly ONE pure-HTTP reactivation attempt (it may only
+        # be 2 h+ idle); if the renew fails too, keep_alive returns None — still no browser.
         with mock.patch.object(etrade, "_load_tokens", return_value={"oauth_token": "t"}), \
              mock.patch.object(etrade, "_probe_token_auth", return_value=False), \
-             mock.patch.object(etrade, "renew_tokens") as renew:
+             mock.patch.object(etrade, "renew_tokens", return_value=None) as renew, \
+             mock.patch.object(etrade, "_login_headless") as login:
             self.assertIsNone(etrade.keep_alive("production"))
-        renew.assert_not_called()
+        renew.assert_called_once()
+        login.assert_not_called()
+
+    def test_idle_token_is_reactivated_by_renew(self):
+        # E*TRADE inactivates a token after 2 h without requests (401) and the renew endpoint
+        # reactivates it. keep_alive must recover it rather than report it dead.
+        toks, renewed = {"oauth_token": "t"}, {"oauth_token": "t2"}
+        cases = [
+            # probe results (before, after renew), expected
+            ((False, True),  renewed),   # idle -> reactivated
+            ((False, None),  renewed),   # re-probe indeterminate -> keep (same-day rule)
+            ((False, False), None),      # still rejected after renew -> dead
+        ]
+        for probes, expected in cases:
+            with self.subTest(probes=probes), \
+                 mock.patch.object(etrade, "_load_tokens", return_value=toks), \
+                 mock.patch.object(etrade, "_probe_token_auth", side_effect=list(probes)) as probe, \
+                 mock.patch.object(etrade, "renew_tokens", return_value=renewed) as renew, \
+                 mock.patch.object(etrade, "_login_headless") as login:
+                self.assertIs(etrade.keep_alive("production"), expected)
+                renew.assert_called_once_with(toks, "production")
+                self.assertIs(probe.call_args_list[1].args[0], renewed)   # re-probed the renewed token
+                login.assert_not_called()
 
     def test_valid_token_is_renewed(self):
         toks, renewed = {"oauth_token": "t"}, {"oauth_token": "t2"}

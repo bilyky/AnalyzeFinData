@@ -36,7 +36,8 @@ single-writer auth/token manager + stateless data-plane.
 
 **Persistence today:** `database.py` is a **legacy, unused** raw-SQL Postgres stub (no ORM,
 imported by nothing). Live persistence = JSON files under `Data/`. Config already exposes
-`CFG.database_url` / `DATABASE_URL` (env-over-json) — reuse it.
+`CFG.database_url` / `DATABASE_URL` (env-over-json) — reuse it for the URL only. It is the app's own
+Postgres and is set on PROD, so it must NOT be the backend switch (see Phase 2).
 
 ## Architecture review — corners the naive design misses (drives the phases below)
 
@@ -123,8 +124,10 @@ renew/browser/writes and exposes only `current_token` + read paths. Centralize e
 the breaker as `ReauthCircuitBreaker` (same on-disk schema/paths/backoff).
 
 ### Phase 2 — Abstracted persistence (Ports & Adapters) + local schema
-`make_etrade_store(config)` selects backend by config (`DATABASE_URL` empty ⇒ file backend =
-today's behavior; set ⇒ DB). Ports (ABCs in `store.py`), each with a defined record schema:
+`make_etrade_store(config)` selects the backend by an explicit opt-in: `AETHER_ETRADE_STORE=db` ⇒ DB
+(URL from `DATABASE_URL` / `database.url`); anything else ⇒ file backend = today's behavior. (Originally
+keyed off `DATABASE_URL` itself; since PROD sets that for the app's Postgres, every port-routed call hit
+the raising DB stub — fixed 2026-10-01.) Ports (ABCs in `store.py`), each with a defined record schema:
 - **`TokenStore`** — `load(env)`(same-day guard)/`load_any_date`/`save`/`delete`; record
   `env, oauth_token, oauth_token_secret, saved_at, issued_date_et, generation`. **Secret.**
 - **`BrowserStateStore`** — `load/save(blob)`; Playwright storage_state. **Secret.**
@@ -204,7 +207,7 @@ independent and individually reversible.
    the new package + store boundary; then full `discover tests` stays green.
 2. **Data-layer parity:** file `TokenStore`/`ReauthStateStore`/`AuthEventLog` round-trip
    against today's `Data/*.json` shapes; `_TOKEN_PATH` reassignment redirects the store;
-   `make_etrade_store` selects file vs DB by `DATABASE_URL`.
+   `make_etrade_store` selects file vs DB by the `AETHER_ETRADE_STORE=db` opt-in.
 3. **Role guard:** `ETradeClient(role="data").auth.get_tokens()` raises / is unavailable;
    `current_token` never renews or writes (assert no file mutation, no browser call).
 4. **Behavior identity:** diff-test module fns vs `ETradeClient` methods under mocked
