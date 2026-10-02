@@ -42,6 +42,7 @@ _DIR      = os.path.dirname(os.path.abspath(__file__))
 OHLCV_DIR = os.path.join(_DIR, "Data", "Symbol_full")
 MAX_GAP_DAYS = 30   # trigger compact/full fetch if latest entry is this many calendar days behind
 SLEEP_SEC    = 14   # 14 s between requests → 4.3 req/min (safe under 5/min limit)
+COMPACT_WINDOW_DAYS = 120  # a compact fetch returns ~100 sessions (~140 calendar days)
 
 _BASE_URL = "https://alpha-vantage.p.rapidapi.com/query"
 _HEADERS  = {
@@ -88,6 +89,12 @@ def _check_recovery(path: str, today_str: str) -> tuple[bool, dict | None]:
     # even though its date is current (gap == 0) — this is what the old gap-only gate missed.
     # Any bar with real volume (volume > 0) is trusted and skipped.
     if is_provisional(ts[latest]):
+        return True, cache
+    # A placeholder stranded inside the compact window (a missed nightly pass, a weekend or
+    # holiday print) is repairable by the same single compact fetch.
+    cutoff = (datetime.date.fromisoformat(today_str)
+              - datetime.timedelta(days=COMPACT_WINDOW_DAYS)).isoformat()
+    if any(is_provisional(ts[d]) for d in ts if d >= cutoff):
         return True, cache
     return False, cache
 
@@ -146,8 +153,9 @@ def _write_atomic(path: str, data: dict) -> None:
 def _fetch_and_merge(symbol: str, path: str, outputsize: str = "compact") -> None:
     """Fetch from RapidAPI and merge into the existing file (or write fresh).
 
-    The overwrite of the last 3 days replaces any Chaikin ``provisional`` placeholder with
-    settled real-volume OHLCV, so volume-confirmation consumers (MFI, RBR) see real bars.
+    Every Chaikin ``provisional`` placeholder inside the response window is settled —
+    replaced by the real bar, or dropped if the API has no session that day — so range and
+    volume consumers (ATR, MFI, RBR) see real bars.
     """
     raw = _fetch_raw(symbol, outputsize)
     new_ts = raw["Time Series (Daily)"]
@@ -168,6 +176,17 @@ def _fetch_and_merge(symbol: str, path: str, outputsize: str = "compact") -> Non
     new_dates = sorted(new_ts.keys(), reverse=True)
     for d in new_dates[:3]:
         existing_ts[d] = new_ts[d]
+
+    # Settle EVERY placeholder the response covers, not just the newest 3: replace it with
+    # the real bar, or drop it when its date lies inside the response window yet the API
+    # has no bar for it (weekend / holiday — never a session). Placeholders older than the
+    # window are left for a later full fetch.
+    lo, hi = min(new_ts), max(new_ts)
+    for d in [d for d, bar in existing_ts.items() if is_provisional(bar)]:
+        if d in new_ts:
+            existing_ts[d] = new_ts[d]
+        elif lo <= d <= hi:
+            del existing_ts[d]
 
     # Plus, append any older historical dates that are missing
     added = {d: v for d, v in new_ts.items() if d not in existing_ts}

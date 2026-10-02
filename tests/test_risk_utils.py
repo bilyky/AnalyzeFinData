@@ -12,6 +12,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import risk_utils
 
 
+
+def _dated(highs, lows, closes, last):
+    """(dates, highs, lows, closes) as _load_ohlcv_bars returns them: consecutive
+    calendar days ending at `last` (no session gaps)."""
+    end = datetime.date.fromisoformat(last)
+    dates = [(end - datetime.timedelta(days=len(highs) - 1 - i)).isoformat() for i in range(len(highs))]
+    return dates, highs, lows, closes
+
 class TestResolveStop(unittest.TestCase):
     def test_swing_low_preferred(self):
         # min(last 3 lows) x 0.99, when below price.
@@ -44,16 +52,16 @@ class TestResolveStop(unittest.TestCase):
     def test_stale_cache_uses_pct_off_live_price(self):
         # Loading by symbol with a stale cache -> ignore swing-low/ATR, use 8% off price.
         stale_date = "2020-01-01"
-        with mock.patch.object(risk_utils, "_load_ohlcv_series",
-                               return_value=([200, 201, 202], [190, 191, 192],
+        with mock.patch.object(risk_utils, "_load_ohlcv_bars",
+                               return_value=_dated([200, 201, 202], [190, 191, 192],
                                              [195, 196, 197], stale_date)):
             s = risk_utils.resolve_stop(100.0, symbol="OLD")
         self.assertEqual(s, 92.0)   # 8% off live 100, NOT the (stale) 190x0.99=188.1
 
     def test_fresh_cache_uses_swing_low(self):
         fresh = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
-        with mock.patch.object(risk_utils, "_load_ohlcv_series",
-                               return_value=([12, 12, 12], [10, 11, 9],
+        with mock.patch.object(risk_utils, "_load_ohlcv_bars",
+                               return_value=_dated([12, 12, 12], [10, 11, 9],
                                              [11, 11, 11], fresh)):
             s = risk_utils.resolve_stop(12.0, symbol="NEW")
         self.assertEqual(s, round(9.0 * 0.99, 2))   # 8.91 swing-low, cache is fresh
@@ -80,8 +88,8 @@ class TestResolveStop(unittest.TestCase):
         self.assertEqual(d["stop"], round(90 * 0.99, 2))
 
     def test_resolve_detailed_stale_source(self):
-        with mock.patch.object(risk_utils, "_load_ohlcv_series",
-                               return_value=([200] * 8, [190] * 8, [195] * 8, "2020-01-01")):
+        with mock.patch.object(risk_utils, "_load_ohlcv_bars",
+                               return_value=_dated([200] * 8, [190] * 8, [195] * 8, "2020-01-01")):
             d = risk_utils.resolve_stop_detailed(100.0, symbol="OLD")
         self.assertTrue(d["stale"])
         self.assertEqual(d["source"], "stale")
@@ -107,8 +115,8 @@ class TestResolveStop(unittest.TestCase):
         self.assertEqual(t["target"], 120)
 
     def test_resolve_target_stale_source(self):
-        with mock.patch.object(risk_utils, "_load_ohlcv_series",
-                               return_value=([120] * 8, [110] * 8, [115] * 8, "2020-01-01")):
+        with mock.patch.object(risk_utils, "_load_ohlcv_bars",
+                               return_value=_dated([120] * 8, [110] * 8, [115] * 8, "2020-01-01")):
             t = risk_utils.resolve_target_detailed(100.0, symbol="OLD")
         self.assertTrue(t["stale"])
         self.assertEqual(t["target"], round(100.0 * 1.08, 2))   # +8% off live
@@ -117,8 +125,8 @@ class TestResolveStop(unittest.TestCase):
         # Entry-anchored: even a very old as-of date must NOT trip the staleness gate;
         # it should compute the confirmed swing low from the as-of series.
         lows = [100, 99, 98, 90, 98, 99, 100, 101, 102, 103]
-        with mock.patch.object(risk_utils, "_load_ohlcv_series",
-                               return_value=([110] * 10, lows, [100] * 10, "2020-01-01")):
+        with mock.patch.object(risk_utils, "_load_ohlcv_bars",
+                               return_value=_dated([110] * 10, lows, [100] * 10, "2020-01-01")):
             d = risk_utils.resolve_stop_detailed(105.0, symbol="OLD", as_of="2020-01-01")
         self.assertFalse(d["stale"])
         self.assertEqual(d["source"], "support")
@@ -132,7 +140,7 @@ class TestResolveStop(unittest.TestCase):
 
     @mock.patch("aether.risk_utils.pd.DataFrame.from_dict")
     @mock.patch("aether.risk_utils.Path.exists", return_value=True)
-    @mock.patch("builtins.open", mock.mock_open(read_data="{\"Time Series (Daily)\": {\"2026-08-01\": {}}}"))
+    @mock.patch("builtins.open", mock.mock_open(read_data="{\"Time Series (Daily)\": {\"2026-08-01\": {\"5. volume\": \"1000\"}}}"))
     def test_calculate_atr_duplicate_columns(self, mock_exists, mock_from_dict):
         import pandas as pd
         # Return a dataframe with 15 rows and duplicate '5. volume' columns to trigger the Length mismatch on broken code
@@ -190,14 +198,15 @@ class TestLoaderSplitAdjust(unittest.TestCase):
     def test_load_ohlcv_series_returns_adjusted(self):
         # Synthetic cache file with a 2:1 forward split -> loader returns a continuous
         # series (pre-split closes halved), so detect_support sees the current scale.
+        # Bars carry volume like real Alpha Vantage bars (volume 0 = placeholder, dropped).
         import json as _json
         bars = {
-            "2020-01-01": {"1. open": "100", "2. high": "104", "3. low": "99", "4. close": "100"},
-            "2020-01-02": {"1. open": "101", "2. high": "105", "3. low": "100", "4. close": "102"},
-            "2020-01-03": {"1. open": "102", "2. high": "104", "3. low": "100", "4. close": "101"},
-            "2020-01-04": {"1. open": "103", "2. high": "105", "3. low": "101", "4. close": "103"},
-            "2020-01-05": {"1. open": "51", "2. high": "52", "3. low": "50", "4. close": "51.5"},
-            "2020-01-06": {"1. open": "51.5", "2. high": "53", "3. low": "51", "4. close": "52"},
+            "2020-01-01": {"1. open": "100", "2. high": "104", "3. low": "99", "4. close": "100", "5. volume": "1000"},
+            "2020-01-02": {"1. open": "101", "2. high": "105", "3. low": "100", "4. close": "102", "5. volume": "1000"},
+            "2020-01-03": {"1. open": "102", "2. high": "104", "3. low": "100", "4. close": "101", "5. volume": "1000"},
+            "2020-01-04": {"1. open": "103", "2. high": "105", "3. low": "101", "4. close": "103", "5. volume": "1000"},
+            "2020-01-05": {"1. open": "51", "2. high": "52", "3. low": "50", "4. close": "51.5", "5. volume": "1000"},
+            "2020-01-06": {"1. open": "51.5", "2. high": "53", "3. low": "51", "4. close": "52", "5. volume": "1000"},
         }
         payload = _json.dumps({"Time Series (Daily)": bars})
         with mock.patch.object(risk_utils.Path, "exists", return_value=True), \
