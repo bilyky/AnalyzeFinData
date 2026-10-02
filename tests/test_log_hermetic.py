@@ -67,20 +67,41 @@ class TestLogPathsRedirected(unittest.TestCase):
 
 
 class TestProcessSideEffectsBlocked(unittest.TestCase):
-    def test_kill_and_game_launch_are_refused(self):
+    def test_kill_game_launch_and_scheduler_changes_are_refused(self):
+        # Checked against the guard itself, so a regression can never actually run one
+        # of these (e.g. create a real scheduled task).
+        import tests as harness
         for argv in (["taskkill", "/F", "/PID", "0"],
                      ["powershell", "-Command", "Get-Process python | Stop-Process -Force"],
                      [sys.executable, "ai_portfolio_game.py", "--report"],
-                     "taskkill /F /PID 0"):
+                     "taskkill /F /PID 0",
+                     ["schtasks", "/Create", "/TN", "AETHER_probe", "/TR", "x"],
+                     ["schtasks", "/Delete", "/TN", "AETHER_probe", "/F"],
+                     ["powershell", "-Command", "Register-ScheduledTask -TaskName AETHER_probe"],
+                     ["powershell", "-Command", "Unregister-ScheduledTask -TaskName AETHER_probe"]):
             with self.subTest(argv=argv):
                 with self.assertRaisesRegex(RuntimeError, "Blocked real process side effect"):
-                    subprocess.run(argv, capture_output=True)
+                    harness._guard_proc(argv)
+
+    def test_guard_is_wired_into_run_and_popen(self):
+        # End to end through the real entry points, with the one argv that is harmless
+        # even if the guard were missing (PID 0 cannot be killed).
+        for launch in (subprocess.run, subprocess.Popen):
+            with self.subTest(launch=launch.__name__):
                 with self.assertRaisesRegex(RuntimeError, "Blocked real process side effect"):
-                    subprocess.Popen(argv)
+                    launch(["taskkill", "/PID", "0"])
 
     def test_ordinary_commands_still_run(self):
         out = subprocess.run([sys.executable, "-c", "print('ok')"], capture_output=True, text=True)
         self.assertEqual(out.stdout.strip(), "ok")
+
+    def test_read_only_scheduler_queries_are_not_refused(self):
+        # Exercise the guard itself (nothing is executed): queries must pass through.
+        import tests as harness
+        for argv in (["schtasks", "/query", "/tn", "AETHER_probe"],
+                     ["powershell", "-Command", "Get-ScheduledTask -TaskName AETHER_probe"]):
+            with self.subTest(argv=argv):
+                harness._guard_proc(argv)  # raises RuntimeError if refused
 
 
 if __name__ == "__main__":

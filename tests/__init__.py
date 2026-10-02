@@ -191,7 +191,14 @@ if not _os.getenv("AETHER_LIVE_TESTS"):
     # child, which logs to the repo's Data/logs because a child never loads this harness.
     # A test that mocks subprocess itself still wins (its patch replaces these wrappers).
 
-    _FORBIDDEN_PROC_TOKENS = ("taskkill", "stop-process", "ai_portfolio_game.py")
+    # Kills, the real game, and anything that CHANGES Task Scheduler. Read-only
+    # queries (`schtasks /query`, Get-ScheduledTask) stay allowed.
+    _FORBIDDEN_PROC_TOKENS = (
+        "taskkill", "stop-process", "ai_portfolio_game.py",
+        "schtasks /create", "schtasks /delete", "schtasks /change", "schtasks /run", "schtasks /end",
+        "register-scheduledtask", "unregister-scheduledtask", "set-scheduledtask",
+        "start-scheduledtask", "stop-scheduledtask", "enable-scheduledtask", "disable-scheduledtask",
+    )
 
     def _argv_text(args):
         if isinstance(args, (list, tuple)):
