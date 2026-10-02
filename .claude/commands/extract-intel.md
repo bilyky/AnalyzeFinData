@@ -55,7 +55,7 @@ print("Not in our 500-symbol universe:", [m["symbol"] for m in missing])
 
 ### 4. Assess R&D topics
 For each item in `intel["rd_topics"]`, consider whether it should be added to
-the R&D roadmap in `CLAUDE.md`.
+the R&D roadmap (`plans/roadmap.md`, the single source for R&D items).
 
 ### 5. Check position exposure
 For each item in `intel["dated_catalysts"]`, check if any current holding
@@ -72,7 +72,7 @@ intersects with the event date.
 Table: symbol | why it matters | in universe? | action
 
 ### R&D / ROADMAP IDEAS
-Analytical ideas worth adding to `CLAUDE.md`.
+Analytical ideas worth adding to `plans/roadmap.md`.
 
 Flag the pitch_ratio prominently — a 7+/10 pitch means extract the facts
 but treat the BUY recommendations skeptically.
