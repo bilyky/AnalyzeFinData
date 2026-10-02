@@ -51,7 +51,11 @@ machine's only job is to keep a *human-created* session warm during the day.
      admin `POST /api/etrade/scheduled-reauth` endpoint. (The human `POST /api/etrade/reauth` in §4.1 is a
      different door.) It calls `keep_alive`
      first (pure HTTP) and mints only when the profile is trusted (or a TOTP secret is configured), the
-     breaker is clear, and it wins the single-flight lock. The mint is headless by default
+     breaker is clear, and it wins the single-flight lock. The unattended callers (watchdog, the 05:15
+     task, preflight) skip the mint on an **ET weekend** and only renew (`reason=weekend`). The human
+     doors (the web "+" button behind `POST /api/etrade/scheduled-reauth`, `scripts/etrade_reauth.py`)
+     and `goal_sentry` (not scheduled in this repo) keep `weekend_mint=True`, so a person can still log
+     in on a Saturday. The mint is headless by default
      (`AETHER_ETRADE_SCHEDULED_HEADLESS` / `CFG.etrade_scheduled_headless`).
    - **`get_tokens(env, allow_browser=False)`'s automated rung** — a caller that finds the token dead may
      mint through the same breaker + reauth lock when saved browser state or a TOTP secret exists. It
@@ -178,12 +182,14 @@ uses the separate automated door `scheduled_reauth()` (§3 rule 1), which goes t
    or `blocked` (fix the cause, then `aether etrade-login` to clear the breaker).
 
 ### Weekends
-- Preflight treats an ET Saturday/Sunday as market-closed: renew-only, then `WAIVED`, never a mint.
-  Sunday's 21:30 PT run is 00:30 ET Monday and mints Monday's token.
-- The 05:15 task and the hourly watchdog catch-up have **no weekend rule**, so they still mint one
-  token per ET day on weekends. If weekend mints should be avoided, that needs a weekend gate in
-  `scheduled_reauth` (or in those callers); preflight alone does not prevent them.
-- If Monday starts with an alert instead, do the human step above.
+- On an ET Saturday or Sunday no unattended caller mints. Preflight renews only, then reports
+  `WAIVED`; the hourly watchdog and the 05:15 task call `scheduled_reauth(..., weekend_mint=False)`,
+  which renews only and returns `reason=weekend` (the 05:15 task exits 0 for it, so it isn't
+  reported as failed).
+- The first weekday-ET run mints Monday's token: Sunday's 21:30 PT preflight (00:30 ET Monday), or
+  the watchdog's first pass after midnight ET.
+- A human can still log in on a weekend (`aether etrade-login`, the web re-auth button). If Monday
+  starts with an alert instead of a token, do the human step above.
 
 ### If automated re-auth failed / a ban is suspected
 1. **Stop all automated E*TRADE contact** (scheduled tasks, `server.py`). Nothing should be hitting

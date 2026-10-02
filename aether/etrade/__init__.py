@@ -129,6 +129,13 @@ def _et_today() -> str:
     return datetime.datetime.fromtimestamp(time.time(), _ET).date().isoformat()
 
 
+def _et_is_weekend() -> bool:
+    """True on an ET Saturday or Sunday — the market-closed days on which the unattended callers
+    skip a mint (a token minted then expires at midnight ET before the next session). Same
+    unmocked physical clock as _et_today()."""
+    return datetime.datetime.fromtimestamp(time.time(), _ET).weekday() >= 5
+
+
 def _et_now() -> str:
     """Full ET timestamp (seconds) — stamps WHEN an auth verdict was computed (Temporal
     Zero-Trust: a status is only true as of its check time). Same unmocked physical clock."""
@@ -139,7 +146,7 @@ class AuthReason:
     """The E*TRADE auth-state vocabulary, defined once.
 
     Shared by auth_status() and scheduled_reauth() so neither hardcodes a divergent string. The
-    outcome values (renewed/reauthed/sms_required/unseeded/breaker/blocked/in_progress/failed)
+    outcome values (renewed/reauthed/sms_required/unseeded/breaker/blocked/in_progress/weekend/failed)
     double as scheduled_reauth's `reason` field, so both paths speak one language.
     """
     RENEWED       = "renewed"        # a live same-day token was refreshed via ban-free HTTP renew
@@ -149,6 +156,7 @@ class AuthReason:
     BREAKER       = "breaker"        # the anti-ban circuit breaker is cooling down (elapses on its own)
     BLOCKED       = "blocked"        # hard-blocked after N consecutive failures — needs a human re-auth
     IN_PROGRESS   = "in_progress"    # a mint is already in flight (single-flight loser) — no 2nd browser
+    WEEKEND       = "weekend"        # unattended caller on an ET weekend: renew only, mint skipped
     FAILED        = "failed"         # an automated browser re-auth attempt failed
     LIVE          = "live"           # token present and valid (local record, or probe-confirmed)
     EXPIRED       = "expired"        # token dead (overnight/midnight-ET) or broker-rejected (401/403)
@@ -1639,14 +1647,19 @@ def auth_status(env: str = "production", *, probe: bool = False) -> dict:
     return _finalize(AuthReason.LIVE, AuthReason.INDETERMINATE, needs_manual=False, can_auto=False)
 
 
-def scheduled_reauth(env: str = "production") -> dict:
+def scheduled_reauth(env: str = "production", *, weekend_mint: bool = True) -> dict:
     """The ONE automated (unattended) E*TRADE re-auth door — safe by construction.
 
-    Called only by the daily Task-Scheduler entry (server.py `etrade-reauth --scheduled`) and
-    the watchdog catch-up. Opens a browser at most ONCE per invocation, and only when ALL of
-    these hold, in order:
+    Called by the daily Task-Scheduler entry (server.py `etrade-reauth --scheduled`), the
+    watchdog catch-up, preflight, goal_sentry, scripts/etrade_reauth.py and the admin
+    scheduled-reauth endpoint. Opens a browser at most ONCE per invocation, and only when ALL
+    of these hold, in order:
       1. keep_alive() couldn't renew a live same-day token (pure HTTP, no browser). If it
          could, we return renewed with NO browser.
+      1b. weekend_mint is True, or today is not an ET weekend. Unattended callers pass
+         weekend_mint=False: a token minted on a market-closed day expires at midnight ET
+         before the next session, so the login is skipped (reason 'weekend', no browser).
+         Human doors keep the default, so a person can still log in on a weekend.
       2. The persistent-profile trust marker reads 'trusted'. If it is 'sms_required' or
          'unseeded', we open NO browser and return that reason so the caller alerts a human.
       3. The circuit breaker isn't cooling.
@@ -1662,7 +1675,7 @@ def scheduled_reauth(env: str = "production") -> dict:
     do not open a second browser.
 
     Returns a JSON-serializable dict: {ok, env, reason, browser_opened, ...}. `reason` is one of:
-    renewed | reauthed | sms_required | unseeded | breaker | blocked | in_progress | failed.
+    renewed | reauthed | sms_required | unseeded | breaker | blocked | in_progress | weekend | failed.
     (`in_progress` = another mint held the single-flight lock, so this call opened no browser;
     `blocked` = the hard-block threshold was hit, so a human must re-auth — distinct from the
     self-elapsing `breaker` cooldown.)
@@ -1674,6 +1687,12 @@ def scheduled_reauth(env: str = "production") -> dict:
     alive = keep_alive(env)
     if alive:
         result.update(ok=True, reason=AuthReason.RENEWED, issued_date_et=alive.get("issued_date_et"))
+        result["breaker_state"] = _breaker_summary(env)
+        return result
+
+    # 1b. Unattended caller on a market-closed ET day: renew only, never mint.
+    if not weekend_mint and _et_is_weekend():
+        result["reason"] = AuthReason.WEEKEND
         result["breaker_state"] = _breaker_summary(env)
         return result
 
