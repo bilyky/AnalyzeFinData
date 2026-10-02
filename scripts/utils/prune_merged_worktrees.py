@@ -32,6 +32,7 @@ Usage::
     python scripts/utils/prune_merged_worktrees.py --merged-only # only merged==true
 """
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -68,10 +69,10 @@ def _run(cmd, check=True):
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def _gh_json(gh, repo, path, jq):
-    """Query the gh REST API and return decoded lines from a jq expression."""
-    _, out, _ = _run([gh, "api", "repos/%s/%s" % (repo, path), "--jq", jq])
-    return [ln for ln in out.splitlines() if ln.strip()]
+def _gh_api(gh, repo, path):
+    """Query the gh REST API and return the decoded JSON body."""
+    _, out, _ = _run([gh, "api", "repos/%s/%s" % (repo, path)])
+    return json.loads(out) if out.strip() else []
 
 
 def pr_state_map(gh, repo):
@@ -82,24 +83,18 @@ def pr_state_map(gh, repo):
     MUST dominate: a branch still backing any open PR is never prunable. So
     'open' is queried LAST and overwrites any 'closed' entry for the same ref
     — never the reverse — which is the safety guarantee, not a cosmetic order.
+
+    Merged-ness comes from ``merged_at``: the pulls LIST endpoint does not return a
+    ``merged`` field at all (only the single-PR endpoint does), so reading ``merged``
+    here labelled every merged PR "closed-unmerged".
     """
     state = {}
     for scope in ("closed", "open"):
-        rows = _gh_json(
-            gh,
-            repo,
-            "pulls?state=%s&per_page=100" % scope,
-            r'.[] | "\(.head.ref)\t\(.number)\t\(.state)\t\(.merged)"',
-        )
-        for row in rows:
-            parts = row.split("\t")
-            if len(parts) != 4:
-                continue
-            ref, number, st, merged = parts
-            state[ref] = {
-                "number": int(number),
-                "state": st,
-                "merged": merged.strip().lower() == "true",
+        for pr in _gh_api(gh, repo, "pulls?state=%s&per_page=100" % scope):
+            state[pr["head"]["ref"]] = {
+                "number": int(pr["number"]),
+                "state": pr["state"],
+                "merged": pr.get("merged_at") is not None,
             }
     return state
 
