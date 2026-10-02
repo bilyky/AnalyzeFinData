@@ -107,9 +107,13 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
   that "matches" another literal elsewhere should reference it).
 - **Confidential data** — ids, emails, usernames, tokens, internal IPs, UNC paths, account ids. Flag
   every leak, and never reproduce one unmasked in a public channel (§6).
-- **Documentation** — missing, obsolete, or contradicting the code. A doc that *promises*
-  cross-referencing ("so the two files don't drift") must actually carry the links both ways
-  (reference §A, PR #84).
+- **Documentation stays true — verify it, don't assume it.** For every behavior the PR changes, grep
+  every doc surface for the *old* behavior: README and `*.md`, design/plan docs, roadmap **status
+  lines**, wiki/About text, skills, docstrings, comments, and log/alert text. A doc left describing the
+  old behavior is a finding in the same PR. Check first any doc that states a **safety invariant**
+  ("never opens a browser", "zero calls", "only a human may…"): those are the docs people trust. Also
+  check that identifiers meant to be unique (e.g. roadmap item numbers) still are, and that a doc
+  promising cross-references actually carries them both ways (reference §A, PR #84).
 - **Tests have value** — real behavior, not tautologies:
   - **Fully mocked?** Mocking the unit under test proves nothing; mock only expensive or
     non-deterministic IO (fs, network, clock) while the real code runs.
@@ -214,6 +218,19 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
 - Batch removals are irreversible local changes: present the classified plan, get the go-ahead, and
   delete your own scratch (temp refs, worktrees, files) when done.
 
+## 9b. Post-merge doc audit (after a batch of merges, or when asked)
+
+Docs drift between PRs even when each review was careful. After a batch lands:
+1. Bring the main checkout current (`git merge --ff-only origin/main`, only when the user asks, and only
+   if no local edit conflicts).
+2. List the merges since the last audit and, for each, the behavior it changed.
+3. Grep every doc surface (§3 *Documentation*) for each old behavior, plus status lines of tracked items
+   ("UNBUILT" for something built) and duplicate identifiers.
+4. Verify each replacement claim against code on `main` (callers, defaults, gates, thresholds) before
+   writing it. A behavior gap you find (code doing something unintended) is reported for a decision,
+   not silently "fixed" inside the docs PR.
+5. Land the fixes as one docs PR from a fresh branch off latest `main`.
+
 ## 10. Checklist
 
 - §0 goal + authoritative definition read first; PR/commit claims checked against their evidence.
@@ -221,6 +238,8 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
   before any "re-review"; merged-unreviewed fixes get a post-merge review.
 - §2 branch source in a detached, fail-stop scratch worktree; private `refs/review/*`; a red check's log
   read and the gate reproduced locally.
+- §3 docs re-verified for every changed behavior (old-behavior grep, status lines, safety invariants,
+  unique identifiers); §9b audit run after a batch of merges.
 - §3 every perspective covered; tests red-green or mutation-checked and actually run; architecture-fit
   and extraction faithfulness checked; prod-readiness stated on both gates.
 - §4/§5/§6 house format, posted as a comment, PII masked.
