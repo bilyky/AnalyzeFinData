@@ -548,7 +548,7 @@ def short_score(pg_fields: dict) -> float:
       Regime         +-1.0
       Fibonacci      +-1.0
       RSI Divergence 1.85% spread: +/-0.5 (calibrated Phase A backtest)
-      Candlestick    3.49% spread: contrarian, weight -0.30 (high score = bearish signal, calibrated post-market Aug-12)
+      Candlestick    3.49% spread: contrarian, weight -0.30 (raw score: + = bullish tally; calibrated post-market Aug-12)
       Chart Pattern  11.83% spread: contrarian, weight -0.30 (bearish patterns = recovery, calibrated post-market Aug-12)
       Momentum       5.76% spread: contrarian, weight -0.30 (bearish momentum = reversal, calibrated post-market Aug-12)
       Digit-sum      symbol-specific numerology (z>=2.0 signals only): +-1.0
@@ -583,7 +583,10 @@ def short_score(pg_fields: dict) -> float:
     score += {'Bull': 1.0, 'Neutral': 0.0, 'Bear': -1.0}.get(regime, 0.0)
     score += pg_fields.get('fibonacci', 0.0)
     score += pg_fields.get('rsi_divergence', 0.0) * 0.5
-    score += pg_fields.get('candlestick_score', 0.0) * 0.30
+    # Candlestick is CONTRARIAN (study aggregate_sign = -1): candlestick_score is the raw
+    # tally (positive = bullish), so the coefficient is negative. The sign lives ONLY here;
+    # tests/test_scoring.py guards it against Data/candlestick_pattern_study.json.
+    score += pg_fields.get('candlestick_score', 0.0) * -0.30
     score += pg_fields.get('chart_score', 0.0)        * -0.30
 
     if is_bullish_breakout:
@@ -637,7 +640,7 @@ def long_score(pg_fields: dict) -> float:
     score += {'Bull': 1.5, 'Neutral': 0.0, 'Bear': -1.5}.get(pg_fields.get('market_regime', 'Neutral'), 0.0)
     score += pg_fields.get('fibonacci', 0.0) * 0.5
     score += pg_fields.get('rsi_divergence', 0.0) * 0.25
-    score += pg_fields.get('candlestick_score', 0.0) * 0.15
+    score += pg_fields.get('candlestick_score', 0.0) * -0.15  # contrarian, see short_score
     score += pg_fields.get('chart_score', 0.0)        * -0.15
     score += pg_fields.get('momentum_score', 0.0)     * -0.15
     score += pg_fields.get('digit_sum', 0.0) * 0.5

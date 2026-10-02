@@ -17,6 +17,7 @@ from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import patterns
 import scoring
 from scoring import (
     ohlcv_streak_perc, ohlcv_streak_count,
@@ -211,15 +212,38 @@ class TestShortScore(unittest.TestCase):
                   "seasonality": 0.0, "market_regime": "Neutral"}
         self.assertEqual(short_score(fields), 2.0)
 
-    def test_candlestick_score_rewards_bullish(self):
-        # A bullish candlestick_score of +2.0 should add +0.60 to the score (2.0 * +0.30)
+    def test_candlestick_is_contrarian(self):
+        # candlestick_score is the RAW tally (+ = bullish); the study's aggregate_sign is
+        # -1, so a bullish +2.0 must LOWER the score by 0.60 (2.0 * -0.30).
         base = {"rel_vol": "Normal", "ob_os": "Neutral", "money_flow": "Neutral",
                 "industry_strength": "", "lt_trend": "Neutral",
                 "seasonality": 0.0, "market_regime": "Neutral"}
         score_neutral = short_score({**base, "candlestick_score": 0.0})
         score_bullish = short_score({**base, "candlestick_score": 2.0})
         self.assertEqual(score_neutral, 0.0)
-        self.assertEqual(score_bullish, 0.6)
+        self.assertEqual(score_bullish, -0.6)
+
+
+class TestCandlestickSignGuard(unittest.TestCase):
+    """The candlestick direction lives ONLY in the scoring coefficient (patterns returns the
+    raw tally). Guard both halves so the factor can never be double-negated or drift from
+    the backtest verdict in Data/candlestick_pattern_study.json."""
+
+    @staticmethod
+    def _coef_sign(score_fn):
+        delta = score_fn({"candlestick_score": 2.0}) - score_fn({"candlestick_score": 0.0})
+        return 1 if delta > 0 else -1 if delta < 0 else 0
+
+    def test_live_coefficient_matches_study_aggregate_sign(self):
+        _w, _d, study_sign = patterns._load_candlestick_calibration(patterns._STUDY_PATH)
+        if study_sign is None:
+            self.skipTest("Data/candlestick_pattern_study.json absent (CI / unsynced Data/)")
+        self.assertEqual(self._coef_sign(short_score), study_sign)
+        self.assertEqual(self._coef_sign(long_score), study_sign)
+
+    def test_both_horizons_share_one_direction(self):
+        self.assertEqual(self._coef_sign(short_score), self._coef_sign(long_score))
+        self.assertNotEqual(self._coef_sign(short_score), 0)
 
 
 # ── long_score ───────────────────────────────────────────────────────────────
@@ -263,14 +287,14 @@ class TestLongScore(unittest.TestCase):
                   "seasonality": 0.0, "market_regime": "Neutral"}
         self.assertEqual(long_score(fields), 4.0)
 
-    def test_candlestick_score_rewards_bullish(self):
-        # A bullish candlestick_score of +2.0 should add +0.30 to the score (2.0 * +0.15)
+    def test_candlestick_is_contrarian(self):
+        # Raw bullish +2.0 must LOWER the L60 score by 0.30 (2.0 * -0.15); see TestShortScore.
         base = {"lt_trend": "Neutral", "rel_vol": "Normal", "money_flow": "Neutral",
                 "industry_strength": "", "ob_os": "Neutral", "market_regime": "Neutral"}
         score_neutral = long_score({**base, "candlestick_score": 0.0})
         score_bullish = long_score({**base, "candlestick_score": 2.0})
         self.assertEqual(score_neutral, 0.0)
-        self.assertEqual(score_bullish, 0.3)
+        self.assertEqual(score_bullish, -0.3)
 
     def test_regime_weight_1_5(self):
         # Bull regime = +1.5 in long (vs +1.0 in short)
