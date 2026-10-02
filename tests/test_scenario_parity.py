@@ -124,12 +124,23 @@ def _find_block(needle, haystack):
     return -1
 
 
-def _first_mismatch(needle, haystack):
-    """Best-effort diagnostic: the longest prefix of ``needle`` found in the root."""
-    for n in range(len(needle), 0, -1):
-        if _find_block(needle[:n], haystack) >= 0:
-            return n, needle[n] if n < len(needle) else None
-    return 0, needle[0]
+def _drift_report(needle, haystack):
+    """Best-effort diagnostic: how much of ``needle`` still matches from each end.
+
+    Returns ``(prefix, suffix, first_bad)``: the longest leading and trailing runs of
+    the stage found contiguously in the root, and the first line after the leading
+    run. Checking both ends matters because a drift in the very first statement
+    would otherwise report "0 lines match" even when nearly all of the body does.
+    """
+    def longest(run_of):
+        for n in range(len(needle), 0, -1):
+            if _find_block(run_of(n), haystack) >= 0:
+                return n
+        return 0
+    prefix = longest(lambda n: needle[:n])
+    suffix = longest(lambda n: needle[len(needle) - n:])
+    first_bad = needle[prefix] if prefix < len(needle) else None
+    return prefix, suffix, first_bad
 
 
 class TestStageRootParity(unittest.TestCase):
@@ -140,11 +151,12 @@ class TestStageRootParity(unittest.TestCase):
                 stage = _stage_lines(getattr(steps, name))
                 self.assertTrue(stage, f"{name}: empty normalised body")
                 if _find_block(stage, root) < 0:
-                    matched, bad = _first_mismatch(stage, root)
+                    prefix, suffix, bad = _drift_report(stage, root)
                     self.fail(
-                        f"{name} has drifted from run_daily_ai_management: the first "
-                        f"{matched}/{len(stage)} normalised lines match the root, then "
-                        f"{bad!r} does not. Re-sync the stage with the root block.")
+                        f"{name} has drifted from run_daily_ai_management: of {len(stage)} "
+                        f"normalised lines, the first {prefix} and the last {suffix} still "
+                        f"match the root; first differing line: {bad!r}. Re-sync the stage "
+                        "with the root block.")
 
     def test_every_steps_function_is_registered(self):
         defined = {n for n, obj in vars(steps).items()
@@ -171,6 +183,15 @@ class TestParityHelpers(unittest.TestCase):
         body = ast.parse("if not q:\n    return\nfor o in q:\n    f(o)").body
         self.assertEqual(_lines(_unwrap_early_return(body)),
                          ["if q:", "    for o in q:", "        f(o)"])
+
+    def test_drift_report_counts_from_both_ends(self):
+        # The first line drifted but the rest still matches: a prefix-only search would
+        # say 0 of 4 match; the suffix search shows 3 of 4 still do.
+        root = ["a = 1", "b = 2", "c = 3", "d = 4"]
+        self.assertEqual(_drift_report(["a = 0", "b = 2", "c = 3", "d = 4"], root),
+                         (0, 3, "a = 0"))
+        self.assertEqual(_drift_report(["a = 1", "b = 2", "x = 9", "d = 4"], root),
+                         (2, 1, "x = 9"))
 
     def test_game_prefix_stripped(self):
         stmt = _StripGame().visit(ast.parse("game._log.info(game.CFG.x)").body[0])
