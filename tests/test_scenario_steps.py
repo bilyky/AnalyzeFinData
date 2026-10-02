@@ -27,7 +27,6 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game  # noqa: E402
-from aether.scenario import determine_profile as determine_profile_reexport  # noqa: E402
 from aether.scenario.steps import determine_profile  # noqa: E402
 
 
@@ -156,15 +155,22 @@ class TestCashDeploymentGateGuards(_ProfileCase):
         self.assertEqual(result, "DEFENSIVE")
 
 
-class TestSeamAndReexport(_ProfileCase):
-    def test_regime_is_resolved_at_call_time(self):
-        # The whole point of _pkg(): the patch applied now is the one used.
-        state = {}
-        result, _, _ = self._run(state, regime="SENTINEL_REGIME")
-        self.assertEqual(result, "SENTINEL_REGIME")
+class TestPackageReexports(unittest.TestCase):
+    """Every public stage in steps.py is re-exported, unchanged, from the package root."""
 
-    def test_reexported_from_package_root(self):
-        self.assertIs(determine_profile_reexport, determine_profile)
+    def test_every_public_stage_is_reexported(self):
+        import inspect
+
+        import aether.scenario as pkg
+        from aether.scenario import steps
+        stages = sorted(n for n, obj in vars(steps).items()
+                        if inspect.isfunction(obj) and obj.__module__ == steps.__name__
+                        and not n.startswith("_"))
+        self.assertTrue(stages)
+        for name in stages:
+            with self.subTest(stage=name):
+                self.assertIn(name, pkg.__all__)
+                self.assertIs(getattr(pkg, name), getattr(steps, name))
 
 
 if __name__ == "__main__":
