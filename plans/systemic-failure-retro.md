@@ -97,4 +97,4 @@ call for different fixes (Step 1 keep-alive persistence vs. a pre-midnight renew
 measured answer before over-investing in either. This lifecycle question is carried on **R&D #41**
 in [`plans/roadmap.md`](./roadmap.md) (the E\*TRADE token-refresh item).
 
-**Update (2026-10-02):** both mechanisms occur and need different handling. Inactivity is recoverable: a token idle for 2 h is inactivated and Renew Access Token reactivates it, which `keep_alive` / `get_tokens` now do (#144). The midnight-ET expiry is hard: the overnight renew test saw the renew REJECTED in both post-expiry runs (n=2), so each ET day needs a fresh login, which the nightly preflight now mints headlessly (#125). See R&D #41 for the current state.
+**Update (2026-10-02):** both causes are real and need different fixes. A token idle for 2 hours goes inactive, and a renew brings it back; `keep_alive` and `get_tokens` now do that (#144). The midnight ET expiry can't be renewed: the overnight renew test saw the renew rejected in both runs after expiry (n=2), so every ET day needs a new login, which the nightly preflight now does headlessly (#125). See R&D #41 for the current state.

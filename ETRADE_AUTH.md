@@ -42,36 +42,35 @@ machine's only job is to keep a *human-created* session warm during the day.
 
 ## 3. The hard restrictions (rules)
 
-1. **Automation mints only through the gated doors — never an interactive browser.** Scheduled and
-   unattended code renews first and opens **at most one headless browser**, only through:
-   - **`etrade.scheduled_reauth(env)`** — the automated door. Callers: the daily
-     `AnalyzeFinData_ETrade_Reauth` task (05:15, runs `server.py etrade-reauth --scheduled`; registered by
-     `scripts/etrade_totp_wizard.py`), the hourly watchdog catch-up, the nightly preflight (weekdays by the
-     **ET** calendar; renew-only on an ET weekend), `goal_sentry`, `scripts/etrade_reauth.py`, and the
-     admin `POST /api/etrade/scheduled-reauth` endpoint. (The human `POST /api/etrade/reauth` in §4.1 is a
-     different door.) It calls `keep_alive`
-     first (pure HTTP) and mints only when the profile is trusted (or a TOTP secret is configured), the
-     breaker is clear, and it wins the single-flight lock. The mint is headless by default
-     (`AETHER_ETRADE_SCHEDULED_HEADLESS` / `CFG.etrade_scheduled_headless`).
-   - **`get_tokens(env, allow_browser=False)`'s automated rung** — a caller that finds the token dead may
-     mint through the same breaker + reauth lock when saved browser state or a TOTP secret exists. It
-     uses the caller's `headless` flag (default `False`), so unattended code should prefer
-     `scheduled_reauth`.
+1. **Scheduled code logs in only through two gated paths, and never opens an interactive browser.**
+   It always tries a renew first and opens at most one headless browser:
+   - **`etrade.scheduled_reauth(env)`**. Used by the daily `AnalyzeFinData_ETrade_Reauth` task (05:15,
+     runs `server.py etrade-reauth --scheduled`, set up by `scripts/etrade_totp_wizard.py`), the hourly
+     watchdog, the nightly preflight (ET weekdays only), `goal_sentry`, `scripts/etrade_reauth.py`, and
+     the admin `POST /api/etrade/scheduled-reauth` endpoint. That endpoint is not the manual
+     `POST /api/etrade/reauth` in §4.1. It calls `keep_alive` first, and only logs in if the profile is
+     trusted (or a TOTP secret is set), the breaker is clear, and it gets the single-flight lock. The
+     login is headless unless `AETHER_ETRADE_SCHEDULED_HEADLESS` / `CFG.etrade_scheduled_headless` says
+     otherwise.
+   - **The automated step inside `get_tokens(env, allow_browser=False)`**. A caller that finds the
+     token dead can log in through the same breaker and lock, if saved browser state or a TOTP secret
+     exists. It uses the caller's `headless` flag, which defaults to `False`, so scheduled code should
+     use `scheduled_reauth` instead.
 
-   `keep_alive(env)` itself is **renew-only and never opens a browser**: with no same-day token it returns
-   `None` without any brokerage call; a same-day token the broker rejects gets **one** reactivation renew
-   (a token idle for 2 h is inactive until renewed, §2) and is otherwise `None`. Never call
-   `get_tokens(..., allow_browser=True)` from automation.
-2. **Only a human at a TTY uses the interactive login.** The sanctioned interactive path is
-   **`aether etrade-login`** (add `--bootstrap` for the one-time supervised OTP that re-seeds device
-   trust). It calls the `etrade.reauthenticate()` core (`get_tokens(..., allow_browser=True)`); see §4.1.
-   (The legacy `python scripts/diagnostics/test_etrade.py production` still works as the same call.)
+   `keep_alive(env)` only renews and never opens a browser. With no token from today it returns `None`
+   without calling E*TRADE. If E*TRADE rejects today's token, it tries one renew (a token idle for 2
+   hours stays inactive until renewed, see §2) and otherwise returns `None`. Never call
+   `get_tokens(..., allow_browser=True)` from scheduled code.
+2. **Only a person at a terminal uses the interactive login.** Run **`aether etrade-login`** (add
+   `--bootstrap` for the one-time supervised OTP that re-seeds device trust). It calls
+   `etrade.reauthenticate()` (`get_tokens(..., allow_browser=True)`), see §4.1. The older
+   `python scripts/diagnostics/test_etrade.py production` does the same thing.
 3. **The automated browser path is circuit-broken.** `_login_headless` is the *single choke point*
    for any automated browser re-auth and it enforces an **escalating cooldown** that doubles on each
    consecutive failure — 15 → 30 → 60 → 120 → 240 → 480 → 960 min — pinned at a hard **1440 min (24 h)**
-   ceiling from the 8th failure on. After **3 consecutive failures** (`CFG.etrade_reauth_alert_threshold`)
-   the automated door is **hard-blocked** (`reason=blocked`) regardless of the cooldown clock, and a human
-   is alerted. A sustained streak means the saved session is dead or the IP is being watched, so only a
+   ceiling from the 8th failure on. After **3 failures in a row** (`CFG.etrade_reauth_alert_threshold`)
+   automated login is blocked (`reason=blocked`) wherever the cooldown is, and a person is alerted.
+   A sustained streak means the saved session is dead or the IP is being watched, so only a
    human re-auth should revive the automated path. The breaker clears **only on a successful login**. It
    cannot be bypassed by a retry loop or a second process.
 4. **Never hammer after a failure.** One failed automated re-auth = back off. Repeated failures = the
@@ -90,7 +89,7 @@ machine's only job is to keep a *human-created* session warm during the day.
 
 | Piece | File | Role |
 |-------|------|------|
-| `keep_alive(env)` | `aether/etrade/__init__.py` | **Renew-only** session keeper for automation. Never opens a browser; no brokerage call when there is no same-day token, and one reactivation renew for a same-day token the broker rejects (#144). |
+| `keep_alive(env)` | `aether/etrade/__init__.py` | **Renew-only** session keeper for scheduled code. Never opens a browser. No E*TRADE call when there's no token from today; one renew if E*TRADE rejects today's token (#144). |
 | Circuit breaker | `aether/etrade/__init__.py` (`_reauth_cooldown_remaining` / `_record_reauth_attempt` / `reset_reauth_circuit_breaker`) | Escalating anti-ban throttle, enforced inside `_login_headless`. State in `Data/etrade_reauth_state.json`. |
 | `_login_headless` | `aether/etrade/__init__.py` | The **only** automated browser path. Self-gates on the breaker, then **pessimistically arms** it (`_record_reauth_attempt`) *before* opening the browser and retracts (`reset_reauth_circuit_breaker`) only on a confirmed success — so an attempt killed/hung mid-browser still leaves the breaker engaged instead of silently at 0. |
 | `_get_tokens_via_playwright` | `aether/etrade/__init__.py` | Drives a **persistent real-Chrome profile** (`_CHROME_PROFILE_DIR`), not a throwaway browser seeded with a static cookie snapshot — see §4.1. |
@@ -156,34 +155,32 @@ execution path):
 (`ok=False`). `--bootstrap` forces a **headed** browser for the rare one-time SMS OTP that re-seeds
 device trust (check "remember this device"); the daily path expects no OTP.
 
-**This does NOT relax any §3 rule.** These three front doors are **human-initiated**. Unattended code
-uses the separate automated door `scheduled_reauth()` (§3 rule 1), which goes through the same
-`_login_headless` choke point and breaker.
+**None of this relaxes the §3 rules.** A person starts each of these three doors. Scheduled code uses
+`scheduled_reauth()` instead (§3 rule 1), which goes through the same `_login_headless` step and
+breaker.
 
-> **Status (2026-10-02) — automated door wired; PROD confirmation pending.** `scheduled_reauth()` and its
-> callers (§3 rule 1) are merged and unit-tested offline. Whether unattended mints keep succeeding on the
-> PROD host across days is confirmed only by its own runs: check the preflight / watchdog logs and the
-> `reason` they report (`renewed` / `reauthed` vs `sms_required` / `blocked`).
+> **Status (2026-10-02):** automated login is wired in and tested offline. Whether it keeps working on
+> the PROD machine day after day only shows in PROD's own runs: check the preflight and watchdog logs
+> for the `reason`. `renewed` or `reauthed` is fine; `sms_required` or `blocked` needs a person.
 
 ---
 
 ## 5. Correct procedures
 
 ### Daily (normal weekday)
-1. The token dies at midnight ET. The automated door mints the new day's token unattended: the nightly
-   preflight at 21:30 PT (00:30 ET), the 05:15 `AnalyzeFinData_ETrade_Reauth` task, or the hourly
-   watchdog catch-up. Whichever runs first mints; the rest just renew.
-2. During the day, `keep_alive` renews the token (and reactivates it after a 2 h idle gap). No browser.
-3. A human acts **only** on an alert: `sms_required` / `unseeded` (run `aether etrade-login --bootstrap`)
-   or `blocked` (fix the cause, then `aether etrade-login` to clear the breaker).
+1. The token expires at midnight ET. A scheduled run logs in for the new day with nobody present: the
+   nightly preflight at 21:30 PT (00:30 ET), the 05:15 `AnalyzeFinData_ETrade_Reauth` task, or the
+   hourly watchdog. Whichever runs first logs in; the others just renew.
+2. During the day, `keep_alive` renews the token, including after a 2-hour idle gap. No browser.
+3. A person only acts on an alert. For `sms_required` or `unseeded`, run `aether etrade-login
+   --bootstrap`. For `blocked`, fix the cause, then run `aether etrade-login` to clear the breaker.
 
 ### Weekends
-- Preflight treats an ET Saturday/Sunday as market-closed: renew-only, then `WAIVED`, never a mint.
-  Sunday's 21:30 PT run is 00:30 ET Monday and mints Monday's token.
-- The 05:15 task and the hourly watchdog catch-up have **no weekend rule**, so they still mint one
-  token per ET day on weekends. If weekend mints should be avoided, that needs a weekend gate in
-  `scheduled_reauth` (or in those callers); preflight alone does not prevent them.
-- If Monday starts with an alert instead, do the human step above.
+- Preflight treats ET Saturdays and Sundays as market-closed. It only renews and reports `WAIVED`.
+  Sunday's 21:30 PT run is 00:30 ET Monday, so it logs in for Monday.
+- The 05:15 task and the hourly watchdog have **no weekend rule**, so they still log in once per ET
+  day on weekends. Stopping that needs a weekend check in `scheduled_reauth` or in those callers.
+- If Monday starts with an alert, do step 3 above.
 
 ### If automated re-auth failed / a ban is suspected
 1. **Stop all automated E*TRADE contact** (scheduled tasks, `server.py`). Nothing should be hitting
@@ -249,9 +246,9 @@ different IP** so that even if bot-detection fires, the primary IP is untouched 
 ## 6. Do / Don't (quick reference)
 
 **Do**
-- Use `scheduled_reauth()` for unattended session upkeep (renew-first, at most one gated headless mint);
-  use `keep_alive()` where a job must never mint.
-- Let a human handle the interactive login (`aether etrade-login`, `--bootstrap` for OTP).
+- Use `scheduled_reauth()` to keep the session alive from scheduled code. Use `keep_alive()` where a
+  job must never log in.
+- Leave the interactive login to a person (`aether etrade-login`, `--bootstrap` for OTP).
 - Back off on failure; the breaker does this for you — don't defeat it.
 - Guard `get_tokens()` return values (`if not tokens: fall back`).
 
