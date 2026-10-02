@@ -20,16 +20,18 @@ BALANCED minimum. Groups:
 Primary test (pre-registered): S10_ONLY minus BOTH on fwd10, DATE-CLUSTERED — the
 cross-sectional mean difference on each day where both groups are present, then a
 t-test across days, so one market move is not counted hundreds of times. Because
-neighbouring days' 10-day windows overlap, the verdict uses the NON-OVERLAPPING t
-(every 10th day; median over the 10 offsets). Repeated on PULLBACK days (SPY below
+neighbouring days' 10-day windows overlap, the verdict uses a Newey-West (HAC, lag 9)
+t; the plain t and the every-10th-day (non-overlapping) t are reported alongside. Repeated on PULLBACK days (SPY below
 its 20-day SMA with a negative 10-day return).
 
 Decision rule (stated before running):
-    TOO STRICT  S10_ONLY is not worse than BOTH (non-overlapping t > -1.96) AND
-                S10_ONLY beats BASE (non-overlapping t >= 1.96)  -> consider relaxing
-    (The first run decided on the overlapping t; switching to the non-overlapping t
-    after seeing it only makes the rule stricter, never looser.)
-    KEEP        S10_ONLY is significantly worse than BOTH (non-overlapping t <= -1.96)
+    TOO STRICT  S10_ONLY is not worse than BOTH (HAC t > -1.96) AND
+                S10_ONLY beats BASE (HAC t >= 1.96)  -> consider relaxing
+    History (disclosed): the rule first pre-registered decided on the plain overlapping
+    t, which gave TOO_STRICT on 2023+. The statistic was changed AFTER that run — first to
+    the non-overlapping median t (INCONCLUSIVE), then to HAC on review. HAC is the rule
+    fixed for every future re-run.
+    KEEP        S10_ONLY is significantly worse than BOTH (HAC t <= -1.96)
     otherwise   INCONCLUSIVE — keep the gate (no evidence to loosen)
 
 Usage:
@@ -73,6 +75,21 @@ def _t_one_sample(xs):
     m = _mean(xs)
     var = sum((x - m) ** 2 for x in xs) / (n - 1)
     return m / math.sqrt(var / n) if var > 0 else None
+
+
+def _t_hac(xs, lag):
+    """Newey-West (HAC, Bartlett kernel) t of mean(xs) vs 0 — the standard estimator when
+    consecutive observations share overlapping forward windows (lag = horizon - 1)."""
+    n = len(xs)
+    if n < lag + 3:
+        return None
+    m = _mean(xs)
+    d = [x - m for x in xs]
+    lrv = sum(v * v for v in d) / n
+    for k in range(1, lag + 1):
+        gamma = sum(d[i] * d[i - k] for i in range(k, n)) / n
+        lrv += 2 * (1 - k / (lag + 1)) * gamma
+    return m / math.sqrt(lrv / n) if lrv > 0 else None
 
 
 def _spy_pullback_days(ohlcv_dir: str) -> set:
@@ -163,15 +180,18 @@ def _clustered(per_day: dict, a: str, b: str) -> dict:
     """Date-clustered difference: per-day cross-sectional mean(a) - mean(b), t over days.
 
     Neighbouring days' 10-day forward windows overlap, so the daily diffs are serially
-    correlated and `t` overstates significance. `t_nonoverlap_min` / `_median` repeat
-    the test on every 10th day (each of the 10 offsets) — independent windows."""
+    correlated and the plain `t` overstates significance. `t_hac` (Newey-West, lag 9) is
+    the decision statistic; `t_nonoverlap_min` / `_median` repeat the plain test on every
+    10th day (each of the 10 offsets) as a cross-check."""
     days = sorted(d for d, g in per_day.items() if g.get(a) and g.get(b))
     diffs = [_mean(per_day[d][a]) - _mean(per_day[d][b]) for d in days]
     t = _t_one_sample(diffs)
     step = FWD[0]
+    t_hac = _t_hac(diffs, step - 1)
     ts = sorted(x for x in (_t_one_sample(diffs[k::step]) for k in range(step)) if x is not None)
     return {"days": len(diffs), "mean_diff10": round(_mean(diffs), 3) if diffs else None,
             "t": round(t, 2) if t is not None else None,
+            "t_hac": round(t_hac, 2) if t_hac is not None else None,
             "t_nonoverlap_min": round(ts[0], 2) if ts else None,
             "t_nonoverlap_median": round(ts[len(ts) // 2], 2) if ts else None}
 
@@ -200,10 +220,10 @@ def summarize(obs, pullback_days: set) -> dict:
         tests = {"S10_ONLY_vs_BOTH": _clustered(per_day, "S10_ONLY", "BOTH"),
                  "S10_ONLY_vs_BASE": _clustered(per_day, "S10_ONLY", "BASE"),
                  "BOTH_vs_BASE": _clustered(per_day, "BOTH", "BASE")}
-        # Decide on the non-overlapping median t (independent 10-day windows); the
-        # overlapping t is reported but overstates significance.
-        t_vs_both = tests["S10_ONLY_vs_BOTH"]["t_nonoverlap_median"]
-        t_vs_base = tests["S10_ONLY_vs_BASE"]["t_nonoverlap_median"]
+        # Decision statistic: Newey-West HAC t (lag 9). The plain t is reported but
+        # overstates significance on overlapping windows.
+        t_vs_both = tests["S10_ONLY_vs_BOTH"]["t_hac"]
+        t_vs_base = tests["S10_ONLY_vs_BASE"]["t_hac"]
         if t_vs_both is not None and t_vs_both <= -GATE_T:
             verdict = "KEEP"
         elif t_vs_both is not None and t_vs_base is not None and t_vs_both > -GATE_T and t_vs_base >= GATE_T:
@@ -242,7 +262,7 @@ def main():
                      f"win10 {g['win10']:.1%}  fwd20 {g['mean20']:+.2f}%")
         for k, v in r["tests"].items():
             _out(f"  {k:18s} days={v['days']:>4}  mean diff fwd10 {v['mean_diff10']}  t={v['t']}  "
-                 f"non-overlap t median={v['t_nonoverlap_median']} min={v['t_nonoverlap_min']}")
+                 f"HAC t={v['t_hac']}  non-overlap t median={v['t_nonoverlap_median']} min={v['t_nonoverlap_min']}")
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
