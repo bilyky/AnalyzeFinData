@@ -1273,7 +1273,7 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
             if reactivated:
                 check_etrade_cookie_freshness()
                 return reactivated
-            _log.warning("🚨 [E*TRADE ALERT] Cached token failed server verification (401 Unauthorized). Soft-deleting to trash (recoverable)...")
+            _log.warning("🚨 [E*TRADE ALERT] Cached token still rejected (401/403) after a reactivation renew. Soft-deleting to trash (recoverable)...")
             trash.soft_delete(_TOKEN_PATH, reason="rejected-401")
             cached = None
         else:

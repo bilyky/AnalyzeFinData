@@ -90,9 +90,11 @@ PST) and skips the heavy process supervisor / port sentry outside it. No further
 
 ---
 
-## 5. Open Question (not yet resolved; tracked under R&D #41)
+## 5. Open Question (partly answered 2026-10-02; tracked under R&D #41)
 Whether the overnight token loss is driven primarily by **server-side inactivity** (no keep-alive
 while the scheduler is suspended) or by the **midnight-ET expiry** that happens regardless. The two
 call for different fixes (Step 1 keep-alive persistence vs. a pre-midnight renew), so this needs a
 measured answer before over-investing in either. This lifecycle question is carried on **R&D #41**
 in [`plans/roadmap.md`](./roadmap.md) (the E\*TRADE token-refresh item).
+
+**Update (2026-10-02):** both mechanisms occur and need different handling. Inactivity is recoverable: a token idle for 2 h is inactivated and Renew Access Token reactivates it, which `keep_alive` / `get_tokens` now do (#144). The midnight-ET expiry is hard: the overnight renew test saw the renew REJECTED in both post-expiry runs (n=2), so each ET day needs a fresh login, which the nightly preflight now mints headlessly (#125). See R&D #41 for the current state.
