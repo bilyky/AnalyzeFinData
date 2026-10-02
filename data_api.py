@@ -16,6 +16,7 @@ import pytz
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from scripts.backtesting import backtest_levels
+from aether import ai_buildout as _ai_buildout
 from aether import decision_eval as _decision_eval
 from aether.config import CFG as _cfg
 import ai_portfolio_game
@@ -378,6 +379,18 @@ def read_reserves() -> dict:
         except Exception as e:
             return {"reserves": [], "error": str(e)}
     return _cached("reserves", 60.0, _load)
+
+
+def read_ai_buildout() -> dict:
+    """Latest AI-buildout supply-chain watch (scripts/monitoring/ai_buildout_watch.py).
+    Cached 60s; empty rows when the scan has not run yet."""
+    def _load():
+        try:
+            data = _ai_buildout.load_latest(_DATA_DIR / "ai_buildout_watch.json")
+            return data or {"as_of": None, "rows": []}
+        except Exception as e:
+            return {"as_of": None, "rows": [], "error": str(e)}
+    return _cached("ai_buildout", 60.0, _load)
 
 
 # ── Research sheet (full screener output) ──────────────────────────────────────
