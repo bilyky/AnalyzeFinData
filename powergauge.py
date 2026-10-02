@@ -1464,14 +1464,8 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
             prev_move_perc = _ohlcv_streak_perc(ohlcv_ts, all_dates, idx, power_g.percentage)
 
             # entry filter: close > SMA(_TREND_SMA_PERIOD) AND close > close[_DIR_CHECK_DAYS ago]
-            sma_w = all_dates[max(0, idx - _TREND_SMA_PERIOD): idx]
-            if len(sma_w) >= _TREND_SMA_PERIOD:
-                sma = sum(_to_float(ohlcv_ts[d].get('4. close'), 0) for d in sma_w) / len(sma_w)
-                trend_ok = power_g.price > sma
-            else:
-                trend_ok = False
-            dir_ok = power_g.price > _to_float(ohlcv_ts[all_dates[idx - _DIR_CHECK_DAYS]].get('4. close'), 0) if idx >= _DIR_CHECK_DAYS else False
-            setup_ok = trend_ok and dir_ok
+            setup_ok = risk_utils.setup_ok(power_g.price, idx, all_dates, ohlcv_ts,
+                                           sma_period=_TREND_SMA_PERIOD, dir_days=_DIR_CHECK_DAYS)
 
     _date_str = str(power_g.date)
     _pattern_score, _pattern_text = _pattern_summary(ohlcv_ts, _date_str)
