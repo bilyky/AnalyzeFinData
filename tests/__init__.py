@@ -48,6 +48,7 @@ _logging.getLogger("aether.daily_task").addHandler(
 # and driving toward an IP ban.
 import os as _os
 import socket as _socket
+import subprocess as _subprocess
 import importlib as _importlib
 import aether.etrade as _etrade
 import aether.instruments as _instruments
@@ -189,7 +190,6 @@ if not _os.getenv("AETHER_LIVE_TESTS"):
     # server.py / "orphaned" AETHER consoles) and a real `ai_portfolio_game.py --report`
     # child, which logs to the repo's Data/logs because a child never loads this harness.
     # A test that mocks subprocess itself still wins (its patch replaces these wrappers).
-    import subprocess as _subprocess
 
     _FORBIDDEN_PROC_TOKENS = ("taskkill", "stop-process", "ai_portfolio_game.py")
 
