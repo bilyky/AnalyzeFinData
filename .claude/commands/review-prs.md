@@ -76,9 +76,11 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
   inherits every blocker beneath it.
 - **Know what "green" means.** Read the check-runs and the failing log (`gh run view <id> --log-failed`);
   a red check's exact line *is* a finding. A gate proves only what it runs — if CI lints but skips
-  tests, say so. **Commit-time hooks are not CI:** here `pre_commit_validator.py` (no inline imports,
-  no silent except, doc/wiki sync) runs at commit, so CI-green does not prove it passes; ruff `E402` is
-  module-level only and does not catch a function-body import. A branch far behind `main` may predate
+  tests, say so. **Check which gate runs the commit-time rules:** here CI's `quality-gate` job now runs
+  `pre_commit_validator.py` on the PR's diff (soft-reset to the base, then validate the staged change),
+  so a red `quality-gate` is often an inline import or silent except. Reproduce it the same way
+  locally; the validator stops at the first hit per file and exempts `test_*.py`, so confirm a fix by
+  re-running it. Ruff `E402` is module-level only and does not catch a function-body import. A branch far behind `main` may predate
   whole CI jobs, so its green set is smaller than today's gate. Reproduce the gate locally when you can.
 
 ## 3. The fixed rubric — address every perspective
@@ -217,8 +219,8 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
 - §0 goal + authoritative definition read first; PR/commit claims checked against their evidence.
 - §1 all three comment surfaces read; prior findings resolved fixed/open/never-valid; heads compared
   before any "re-review"; merged-unreviewed fixes get a post-merge review.
-- §2 branch source in a detached, fail-stop scratch worktree; private `refs/review/*`; CI and
-  commit-hook gates both accounted for.
+- §2 branch source in a detached, fail-stop scratch worktree; private `refs/review/*`; a red check's log
+  read and the gate reproduced locally.
 - §3 every perspective covered; tests red-green or mutation-checked and actually run; architecture-fit
   and extraction faithfulness checked; prod-readiness stated on both gates.
 - §4/§5/§6 house format, posted as a comment, PII masked.
