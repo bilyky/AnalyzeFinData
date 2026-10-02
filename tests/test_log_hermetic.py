@@ -19,8 +19,11 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import ai_portfolio_game
 import autonomous_pipeline
+import bootstrap_dna
 import daily_task
+import workbook_read
 import tests as harness
 from aether import logger as aether_logger
 
@@ -66,6 +69,34 @@ class TestLogPathsRedirected(unittest.TestCase):
         repo = _REPO_DATA.parent
         self.assertEqual([f for f in files if Path(f).resolve().parent == repo or _inside_repo_data(f)], [])
 
+
+
+class TestGameStateRedirected(unittest.TestCase):
+    """The game state file and its backups never resolve into the repo's Data/.
+
+    save_game() backs the file up into GAME_BACKUP_DIR and then PRUNES that folder to
+    the last 15 backups, so redirecting the file alone would delete real backups. Each
+    behavioural test asserts the redirect first, so a broken harness fails here
+    without ever writing a production file.
+    """
+
+    def _assert_redirected(self):
+        for name, path in [("ai_portfolio_game.AI_GAME_FILE", ai_portfolio_game.AI_GAME_FILE),
+                           ("ai_portfolio_game.GAME_BACKUP_DIR", ai_portfolio_game.GAME_BACKUP_DIR),
+                           ("workbook_read.GAME_FILE", workbook_read.GAME_FILE),
+                           ("bootstrap_dna.GAME_FILE", bootstrap_dna.GAME_FILE)]:
+            self.assertFalse(_inside_repo_data(path), f"{name} -> {path}")
+
+    def test_game_paths_redirected(self):
+        self._assert_redirected()
+
+    def test_save_and_load_stay_in_the_temp_dir(self):
+        self._assert_redirected()  # must hold BEFORE anything is written
+        state = {"balance": 123.0, "equity": 123.0, "positions": {}, "history": []}
+        ai_portfolio_game.save_game(state)
+        ai_portfolio_game.save_game(state)  # 2nd save backs up the 1st into GAME_BACKUP_DIR
+        self.assertEqual(ai_portfolio_game.load_game()["balance"], 123.0)
+        self.assertTrue(any(ai_portfolio_game.GAME_BACKUP_DIR.glob("ai_portfolio_game_*.json")))
 
 class TestProcessSideEffectsBlocked(unittest.TestCase):
     def test_kill_game_launch_and_scheduler_changes_are_refused(self):

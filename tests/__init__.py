@@ -81,7 +81,10 @@ _seed_wb = _openpyxl.Workbook()
 _seed_wb.active.title = "Research"
 _seed_wb.save(_test_xlsx_path)
 
-for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomous_pipeline"):
+_test_game_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+_test_game_file = Path(_test_game_dir.name) / "ai_portfolio_game.json"
+
+for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomous_pipeline", "bootstrap_dna"):
     try:
         _mod = _importlib.import_module(_mod_name)
     except Exception:
@@ -90,6 +93,15 @@ for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomou
     # (Data/autonomous_run.log, read by watchdog and the dashboard) — redirect it too.
     if hasattr(_mod, "LOG_FILE_PATH"):
         _mod.LOG_FILE_PATH = Path(_test_log_dir.name) / "autonomous_run.log"
+    # Game state: ai_portfolio_game is the only writer (save_game, load_game's backup
+    # restore). Its backups MUST move with it — save_game prunes GAME_BACKUP_DIR to the
+    # last 15, so redirecting the file alone would delete real backups. Readers
+    # (workbook_read / bootstrap_dna GAME_FILE) point at the same temp file.
+    if hasattr(_mod, "AI_GAME_FILE"):
+        _mod.AI_GAME_FILE = _test_game_file
+        _mod.GAME_BACKUP_DIR = Path(_test_game_dir.name) / "Backup" / "Game"
+    if hasattr(_mod, "GAME_FILE"):
+        _mod.GAME_FILE = _test_game_file
     _orig_xlsx_const = getattr(_mod, "XLSX_FILE", None)
     if _orig_xlsx_const is None:
         continue
