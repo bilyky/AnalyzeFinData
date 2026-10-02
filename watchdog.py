@@ -725,7 +725,7 @@ def run_watchdog():
     #    down; it latches 'sms_required' and we alert a human. A token momentarily dead between
     #    midnight-ET and the 05:15 refresh is normal — we log it, we do NOT fail the run.
     try:
-        # Unattended: on an ET weekend this renews only and never mints (reason 'weekend').
+        # On ET weekends this only renews; it won't log in (reason 'weekend').
         rr = etrade.scheduled_reauth("production", weekend_mint=False)
     except Exception as e:
         rr = {"ok": False, "reason": "error"}

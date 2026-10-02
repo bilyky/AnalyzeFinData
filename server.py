@@ -1176,9 +1176,8 @@ def cmd_etrade_reauth(scheduled: bool = False) -> None:
     consecutive-failure count reaches the hard-block threshold — so EVERY door (lazy get_tokens,
     this scheduled path, the web button, the script) reports a failure streak identically instead
     of only this one. Prints the JSON result; exits 0 on ok (renewed or reauthed), 1 otherwise so
-    the scheduler/CI can detect it. With --scheduled (the unattended Task-Scheduler run) an ET
-    weekend renews only and never mints; that deliberate skip (reason 'weekend') exits 0, so the
-    task isn't reported as failed every Saturday and Sunday."""
+    the scheduler/CI can detect it. With --scheduled (the Task Scheduler run), ET weekends only
+    renew. That case (reason 'weekend') exits 0, so the task doesn't show as failed on weekends."""
     result = etrade.scheduled_reauth("production", weekend_mint=not scheduled)
     _log.info("E*TRADE scheduled re-auth result: %s", json.dumps(result))
     if not result.get("ok") and result.get("reason") in {"sms_required", "unseeded"}:

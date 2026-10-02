@@ -130,9 +130,9 @@ def _et_today() -> str:
 
 
 def _et_is_weekend() -> bool:
-    """True on an ET Saturday or Sunday — the market-closed days on which the unattended callers
-    skip a mint (a token minted then expires at midnight ET before the next session). Same
-    unmocked physical clock as _et_today()."""
+    """True on a Saturday or Sunday in ET. Scheduled callers don't log in on these days, because a
+    token made then expires at midnight ET before the market opens. Uses the same real clock as
+    _et_today()."""
     return datetime.datetime.fromtimestamp(time.time(), _ET).weekday() >= 5
 
 
@@ -156,7 +156,7 @@ class AuthReason:
     BREAKER       = "breaker"        # the anti-ban circuit breaker is cooling down (elapses on its own)
     BLOCKED       = "blocked"        # hard-blocked after N consecutive failures — needs a human re-auth
     IN_PROGRESS   = "in_progress"    # a mint is already in flight (single-flight loser) — no 2nd browser
-    WEEKEND       = "weekend"        # unattended caller on an ET weekend: renew only, mint skipped
+    WEEKEND       = "weekend"        # scheduled caller on an ET weekend: renewed only, no login
     FAILED        = "failed"         # an automated browser re-auth attempt failed
     LIVE          = "live"           # token present and valid (local record, or probe-confirmed)
     EXPIRED       = "expired"        # token dead (overnight/midnight-ET) or broker-rejected (401/403)
@@ -1656,10 +1656,10 @@ def scheduled_reauth(env: str = "production", *, weekend_mint: bool = True) -> d
     of these hold, in order:
       1. keep_alive() couldn't renew a live same-day token (pure HTTP, no browser). If it
          could, we return renewed with NO browser.
-      1b. weekend_mint is True, or today is not an ET weekend. Unattended callers pass
-         weekend_mint=False: a token minted on a market-closed day expires at midnight ET
-         before the next session, so the login is skipped (reason 'weekend', no browser).
-         Human doors keep the default, so a person can still log in on a weekend.
+      1b. It's not an ET weekend, or weekend_mint is True. Scheduled callers pass
+         weekend_mint=False, because a token made on Saturday or Sunday expires before the
+         market opens; they get reason 'weekend' and no browser. Manual callers keep the
+         default, so a person can still log in on a weekend.
       2. The persistent-profile trust marker reads 'trusted'. If it is 'sms_required' or
          'unseeded', we open NO browser and return that reason so the caller alerts a human.
       3. The circuit breaker isn't cooling.
@@ -1690,7 +1690,7 @@ def scheduled_reauth(env: str = "production", *, weekend_mint: bool = True) -> d
         result["breaker_state"] = _breaker_summary(env)
         return result
 
-    # 1b. Unattended caller on a market-closed ET day: renew only, never mint.
+    # 1b. Scheduled caller on an ET weekend: renew only, don't log in.
     if not weekend_mint and _et_is_weekend():
         result["reason"] = AuthReason.WEEKEND
         result["breaker_state"] = _breaker_summary(env)

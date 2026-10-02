@@ -192,8 +192,8 @@ class TestScheduledReauth(unittest.TestCase):
 
 
 class TestScheduledReauthWeekendGate(TestScheduledReauth):
-    """Unattended callers pass weekend_mint=False: on an ET weekend the door renews only and never
-    mints. Human doors keep the default and can still log in on a weekend."""
+    """Scheduled callers pass weekend_mint=False, so on an ET weekend they only renew. Manual
+    callers keep the default and can still log in on a weekend."""
 
     def _run_gate(self, *, weekend, weekend_mint, alive):
         patches = self._patches(alive=alive, trust="trusted")
@@ -213,10 +213,10 @@ class TestScheduledReauthWeekendGate(TestScheduledReauth):
         alive = {"issued_date_et": etrade._et_today()}
         cases = [
             # weekend, weekend_mint, live token, expected reason, browser opened
-            (True,  False, None,  "weekend",  False),  # unattended, weekend, dead token: no mint
-            (True,  False, alive, "renewed",  False),  # weekend still renews a live token
-            (False, False, None,  "reauthed", True),   # unattended on a weekday still mints
-            (True,  True,  None,  "reauthed", True),   # human door (default) mints on a weekend
+            (True,  False, None,  "weekend",  False),  # scheduled, weekend, dead token: no login
+            (True,  False, alive, "renewed",  False),  # a live token is still renewed on a weekend
+            (False, False, None,  "reauthed", True),   # scheduled, weekday: logs in as before
+            (True,  True,  None,  "reauthed", True),   # manual (default) can log in on a weekend
         ]
         for weekend, weekend_mint, live, reason, browser in cases:
             with self.subTest(weekend=weekend, weekend_mint=weekend_mint, live=bool(live)):
@@ -228,7 +228,7 @@ class TestScheduledReauthWeekendGate(TestScheduledReauth):
 
 
 class TestEtIsWeekend(unittest.TestCase):
-    """The weekend test uses the ET calendar, not the host's local date."""
+    """The weekend check uses the ET calendar, not the machine's local date."""
 
     def test_et_calendar_boundaries(self):
         et = etrade._ET
@@ -252,8 +252,8 @@ def _et_epoch(et, y, mo, d, h, mi):
 
 
 class TestScheduledCliWeekendExit(unittest.TestCase):
-    """`server.py etrade-reauth --scheduled` passes weekend_mint=False and treats a deliberate
-    weekend skip as success, so the Task-Scheduler run isn't reported failed every weekend."""
+    """`server.py etrade-reauth --scheduled` passes weekend_mint=False and exits 0 for a weekend
+    skip, so the Task Scheduler run doesn't show as failed on weekends."""
 
     def test_scheduled_flag_and_exit_codes(self):
         cases = [
