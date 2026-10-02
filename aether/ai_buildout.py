@@ -16,7 +16,12 @@ early signals that a supplier's results are growing:
 The ranking is NOT validated and adds no buy weight. It is a watchlist only until a
 backtest shows the signals have a forward-return spread.
 
-Theme membership: a curated seed list first, then the company's SEC SIC code.
+Themes (see THEMES): each has a curated seed list and, optionally, SEC SIC codes that
+pull in more universe symbols. The signals are the same for every theme.
+  - ai_buildout:  power / cooling / electrical / construction (seed + SIC)
+  - robot_vision: what robots need to see: sensors, vision chips, perception
+                  software (seed only; SIC 3674/7372 would pull in every chip and
+                  software company)
 """
 
 import datetime
@@ -33,8 +38,6 @@ from aether.config import CFG
 from aether.logger import get_logger as _get_logger
 
 _log = _get_logger("ai_buildout")
-
-BUCKETS = ("power", "cooling", "electrical", "construction")
 
 # Curated names with known AI-data-center exposure. Takes precedence over SIC codes.
 SEED_THEME = {
@@ -68,6 +71,33 @@ SIC_BUCKET = {
     3241: "construction", 8711: "construction",
 }
 
+# Robot vision: eyes (lidar, radar, machine vision, thermal, image sensors), chips that
+# process what the eyes capture, and perception / autonomy software. Robot makers
+# themselves are left out. Foreign filers without quarterly XBRL (Innoviz, Hesai,
+# Pony, WeRide) are left out because the SEC signals would all be empty.
+ROBOT_VISION_SEED = {
+    "OUST": "eyes", "AEVA": "eyes", "MVIS": "eyes", "ARBE": "eyes",
+    "CGNX": "eyes", "ZBRA": "eyes", "TDY": "eyes", "ON": "eyes",
+    "AMBA": "chips", "LSCC": "chips", "INDI": "chips", "CEVA": "chips",
+    "MBLY": "software", "AUR": "software",
+}
+
+THEMES = {
+    "ai_buildout": {
+        "title": "AI-buildout supply chain",
+        "buckets": ("power", "cooling", "electrical", "construction"),
+        "seed": SEED_THEME,
+        "sic": SIC_BUCKET,
+    },
+    "robot_vision": {
+        "title": "Robot vision: eyes, chips, software",
+        "buckets": ("eyes", "chips", "software"),
+        "seed": ROBOT_VISION_SEED,
+        "sic": {},
+    },
+}
+DEFAULT_THEME = "ai_buildout"
+
 _REVENUE_TAGS = (
     "RevenueFromContractWithCustomerExcludingAssessedTax",
     "Revenues",
@@ -78,6 +108,9 @@ _RPO_TAG = "RevenueRemainingPerformanceObligation"
 # RPO swings beyond this are usually a reporting change or an acquisition, not
 # organic backlog growth (e.g. AES $7M -> $435M, CEG $1.0B -> $12.0B). Shown, not scored.
 RPO_SUSPECT_PCT = 300
+# Revenue / RPO periods older than this are shown but not scored. Domestic filers
+# report within ~45 days of quarter end; foreign filers (20-F) can be 9+ months old.
+STALE_DAYS = 200
 
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
@@ -88,13 +121,20 @@ _RETRIES = 2
 _RETRY_BACKOFF_S = 5
 
 
-def bucket_for(symbol, sic=None):
+def _theme(theme):
+    if theme not in THEMES:
+        raise ValueError(f"Unknown theme {theme!r}; known: {', '.join(THEMES)}")
+    return THEMES[theme]
+
+
+def bucket_for(symbol, sic=None, theme=DEFAULT_THEME):
     """Theme bucket for a symbol, or None. Seed list wins over the SIC code."""
+    t = _theme(theme)
     s = (symbol or "").upper().strip()
-    if s in SEED_THEME:
-        return SEED_THEME[s]
+    if s in t["seed"]:
+        return t["seed"][s]
     try:
-        return SIC_BUCKET.get(int(sic)) if sic not in (None, "") else None
+        return t["sic"].get(int(sic)) if sic not in (None, "") else None
     except (TypeError, ValueError):
         return None
 
@@ -312,8 +352,11 @@ def chaikin_money_flow(bars, n=20):
 def watch_score(row):
     """Simple points ranking of the leading signals. Unvalidated; for sorting only."""
     pts = 0
+    stale = row.get("stale") or ()
     for key in ("revenue_yoy", "rpo_yoy"):
         v = row.get(key)
+        if key in stale:
+            continue
         if key == "rpo_yoy" and v is not None and abs(v) > RPO_SUSPECT_PCT:
             continue
         if v is not None:
@@ -348,6 +391,8 @@ def build_row(symbol, bucket, sub, facts, ohlcv_ts, spy_bars, as_of):
         "rs_60d": round(r60 - spy60, 1) if r60 is not None and spy60 is not None else None,
         "cmf_20": chaikin_money_flow(bars),
     }
+    row["stale"] = [key for key, end in (("revenue_yoy", rev_end), ("rpo_yoy", rpo_end))
+                    if end and (_d(as_of) - _d(end)).days > STALE_DAYS]
     row["watch_score"] = watch_score(row)
     return row
 
@@ -378,15 +423,18 @@ def _load_ohlcv(symbol):
         return None
 
 
-def scan(as_of, universe=None, failed=None):
-    """Classify universe + seed names into buckets and compute signals.
-    Returns a list of rows sorted by watch_score (high first). Symbols whose SEC
-    submissions could not be fetched are appended to `failed` (if given) so the
-    caller can report them instead of dropping them silently."""
+def scan(as_of, universe=None, failed=None, theme=DEFAULT_THEME):
+    """Classify universe + seed names into the theme's buckets and compute signals.
+    A seed-only theme (no SIC codes) scans just its seed list. Returns a list of
+    rows sorted by watch_score (high first). Symbols whose SEC submissions could
+    not be fetched are appended to `failed` (if given) so the caller can report
+    them instead of dropping them silently."""
+    t = _theme(theme)
     cik_map = ticker_cik_map()
     if not cik_map:
         raise RuntimeError("SEC ticker map unavailable; cannot scan.")
-    symbols = list(dict.fromkeys((universe or load_universe()) + list(SEED_THEME)))
+    base = (universe or load_universe()) if t["sic"] else []
+    symbols = list(dict.fromkeys(base + list(t["seed"])))
     spy_bars = _real_bars(_load_ohlcv("SPY") or {}, as_of)
 
     rows = []
@@ -397,7 +445,7 @@ def scan(as_of, universe=None, failed=None):
         sub = submissions(cik)
         if sub is None and failed is not None:
             failed.append(sym)
-        bucket = bucket_for(sym, (sub or {}).get("sic"))
+        bucket = bucket_for(sym, (sub or {}).get("sic"), theme)
         if not bucket:
             continue
         rows.append(build_row(sym, bucket, sub, company_facts(cik),
@@ -406,17 +454,24 @@ def scan(as_of, universe=None, failed=None):
     return rows
 
 
-def save(rows, as_of, out_path=None, failed=None):
-    out_path = Path(out_path or Path(paths.data_dir()) / "ai_buildout_watch.json")
-    out_path.write_text(json.dumps({"as_of": as_of, "rows": rows,
+def output_path(theme=DEFAULT_THEME, suffix=".json") -> Path:
+    """Data/<theme>_watch.json (or .html)."""
+    _theme(theme)
+    return Path(paths.data_dir()) / f"{theme}_watch{suffix}"
+
+
+def save(rows, as_of, out_path=None, failed=None, theme=DEFAULT_THEME):
+    out_path = Path(out_path or output_path(theme))
+    out_path.write_text(json.dumps({"as_of": as_of, "theme": theme,
+                                    "title": THEMES[theme]["title"], "rows": rows,
                                     "fetch_failed": sorted(failed or [])}, indent=2),
                         encoding="utf-8")
     return out_path
 
 
-def load_latest(path=None):
+def load_latest(path=None, theme=DEFAULT_THEME):
     """Last saved scan, or None. Used by the web endpoint."""
-    path = Path(path or Path(paths.data_dir()) / "ai_buildout_watch.json")
+    path = Path(path or output_path(theme))
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))

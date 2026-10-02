@@ -762,26 +762,29 @@ async function loadReserves() {
         : `<tr><td colspan="6" class="text-center text-slate-500 py-6">No reserves.</td></tr>`;
 }
 
-// AI-buildout supply-chain watchlist (watch-only, from scripts/monitoring/ai_buildout_watch.py).
+// Theme watchlists (watch-only, from scripts/monitoring/ai_buildout_watch.py --theme ...).
+$("theme-watch-select")?.addEventListener("change", () => loadAiBuildout());
 async function loadAiBuildout() {
     const body = $("ai-buildout-body");
     const meta = $("ai-buildout-meta");
+    const theme = $("theme-watch-select")?.value || "ai_buildout";
     const num = (v, d = 1) => (v === null || v === undefined) ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(d);
     try {
-        const d = await api("/api/ai_buildout");
+        const d = await api(`/api/ai_buildout?theme=${encodeURIComponent(theme)}`);
         const rows = d.rows || [];
         const failed = d.fetch_failed || [];
         meta.textContent = d.as_of
-            ? `As of ${d.as_of} · ${rows.length} names · ranking is unvalidated and adds no buy weight · RPO "?" = likely reporting change, not scored`
+            ? `As of ${d.as_of} · ${rows.length} names · ranking is unvalidated and adds no buy weight · RPO "?" = likely reporting change, not scored · "old" = quarter ended over 200 days ago, not scored`
               + (failed.length ? ` · SEC fetch failed, not scanned: ${failed.join(", ")}` : "")
-            : "No scan yet — run scripts/monitoring/ai_buildout_watch.py";
+            : `No scan yet — run scripts/monitoring/ai_buildout_watch.py --theme ${theme}`;
         body.innerHTML = rows.length ? rows.map((r) => `
             <tr>
                 <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${esc(r.symbol)}">${esc(r.symbol)}</td>
                 <td class="text-xs">${esc(r.bucket)}</td>
                 <td class="font-bold ${cls(r.watch_score)}">${num(r.watch_score, 0)}</td>
-                <td class="${cls(r.revenue_yoy)}">${num(r.revenue_yoy)}</td>
-                <td class="${cls(r.rpo_yoy)}">${num(r.rpo_yoy)}${r.rpo_yoy !== null && Math.abs(r.rpo_yoy) > 300 ? "?" : ""}</td>
+                <td class="text-xs">${esc(r.revenue_q_end || "—")}</td>
+                <td class="${cls(r.revenue_yoy)}">${num(r.revenue_yoy)}${(r.stale || []).includes("revenue_yoy") ? " <span class=\"mut\">old</span>" : ""}</td>
+                <td class="${cls(r.rpo_yoy)}">${num(r.rpo_yoy)}${r.rpo_yoy !== null && Math.abs(r.rpo_yoy) > 300 ? "?" : ""}${(r.stale || []).includes("rpo_yoy") ? " <span class=\"mut\">old</span>" : ""}</td>
                 <td>${esc(r.agreements_90d)}</td>
                 <td class="text-xs">${esc((r.agreement_dates || [])[0] || "—")}</td>
                 <td class="${cls(r.rs_60d)}">${num(r.rs_60d)}</td>
@@ -789,7 +792,7 @@ async function loadAiBuildout() {
                 <td>${r.close ?? "—"}</td>
                 <td class="text-xs mut">${esc(r.name || "")}</td>
             </tr>`).join("")
-            : `<tr><td colspan="11" class="text-center text-slate-500 py-6">No rows.</td></tr>`;
+            : `<tr><td colspan="12" class="text-center text-slate-500 py-6">No rows.</td></tr>`;
     } catch (e) {
         meta.textContent = `Failed to load: ${e.message}`;
         body.innerHTML = "";
