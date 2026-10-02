@@ -148,6 +148,7 @@
             <div class="flex gap-2 mb-4">
                 <button class="subtab-btn active" data-research-sub="screener">Screener</button>
                 <button class="subtab-btn" data-research-sub="predictions">Predictions</button>
+                <button class="subtab-btn" data-research-sub="ai_buildout">AI Buildout</button>
             </div>
 
             <div id="research-screener">
@@ -229,6 +230,27 @@
                         </thead>
                         <tbody id="reserves-body">
                             <tr><td colspan="6" class="text-center text-slate-500 py-6">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- AI Buildout sub-tab: power / cooling / electrical / construction watchlist -->
+            <div id="research-ai_buildout" class="hidden">
+                <h2 class="section-title">AI Buildout Supply Chain (watch-only)</h2>
+                <div id="ai-buildout-meta" class="text-xs mut mb-2">Loading…</div>
+                <div class="overflow-x-auto">
+                    <table class="data-table text-sm">
+                        <thead>
+                            <tr><th>Symbol</th><th>Bucket</th><th title="Unvalidated ranking points; no buy weight">Score</th>
+                                <th title="Latest quarter revenue vs same quarter a year ago (SEC XBRL)">Rev YoY%</th>
+                                <th title="Remaining performance obligation (backlog) vs a year ago">RPO YoY%</th>
+                                <th title="8-K filings with item 1.01 (material agreement) in the last 90 days">8-K 1.01</th>
+                                <th>Last agreement</th><th title="60-day return minus SPY 60-day return">RS 60d</th>
+                                <th title="20-day Chaikin money flow, real-volume bars only">CMF20</th><th>Close</th><th>Name</th></tr>
+                        </thead>
+                        <tbody id="ai-buildout-body">
+                            <tr><td colspan="11" class="text-center text-slate-500 py-6">Loading…</td></tr>
                         </tbody>
                     </table>
                 </div>
