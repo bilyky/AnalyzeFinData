@@ -519,8 +519,8 @@ class TestPersistentProfileModes(unittest.TestCase):
             rules_path = Path(td) / "Data" / "failure_dna_rules.json"
             rules_path.parent.mkdir(parents=True)
             rules_path.write_text(json.dumps(test_rules), encoding="utf-8")
-            orig = game.BASE_DIR
-            game.BASE_DIR = Path(td)
+            orig = game.ledgers.FAILURE_RULES_FILE
+            game.ledgers.FAILURE_RULES_FILE = rules_path
             try:
                 is_toxic, reason = game.check_failure_rules("AAPL", "Be-", 9.5, 0.5, "Technology")
                 self.assertTrue(is_toxic)
@@ -534,7 +534,7 @@ class TestPersistentProfileModes(unittest.TestCase):
                 self.assertFalse(is_toxic)
                 self.assertEqual(reason, "")
             finally:
-                game.BASE_DIR = orig
+                game.ledgers.FAILURE_RULES_FILE = orig
 
     def test_log_closed_trade_dna_writing(self):
         pos = {
@@ -545,13 +545,13 @@ class TestPersistentProfileModes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             dna_path = Path(td) / "Data" / "trade_history_dna.json"
             dna_path.parent.mkdir(parents=True)
-            orig = game.BASE_DIR
-            game.BASE_DIR = Path(td)
+            orig = game.ledgers.TRADE_DNA_FILE
+            game.ledgers.TRADE_DNA_FILE = dna_path
             try:
                 game.log_closed_trade_dna("TEST_SYM", pos, 105.0, "2026-06-05")
                 records = json.loads(dna_path.read_text(encoding="utf-8"))
             finally:
-                game.BASE_DIR = orig
+                game.ledgers.TRADE_DNA_FILE = orig
 
         self.assertEqual(len(records), 1)
         rec = records[0]
@@ -721,7 +721,7 @@ class TestPersistentProfileModes(unittest.TestCase):
         mock_series = [{"close": 100.0}] * 15
         with tempfile.TemporaryDirectory() as td:
             tmp_dna = Path(td) / "trade_history_dna.json"
-            with mock.patch.object(circuit_breaker, "DNA_FILE", tmp_dna), \
+            with mock.patch.object(game.ledgers, "TRADE_DNA_FILE", tmp_dna), \
                  mock.patch("circuit_breaker.load_spy_history", return_value=mock_series), \
                  mock.patch("circuit_breaker.load_vxx_prev_close", return_value=100.0):
                 circuit_breaker.log_circuit_breaker_trigger_dna(
