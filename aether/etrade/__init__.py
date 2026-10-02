@@ -363,9 +363,10 @@ def _load_reauth_state(env: str = "production") -> dict:
 
     A missing/corrupt file reads as a fully-open gate (no active cooldown).
     Routes through ``make_etrade_store().reauth.load`` so the breaker state follows the
-    configured backend (file today; a shared DB under ``DATABASE_URL`` — reauth state is
-    non-secret/shareable, so a DB backend gives every pod one breaker). Behavior-identical
-    to the file adapter today.
+    configured backend: file today; a shared DB only when opted in with
+    ``AETHER_ETRADE_STORE=db`` (reauth state is non-secret/shareable, so a DB backend gives
+    every pod one breaker). An app ``DATABASE_URL`` alone keeps the file backend.
+    Behavior-identical to the file adapter today.
     """
     return make_etrade_store().reauth.load(env)
 

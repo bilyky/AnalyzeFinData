@@ -231,9 +231,10 @@ class TestKeepAliveIsRenewOnly(unittest.TestCase):
 class TestReauthStatePortWiring(unittest.TestCase):
     """The three reauth-state helpers must route their I/O through the configured
     ``make_etrade_store().reauth`` port (not a hardcoded File adapter), so a DB backend
-    swaps in via ``DATABASE_URL`` with zero call-site change — the same wiring pattern as
-    the lock (#120) and browser_state (#128) ports. Behavior is unchanged on the file
-    backend; this pins the routing so a regression to ``FileReauthStateStore()`` is caught.
+    swaps in via the ``AETHER_ETRADE_STORE=db`` opt-in with zero call-site change — the same
+    wiring pattern as the lock (#120) and browser_state (#128) ports. Behavior is unchanged
+    on the file backend; this pins the routing so a regression to ``FileReauthStateStore()``
+    is caught. (These mock the factory; TestReauthStateOnProdConfig runs the real one.)
     """
 
     def _bundle_with_spy_reauth(self):
@@ -261,6 +262,29 @@ class TestReauthStatePortWiring(unittest.TestCase):
         with mock.patch.object(etrade, "make_etrade_store", return_value=bundle):
             etrade.reset_reauth_circuit_breaker("production")
         reauth.reset.assert_called_once_with("production")
+
+
+class TestReauthStateOnProdConfig(_StateFileMixin, unittest.TestCase):
+    """The REAL factory under PROD's config: the app's own Postgres URL is set
+    (``database.url``) and there is no ``AETHER_ETRADE_STORE=db`` opt-in. The breaker must
+    stay on the working file backend and round-trip. Routing the breaker through a factory
+    that picked the unimplemented DB stub here would break get_tokens' automated mint gate
+    and scheduled_reauth on PROD (the #144 failure mode), which the mocked wiring tests
+    above cannot see."""
+
+    def test_breaker_round_trips_with_app_database_url_set(self):
+        clean = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "AETHER_ETRADE_STORE")}
+        now = etrade.time.time()
+        state = {"consecutive_failures": 2, "last_attempt": now, "cooldown_until": now + 600}
+        with mock.patch.dict(os.environ, clean, clear=True), \
+             mock.patch.object(etrade.CFG, "database_url", "postgresql://example/app", create=True):
+            self.assertEqual(etrade.make_etrade_store().backend, "file")
+            etrade._save_reauth_state(state, "production")
+            self.assertEqual(etrade._load_reauth_state("production"), state)
+            self.assertGreater(etrade._reauth_cooldown_remaining("production"), 0)   # get_tokens' mint gate
+            etrade.reset_reauth_circuit_breaker("production")
+            self.assertEqual(etrade._load_reauth_state("production")["consecutive_failures"], 0)
+            self.assertEqual(etrade._reauth_cooldown_remaining("production"), 0.0)
 
 
 if __name__ == "__main__":
