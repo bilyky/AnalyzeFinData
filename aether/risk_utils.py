@@ -4,12 +4,28 @@ import os
 import pandas as pd
 from pathlib import Path
 from aether.config import CFG
+from aether.utils import _to_float
 from aether.logger import get_logger as _get_logger
 
 _log = _get_logger("risk_utils")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 OHLCV_DIR = BASE_DIR / "Data" / "Symbol_full"
+
+def setup_ok(price, idx, all_dates, ohlcv_ts, sma_period=20, dir_days=3) -> bool:
+    """The Research-sheet Setup flag (entry filter): price > SMA(sma_period) of the prior
+    closes AND price > close[dir_days ago]. Single definition — powergauge writes the
+    workbook column with it and the backtests replay it, so what they measure is what
+    the game gates on. Needs a full sma_period-bar window, else False."""
+    sma_w = all_dates[max(0, idx - sma_period): idx]
+    if len(sma_w) >= sma_period:
+        sma = sum(_to_float(ohlcv_ts[d].get('4. close'), 0) for d in sma_w) / len(sma_w)
+        trend_ok = price > sma
+    else:
+        trend_ok = False
+    dir_ok = price > _to_float(ohlcv_ts[all_dates[idx - dir_days]].get('4. close'), 0) if idx >= dir_days else False
+    return trend_ok and dir_ok
+
 
 def calculate_atr(symbol, period=14):
     """Calculate the Average True Range (ATR) from local daily OHLCV files."""
