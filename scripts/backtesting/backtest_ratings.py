@@ -41,6 +41,7 @@ from scoring import (
     rel_volume_bucket as _rel_vol_fn,
     market_regime as _market_regime,
 )
+from aether.risk_utils import setup_ok as _setup_ok
 from patterns import (
     candlestick_score as _cs_score,
     chart_pattern_score as _cp_score,
@@ -147,6 +148,11 @@ def extract_pgr_corr(data):
         return 0
 
 
+def compute_setup_ok(price, idx, all_dates, ohlcv_ts):
+    """The Research-sheet Setup flag, via the one production definition (risk_utils.setup_ok)."""
+    return _setup_ok(price, idx, all_dates, ohlcv_ts, sma_period=SMA_DAYS, dir_days=3)
+
+
 def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map):
     cl = data.get('checklist_stocks') or {}
     pgr_corr      = extract_pgr_corr(data)
@@ -161,19 +167,7 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     day           = int(date_str[8:10])
     week          = _week_of_month(day)
 
-    # setup_ok: price > SMA20 AND price > close[3d ago]
-    sma_w = all_dates[max(0, idx - SMA_DAYS): idx]
-    if len(sma_w) >= SMA_DAYS // 2:
-        sma20 = sum(float(ohlcv_ts[d].get('4. close', 0)) for d in sma_w) / len(sma_w)
-        trend_ok = price > sma20 > 0
-    else:
-        trend_ok = False
-    if idx >= 3:
-        price_3d = float(ohlcv_ts[all_dates[idx - 3]].get('4. close', 0))
-        dir_ok = price > price_3d > 0
-    else:
-        dir_ok = False
-    setup_ok = trend_ok and dir_ok
+    setup_ok = compute_setup_ok(price, idx, all_dates, ohlcv_ts)
 
     # risk/reward from OHLCV
     stop_w = all_dates[max(0, idx - STOP_DAYS): idx]
