@@ -13,7 +13,7 @@ to a shared database and (b) running the auth plane and a scaled data plane as
 separate k8s pods. This module defines **ports** (abstract interfaces) for each
 kind of state plus a **file adapter** (today's behaviour) and a seam where a
 ``store_db`` adapter can be dropped in later — selected by ``make_etrade_store``
-from ``DATABASE_URL`` with *zero* call-site changes.
+via the explicit ``AETHER_ETRADE_STORE=db`` opt-in with *zero* call-site changes.
 
 DESIGN NOTES
 ------------
@@ -392,12 +392,20 @@ def _file_store() -> EtradeStore:
 def make_etrade_store(config=None) -> EtradeStore:
     """Select the persistence backend.
 
-    ``DATABASE_URL`` empty / unset  -> file backend (today's behaviour).
-    ``DATABASE_URL`` set            -> DB backend (aether.etrade.store_db).
+    The DB backend is **explicit opt-in**: ``AETHER_ETRADE_STORE=db``. Anything else
+    (unset, ``file``) -> file backend (today's behaviour).
 
-    ``config`` may be any object exposing ``database_url`` (defaults to the global
-    ``CFG``); env var ``DATABASE_URL`` always wins, matching CFG's env-over-json rule.
+    ``DATABASE_URL`` / config ``database.url`` alone does NOT select it. That setting is the
+    app's own Postgres (``database.py``), so a host can have it configured for reasons that
+    have nothing to do with E*TRADE, while the E*TRADE DB adapter is still a stub whose every
+    method raises (``store_db``). Keying the backend off it made every port-routed E*TRADE
+    call fail on such a host (seen on PROD: preflight's ``scheduled_reauth`` lock, and
+    ``ETradeClient`` token loads). Once opted in, the URL comes from ``DATABASE_URL`` (env
+    wins) or ``config.database_url``; ``config`` defaults to the global ``CFG``.
     """
+    backend = (os.environ.get("AETHER_ETRADE_STORE") or "file").strip().lower()
+    if backend != "db":
+        return _file_store()
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
         if config is None:
@@ -408,7 +416,7 @@ def make_etrade_store(config=None) -> EtradeStore:
                 config = None
         db_url = getattr(config, "database_url", None) if config is not None else None
     if not db_url:
-        return _file_store()
+        raise ValueError("AETHER_ETRADE_STORE=db but no DATABASE_URL / database.url is configured.")
     # DB backend requested — kept isolated so importing it (and SQLAlchemy) is
     # only paid for when actually selected.
     from aether.etrade.store_db import make_db_store

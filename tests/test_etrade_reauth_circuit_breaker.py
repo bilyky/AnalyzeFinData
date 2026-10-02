@@ -188,11 +188,36 @@ class TestKeepAliveIsRenewOnly(unittest.TestCase):
         renew.assert_not_called()
 
     def test_rejected_token_returns_none(self):
+        # A rejected same-day token gets exactly ONE pure-HTTP reactivation attempt (it may only
+        # be 2 h+ idle); if the renew fails too, keep_alive returns None — still no browser.
         with mock.patch.object(etrade, "_load_tokens", return_value={"oauth_token": "t"}), \
              mock.patch.object(etrade, "_probe_token_auth", return_value=False), \
-             mock.patch.object(etrade, "renew_tokens") as renew:
+             mock.patch.object(etrade, "renew_tokens", return_value=None) as renew, \
+             mock.patch.object(etrade, "_login_headless") as login:
             self.assertIsNone(etrade.keep_alive("production"))
-        renew.assert_not_called()
+        renew.assert_called_once()
+        login.assert_not_called()
+
+    def test_idle_token_is_reactivated_by_renew(self):
+        # E*TRADE inactivates a token after 2 h without requests (401) and the renew endpoint
+        # reactivates it. keep_alive must recover it rather than report it dead.
+        toks, renewed = {"oauth_token": "t"}, {"oauth_token": "t2"}
+        cases = [
+            # probe results (before, after renew), expected
+            ((False, True),  renewed),   # idle -> reactivated
+            ((False, None),  renewed),   # re-probe indeterminate -> keep (same-day rule)
+            ((False, False), None),      # still rejected after renew -> dead
+        ]
+        for probes, expected in cases:
+            with self.subTest(probes=probes), \
+                 mock.patch.object(etrade, "_load_tokens", return_value=toks), \
+                 mock.patch.object(etrade, "_probe_token_auth", side_effect=list(probes)) as probe, \
+                 mock.patch.object(etrade, "renew_tokens", return_value=renewed) as renew, \
+                 mock.patch.object(etrade, "_login_headless") as login:
+                self.assertIs(etrade.keep_alive("production"), expected)
+                renew.assert_called_once_with(toks, "production")
+                self.assertIs(probe.call_args_list[1].args[0], renewed)   # re-probed the renewed token
+                login.assert_not_called()
 
     def test_valid_token_is_renewed(self):
         toks, renewed = {"oauth_token": "t"}, {"oauth_token": "t2"}
@@ -201,6 +226,65 @@ class TestKeepAliveIsRenewOnly(unittest.TestCase):
              mock.patch.object(etrade, "renew_tokens", return_value=renewed) as renew:
             self.assertIs(etrade.keep_alive("production"), renewed)
         renew.assert_called_once()
+
+
+class TestReauthStatePortWiring(unittest.TestCase):
+    """The three reauth-state helpers must route their I/O through the configured
+    ``make_etrade_store().reauth`` port (not a hardcoded File adapter), so a DB backend
+    swaps in via the ``AETHER_ETRADE_STORE=db`` opt-in with zero call-site change — the same
+    wiring pattern as the lock (#120) and browser_state (#128) ports. Behavior is unchanged
+    on the file backend; this pins the routing so a regression to ``FileReauthStateStore()``
+    is caught. (These mock the factory; TestReauthStateOnProdConfig runs the real one.)
+    """
+
+    def _bundle_with_spy_reauth(self):
+        reauth = mock.Mock()
+        reauth.load.return_value = {"consecutive_failures": 0, "cooldown_until": 0.0}
+        return mock.Mock(reauth=reauth), reauth
+
+    def test_load_routes_through_port(self):
+        bundle, reauth = self._bundle_with_spy_reauth()
+        with mock.patch.object(etrade, "make_etrade_store", return_value=bundle) as mk:
+            out = etrade._load_reauth_state("production")
+        mk.assert_called_once_with()
+        reauth.load.assert_called_once_with("production")
+        self.assertIs(out, reauth.load.return_value)
+
+    def test_save_routes_through_port(self):
+        bundle, reauth = self._bundle_with_spy_reauth()
+        state = {"consecutive_failures": 2, "cooldown_until": 123.0}
+        with mock.patch.object(etrade, "make_etrade_store", return_value=bundle):
+            etrade._save_reauth_state(state, "sandbox")
+        reauth.save.assert_called_once_with(state, "sandbox")
+
+    def test_reset_routes_through_port(self):
+        bundle, reauth = self._bundle_with_spy_reauth()
+        with mock.patch.object(etrade, "make_etrade_store", return_value=bundle):
+            etrade.reset_reauth_circuit_breaker("production")
+        reauth.reset.assert_called_once_with("production")
+
+
+class TestReauthStateOnProdConfig(_StateFileMixin, unittest.TestCase):
+    """The REAL factory under PROD's config: the app's own Postgres URL is set
+    (``database.url``) and there is no ``AETHER_ETRADE_STORE=db`` opt-in. The breaker must
+    stay on the working file backend and round-trip. Routing the breaker through a factory
+    that picked the unimplemented DB stub here would break get_tokens' automated mint gate
+    and scheduled_reauth on PROD (the #144 failure mode), which the mocked wiring tests
+    above cannot see."""
+
+    def test_breaker_round_trips_with_app_database_url_set(self):
+        clean = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "AETHER_ETRADE_STORE")}
+        now = etrade.time.time()
+        state = {"consecutive_failures": 2, "last_attempt": now, "cooldown_until": now + 600}
+        with mock.patch.dict(os.environ, clean, clear=True), \
+             mock.patch.object(etrade.CFG, "database_url", "postgresql://example/app", create=True):
+            self.assertEqual(etrade.make_etrade_store().backend, "file")
+            etrade._save_reauth_state(state, "production")
+            self.assertEqual(etrade._load_reauth_state("production"), state)
+            self.assertGreater(etrade._reauth_cooldown_remaining("production"), 0)   # get_tokens' mint gate
+            etrade.reset_reauth_circuit_breaker("production")
+            self.assertEqual(etrade._load_reauth_state("production")["consecutive_failures"], 0)
+            self.assertEqual(etrade._reauth_cooldown_remaining("production"), 0.0)
 
 
 if __name__ == "__main__":

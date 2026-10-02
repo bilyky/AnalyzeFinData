@@ -10,7 +10,7 @@ import rapidapi
 import sys
 import console_safe
 import circuit_breaker
-from aether import trash
+from aether import ledgers, trash
 import aether.notify as notify
 import argparse
 from pathlib import Path
@@ -67,7 +67,7 @@ def _load_symbol_today_cache(symbol: str, today_str: str) -> dict:
 
 def check_failure_rules(symbol, pgr, score, z_score, industry, s10=0.0) -> tuple[bool, str]:
     """Check if the candidate matches any active toxic rules in Data/failure_dna_rules.json or dynamic filters."""
-    rules_file = BASE_DIR / "Data" / "failure_dna_rules.json"
+    rules_file = ledgers.FAILURE_RULES_FILE
     
     # ── Earnings-Shock Failure Gate (Pillar 1 Guard) ──
     # Programmatic, un-bypassable veto on any symbol that has just reported a massive earnings miss
@@ -133,7 +133,7 @@ def log_closed_trade_dna(sym, pos, price, today_str):
         buy_date = buy_dna.get("buy_date", today_str)
         pnl_pct = round(((price - pos["cost"]) / pos["cost"]) * 100, 2) if pos["cost"] else 0.0
         
-        dna_file = BASE_DIR / "Data" / "trade_history_dna.json"
+        dna_file = ledgers.TRADE_DNA_FILE
         dna_list = []
         if dna_file.exists() and dna_file.stat().st_size > 0:
             with open(dna_file, "r", encoding="utf-8") as f:
@@ -1528,7 +1528,8 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         "date": today, "time": now_time, "type": "SELL", 
                         "symbol": sym, "price": price, "qty": pos["qty"], 
                         "pnl": round((price - pos["cost"]) * pos["qty"], 2),
-                        "details": f"Queued Sell: {order['reason']}"
+                        "details": f"Queued Sell: {order['reason']}",
+                        "stop_loss": pos.get("stop_loss"),
                     }
                     state["history"].append(tx)
                     new_transactions.append(tx)
@@ -1612,7 +1613,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
         # SELL logic — unified deterministic exit policy (sell_rules.exit_decision):
         # hard ATR stop > soft momentum signal (winner-protected) > hold.
-        symbols_to_sell = []
+        symbols_to_sell = {}  # sym -> exit reason, recorded on the SELL tx
         decision_entries = []
         for sym in list(state["positions"].keys()):
             pos = state["positions"][sym]
@@ -1783,22 +1784,23 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
             decision_entries.append(entry)
             if entry["rules_action"] == "SELL":
+                exit_reason = entry["rules_reason"] or "Technical exit"
                 if not is_market_hours():
                     # Queue the sell instead of executing immediately
                     if not any(q["symbol"] == sym and q["type"] == "SELL" for q in state.get("queued_orders", [])):
                         state.setdefault("queued_orders", []).append({
-                            "type": "SELL", "symbol": sym, "reason": f"Exit triggered: {entry['rules_reason'] or 'Technical exit'}"
+                            "type": "SELL", "symbol": sym, "reason": f"Exit triggered: {exit_reason}"
                         })
                         _log.info(f"📝 [Queued] After-hours SELL queued for {sym}: {entry['rules_reason']}")
                 else:
-                    symbols_to_sell.append(sym)
+                    symbols_to_sell[sym] = exit_reason
             elif entry["rules_action"] == "REVIEW":
                 # Winner above its 50-DMA on a soft signal — hold, don't dump.
                 _log.info(f"🌸 AI HOLD (winner-protected): {sym} — {entry['rules_reason']}")
         if decision_entries:
             decision_eval.log_decisions(decision_entries)
 
-        for sym in symbols_to_sell:
+        for sym, exit_reason in symbols_to_sell.items():
             pos = state["positions"][sym]
             price = prices.get(sym, pos["cost"])
             options.unwind_option_liability_if_held(sym, pos, state, price, today)
@@ -1807,13 +1809,16 @@ def run_daily_ai_management(force=False, manual_profile=None):
             # Slippage-Protected Limit Stop (STP LMT - R&D #8): Execute at exactly the stop price
             # if the market close price dropped below our stop-loss floor, preventing slippage leaks.
             stop_loss = pos.get("stop_loss", 0.0)
-            if stop_loss > 0.0 and price <= stop_loss:
+            stop_fill = stop_loss > 0.0 and price <= stop_loss
+            if stop_fill:
                 _log.info(f"🛡️ [STP LMT] Executed {sym} stop-loss at Limit price ${stop_loss:.2f} (protected against market gap ${price:.2f}).")
                 price = stop_loss
                 
             proceeds = pos["qty"] * price
             state["balance"] += proceeds
-            tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2)}
+            tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2),
+                  "details": f"Exit: {exit_reason}" + (" [STP LMT fill]" if stop_fill else ""),
+                  "stop_loss": pos.get("stop_loss")}
             state["history"].append(tx)
             new_transactions.append(tx)
             _log.info(f"🤖 AI LIVE SELL: {sym} at ${price} (Time: {now_time})")
