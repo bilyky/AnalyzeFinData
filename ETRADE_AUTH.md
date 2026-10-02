@@ -49,7 +49,9 @@ machine's only job is to keep a *human-created* session warm during the day.
      watchdog, the nightly preflight (ET weekdays only), `goal_sentry`, `scripts/etrade_reauth.py`, and
      the admin `POST /api/etrade/scheduled-reauth` endpoint. That endpoint is not the manual
      `POST /api/etrade/reauth` in §4.1. It calls `keep_alive` first, and only logs in if the profile is
-     trusted (or a TOTP secret is set), the breaker is clear, and it gets the single-flight lock. The
+     trusted (or a TOTP secret is set), the breaker is clear, and it gets the single-flight lock. On ET weekends the watchdog, the
+     05:15 task and preflight only renew; they don't log in (`reason=weekend`). The web "+" button,
+     `scripts/etrade_reauth.py` and `goal_sentry` can still log in on a weekend. The
      login is headless unless `AETHER_ETRADE_SCHEDULED_HEADLESS` / `CFG.etrade_scheduled_headless` says
      otherwise.
    - **The automated step inside `get_tokens(env, allow_browser=False)`**. A caller that finds the
@@ -176,11 +178,14 @@ breaker.
    --bootstrap`. For `blocked`, fix the cause, then run `aether etrade-login` to clear the breaker.
 
 ### Weekends
-- Preflight treats ET Saturdays and Sundays as market-closed. It only renews and reports `WAIVED`.
-  Sunday's 21:30 PT run is 00:30 ET Monday, so it logs in for Monday.
-- The 05:15 task and the hourly watchdog have **no weekend rule**, so they still log in once per ET
-  day on weekends. Stopping that needs a weekend check in `scheduled_reauth` or in those callers.
-- If Monday starts with an alert, do step 3 above.
+- On ET Saturdays and Sundays nothing scheduled logs in. Preflight only renews and reports
+  `WAIVED`. The watchdog and the 05:15 task call `scheduled_reauth(..., weekend_mint=False)`, which
+  only renews and returns `reason=weekend`. The 05:15 task exits 0 in that case, so it doesn't show
+  as failed.
+- Monday's token comes from the first run after midnight ET on Monday: Sunday's 21:30 PT preflight,
+  or the watchdog.
+- You can still log in by hand on a weekend (`aether etrade-login` or the web re-auth button). If
+  Monday starts with an alert, do step 3 above.
 
 ### If automated re-auth failed / a ban is suspected
 1. **Stop all automated E*TRADE contact** (scheduled tasks, `server.py`). Nothing should be hitting
