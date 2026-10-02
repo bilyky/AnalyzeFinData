@@ -20,6 +20,8 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import autonomous_pipeline
+import daily_task
+import tests as harness
 from aether import logger as aether_logger
 
 _REPO_DATA = (Path(__file__).resolve().parent.parent / "Data").resolve()
@@ -59,7 +61,6 @@ class TestLogPathsRedirected(unittest.TestCase):
         self.assertEqual(after, before)
 
     def test_daily_task_logger_writes_outside_repo(self):
-        import daily_task
         files = [h.baseFilename for h in daily_task._log.handlers if isinstance(h, logging.FileHandler)]
         self.assertTrue(files)
         repo = _REPO_DATA.parent
@@ -70,7 +71,6 @@ class TestProcessSideEffectsBlocked(unittest.TestCase):
     def test_kill_game_launch_and_scheduler_changes_are_refused(self):
         # Checked against the guard itself, so a regression can never actually run one
         # of these (e.g. create a real scheduled task).
-        import tests as harness
         for argv in (["taskkill", "/F", "/PID", "0"],
                      ["powershell", "-Command", "Get-Process python | Stop-Process -Force"],
                      [sys.executable, "ai_portfolio_game.py", "--report"],
@@ -97,7 +97,6 @@ class TestProcessSideEffectsBlocked(unittest.TestCase):
 
     def test_read_only_scheduler_queries_are_not_refused(self):
         # Exercise the guard itself (nothing is executed): queries must pass through.
-        import tests as harness
         for argv in (["schtasks", "/query", "/tn", "AETHER_probe"],
                      ["powershell", "-Command", "Get-ScheduledTask -TaskName AETHER_probe"]):
             with self.subTest(argv=argv):
