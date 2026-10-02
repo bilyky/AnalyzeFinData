@@ -81,17 +81,48 @@ class TestTokenReadRoutesThroughStore(unittest.TestCase):
 
 
 class TestDefaultStoreSelection(unittest.TestCase):
-    """Without DATABASE_URL, the default backend is the file adapter (today's behaviour)."""
+    """The DB backend is explicit opt-in (AETHER_ETRADE_STORE=db). A configured app database
+    URL alone must NOT select it: on PROD config ``database.url`` is the app's own Postgres, and
+    selecting the (stub) E*TRADE DB adapter made every port-routed call raise."""
 
     class _Cfg:
-        database_url = None
+        def __init__(self, url):
+            self.database_url = url
 
-    def test_make_store_is_file_backend_without_db_url(self):
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("DATABASE_URL", None)
-            store = make_etrade_store(self._Cfg())
-        self.assertIsInstance(store, EtradeStore)
-        self.assertEqual(store.backend, "file")
+    PG = "postgresql://example/app"
+
+    def _make(self, env, cfg_url):
+        clean = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "AETHER_ETRADE_STORE")}
+        with mock.patch.dict(os.environ, {**clean, **env}, clear=True):
+            return make_etrade_store(self._Cfg(cfg_url))
+
+    def test_backend_selection_matrix(self):
+        PG = self.PG
+        cases = [
+            # env,                                                     config database_url, backend
+            ({},                                                         None,    "file"),
+            ({},                                                         PG,      "file"),  # PROD: app Postgres configured
+            ({"DATABASE_URL": PG},                                       None,    "file"),  # env URL alone doesn't opt in
+            ({"AETHER_ETRADE_STORE": "file", "DATABASE_URL": PG},        PG,      "file"),
+            ({"AETHER_ETRADE_STORE": "db"},                              PG,      "db"),    # opted in, URL from config
+            ({"AETHER_ETRADE_STORE": " DB ", "DATABASE_URL": PG},        None,    "db"),    # opted in, URL from env
+        ]
+        for env, cfg_url, backend in cases:
+            with self.subTest(env=env, cfg_url=bool(cfg_url)):
+                store = self._make(env, cfg_url)
+                self.assertIsInstance(store, EtradeStore)
+                self.assertEqual(store.backend, backend)
+
+    def test_opt_in_without_a_url_fails_loudly(self):
+        with self.assertRaises(ValueError):
+            self._make({"AETHER_ETRADE_STORE": "db"}, None)
+
+    def test_prod_config_still_reaches_file_ports(self):
+        # The PROD failure, end to end: with the app's database URL configured, the ports the
+        # reauth door and ETradeClient use (lock, tokens) are the working file adapters.
+        store = self._make({}, self.PG)
+        self.assertEqual(type(store.lock).__name__, "FileLockProvider")
+        self.assertEqual(type(store.tokens).__name__, "FileTokenStore")
 
 
 if __name__ == "__main__":
