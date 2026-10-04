@@ -1,6 +1,6 @@
 # Plan: Decompose `ai_portfolio_game.py` into an `aether/scenario/` package (entities + action ports + composable scenarios)
 
-> Reference plan saved 2026-09-16. Status (2026-10-02): **BUILD in progress** — B1 #102, B2 #107, B3 #109, B5 + B6 `assemble_symbol_universe` #123, B6 `price_and_settle` #130, `execute_queued_orders` #134 and `decide_exits` #138 are merged; B4 `ResearchRow` (#122) is open. Remaining B6 stages, B7 and all of REPLACE are not started. The stage↔root parity guard landed with #142.
+> Reference plan saved 2026-09-16. Status (2026-10-02): **partly built, not used yet.** B1–B3, B5 and four B6 stages are merged, with a test that checks each stage still matches the game code. B4 (#122) is open. The other B6 stages, B7 and the switch-over haven't started. See R&D #44 in [`plans/roadmap.md`](./roadmap.md) for the current state.
 > Origin: request to refactor `ai_portfolio_game.py` ("that is total mess") into **objects for entities** and **interfaces for actions**, with the script becoming a **starting place for different scenarios** — "even maybe split it on smaller scenario-specific entry points." Refined through dialogue: mirror the existing `aether/etrade/` schema ("we have etrade schema to follow already"), **build-then-replace** ("build object and functionality and then replace it inside ai_portfolio_game script"), **prepare everything first, then refactor in small verifiable steps**, and keep it **generic** — use `scenario`, not "game."
 
 ## Context
