@@ -22,7 +22,6 @@ hardening + failure reporting.
 """
 import os
 import sys
-import tempfile
 import unittest
 from unittest import mock
 
@@ -30,7 +29,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import tests  # noqa: F401  — globally locks hermeticity and redirects prod Data/ to temp
 import config as config_module
 from aether import etrade
-from aether.token_renewer import single_flight
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +156,7 @@ class TestScheduledReauthSingleFlight(unittest.TestCase):
         m_lh.assert_not_called()
 
     def test_lock_released_on_success_so_next_call_wins(self):
-        # Two back-to-back wins through the REAL single_flight (temp lock in the hermetic Data dir):
+        # Two back-to-back wins through the REAL store.lock.single_flight (temp lock in the hermetic Data dir):
         # the second call could only win if the first released the lock in its finally.
         tokens = {"issued_date_et": etrade._et_today()}
         ps = self._patches()
@@ -171,32 +169,6 @@ class TestScheduledReauthSingleFlight(unittest.TestCase):
         self.assertEqual(first["reason"], "reauthed")
         self.assertEqual(second["reason"], "reauthed")
         self.assertEqual(m_lh.call_count, 2)             # lock freed between the two mints
-
-
-class TestSingleFlightPrimitive(unittest.TestCase):
-    """The shared cross-process single-flight guard: one winner, immediate loser, release on exit."""
-
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        self._lock = os.path.join(self._tmp.name, "sf.lock")
-
-    def test_nested_loser_then_release(self):
-        with single_flight(self._lock) as won_a:
-            self.assertTrue(won_a)                       # first caller wins
-            with single_flight(self._lock) as won_b:
-                self.assertFalse(won_b)                  # concurrent caller loses, does NOT block
-        # holder exited → lock released → a later caller wins again
-        with single_flight(self._lock) as won_c:
-            self.assertTrue(won_c)
-
-    def test_release_on_exception(self):
-        with self.assertRaises(RuntimeError):
-            with single_flight(self._lock) as won:
-                self.assertTrue(won)
-                raise RuntimeError("boom")
-        with single_flight(self._lock) as won_again:
-            self.assertTrue(won_again)                   # finally-release survived the exception
 
 
 # ---------------------------------------------------------------------------

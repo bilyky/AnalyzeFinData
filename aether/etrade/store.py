@@ -138,7 +138,7 @@ class ReauthStateStore(abc.ABC):
     def reset(self, env: str = "production") -> None: ...
 
 
-# Default lock lease (seconds). Mirrors ``token_renewer.single_flight``'s own default —
+# Default lock lease (seconds) for ``LockProvider.single_flight`` (the reauth door's lease) —
 # kept as a local literal because this module imports ``token_renewer`` lazily (inside
 # methods) to avoid an import-time circular with ``aether.etrade.__init__``.
 _DEFAULT_LOCK_TTL = 300
@@ -322,7 +322,7 @@ class FileLockProvider(LockProvider):
     """File-lock adapter over the shared ``O_EXCL`` primitive in ``token_renewer``.
 
     This wraps the **exact** module-level ``_acquire_lock`` / ``_release_lock`` that
-    ``TokenRenewer`` and ``token_renewer.single_flight`` already use — the one that
+    ``TokenRenewer`` already uses — the one that
     stamps ``{pid, host}`` on win and reclaims a dead-owner lock immediately (else
     TTL). So the reauth single-flight door and this port share **one** lock
     behaviour on one lock file; a future DB row-lease adapter can replace this class
