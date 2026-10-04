@@ -1,10 +1,11 @@
 """Every R&D item in plans/roadmap.md has its own number.
 
 Code, docs and PRs cite items as "R&D #N", so two items sharing a number make those
-citations ambiguous. Four collisions slipped in unnoticed: #44 (scenario refactor vs
-the log.out() writer, now #47) and #35/#36/#37 (stability items vs the Defensive
-Overlay Rules C/B/A, now #48/#49/#50). This test fails on any duplicate, and on an
-item whose leading number disagrees with its own "(R&D #N ...)" label.
+citations ambiguous. Four collisions slipped in unnoticed until #153 renumbered them:
+#44 (scenario refactor vs the log.out() writer, now #50) and #35/#36/#37 (stability
+items vs the Defensive Overlay Rules C/B/A, now #47/#48/#49). This test fails on any
+duplicate, and on an item whose leading number disagrees with its own "(R&D #N ...)"
+label, so a new collision is caught when it is introduced.
 """
 import os
 import re

@@ -170,8 +170,8 @@ Routes: `GET /health`, `GET /ready` (token present/unexpired), `GET /v1/quotes?s
 - **DB migration = schema + data.** Adopt **Alembic** under `deploy/migrations/` (repo has
   none; SQLAlchemy already a dep). Initial revision creates the **non-secret** tables:
   `etrade_reauth_state`, `etrade_lock` (row-lease), `etrade_auth_event` (indexed `(env, ts)`),
-  `etrade_position_snapshot`. One-time **file→DB backfill** command (idempotent) so flipping
-  `DATABASE_URL` is a clean cutover.
+  `etrade_position_snapshot`. One-time **file→DB backfill** command (idempotent) so the opt-in
+  (`AETHER_ETRADE_STORE=db`, URL from `DATABASE_URL`) is a clean cutover.
 - **Container/k8s.** `Dockerfile` on `mcr.microsoft.com/playwright/python` (Chromium+libs) +
   **`tzdata`** + curated `requirements-etrade.txt` (pyetrade, requests-oauthlib, playwright,
   pytz, fastapi, uvicorn[standard], httpx, sqlalchemy, alembic, prometheus-client).
@@ -187,7 +187,7 @@ Execute **Phase 1 + 2 + security cleanup** as real, tested code (extensible pack
 layer with today's file backend default — no behavior change). Deliver **Phase 3 + 4 + 5** as
 new, side-effect-free files (extension stubs, service + single-flight/metrics, DB
 adapter/migrations, Docker/k8s, runbook) that add capability **without altering the running
-monolith** (opt-in via `ETRADE_SERVICE_URL` / `DATABASE_URL` / `role`). Phases are
+monolith** (opt-in via `ETRADE_SERVICE_URL` / `AETHER_ETRADE_STORE=db` / `role`). Phases are
 independent and individually reversible.
 
 ## Critical files
