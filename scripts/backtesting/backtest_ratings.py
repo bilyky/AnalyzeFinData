@@ -250,9 +250,10 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
             short_no_div, long_no_div, cs_val, cps_val, ms_val, gann_val)
 
 
-def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
+def process_symbol(symbol, min_year, ohlcv_ts, all_dates, keyed=False):
     """Returns list of (br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms,
-    gann_val, fwd_5, fwd_10, fwd_20) tuples."""
+    gann_val, fwd_5, fwd_10, fwd_20) tuples. keyed=True prepends the cache date_str to
+    each tuple (the portfolio backtest needs the date to replay scores day by day)."""
     seasonality_map = precompute_seasonality(ohlcv_ts)
     ohlcv_date_set = set(all_dates)
 
@@ -333,8 +334,9 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
             else:
                 fwd.append(None)
 
-        results.append((br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms,
-                        gann_val, fwd[0], fwd[1], fwd[2]))
+        row = (br, short, long, s_nf, l_nf, rsi_div, s_nd, l_nd, cs, cps, ms,
+               gann_val, fwd[0], fwd[1], fwd[2])
+        results.append((date_str, *row) if keyed else row)
         prev_data, prev_date = data, date_str
 
     return results
