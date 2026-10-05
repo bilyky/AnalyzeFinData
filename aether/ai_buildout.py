@@ -218,17 +218,27 @@ def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
     return data
 
 
+def _read_cache(cache_name: str):
+    """Cached SEC JSON regardless of age, or None. No network."""
+    path = _cache_dir() / cache_name
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    except Exception as e:
+        _log.warning(f"Bad EDGAR cache file {path.name}: {e}")
+        return None
+
+
 def ticker_cik_map() -> dict:
     data = _get_json(_TICKERS_URL, "company_tickers.json", ttl_hours=24 * 7) or {}
     return {v["ticker"].upper(): int(v["cik_str"]) for v in data.values()}
 
 
-def submissions(cik: int):
-    return _get_json(_SUBMISSIONS_URL.format(cik=cik), f"sub_{cik}.json")
+def submissions(cik: int, ttl_hours: float = _CACHE_TTL_HOURS):
+    return _get_json(_SUBMISSIONS_URL.format(cik=cik), f"sub_{cik}.json", ttl_hours)
 
 
-def company_facts(cik: int):
-    return _get_json(_FACTS_URL.format(cik=cik), f"facts_{cik}.json")
+def company_facts(cik: int, ttl_hours: float = _CACHE_TTL_HOURS):
+    return _get_json(_FACTS_URL.format(cik=cik), f"facts_{cik}.json", ttl_hours)
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +247,13 @@ def company_facts(cik: int):
 
 def _d(s):
     return datetime.date.fromisoformat(s)
+
+
+def _known_by(e, as_of):
+    """True if the fact's period had ended AND it had been filed by as_of. Filtering
+    on the filing date keeps a backtest point-in-time (a quarter is filed weeks after
+    it ends, and restatements are filed later still)."""
+    return not as_of or (e["end"] <= as_of and e.get("filed", "") <= as_of)
 
 
 def _latest_per_end(entries):
@@ -273,7 +290,7 @@ def revenue_yoy(facts, as_of=None):
     for tag in _REVENUE_TAGS:
         quarters = []
         for e in gaap.get(tag, {}).get("units", {}).get("USD", []):
-            if "start" not in e or (as_of and e["end"] > as_of):
+            if "start" not in e or not _known_by(e, as_of):
                 continue
             if 80 <= (_d(e["end"]) - _d(e["start"])).days <= 100:
                 quarters.append(e)
@@ -291,7 +308,7 @@ def rpo_yoy(facts, as_of=None):
     """(latest end, YoY % change) of remaining performance obligation, or (None, None)."""
     gaap = (facts or {}).get("facts", {}).get("us-gaap", {})
     points = [e for e in gaap.get(_RPO_TAG, {}).get("units", {}).get("USD", [])
-              if e.get("val") and not (as_of and e["end"] > as_of)]
+              if e.get("val") and _known_by(e, as_of)]
     if not points:
         return (None, None)
     by_end = _latest_per_end(points)
@@ -372,12 +389,14 @@ def watch_score(row):
     return pts
 
 
-def build_row(symbol, bucket, sub, facts, ohlcv_ts, spy_bars, as_of):
-    """All signals for one symbol as a flat dict (missing data -> None)."""
+def build_row(symbol, bucket, sub, facts, ohlcv_ts, spy_bars, as_of, bars=None):
+    """All signals for one symbol as a flat dict (missing data -> None). `bars` may
+    be passed pre-sliced (real bars up to as_of) to skip re-parsing ohlcv_ts."""
     rev_end, rev = revenue_yoy(facts, as_of)
     rpo_end, rpo = rpo_yoy(facts, as_of)
     n_agr, agr_dates = material_agreements(sub, as_of)
-    bars = _real_bars(ohlcv_ts, as_of) if ohlcv_ts else []
+    if bars is None:
+        bars = _real_bars(ohlcv_ts, as_of) if ohlcv_ts else []
     r60, spy60 = return_pct(bars, 60), return_pct(spy_bars, 60)
     row = {
         "symbol": symbol,

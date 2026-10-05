@@ -80,6 +80,32 @@ class TestRevenueYoy(unittest.TestCase):
         ]})
         self.assertEqual(ab.revenue_yoy(facts, as_of="2026-05-15"), ("2026-03-31", 10.0))
 
+    def test_point_in_time_uses_filed_date(self):
+        facts = _facts({"Revenues": [
+            _q("2025-04-01", "2025-06-30", 100, filed="2025-08-01"),
+            _q("2025-04-01", "2025-06-30", 120, filed="2026-08-01"),   # restated later
+            _q("2026-04-01", "2026-06-30", 150, filed="2026-08-05"),
+        ]})
+        # quarter ended 6/30 but not filed until 8/5: not known on 7/15
+        self.assertEqual(ab.revenue_yoy(facts, as_of="2026-07-15"), ("2025-06-30", None))
+        # 8/3: the restatement (filed 8/1) is known, the new quarter is not
+        self.assertEqual(ab.revenue_yoy(facts, as_of="2026-08-03"), ("2025-06-30", None))
+        # 8/10: new quarter vs the restated year-ago value
+        self.assertEqual(ab.revenue_yoy(facts, as_of="2026-08-10"), ("2026-06-30", 25.0))
+        # 2025-09-01: only the original filing of the 2025 quarter is known
+        old = _facts({"Revenues": [_q("2024-04-01", "2024-06-30", 80, filed="2024-08-01"),
+                                   _q("2025-04-01", "2025-06-30", 100, filed="2025-08-01"),
+                                   _q("2025-04-01", "2025-06-30", 120, filed="2026-08-01")]})
+        self.assertEqual(ab.revenue_yoy(old, as_of="2025-09-01"), ("2025-06-30", 25.0))
+
+    def test_rpo_point_in_time(self):
+        facts = _facts({"RevenueRemainingPerformanceObligation": [
+            {"end": "2025-06-30", "val": 20e9, "filed": "2025-08-01"},
+            {"end": "2026-06-30", "val": 30e9, "filed": "2026-08-01"},
+        ]})
+        self.assertEqual(ab.rpo_yoy(facts, as_of="2026-07-31"), ("2025-06-30", None))
+        self.assertEqual(ab.rpo_yoy(facts, as_of="2026-08-01"), ("2026-06-30", 50.0))
+
     def test_missing_year_ago_gives_none(self):
         facts = _facts({"Revenues": [_q("2026-04-01", "2026-06-30", 150)]})
         self.assertEqual(ab.revenue_yoy(facts), ("2026-06-30", None))
@@ -177,6 +203,16 @@ class TestWatchScore(unittest.TestCase):
         self.assertEqual(ab.watch_score({"revenue_yoy": None, "rpo_yoy": None,
                                          "agreements_90d": 0, "rs_60d": None,
                                          "cmf_20": None}), 0)
+
+
+class TestCache(unittest.TestCase):
+    def test_read_cache_ignores_age_and_missing(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"AETHER_DATA_DIR": d}):
+            (Path(d) / "edgar_cache").mkdir()
+            (Path(d) / "edgar_cache" / "sub_1.json").write_text('{"sic": 4911}', encoding="utf-8")
+            os.utime(Path(d) / "edgar_cache" / "sub_1.json", (0, 0))   # very old
+            self.assertEqual(ab._read_cache("sub_1.json"), {"sic": 4911})
+            self.assertIsNone(ab._read_cache("sub_2.json"))
 
 
 class TestScan(unittest.TestCase):
