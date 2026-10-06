@@ -3,6 +3,7 @@ import json
 import os
 import pandas as pd
 from pathlib import Path
+from aether import paths
 from aether.config import CFG
 from aether.utils import _to_float
 from aether.logger import get_logger as _get_logger
@@ -10,7 +11,7 @@ from aether.logger import get_logger as _get_logger
 _log = _get_logger("risk_utils")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-OHLCV_DIR = BASE_DIR / "Data" / "Symbol_full"
+OHLCV_DIR = Path(paths.ohlcv_dir())   # $AETHER_CACHE_DIR/Symbol_full, else <checkout>/Data/Symbol_full
 
 def setup_ok(price, idx, all_dates, ohlcv_ts, sma_period=20, dir_days=3) -> bool:
     """The Research-sheet Setup flag (entry filter): price > SMA(sma_period) of the prior

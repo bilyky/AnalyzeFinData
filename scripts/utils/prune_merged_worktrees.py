@@ -152,6 +152,56 @@ def is_dirty(path):
     return rc != 0 or bool(out.strip())
 
 
+def _is_junction(path):
+    isjunction = getattr(os.path, "isjunction", None)  # Python 3.12+
+    return bool(isjunction and isjunction(path))
+
+
+def links_inside(path):
+    """Every junction / symlink under ``path``, found WITHOUT following any of them.
+
+    ``git worktree remove`` deletes gitignored files too, and on Windows it deletes
+    THROUGH a directory junction: on 2026-10-06 a worktree whose Data/Symbol(+_full)
+    were junctions into the main checkout was removed and the real caches (551,974
+    files) went with it. ``git status`` cannot see this (Data/ is gitignored), so the
+    filesystem is scanned directly.
+    """
+    found, stack = [], [path]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.is_symlink() or _is_junction(entry.path):
+                found.append(entry.path)
+            elif entry.is_dir(follow_symlinks=False):
+                stack.append(entry.path)
+    return sorted(found)
+
+
+# The main checkout's big re-fetchable caches; a removal that shrinks them stops the run.
+MAIN_CACHE_DIRS = ("Symbol", "Symbol_full")
+
+
+def main_cache_counts():
+    """Entry count of each main-checkout cache dir (one listdir each, so it is cheap)."""
+    trees = list_worktrees()
+    main_path = trees[0]["path"] if trees else os.getcwd()
+    counts = {}
+    for name in MAIN_CACHE_DIRS:
+        try:
+            counts[name] = len(os.listdir(os.path.join(main_path, "Data", name)))
+        except OSError:
+            counts[name] = None
+    return counts
+
+
+def _shrunk(before, after):
+    return [k for k in before if before[k] is not None and after.get(k) is not None and after[k] < before[k]]
+
+
 def _is_harness_path(path):
     norm = path.replace("\\", "/")
     return "/.claude/" in norm or norm.endswith("/.claude")
@@ -198,6 +248,13 @@ def plan(gh, repo, want_merged, want_closed):
         if is_dirty(path):
             keep.append((path, "PR #%d finished but worktree DIRTY — skipped (review)" % info["number"]))
             continue
+        links = links_inside(path)
+        if links:
+            keep.append((path, "PR #%d finished but contains %d link(s), e.g. %s — NOT removed: "
+                         "removing it would delete the link targets. Remove each link itself "
+                         "(`cmd /c rmdir <link>`), re-run, and get the owner's OK for any link "
+                         "into Data/" % (info["number"], len(links), links[0])))
+            continue
         verb = "merged" if info["merged"] else "closed-unmerged"
         actions.append(("worktree", path, branch, "PR #%d %s" % (info["number"], verb)))
 
@@ -217,13 +274,25 @@ def plan(gh, repo, want_merged, want_closed):
 
 def execute(actions):
     done, failed = [], []
+    before = main_cache_counts()
     for kind, path, branch, reason in actions:
         if kind == "worktree":
+            links = links_inside(path)  # re-check right before removal: plan() may be stale
+            if links:
+                failed.append(("worktree", path, "contains link(s) %s — not removed" % links[:3]))
+                continue
             rc, _, err = _run(["git", "worktree", "remove", path], check=False)
             if rc != 0:
                 failed.append(("worktree", path, err.strip()))
                 continue
             done.append(("worktree", path, reason))
+            after = main_cache_counts()
+            shrunk = _shrunk(before, after)
+            if shrunk:
+                failed.append(("tripwire", path, "main Data cache(s) %s shrank %s -> %s after removing "
+                               "this worktree — STOPPED; restore from backup before going on"
+                               % (shrunk, before, after)))
+                break
         rc, _, err = _run(["git", "branch", "-D", branch], check=False)
         if rc != 0:
             failed.append(("branch", branch, err.strip()))

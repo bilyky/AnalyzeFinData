@@ -41,6 +41,7 @@ from scoring import (
     rel_volume_bucket as _rel_vol_fn,
     market_regime as _market_regime,
 )
+from aether import paths
 from aether.risk_utils import setup_ok as _setup_ok
 from patterns import (
     candlestick_score as _cs_score,
@@ -48,8 +49,10 @@ from patterns import (
     momentum_pattern_score as _mo_score,
 )
 
-SYM_DIR   = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Data", "Symbol")
-OHLCV_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Data", "Symbol_full")
+# $AETHER_CACHE_DIR-aware: a worktree study reads the real caches with AETHER_CACHE_DIR=<main>/Data,
+# never through a directory junction (see aether.paths.cache_dir).
+SYM_DIR   = paths.symbol_dir()
+OHLCV_DIR = paths.ohlcv_dir()
 
 STOP_DAYS      = 3
 TARGET_LOOKBACK = 10
