@@ -15,6 +15,22 @@ import aether.logger
 
 _test_log_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
 aether.logger._LOG_DIR = Path(_test_log_dir.name)
+# aether.logger opens its file handlers at IMPORT time (module-level
+# `log = get_logger("aether")`), so re-pointing _LOG_DIR alone is too late — the
+# handlers already target the repo's Data/logs. Close them and rebuild the chain
+# under the temp dir. Guarded by tests/test_log_hermetic.py.
+import logging as _logging
+
+_aether_root_logger = _logging.getLogger("aether")
+for _h in list(_aether_root_logger.handlers):
+    _aether_root_logger.removeHandler(_h)
+    _h.close()
+aether.logger._initialised = False
+aether.logger._init()
+# daily_task.py attaches its own FileHandler (repo-root daily_task.log) at import,
+# but only when its logger has no handlers yet — pre-seed one under the temp dir.
+_logging.getLogger("aether.daily_task").addHandler(
+    _logging.FileHandler(Path(_test_log_dir.name) / "daily_task.log", encoding="utf-8", delay=True))
 
 # ---------------------------------------------------------------------------
 # Hermeticity guard — no test may touch prod state, contact a live host, or
@@ -32,6 +48,8 @@ aether.logger._LOG_DIR = Path(_test_log_dir.name)
 # and driving toward an IP ban.
 import os as _os
 import socket as _socket
+import re as _re
+import subprocess as _subprocess
 import importlib as _importlib
 import aether.etrade as _etrade
 import aether.instruments as _instruments
@@ -64,11 +82,27 @@ _seed_wb = _openpyxl.Workbook()
 _seed_wb.active.title = "Research"
 _seed_wb.save(_test_xlsx_path)
 
-for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomous_pipeline"):
+_test_game_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+_test_game_file = Path(_test_game_dir.name) / "ai_portfolio_game.json"
+
+for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomous_pipeline", "bootstrap_dna"):
     try:
         _mod = _importlib.import_module(_mod_name)
     except Exception:
         continue
+    # autonomous_pipeline.log() also appends to its own legacy run log
+    # (Data/autonomous_run.log, read by watchdog and the dashboard) — redirect it too.
+    if hasattr(_mod, "LOG_FILE_PATH"):
+        _mod.LOG_FILE_PATH = Path(_test_log_dir.name) / "autonomous_run.log"
+    # Game state: ai_portfolio_game is the only writer (save_game, load_game's backup
+    # restore). Its backups MUST move with it — save_game prunes GAME_BACKUP_DIR to the
+    # last 15, so redirecting the file alone would delete real backups. Readers
+    # (workbook_read / bootstrap_dna GAME_FILE) point at the same temp file.
+    if hasattr(_mod, "AI_GAME_FILE"):
+        _mod.AI_GAME_FILE = _test_game_file
+        _mod.GAME_BACKUP_DIR = Path(_test_game_dir.name) / "Backup" / "Game"
+    if hasattr(_mod, "GAME_FILE"):
+        _mod.GAME_FILE = _test_game_file
     _orig_xlsx_const = getattr(_mod, "XLSX_FILE", None)
     if _orig_xlsx_const is None:
         continue
@@ -163,3 +197,50 @@ if not _os.getenv("AETHER_LIVE_TESTS"):
         except (ImportError, AttributeError):
             pass
 
+
+    # -- Process side: no test may kill a real process or launch the real game --
+    # watchdog.run_watchdog() runs the live process supervisor (taskkill of duplicate
+    # server.py / "orphaned" AETHER consoles) and a real `ai_portfolio_game.py --report`
+    # child, which logs to the repo's Data/logs because a child never loads this harness.
+    # A test that mocks subprocess itself still wins (its patch replaces these wrappers).
+
+    # Kills, the real game, and anything that CHANGES Task Scheduler. Read-only
+    # queries (`schtasks /query`, Get-ScheduledTask) stay allowed.
+    # Matched on the command's shape, not a fixed string, so `schtasks.exe /Create`, a
+    # full `C:\...\schtasks.exe` path and a quoted path are all caught.
+    _FORBIDDEN_PROC_PATTERNS = (
+        _re.compile(r"\btaskkill(\.exe)?\b"),
+        _re.compile(r"\bstop-process\b"),
+        _re.compile(r"ai_portfolio_game\.py"),
+        _re.compile(r"\bschtasks(\.exe)?[\"']?\s+/(create|delete|change|run|end)\b"),
+        _re.compile(r"\b(register|unregister|set|start|stop|enable|disable)-scheduledtask\b"),
+    )
+
+    def _argv_text(args):
+        if isinstance(args, (list, tuple)):
+            return " ".join(str(a) for a in args)
+        return str(args)
+
+    def _guard_proc(args):
+        text = _argv_text(args).lower()
+        hit = next((p.pattern for p in _FORBIDDEN_PROC_PATTERNS if p.search(text)), None)
+        if hit:
+            raise RuntimeError(
+                f"Blocked real process side effect in tests ({hit!r} in {_argv_text(args)[:120]!r}). "
+                "Mock subprocess at the boundary, or set AETHER_LIVE_TESTS=1."
+            )
+
+    _orig_subprocess_run = _subprocess.run
+    _orig_subprocess_popen = _subprocess.Popen
+
+    def _guarded_run(args, *a, **k):
+        _guard_proc(args)
+        return _orig_subprocess_run(args, *a, **k)
+
+    class _GuardedPopen(_orig_subprocess_popen):
+        def __init__(self, args, *a, **k):
+            _guard_proc(args)
+            super().__init__(args, *a, **k)
+
+    _subprocess.run = _guarded_run
+    _subprocess.Popen = _GuardedPopen
