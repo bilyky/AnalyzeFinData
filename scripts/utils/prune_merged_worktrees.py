@@ -32,6 +32,7 @@ Usage::
     python scripts/utils/prune_merged_worktrees.py --merged-only # only merged==true
 """
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -68,10 +69,27 @@ def _run(cmd, check=True):
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def _gh_json(gh, repo, path, jq):
-    """Query the gh REST API and return decoded lines from a jq expression."""
-    _, out, _ = _run([gh, "api", "repos/%s/%s" % (repo, path), "--jq", jq])
-    return [ln for ln in out.splitlines() if ln.strip()]
+def _gh_api(gh, repo, path):
+    """Query the gh REST API and return the decoded JSON body."""
+    _, out, _ = _run([gh, "api", "repos/%s/%s" % (repo, path)])
+    return json.loads(out) if out.strip() else []
+
+
+_PAGE_SIZE = 100
+_MAX_PAGES = 50          # hard stop: 5,000 PRs per scope, far beyond this repo's size
+
+
+def _gh_list(gh, repo, path):
+    """Every row of a paginated list endpoint, newest first: request page=1, 2, ... until
+    a page comes back short. A single page silently dropped every PR past the first 100."""
+    rows = []
+    for page in range(1, _MAX_PAGES + 1):
+        batch = _gh_api(gh, repo, "%s&sort=created&direction=desc&per_page=%d&page=%d"
+                        % (path, _PAGE_SIZE, page))
+        rows.extend(batch)
+        if len(batch) < _PAGE_SIZE:
+            return rows
+    raise RuntimeError("%s: more than %d pages; refusing to guess" % (path, _MAX_PAGES))
 
 
 def pr_state_map(gh, repo):
@@ -82,25 +100,24 @@ def pr_state_map(gh, repo):
     MUST dominate: a branch still backing any open PR is never prunable. So
     'open' is queried LAST and overwrites any 'closed' entry for the same ref
     — never the reverse — which is the safety guarantee, not a cosmetic order.
+
+    Within one scope the NEWEST PR for a ref wins (rows arrive newest first), so an old
+    abandoned PR on a reused branch name can't relabel a branch whose latest PR merged.
+
+    Merged-ness comes from ``merged_at``: the pulls LIST endpoint does not return a
+    ``merged`` field at all (only the single-PR endpoint does), so reading ``merged``
+    here labelled every merged PR "closed-unmerged".
     """
     state = {}
     for scope in ("closed", "open"):
-        rows = _gh_json(
-            gh,
-            repo,
-            "pulls?state=%s&per_page=100" % scope,
-            r'.[] | "\(.head.ref)\t\(.number)\t\(.state)\t\(.merged)"',
-        )
-        for row in rows:
-            parts = row.split("\t")
-            if len(parts) != 4:
-                continue
-            ref, number, st, merged = parts
-            state[ref] = {
-                "number": int(number),
-                "state": st,
-                "merged": merged.strip().lower() == "true",
-            }
+        scoped = {}
+        for pr in _gh_list(gh, repo, "pulls?state=%s" % scope):
+            scoped.setdefault(pr["head"]["ref"], {
+                "number": int(pr["number"]),
+                "state": pr["state"],
+                "merged": pr.get("merged_at") is not None,
+            })
+        state.update(scoped)
     return state
 
 
@@ -227,8 +244,20 @@ def main(argv=None):
     want_merged = not args.closed_only
     want_closed = not args.merged_only
 
-    gh = _resolve_gh()
-    actions, keep = plan(gh, args.repo, want_merged, want_closed)
+    try:
+        gh = _resolve_gh()
+        actions, keep = plan(gh, args.repo, want_merged, want_closed)
+    except RuntimeError as e:
+        # Nothing has been changed yet: planning is read-only (gh api + git queries). Fail with
+        # one actionable line, not a traceback (gh's own dialer can't reach api.github.com
+        # behind some proxies).
+        sys.stderr.write(
+            "ERROR: could not plan the prune: %s\n"
+            "  Nothing was changed. If gh can't connect, set HTTPS_PROXY/HTTP_PROXY to your proxy "
+            "and retry, or prune by hand (review-prs skill, section 9).\n"
+            % (str(e).strip().splitlines() or ["unknown error"])[0]
+        )
+        return 2
 
     _out("=== KEEP (%d) ===" % len(keep))
     for target, reason in keep:
