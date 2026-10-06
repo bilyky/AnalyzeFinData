@@ -234,6 +234,10 @@ class _Config:
         self.system_default_s10_floor   = float(os.environ.get("AETHER_DEFAULT_S10_FLOOR")   or system.get("default_s10_floor", 2.5))
         self.system_adaptive_s10_floor  = float(os.environ.get("AETHER_ADAPTIVE_S10_FLOOR")  or system.get("adaptive_s10_floor", 2.0))
         self.system_cash_drag_threshold = float(os.environ.get("AETHER_CASH_DRAG_THRESHOLD") or system.get("cash_drag_threshold", 25.0))
+        # Per-trade loss cap (Rule of Loss Minimization): a buy is trimmed so a stop-out
+        # loses at most this fraction of equity: (entry - stop) * shares <= equity * pct.
+        self.system_max_trade_risk_pct = float(
+            os.environ.get("AETHER_MAX_TRADE_RISK_PCT") or system.get("max_trade_risk_pct", 0.01))
         
         # Breakout Waiver / PGR Bypass parameters
         self.system_bypass_score_floor  = float(os.environ.get("AETHER_BYPASS_SCORE_FLOOR")  or system.get("bypass_score_floor", 8.0))

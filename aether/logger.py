@@ -116,9 +116,13 @@ def _init():
     stdout_level = getattr(logging, level_name, logging.INFO)
 
     # ── 1. Rotating plain text — INFO+ only (no CONSOLE noise) ─────────────
+    # delay=True: open the file on the first record, not at handler creation. The
+    # module-level `log` below builds these at IMPORT, so without it merely importing
+    # the logger creates Data/logs/aether.{log,jsonl} (even in a test run that later
+    # redirects them).
     txt_handler = SafeRotatingFileHandler(
         _LOG_DIR / "aether.log",
-        maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8",
+        maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8", delay=True,
     )
     txt_handler.setLevel(logging.INFO)   # CONSOLE(15) is below INFO(20) — excluded
     txt_handler.setFormatter(logging.Formatter(_TEXT_FMT, _DATE_FMT))
@@ -127,7 +131,7 @@ def _init():
     # ── 2. Rotating JSON Lines — INFO+ only ─────────────────────────────────
     jsonl_handler = SafeRotatingFileHandler(
         _LOG_DIR / "aether.jsonl",
-        maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8",
+        maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8", delay=True,
     )
     jsonl_handler.setLevel(logging.INFO)  # CONSOLE(15) excluded from structured log
     jsonl_handler.setFormatter(_JsonlFormatter())

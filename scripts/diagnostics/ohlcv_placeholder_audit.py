@@ -1,21 +1,28 @@
 """
 OHLCV placeholder audit — READ-ONLY. Measures how many Chaikin close-only placeholder
 bars (bar_provenance.is_provisional: `provisional` flag or volume 0) sit in
-Data/Symbol_full/*_daily.json, and how much they distort what live code computes.
+Data/Symbol_full/*_daily.json, and how much they distort the raw series.
 
 Placeholders are written by powergauge._append_ohlcv_entry and are meant to be
 overwritten by rapidapi._fetch_and_merge, which only replaces the 3 newest dates the API
 returns. Anything the repair misses is "stranded": interior placeholders (a real bar
-follows) and weekend-dated ones (the API never returns those dates). Consumers only drop
-TRAILING placeholders (patterns.ohlcv_to_array), so stranded ones reach ATR and patterns.
+follows) and weekend-dated ones (the API never returns those dates). Consumers used to drop
+only TRAILING placeholders, so stranded ones reached ATR and patterns. Consumers now filter
+every placeholder (bar_provenance.real_dates), so the ATR ratio below measures the DATA
+damage — what a consumer that trusts the raw series would see — not what live code sees.
 
 Reports:
   - file freshness (newest bar / newest file mtime) — is this box's data current?
   - placeholder counts since --since: trailing / interior / weekend, by month
   - share of placeholders in each symbol's last 30 bars
-  - ATR(14) as live code computes it vs ATR(14) on real bars only (ratio < 1 = live
-    stops are tighter than intended, since stop distance = multiple x ATR)
+  - ATR(14) on the raw series (trailing placeholders dropped, as consumers did before
+    the stranded-placeholder fix) vs ATR(14) on real bars only (ratio < 1 = stranded
+    placeholders shrink ATR; stop distance = multiple x ATR)
   - the symbols with the most distorted ATR
+  - stop staleness: symbols whose stop falls back to 8% off price because the newest bar
+    is older than risk_utils.STALE_STOP_DAYS — measured from the newest bar of any kind
+    (before the stranded-placeholder fix) and from the newest REAL bar (after it). Run
+    this before deploying that fix: "after" is how many stops would switch to 8%.
 
 Writes nothing unless --json PATH is given (then only that file).
 
@@ -36,6 +43,7 @@ sys.path.insert(0, BASE_DIR)
 
 import numpy as np
 
+from aether.risk_utils import STALE_STOP_DAYS
 from bar_provenance import is_provisional
 from patterns import _wilder_atr, ohlcv_to_array
 
@@ -47,6 +55,21 @@ def _out(line: str = "") -> None:
     sys.stdout.write(line + "\n")
 
 
+def raw_array(ts: dict, lookback: int = 60):
+    """OHLCV array over the raw series, dropping only TRAILING placeholders — the view
+    consumers had before they filtered every placeholder. Built here, NOT via
+    patterns.ohlcv_to_array, which now filters all of them (and would make the
+    raw-vs-real comparison trivially 1.0)."""
+    dates = sorted(ts)
+    while dates and is_provisional(ts[dates[-1]]):
+        dates.pop()
+    if len(dates) < 10:
+        return None
+    return np.array([[float(ts[d].get(k, 0) or 0) for k in
+                      ("1. open", "2. high", "3. low", "4. close", "5. volume")]
+                     for d in dates[-lookback:]])
+
+
 def audit_series(ts: dict, since: str) -> dict:
     """Placeholder stats + live-vs-real ATR for one daily series."""
     dates = sorted(ts)
@@ -54,7 +77,8 @@ def audit_series(ts: dict, since: str) -> dict:
     while trailing_from and is_provisional(ts[dates[trailing_from - 1]]):
         trailing_from -= 1
     out = {"bars": 0, "trailing": 0, "interior": 0, "weekend": 0, "by_month": Counter(),
-           "recent_share": None, "atr_ratio": None, "last_date": dates[-1] if dates else None}
+           "recent_share": None, "atr_ratio": None, "last_date": dates[-1] if dates else None,
+           "last_real": max((d for d in dates if not is_provisional(ts[d])), default=None)}
     for i, d in enumerate(dates):
         if d < since:
             continue
@@ -66,7 +90,7 @@ def audit_series(ts: dict, since: str) -> dict:
         out["weekend"] += datetime.date.fromisoformat(d).weekday() >= 5
     if len(dates) >= RECENT_BARS:
         out["recent_share"] = sum(is_provisional(ts[d]) for d in dates[-RECENT_BARS:]) / RECENT_BARS
-        live = ohlcv_to_array(ts, dates[-1], lookback=60)
+        live = raw_array(ts, lookback=60)
         real = ohlcv_to_array({d: ts[d] for d in dates if not is_provisional(ts[d])},
                               dates[-1], lookback=60)
         if live is not None and real is not None:
@@ -80,7 +104,24 @@ def _pct(xs, q):
     return float(np.percentile(xs, q)) if xs else None
 
 
-def run(data_dir: str, since: str, months: int, top: int) -> dict:
+def _age(day: str | None, today: datetime.date) -> int | None:
+    return (today - datetime.date.fromisoformat(day)).days if day else None
+
+
+def stale_stops(per_sym: dict, today: datetime.date, limit: int = STALE_STOP_DAYS) -> dict:
+    """Symbols whose stop falls back to 8% off price (newest bar older than `limit` days):
+    by the newest bar of any kind (before) vs the newest real bar (after the fix)."""
+    def stale(day):
+        age = _age(day, today)
+        return age is None or age > limit
+    before = {s for s, v in per_sym.items() if stale(v["last_date"])}
+    after = {s for s, v in per_sym.items() if stale(v["last_real"])}
+    return {"limit_days": limit, "as_of": today.isoformat(), "before": len(before),
+            "after": len(after), "newly_stale": sorted(after - before)}
+
+
+def run(data_dir: str, since: str, months: int, top: int,
+        today: datetime.date | None = None) -> dict:
     files = sorted(glob.glob(os.path.join(data_dir, "Symbol_full", "*_daily.json")))
     if not files:
         raise SystemExit(f"no *_daily.json under {os.path.join(data_dir, 'Symbol_full')}")
@@ -127,8 +168,16 @@ def run(data_dir: str, since: str, months: int, top: int) -> dict:
         _out(f"\n  placeholder share of last {RECENT_BARS} bars: median {_pct(shares, 50):.0%}, "
              f"p90 {_pct(shares, 90):.0%}")
     if ratios:
-        _out(f"  ATR14 live / ATR14 real-bars-only: median {_pct(ratios, 50):.2f}, "
+        _out(f"  ATR14 raw series / ATR14 real-bars-only: median {_pct(ratios, 50):.2f}, "
              f"p10 {_pct(ratios, 10):.2f}, p90 {_pct(ratios, 90):.2f}   (1.00 = no distortion)")
+    st = stale_stops(per_sym, today or datetime.date.today())
+    _out(f"\n  stops on the 8% fallback (newest bar > {st['limit_days']} d old, as of {st['as_of']}):")
+    _out(f"    before the stranded-placeholder fix (any bar): {st['before']}   "
+         f"after it (real bars only): {st['after']}   newly stale: {len(st['newly_stale'])}")
+    if st["newly_stale"]:
+        _out("    newly stale: " + ", ".join(st["newly_stale"][:25])
+             + (" ..." if len(st["newly_stale"]) > 25 else ""))
+
     _out(f"\n  worst {top} by ATR distortion:")
     for sym, s in worst:
         ratio = "-" if s["atr_ratio"] is None else f"{s['atr_ratio']:.2f}"
@@ -143,6 +192,7 @@ def run(data_dir: str, since: str, months: int, top: int) -> dict:
         "by_month": dict(sorted(months_c.items())),
         "recent_share": {"median": _pct(shares, 50), "p90": _pct(shares, 90)},
         "atr_ratio": {"median": _pct(ratios, 50), "p10": _pct(ratios, 10), "p90": _pct(ratios, 90)},
+        "stale_stops": st,
         "worst": {sym: {k: v for k, v in s.items() if k != "by_month"} for sym, s in worst},
     }
 

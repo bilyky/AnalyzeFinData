@@ -5,6 +5,7 @@ import pandas as pd
 from pathlib import Path
 from aether.config import CFG
 from aether.utils import _to_float
+from bar_provenance import real_dates
 from aether.logger import get_logger as _get_logger
 
 _log = _get_logger("risk_utils")
@@ -40,6 +41,10 @@ def calculate_atr(symbol, period=14):
         ts = data.get("Time Series (Daily)")
         if not ts:
             return None
+        # Placeholder bars (flat, zero volume) would shrink true range -> too-tight stops.
+        ts = {d: ts[d] for d in real_dates(ts)}
+        if not ts:
+            return None
 
         # Convert to DataFrame
         df = pd.DataFrame.from_dict(ts, orient="index")
@@ -73,10 +78,13 @@ def calculate_atr(symbol, period=14):
         _h, _l, _c = split_adjust_ohlcv(_o, _h, _l, _c)
         df["high"], df["low"], df["close"] = _h, _l, _c
 
-        # True Range components
+        # True Range components. Across a gap left by a dropped placeholder the previous
+        # close is sessions old, so only the bar's own range counts (see session_gaps).
         df["h-l"] = df["high"] - df["low"]
         df["h-pc"] = (df["high"] - df["close"].shift(1)).abs()
         df["l-pc"] = (df["low"] - df["close"].shift(1)).abs()
+        gap = session_gaps([d.date().isoformat() for d in df.index])
+        df.loc[gap, ["h-pc", "l-pc"]] = 0.0
 
         df["tr"] = df[["h-l", "h-pc", "l-pc"]].max(axis=1)
 
@@ -91,6 +99,17 @@ _SWING_LOOKBACK = 3     # days for the swing-low technical stop
 _ATR_STOP_MULT  = 2.5   # ATR multiple for the volatility stop
 _PCT_FALLBACK   = 0.08  # last-resort stop = price * (1 - 8%)
 STALE_STOP_DAYS = 10    # OHLCV cache older than this -> don't trust swing-low/ATR
+MAX_SESSION_GAP_DAYS = 4  # longest calendar gap between consecutive sessions (holiday weekend)
+
+
+def session_gaps(dates):
+    """Per-bar flags: True where the previous bar is more than MAX_SESSION_GAP_DAYS earlier.
+
+    Placeholder bars are dropped before ATR, which can leave real bars sessions apart; a
+    true range measured against a weeks-old close would be a multi-day move, inflating ATR.
+    Flagged bars use their own high-low only. The first bar is never flagged."""
+    ds = [datetime.date.fromisoformat(d[:10]) for d in dates]
+    return [False] + [(b - a).days > MAX_SESSION_GAP_DAYS for a, b in zip(ds, ds[1:])]
 
 
 # --- split adjustment -------------------------------------------------------
@@ -153,26 +172,33 @@ def _load_ohlcv_series(symbol, as_of=None):
     SPLIT-ADJUSTED onto the current price scale; ([], [], [], None) when
     missing/unreadable. When as_of ('YYYY-MM-DD') is given, truncate to bars on/before
     that date (for entry-anchored, as-of-buy-date levels) BEFORE adjusting, so the
-    series is on the entry date's scale."""
+    series is on the entry date's scale. Placeholder bars are excluded."""
+    dates, highs, lows, closes = _load_ohlcv_bars(symbol, as_of=as_of)
+    return highs, lows, closes, (dates[-1] if dates else None)
+
+
+def _load_ohlcv_bars(symbol, as_of=None):
+    """(dates, highs, lows, closes) — _load_ohlcv_series plus the bar dates, so callers
+    can flag session gaps for ATR. ([], [], [], []) when missing/unreadable."""
     path = OHLCV_DIR / f"{symbol}_daily.json"
     if not path.exists():
-        return [], [], [], None
+        return [], [], [], []
     try:
         with open(path) as f:
             ts = json.load(f).get("Time Series (Daily)", {})
-        dates = sorted(ts.keys())
+        dates = real_dates(ts)          # placeholder bars never feed swing levels / ATR
         if as_of:
             dates = [d for d in dates if d <= as_of]
         if not dates:
-            return [], [], [], None
+            return [], [], [], []
         opens = [float(ts[d].get("1. open", 0) or 0) for d in dates]
         highs = [float(ts[d]["2. high"]) for d in dates]
         lows = [float(ts[d]["3. low"]) for d in dates]
         closes = [float(ts[d]["4. close"]) for d in dates]
         highs, lows, closes = split_adjust_ohlcv(opens, highs, lows, closes)
-        return highs, lows, closes, dates[-1]
+        return dates, highs, lows, closes
     except Exception:
-        return [], [], [], None
+        return [], [], [], []
 
 
 def _age_days(last_date, today=None):
@@ -191,12 +217,14 @@ def ohlcv_age_days(symbol):
     return _age_days(_load_ohlcv_series(symbol)[3])
 
 
-def _atr_from_series(highs, lows, closes, period=14):
-    """ATR (simple average of True Range) from in-memory series, or None."""
+def _atr_from_series(highs, lows, closes, period=14, gaps=None):
+    """ATR (simple average of True Range) from in-memory series, or None. `gaps`
+    (session_gaps flags) makes a bar after a gap count only its own high-low."""
     n = min(len(highs), len(lows), len(closes))
     if n < 2:
         return None
-    trs = [max(highs[i] - lows[i],
+    trs = [highs[i] - lows[i] if gaps and gaps[i] else
+           max(highs[i] - lows[i],
                abs(highs[i] - closes[i - 1]),
                abs(lows[i] - closes[i - 1])) for i in range(1, n)]
     window = trs[-period:]
@@ -257,9 +285,11 @@ def resolve_stop_detailed(price, symbol=None, highs=None, lows=None, closes=None
     if price <= 0:
         return out
 
+    gaps = None
     if highs is None and lows is None and closes is None and symbol:
-        highs, lows, closes, last = _load_ohlcv_series(symbol, as_of=as_of)
-        out["age"] = _age_days(last)
+        dates, highs, lows, closes = _load_ohlcv_bars(symbol, as_of=as_of)
+        gaps = session_gaps(dates)
+        out["age"] = _age_days(dates[-1] if dates else None)
         if as_of is None and (out["age"] is None or out["age"] > max_stale_days):
             out.update(stop=round(price * (1 - _PCT_FALLBACK), 2), source="stale", stale=True)
             return out
@@ -280,7 +310,7 @@ def resolve_stop_detailed(price, symbol=None, highs=None, lows=None, closes=None
                 out.update(stop=tech, source="swing")
                 return out
     # 3. ATR-based stop
-    atr = _atr_from_series(highs, lows, closes)
+    atr = _atr_from_series(highs, lows, closes, gaps=gaps)
     if atr and atr > 0:
         s = round(price - _ATR_STOP_MULT * atr, 2)
         if 0 < s < price:
@@ -342,9 +372,11 @@ def resolve_target_detailed(price, symbol=None, highs=None, lows=None, closes=No
     if price <= 0:
         return out
 
+    gaps = None
     if highs is None and lows is None and closes is None and symbol:
-        highs, lows, closes, last = _load_ohlcv_series(symbol, as_of=as_of)
-        out["age"] = _age_days(last)
+        dates, highs, lows, closes = _load_ohlcv_bars(symbol, as_of=as_of)
+        gaps = session_gaps(dates)
+        out["age"] = _age_days(dates[-1] if dates else None)
         if as_of is None and (out["age"] is None or out["age"] > max_stale_days):
             out.update(target=round(price * (1 + _PCT_FALLBACK), 2), source="stale", stale=True)
             return out
@@ -363,13 +395,25 @@ def resolve_target_detailed(price, symbol=None, highs=None, lows=None, closes=No
             out.update(target=round(max(recent), 2), source="high")
             return out
     # 3. ATR projection (blue-sky: no overhead resistance)
-    atr = _atr_from_series(highs, lows, closes)
+    atr = _atr_from_series(highs, lows, closes, gaps=gaps)
     if atr and atr > 0:
         out.update(target=round(price + _ATR_STOP_MULT * atr, 2), source="atr")
         return out
     # 4. percentage fallback
     out.update(target=round(price * (1 + _PCT_FALLBACK), 2), source="pct")
     return out
+
+
+def risk_capped_cash(price, stop_price, max_risk_usd):
+    """Largest position value (USD) whose stop-out loses at most max_risk_usd, or None
+    when there is no usable stop gap (no stop, or stop at/above price)."""
+    try:
+        price, stop_price, max_risk_usd = float(price), float(stop_price), float(max_risk_usd)
+    except (TypeError, ValueError):
+        return None
+    if price <= 0 or stop_price >= price or max_risk_usd <= 0:
+        return None
+    return max_risk_usd / (price - stop_price) * price
 
 
 def get_position_size(price, stop_price, risk_usd=500):

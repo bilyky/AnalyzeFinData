@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from utils import _to_float
+from bar_provenance import is_weekend
 from aether_logger import get_logger as _get_logger
 import risk_utils
 import instruments
@@ -1380,6 +1381,8 @@ def _append_ohlcv_entry(symbol: str, date_str: str, power_g: "PowerGauge", ohlcv
 
     if date_str in ts:
         return  # already have an entry for this date
+    if is_weekend(date_str):
+        return  # not a session: the API never returns it, so it could never be repaired
 
     path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
     if not os.path.exists(path):
