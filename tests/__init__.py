@@ -48,6 +48,7 @@ _logging.getLogger("aether.daily_task").addHandler(
 # and driving toward an IP ban.
 import os as _os
 import socket as _socket
+import re as _re
 import subprocess as _subprocess
 import importlib as _importlib
 import aether.etrade as _etrade
@@ -205,11 +206,14 @@ if not _os.getenv("AETHER_LIVE_TESTS"):
 
     # Kills, the real game, and anything that CHANGES Task Scheduler. Read-only
     # queries (`schtasks /query`, Get-ScheduledTask) stay allowed.
-    _FORBIDDEN_PROC_TOKENS = (
-        "taskkill", "stop-process", "ai_portfolio_game.py",
-        "schtasks /create", "schtasks /delete", "schtasks /change", "schtasks /run", "schtasks /end",
-        "register-scheduledtask", "unregister-scheduledtask", "set-scheduledtask",
-        "start-scheduledtask", "stop-scheduledtask", "enable-scheduledtask", "disable-scheduledtask",
+    # Matched on the command's shape, not a fixed string, so `schtasks.exe /Create`, a
+    # full `C:\...\schtasks.exe` path and a quoted path are all caught.
+    _FORBIDDEN_PROC_PATTERNS = (
+        _re.compile(r"\btaskkill(\.exe)?\b"),
+        _re.compile(r"\bstop-process\b"),
+        _re.compile(r"ai_portfolio_game\.py"),
+        _re.compile(r"\bschtasks(\.exe)?[\"']?\s+/(create|delete|change|run|end)\b"),
+        _re.compile(r"\b(register|unregister|set|start|stop|enable|disable)-scheduledtask\b"),
     )
 
     def _argv_text(args):
@@ -219,7 +223,7 @@ if not _os.getenv("AETHER_LIVE_TESTS"):
 
     def _guard_proc(args):
         text = _argv_text(args).lower()
-        hit = next((t for t in _FORBIDDEN_PROC_TOKENS if t in text), None)
+        hit = next((p.pattern for p in _FORBIDDEN_PROC_PATTERNS if p.search(text)), None)
         if hit:
             raise RuntimeError(
                 f"Blocked real process side effect in tests ({hit!r} in {_argv_text(args)[:120]!r}). "

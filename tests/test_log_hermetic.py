@@ -109,7 +109,13 @@ class TestProcessSideEffectsBlocked(unittest.TestCase):
                      ["schtasks", "/Create", "/TN", "AETHER_probe", "/TR", "x"],
                      ["schtasks", "/Delete", "/TN", "AETHER_probe", "/F"],
                      ["powershell", "-Command", "Register-ScheduledTask -TaskName AETHER_probe"],
-                     ["powershell", "-Command", "Unregister-ScheduledTask -TaskName AETHER_probe"]):
+                     ["powershell", "-Command", "Unregister-ScheduledTask -TaskName AETHER_probe"],
+                     # the executable spelled as schtasks.exe, a full path, or a quoted path
+                     ["schtasks.exe", "/Create", "/TN", "AETHER_probe", "/TR", "x"],
+                     [r"C:\Windows\System32\schtasks.exe", "/Delete", "/TN", "AETHER_probe", "/F"],
+                     r'"C:\Windows\System32\schtasks.exe" /Change /TN AETHER_probe /DISABLE',
+                     "SCHTASKS.EXE  /RUN /TN AETHER_probe",
+                     [r"C:\Windows\System32\taskkill.exe", "/PID", "0"]):
             with self.subTest(argv=argv):
                 with self.assertRaisesRegex(RuntimeError, "Blocked real process side effect"):
                     harness._guard_proc(argv)
@@ -129,6 +135,7 @@ class TestProcessSideEffectsBlocked(unittest.TestCase):
     def test_read_only_scheduler_queries_are_not_refused(self):
         # Exercise the guard itself (nothing is executed): queries must pass through.
         for argv in (["schtasks", "/query", "/tn", "AETHER_probe"],
+                     [r"C:\Windows\System32\schtasks.exe", "/Query", "/TN", "AETHER_probe"],
                      ["powershell", "-Command", "Get-ScheduledTask -TaskName AETHER_probe"]):
             with self.subTest(argv=argv):
                 harness._guard_proc(argv)  # raises RuntimeError if refused
