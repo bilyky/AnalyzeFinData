@@ -125,7 +125,42 @@ _ledgers.TRADE_DNA_FILE = _ledger_tmp / "trade_history_dna.json"
 _ledgers.FAILURE_RULES_FILE = _ledger_tmp / "failure_dna_rules.json"
 _ledgers.RETRO_REPORT_FILE = _ledger_tmp / "retrospective_report.txt"
 
+# ---------------------------------------------------------------------------
+# Singleton-lock / trash / run-guard guard. run_watchdog() and
+# autonomous_pipeline.main() overwrite their PID lock (tests mock "is the holder
+# alive?" to False) and force-delete it at exit, and run_watchdog() purges the
+# trash — so a suite run deleted the REAL Data/watchdog_run.lock, pipeline_run.lock
+# and every >30-day file in Data/.trash, and could steal a live watchdog's or
+# pipeline's lock. Unconditional: live tests never need the real locks either.
+# Guarded by tests/test_log_hermetic.py::TestLocksTrashAndConfigRedirected.
+# ---------------------------------------------------------------------------
+import aether.config as _config
+import aether.run_guard as _run_guard
+import aether.trash as _trash
+
+_test_lock_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+_lock_tmp = Path(_test_lock_dir.name)
+_trash.TRASH_DIR = str(_lock_tmp / ".trash")
+_run_guard._DATA_DIR = _lock_tmp
+for _mod_name, _attrs in (("watchdog", ("WATCHDOG_LOCK_FILE", "SELF_HEAL_LOCK", "SELF_HEAL_PROMPT_FILE")),
+                          ("autonomous_pipeline", ("PIPELINE_LOCK_FILE",))):
+    try:
+        _mod = _importlib.import_module(_mod_name)
+    except Exception:
+        continue
+    for _attr in _attrs:
+        if hasattr(_mod, _attr):
+            setattr(_mod, _attr, _lock_tmp / Path(getattr(_mod, _attr)).name)
+
 if not _os.getenv("AETHER_LIVE_TESTS"):
+    # -- Config side: never load the real config.json. Its E*TRADE TOTP secret opens
+    # get_tokens' automated login path, so the suite behaved differently in the main
+    # checkout than in a worktree (which has none). Rebuild CFG IN PLACE from a missing
+    # file: modules that did `from aether.config import CFG` see the same object, and
+    # nothing copies CFG values at import. Env-var overrides still apply, as in prod.
+    _config._CFG_PATH = str(_lock_tmp / "config.json")  # deliberately absent
+    _config.CFG.__init__()
+
     # -- State side: redirect prod auth-state / cache files to a throwaway temp dir --
     # A test that reaches get_tokens() finds no saved browser state (so the automated
     # headless path is skipped entirely — never even attempted) and any breaker
