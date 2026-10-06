@@ -42,6 +42,8 @@ _DIR      = os.path.dirname(os.path.abspath(__file__))
 OHLCV_DIR = os.path.join(_DIR, "Data", "Symbol_full")
 MAX_GAP_DAYS = 30   # trigger compact/full fetch if latest entry is this many calendar days behind
 SLEEP_SEC    = 14   # 14 s between requests → 4.3 req/min (safe under 5/min limit)
+QUOTA_STOP_AFTER = 3  # consecutive 429s = quota spent: stop the run instead of burning 14 s per symbol
+DORMANT_DAYS = 45     # no real bar this long = likely delisted/dead: queue it LAST, not first
 
 _BASE_URL = "https://alpha-vantage.p.rapidapi.com/query"
 _HEADERS  = {
@@ -65,6 +67,33 @@ def _load_cache(path: str) -> dict | None:
 
 def _latest_date(ts: dict) -> str | None:
     return max(ts.keys()) if ts else None
+
+
+def _last_real_date(cache: dict | None) -> str:
+    """Newest non-placeholder bar date, or "" (sorts first) when there is none/no file."""
+    if not cache:
+        return ""
+    ts = cache["Time Series (Daily)"]
+    return max((d for d, bar in ts.items() if not is_provisional(bar)), default="")
+
+
+def _queue_rank(existing: dict | None, today_str: str, path: str | None = None) -> tuple:
+    """Repair priority (lower = sooner): a missing file first (a new symbol needs its full
+    fetch), then active symbols oldest-real-bar first, and dormant ones last — no real bar
+    for DORMANT_DAYS, or a file holding an API error instead of a series (e.g. Alpha
+    Vantage "Invalid API call" for a delisted ticker) — so they cannot eat the budget
+    every run."""
+    if existing is None:
+        return (2, "") if path and os.path.exists(path) else (0, "")
+    last = _last_real_date(existing)
+    cutoff = (datetime.date.fromisoformat(today_str)
+              - datetime.timedelta(days=DORMANT_DAYS)).isoformat()
+    return (2, last) if last < cutoff else (1, last)
+
+
+def _is_quota_error(err: Exception) -> bool:
+    resp = getattr(err, "response", None)
+    return getattr(resp, "status_code", None) == 429
 
 
 # The is_provisional predicate lives in the stdlib-only leaf module ``bar_provenance`` and is
@@ -180,7 +209,8 @@ def _fetch_and_merge(symbol: str, path: str, outputsize: str = "compact") -> Non
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> dict:
+def repair_missing(symbols: list[str], today_str: str, force: bool = False,
+                   max_fetches: int | None = None) -> dict:
     """
     Scan Symbol_full/ and repair symbols with missing, corrupted, or stale files.
     Uses compact fetch (last 100 days) when file exists but has a gap; full fetch
@@ -191,8 +221,16 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> d
     single symbol whose file isn't stale enough to trip MAX_GAP_DAYS).
 
     Rate: 14 s sleep between API calls → ≤5 req/min.
+
+    Budget: at most max_fetches (default CFG.rapidapi_max_fetches) API calls per run, spent
+    MOST-STARVED FIRST — symbols needing repair are ordered by their newest real bar,
+    oldest first (missing files before them, dormant/delisted names after; _queue_rank). A fixed order starved the tail of the list every night once the quota ran
+    out (the same ~23 symbols 429'd daily and were never repaired); now whatever a run
+    misses is first in line for the next. QUOTA_STOP_AFTER consecutive 429s end the run.
+    Symbols left for the next run are counted in results["deferred"].
     """
-    results = {"updated": 0, "skipped": 0, "errors": []}
+    results = {"updated": 0, "skipped": 0, "errors": [], "deferred": 0, "quota_stopped": False}
+    budget = CFG.rapidapi_max_fetches if max_fetches is None else max_fetches
 
     # Cross-process file lock to prevent multiple processes from running recovery simultaneously
     lock_path = os.path.join(os.path.dirname(OHLCV_DIR), "rapidapi.lock")
@@ -217,27 +255,43 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False) -> d
         return {"updated": 0, "skipped": len(symbols), "errors": [], "locked": True}
 
     try:
-        for i, sym in enumerate(symbols, 1):
+        queue = []
+        for order, sym in enumerate(symbols):
             if sym.upper() in _UNSUPPORTED_SYMBOLS:
                 results["skipped"] += 1
                 continue
-
             path = os.path.join(OHLCV_DIR, f"{sym}_daily.json")
             needs, existing = _check_recovery(path, today_str)
             if not needs and not force:
                 results["skipped"] += 1
                 continue
+            queue.append((_queue_rank(existing, today_str, path), order, sym, path, existing))
+        queue.sort(key=lambda q: (q[0], q[1]))          # most-starved first, stable
+        results["deferred"] = max(0, len(queue) - budget)
+        _log.info("  [RapidAPI] %d need repair, budget %d this run, %d deferred to the next run",
+                     len(queue), budget, results["deferred"])
 
+        quota_hits = 0
+        for i, (_last, _order, sym, path, existing) in enumerate(queue[:budget], 1):
             outputsize = "full" if existing is None else "compact"
             try:
                 _fetch_and_merge(sym, path, outputsize=outputsize)
                 results["updated"] += 1
+                quota_hits = 0
                 _log.console("  [RapidAPI] %s: %s fetch OK (%d/%d, updated=%d)",
-                             sym, outputsize, i, len(symbols), results["updated"])
+                             sym, outputsize, i, min(len(queue), budget), results["updated"])
                 time.sleep(SLEEP_SEC)
             except Exception as e:
                 results["errors"].append((sym, str(e)))
                 _log.error("  [RapidAPI] %s: ERROR - %s", sym, e)
+                quota_hits = quota_hits + 1 if _is_quota_error(e) else 0
+                if quota_hits >= QUOTA_STOP_AFTER:
+                    left = min(len(queue), budget) - i
+                    results["deferred"] += left
+                    results["quota_stopped"] = True
+                    _log.warning("  [RapidAPI] %d consecutive 429s — quota spent; stopping, "
+                                 "%d more deferred to the next run", quota_hits, left)
+                    break
                 # Sleep even on failure to avoid a rapid-fire cascade hammering the API
                 time.sleep(SLEEP_SEC)
     finally:
@@ -296,8 +350,14 @@ def get_quotes(time_frame, year=2022, month=1, day=1, symbol='MSFT'):
 if __name__ == "__main__":
     today_str = str(datetime.date.today())
 
-    args = [a for a in sys.argv[1:] if a != "--force"]
-    force = "--force" in sys.argv[1:]
+    argv = sys.argv[1:]
+    force = "--force" in argv
+    max_fetches = None
+    if "--max-fetches" in argv:
+        max_fetches = int(argv[argv.index("--max-fetches") + 1])
+    args = [a for k, a in enumerate(argv)
+            if a not in ("--force", "--max-fetches")
+            and not (k and argv[k - 1] == "--max-fetches")]
 
     if args:
         # Explicit symbols passed on command line
@@ -308,8 +368,9 @@ if __name__ == "__main__":
 
     _log.console("[RapidAPI] Recovery pass — %d symbols, today=%s, force=%s",
                  len(syms), today_str, force)
-    result = repair_missing(syms, today_str, force=force)
-    _log.console("[RapidAPI] Done: %d fetched, %d already current, %d errors",
-                 result["updated"], result["skipped"], len(result["errors"]))
+    result = repair_missing(syms, today_str, force=force, max_fetches=max_fetches)
+    _log.info("[RapidAPI] Done: %d fetched, %d already current, %d errors, %d deferred%s",
+                 result["updated"], result["skipped"], len(result["errors"]), result["deferred"],
+                 " (stopped: quota spent)" if result["quota_stopped"] else "")
     for sym, err in result["errors"]:
         _log.error("  ERROR %s: %s", sym, err)
