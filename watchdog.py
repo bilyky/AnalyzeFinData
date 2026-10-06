@@ -32,6 +32,7 @@ AETHER_JSONL = BASE_DIR / "Data" / "logs" / "aether.jsonl"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 TASKS = ["AnalyzeFinData_Morning", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_Summary", "AnalyzeFinData_Evening", "AnalyzeFinData_ETrade_Reauth"]
 SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
+WATCHDOG_LOCK_FILE = BASE_DIR / "Data" / "watchdog_run.lock"   # cross-process singleton (PID)
 
 python_exe = sys.executable
 run_agent = BASE_DIR / "run_agent.cmd"
@@ -693,7 +694,7 @@ def _recovery_next_steps_html(compilation_passed, ai_triggered) -> str:
 
 def run_watchdog():
     # Enforce a strict cross-process execution singleton to prevent 2 watchdogs from running concurrently
-    lock_file = BASE_DIR / "Data" / "watchdog_run.lock"
+    lock_file = WATCHDOG_LOCK_FILE
     if lock_file.exists():
         try:
             with open(lock_file, "r") as f:

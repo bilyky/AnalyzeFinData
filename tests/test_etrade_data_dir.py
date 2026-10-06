@@ -34,7 +34,9 @@ def _reapply_hermetic_redirects(e):
         e._BROWSER_STATE_PATH = str(Path(tmp_dir) / "etrade_browser_state_test.json")
         e._REAUTH_STATE_PATH  = str(Path(tmp_dir) / "etrade_reauth_state_test.json")
         e._FAIL_STATE_PATH    = str(Path(tmp_dir) / "etrade_fail_state_test.json")
-        
+        # the reauth single-flight lock is recomputed by the reload too (real Data/ otherwise)
+        e._REAUTH_LOCK_PATH   = str(Path(tmp_dir) / "etrade_reauth_test.lock")
+
         # Block Playwright browser launch on the reloaded etrade module instance
         def _blocked_playwright(*_a, **_k):
             raise RuntimeError(
@@ -104,6 +106,7 @@ class TestCanonicalAuthDataDir(unittest.TestCase):
         # is trashed INTO that override's .trash — same filesystem, not a different checkout's
         # dead Data/. Red-green anchor for the split-brain the hardcoded TRASH_DIR created.
         canonical = os.path.join(os.sep + "srv", "aether-prod", "Data")
+        harness_trash_dir = trash.TRASH_DIR  # the test harness's temp trash; restored below
         base = dict(os.environ)
         base.pop("AETHER_DATA_DIR", None)
         base["AETHER_DATA_DIR"] = canonical
@@ -119,6 +122,9 @@ class TestCanonicalAuthDataDir(unittest.TestCase):
             env.pop("AETHER_DATA_DIR", None)
             with mock.patch.dict(os.environ, env, clear=True):
                 importlib.reload(trash)   # etrade is restored by tearDown
+            # The reload recomputed TRASH_DIR as the REAL Data/.trash; put the harness's
+            # temp trash back, or every later test (e.g. run_watchdog's purge) hits prod.
+            trash.TRASH_DIR = harness_trash_dir
 
 
 if __name__ == "__main__":
