@@ -347,7 +347,7 @@ Tests are plain `unittest.TestCase` — no pytest required.
 python -m unittest discover -s tests -v
 ```
 
-The suite collects **297 tests** (4 live broker/API tests skip unless `AETHER_LIVE_TESTS=1`).
+The live broker/API contract tests skip unless `AETHER_LIVE_TESTS=1`. Everything else is hermetic: `tests/__init__.py` redirects production paths (game state and its backups, workbook, ledgers, logs, E*TRADE tokens) to temp directories and blocks live network, real browsers, and process-kill / Task-Scheduler commands, so a run never touches `Data/` (see AGENT.md §3, *Hermetic Test Harness*).
 
 One test is environment-dependent: `test_executables.test_daily_task_linter_self_validation`
 requires a working `ruff` on PATH and fails if the `ruff` subprocess can't initialize

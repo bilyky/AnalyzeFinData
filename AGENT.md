@@ -71,6 +71,17 @@ To completely eliminate "vacuum tests" or performative mocks that pass in steril
     2.  **No "Happy Path Only" Coverage:** Mocking must never be used to mask complex, multi-day historical data gaps or timeline drifts.
     3.  **Empirical Failure First (Strict Red-Green):** Before applying any bug fix, you MUST write a reproducing test case that fails (RED) on the actual dirty state. If the test cannot fail on the broken code, the test has NO value and must be rewritten. The fix is complete only when the test successfully passes (GREEN) with zero regressions.
 
+### 🧪 Hermetic Test Harness (no production side effects)
+A plain `python -m unittest discover -s tests` run from the main checkout shares its `Data/` with production. It must never change production state:
+
+*   **The Mandate:** No test may write production files (game state and its backups, ledgers, the workbook, auth tokens, or the logs under `Data/logs/`, `Data/autonomous_run.log` and `daily_task.log`), contact a live host, open a real browser, kill a process, or change Task Scheduler.
+*   **How it is enforced:** `tests/__init__.py` redirects to temp directories the workbook (`XLSX_FILE`), the learning ledgers (decision log, trade DNA, failure-DNA rules, retrospective report), the E*TRADE token / browser / reauth-state / lock files, the scarcity cache, the game state (`AI_GAME_FILE` **together with** `GAME_BACKUP_DIR`, because `save_game()` prunes that folder to the last 15 backups), and the logs above. Outside live mode it also blocks non-loopback sockets, Playwright launches, and `subprocess` calls that run `taskkill`, `Stop-Process`, `ai_portfolio_game.py`, or mutate Task Scheduler (read-only queries stay allowed). `tests/test_log_hermetic.py` and `tests/test_ledger_hermetic.py` pin it.
+*   **The Rules:**
+    1.  **Mock at the boundary:** a test that drives code which spawns processes (e.g. `watchdog.run_watchdog()`) must mock `subprocess` itself. A child process never loads the harness, so its writes and side effects are not redirected.
+    2.  **New production paths get a redirect:** when code gains a new module-level file path under `Data/` (or a handler opened at import), add its redirect to `tests/__init__.py` in the same change.
+    3.  **Prove it after harness changes:** hash every file in the repo and in the main checkout's `Data/` before and after a full suite run; the result must be 0 changed / 0 created / 0 deleted.
+    4.  **Live mode is explicit:** only `AETHER_LIVE_TESTS=1` lifts these guards, for the live contract tests.
+
 ---
 
 ## 🧹 4. Resource Cleanup & Sanitation Standards
@@ -157,3 +168,13 @@ To guarantee 100% accurate, zero-trust system diagnostics and eliminate any lyin
 *   **The Mandate:** All errors, exceptions, expired sessions, or bypassed locks **MUST** be programmatically captured, logged, and surfaced to the operator with complete, uncompromised truthfulness.
 *   **No Greenwashing:** You are **strictly and absolutely forbidden** from masking any failure, timeout, or expired credential under a generic success badge or reporting 'PASS' when an API check was actually bypassed, failed, or waived.
 *   **Explicit Labeling:** Any waived check (such as E*TRADE session validation on weekends) must be explicitly reported as **`[WAIVED]`** or **`[EXPIRED]`** on both console screens and HTML emails, never as `[PASS]`. All structural exceptions must fail loudly, instantly, and print complete traceback logs so the operator has immediate, uncompromised visibility.
+
+---
+
+## 🧰 9. Reusable Agent Workflows (Skills)
+
+Step-by-step workflows live as plain markdown in `.claude/commands/<name>.md`. They are agent-agnostic: Claude Code runs them as `/<name>`; any other agent (Gemini, Codex, pi, …) opens the file and follows it. Supporting reference material lives under `docs/skills/` and is read only when a skill points to it.
+
+*   `review-prs` — review open PRs against the fixed rubric and post findings as PR comments; includes the merge-in and lossless-cleanup procedures.
+*   `ship-pr` — take a change from branch to pushed PR with CI verified.
+*   `status`, `analyze`, `compare-stocks`, `daily-run`, `intraday-monitor`, `watchdog`, `pattern-discover`, `extract-intel`, `oceanview-adviser` — portfolio and operations workflows (see each file's header).
