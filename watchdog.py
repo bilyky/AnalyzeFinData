@@ -55,6 +55,17 @@ _TASK_DEFS = {
     "Project_AETHER_Watchdog": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'watchdog.py'}'",              "hourly", None),
 }
 
+# Task Scheduler ExecutionTimeLimit per task (minutes); everything else gets the default.
+# The Evening task (daily_task.py) ends with the OHLCV recovery pass, whose own timeout is
+# rapidapi.pass_timeout_seconds() (~5 h worst case for the 400-fetch budget) — a 15-min
+# scheduler limit would kill the whole task long before that.
+# The Evening value must cover daily_task.worst_case_runtime_seconds() (all of that task's
+# step timeouts, recovery pass included); register_agent_tasks.ps1 repeats it for the
+# AETHER_AftermarketReport task. tests/test_task_time_limits.py pins both.
+_DEFAULT_TASK_TIME_LIMIT_MIN = 15
+_TASK_TIME_LIMIT_MIN = {"AnalyzeFinData_Evening": 360}
+SYNC_TIMEOUT_S = 600  # robocopy timeout for sync_data_folder (PR #64 raised it for the cache volume)
+
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 
 # --- Agnostic AI Self-Healing Tool Configuration ---
@@ -692,7 +703,7 @@ def heal_tasks(missing_tasks, force=False):
                 # 'IgnoreNew' also avoids interrupting an in-flight state write, unlike 'Queue'.)
                 ps_cmd = [
                     "powershell.exe", "-NoProfile", "-Command",
-                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) -ErrorAction SilentlyContinue"
+                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes {_TASK_TIME_LIMIT_MIN.get(task, _DEFAULT_TASK_TIME_LIMIT_MIN)})) -ErrorAction SilentlyContinue"
                 ]
                 subprocess.run(ps_cmd, capture_output=True)
             else:
@@ -763,7 +774,7 @@ def sync_data_folder() -> bool:
             "robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS",
             "/XD", "etrade_chrome_profile"
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=600)
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=SYNC_TIMEOUT_S)
         if result.returncode < 8:
             _log.info(f"✅ Data folder successfully synchronized to {dst}.")
             _record_backup_status("ok")
