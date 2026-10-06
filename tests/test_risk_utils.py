@@ -326,5 +326,18 @@ class TestScaleOut(unittest.TestCase):
         self.assertAlmostEqual(frac, 0.30)
 
 
+
+class TestRiskCappedCash(unittest.TestCase):
+    def test_cash_for_max_loss(self):
+        # $2.50 risk/share, $100 max loss -> 40 shares x $10 = $400.
+        self.assertAlmostEqual(risk_utils.risk_capped_cash(10.0, 7.5, 100.0), 400.0)
+
+    def test_no_usable_stop_gap(self):
+        for stop in (10.0, 11.0, None, "x"):
+            self.assertIsNone(risk_utils.risk_capped_cash(10.0, stop, 100.0))
+        self.assertIsNone(risk_utils.risk_capped_cash(0.0, 7.5, 100.0))
+        self.assertIsNone(risk_utils.risk_capped_cash(10.0, 7.5, 0.0))
+
+
 if __name__ == "__main__":
     unittest.main()

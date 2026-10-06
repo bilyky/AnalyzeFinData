@@ -404,6 +404,18 @@ def resolve_target_detailed(price, symbol=None, highs=None, lows=None, closes=No
     return out
 
 
+def risk_capped_cash(price, stop_price, max_risk_usd):
+    """Largest position value (USD) whose stop-out loses at most max_risk_usd, or None
+    when there is no usable stop gap (no stop, or stop at/above price)."""
+    try:
+        price, stop_price, max_risk_usd = float(price), float(stop_price), float(max_risk_usd)
+    except (TypeError, ValueError):
+        return None
+    if price <= 0 or stop_price >= price or max_risk_usd <= 0:
+        return None
+    return max_risk_usd / (price - stop_price) * price
+
+
 def get_position_size(price, stop_price, risk_usd=500):
     """Calculate shares based on Price - Stop gap."""
     if not price or not stop_price or price <= stop_price:
