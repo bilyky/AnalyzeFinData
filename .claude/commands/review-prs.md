@@ -198,6 +198,13 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
 - **"Merged" comes from the PR API, never from ancestry** — squash-merged tips are never ancestors of
   `main`. In list responses use `merged_at != null` (the list endpoint has no `merged` field); read
   **every page** of results.
+- **Links first (data-loss rule, `AGENT.md` §4 "No Links Into Data/"):** `git status` cannot see a
+  junction or symlink under gitignored `Data/`, and removing a worktree deletes *through* it — on
+  2026-10-06 that wiped the main checkout's `Data/Symbol` + `Data/Symbol_full`. Before removing any
+  worktree, scan it for links (`prune_merged_worktrees.links_inside(<wt>)`, or
+  `Get-ChildItem <wt> -Recurse -Force -Attributes ReparsePoint`). If any: remove the **link itself**
+  (`cmd /c rmdir <link>` — removes only the link), re-scan, and get the owner's OK for any link that
+  pointed into `Data/`. Never remove a worktree that still contains one.
 - **Worktrees:** remove only clean ones, **without `--force`** (a refusal is the safety net —
   `git -C <wt> status --porcelain` non-empty ⇒ leave it and report it). Keep open-PR, dirty, locked,
   and other-session worktrees. **An open PR dominates a shared head ref:** a branch that backs any open

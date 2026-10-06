@@ -5,7 +5,7 @@ import os
 import pytz
 import re
 import requests
-from aether import etrade
+from aether import etrade, paths
 import rapidapi
 import sys
 import console_safe
@@ -30,7 +30,7 @@ AI_GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
 GAME_BACKUP_DIR = BASE_DIR / "Data" / "Backup" / "Game"   # timestamped save_game backups (keeps last 15)
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 AI_PERF_XLSX = BASE_DIR / "Data" / "ai_portfolio_performance.xlsx"
-SYMBOL_FULL_DIR = BASE_DIR / "Data" / "Symbol_full"   # OHLCV cache — one source of truth
+SYMBOL_FULL_DIR = Path(paths.ohlcv_dir())   # OHLCV cache — one source of truth ($AETHER_CACHE_DIR-aware)
 INITIAL_BALANCE = 10000.0
 
 # Import risk utils safely
@@ -54,7 +54,7 @@ def _load_symbol_today_cache(symbol: str, today_str: str) -> dict:
     if symbol in _SYMBOL_DAY_CACHE:
         return _SYMBOL_DAY_CACHE[symbol]
         
-    cache_path = BASE_DIR / "Data" / "Symbol" / symbol / f"{symbol}_{today_str}.json"
+    cache_path = Path(paths.symbol_dir()) / symbol / f"{symbol}_{today_str}.json"
     cache = {}
     if cache_path.exists():
         try:
@@ -896,7 +896,7 @@ def save_game(state):
 def backtrack_verify(symbol):
     """Verify the consistency of a price trend over the last 3 trading days using local daily history."""
     try:
-        path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+        path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
         if not path.exists():
             return False, "No local daily history found."
         
@@ -925,7 +925,7 @@ def backtrack_verify(symbol):
 def is_bottom_confirmed(symbol):
     """Verify if a stock is forming a technical bottom based on its 3-day price slope."""
     try:
-        path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+        path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
         if not path.exists():
             return False, "No local daily history found."
         
