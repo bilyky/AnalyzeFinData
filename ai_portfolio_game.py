@@ -1987,7 +1987,9 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         "bottom_desc": bottom_desc,
                         "industry": row[4]
                     })
-        
+                else:
+                    _log.warning(f"🛑 AI BUY REJECTED (Profile Threshold): {sym} - Combined score {round(total_score, 2)} is below the {profile} minimum of {rules['min_score_threshold']} and no confirmed bottom.")
+
         # ── R&D #32 Overbought Breakout Guard score penalty ──
         for buy_cand in top_buys:
             sym_upper = buy_cand["sym"].upper()
