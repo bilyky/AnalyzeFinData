@@ -36,7 +36,8 @@ single-writer auth/token manager + stateless data-plane.
 
 **Persistence today:** `database.py` is a **legacy, unused** raw-SQL Postgres stub (no ORM,
 imported by nothing). Live persistence = JSON files under `Data/`. Config already exposes
-`CFG.database_url` / `DATABASE_URL` (env-over-json) — reuse it.
+`CFG.database_url` / `DATABASE_URL` (env-over-json) — reuse it for the URL only. It is the app's own
+Postgres and is set on PROD, so it must NOT be the backend switch (see Phase 2).
 
 ## Architecture review — corners the naive design misses (drives the phases below)
 
@@ -123,8 +124,10 @@ renew/browser/writes and exposes only `current_token` + read paths. Centralize e
 the breaker as `ReauthCircuitBreaker` (same on-disk schema/paths/backoff).
 
 ### Phase 2 — Abstracted persistence (Ports & Adapters) + local schema
-`make_etrade_store(config)` selects backend by config (`DATABASE_URL` empty ⇒ file backend =
-today's behavior; set ⇒ DB). Ports (ABCs in `store.py`), each with a defined record schema:
+`make_etrade_store(config)` selects the backend by an explicit opt-in: `AETHER_ETRADE_STORE=db` ⇒ DB
+(URL from `DATABASE_URL` / `database.url`); anything else ⇒ file backend = today's behavior. (Originally
+keyed off `DATABASE_URL` itself; since PROD sets that for the app's Postgres, every port-routed call hit
+the raising DB stub — fixed 2026-10-01.) Ports (ABCs in `store.py`), each with a defined record schema:
 - **`TokenStore`** — `load(env)`(same-day guard)/`load_any_date`/`save`/`delete`; record
   `env, oauth_token, oauth_token_secret, saved_at, issued_date_et, generation`. **Secret.**
 - **`BrowserStateStore`** — `load/save(blob)`; Playwright storage_state. **Secret.**
@@ -167,8 +170,8 @@ Routes: `GET /health`, `GET /ready` (token present/unexpired), `GET /v1/quotes?s
 - **DB migration = schema + data.** Adopt **Alembic** under `deploy/migrations/` (repo has
   none; SQLAlchemy already a dep). Initial revision creates the **non-secret** tables:
   `etrade_reauth_state`, `etrade_lock` (row-lease), `etrade_auth_event` (indexed `(env, ts)`),
-  `etrade_position_snapshot`. One-time **file→DB backfill** command (idempotent) so flipping
-  `DATABASE_URL` is a clean cutover.
+  `etrade_position_snapshot`. One-time **file→DB backfill** command (idempotent) so the opt-in
+  (`AETHER_ETRADE_STORE=db`, URL from `DATABASE_URL`) is a clean cutover.
 - **Container/k8s.** `Dockerfile` on `mcr.microsoft.com/playwright/python` (Chromium+libs) +
   **`tzdata`** + curated `requirements-etrade.txt` (pyetrade, requests-oauthlib, playwright,
   pytz, fastapi, uvicorn[standard], httpx, sqlalchemy, alembic, prometheus-client).
@@ -184,7 +187,7 @@ Execute **Phase 1 + 2 + security cleanup** as real, tested code (extensible pack
 layer with today's file backend default — no behavior change). Deliver **Phase 3 + 4 + 5** as
 new, side-effect-free files (extension stubs, service + single-flight/metrics, DB
 adapter/migrations, Docker/k8s, runbook) that add capability **without altering the running
-monolith** (opt-in via `ETRADE_SERVICE_URL` / `DATABASE_URL` / `role`). Phases are
+monolith** (opt-in via `ETRADE_SERVICE_URL` / `AETHER_ETRADE_STORE=db` / `role`). Phases are
 independent and individually reversible.
 
 ## Critical files
@@ -204,7 +207,7 @@ independent and individually reversible.
    the new package + store boundary; then full `discover tests` stays green.
 2. **Data-layer parity:** file `TokenStore`/`ReauthStateStore`/`AuthEventLog` round-trip
    against today's `Data/*.json` shapes; `_TOKEN_PATH` reassignment redirects the store;
-   `make_etrade_store` selects file vs DB by `DATABASE_URL`.
+   `make_etrade_store` selects file vs DB by the `AETHER_ETRADE_STORE=db` opt-in.
 3. **Role guard:** `ETradeClient(role="data").auth.get_tokens()` raises / is unavailable;
    `current_token` never renews or writes (assert no file mutation, no browser call).
 4. **Behavior identity:** diff-test module fns vs `ETradeClient` methods under mocked

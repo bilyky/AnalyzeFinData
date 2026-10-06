@@ -10,7 +10,7 @@ import json
 import datetime
 from pathlib import Path
 import openpyxl
-import circuit_breaker
+from aether import ledgers
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("bootstrap_dna")
@@ -136,7 +136,7 @@ def bootstrap():
                 })
                 
     _log.info(f"Successfully paired and recovered {len(closed_trades)} completed trades!")
-    out_file = circuit_breaker.DNA_FILE
+    out_file = ledgers.TRADE_DNA_FILE
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Preserve any non-trade records already in the ledger (e.g. CIRCUIT_BREAKER_TRIGGER entries).

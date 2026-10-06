@@ -222,8 +222,8 @@ class ETradeClient:
         "auth" (default) is the single-writer control plane; "data" is the
         read-only, scalable plane (no renew / browser / writes).
     store : EtradeStore, optional
-        Persistence backend; defaults to ``make_etrade_store()`` (file, or DB when
-        DATABASE_URL is set).
+        Persistence backend; defaults to ``make_etrade_store()`` (file, or DB only when
+        opted in with ``AETHER_ETRADE_STORE=db``).
     allow_browser : bool
         Default for ``auth.get_tokens`` — only meaningful in the auth role and only
         honoured in an interactive TTY.

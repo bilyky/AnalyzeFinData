@@ -10,8 +10,7 @@ import rapidapi
 import sys
 import console_safe
 import circuit_breaker
-import retrospective_analyzer
-from aether import trash
+from aether import ledgers, trash
 import aether.notify as notify
 import argparse
 from pathlib import Path
@@ -28,6 +27,7 @@ console_safe.install()
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
 AI_GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
+GAME_BACKUP_DIR = BASE_DIR / "Data" / "Backup" / "Game"   # timestamped save_game backups (keeps last 15)
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 AI_PERF_XLSX = BASE_DIR / "Data" / "ai_portfolio_performance.xlsx"
 SYMBOL_FULL_DIR = BASE_DIR / "Data" / "Symbol_full"   # OHLCV cache — one source of truth
@@ -68,7 +68,7 @@ def _load_symbol_today_cache(symbol: str, today_str: str) -> dict:
 
 def check_failure_rules(symbol, pgr, score, z_score, industry, s10=0.0) -> tuple[bool, str]:
     """Check if the candidate matches any active toxic rules in Data/failure_dna_rules.json or dynamic filters."""
-    rules_file = retrospective_analyzer.RULES_FILE  # single path: the analyzer writes it
+    rules_file = ledgers.FAILURE_RULES_FILE
     
     # ── Earnings-Shock Failure Gate (Pillar 1 Guard) ──
     # Programmatic, un-bypassable veto on any symbol that has just reported a massive earnings miss
@@ -134,7 +134,7 @@ def log_closed_trade_dna(sym, pos, price, today_str):
         buy_date = buy_dna.get("buy_date", today_str)
         pnl_pct = round(((price - pos["cost"]) / pos["cost"]) * 100, 2) if pos["cost"] else 0.0
         
-        dna_file = circuit_breaker.DNA_FILE  # one ledger path, shared with the breaker backfeed
+        dna_file = ledgers.TRADE_DNA_FILE
         dna_list = []
         if dna_file.exists() and dna_file.stat().st_size > 0:
             with open(dna_file, "r", encoding="utf-8") as f:
@@ -805,7 +805,7 @@ def should_pyramid_into_winner(is_winner: bool, has_peak: bool, s10: float, l60:
 def load_game():
     if not AI_GAME_FILE.exists() or AI_GAME_FILE.stat().st_size == 0:
         # Try to find a backup to restore from
-        backup_dir = BASE_DIR / "Data" / "Backup" / "Game"
+        backup_dir = GAME_BACKUP_DIR
         if backup_dir.exists():
             backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
             for b in backups:
@@ -832,7 +832,7 @@ def load_game():
         except Exception as e:
             # Corruption detected! Try to restore from backup
             _log.warning(f"  [⚠️ AETHER SELF-HEALER] Error loading {AI_GAME_FILE.name}: {e}. Attempting automated recovery from backup...")
-            backup_dir = BASE_DIR / "Data" / "Backup" / "Game"
+            backup_dir = GAME_BACKUP_DIR
             if backup_dir.exists():
                 backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
                 for b in backups:
@@ -860,7 +860,7 @@ def save_game(state):
     # --- Mandatory Backup before Write ---
     if AI_GAME_FILE.exists():
         try:
-            backup_dir = BASE_DIR / "Data" / "Backup" / "Game"
+            backup_dir = GAME_BACKUP_DIR
             backup_dir.mkdir(parents=True, exist_ok=True)
             
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1987,7 +1987,9 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         "bottom_desc": bottom_desc,
                         "industry": row[4]
                     })
-        
+                else:
+                    _log.warning(f"🛑 AI BUY REJECTED (Profile Threshold): {sym} - Combined score {round(total_score, 2)} is below the {profile} minimum of {rules['min_score_threshold']} and no confirmed bottom.")
+
         # ── R&D #32 Overbought Breakout Guard score penalty ──
         for buy_cand in top_buys:
             sym_upper = buy_cand["sym"].upper()

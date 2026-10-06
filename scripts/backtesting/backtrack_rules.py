@@ -11,15 +11,15 @@ import sys
 
 # Anchor paths
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from aether import ledgers
 
-DNA_LEDGER_PATH = os.path.join("Data", "trade_history_dna.json")
 
 def run_backtrack_study():
-    if not os.path.exists(DNA_LEDGER_PATH):
-        _log.warning(f"❌ Error: Closed trade ledger '{DNA_LEDGER_PATH}' not found on disk.")
+    if not os.path.exists(ledgers.TRADE_DNA_FILE):
+        _log.warning(f"❌ Error: Closed trade ledger '{ledgers.TRADE_DNA_FILE}' not found on disk.")
         return
 
-    with open(DNA_LEDGER_PATH) as f:
+    with open(ledgers.TRADE_DNA_FILE, encoding="utf-8") as f:
         ledger = json.load(f)
 
     # Filter out circuit breaker triggers, keep only actual completed trades

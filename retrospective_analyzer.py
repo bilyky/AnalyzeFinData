@@ -10,20 +10,16 @@ and outputs a rich, human-readable 'Data/retrospective_report.txt'.
 
 import json
 import datetime
-from pathlib import Path
 import circuit_breaker
+from aether import ledgers
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("retrospective")
 
-BASE_DIR = Path(__file__).resolve().parent
-RULES_FILE = BASE_DIR / "Data" / "failure_dna_rules.json"
-REPORT_FILE = BASE_DIR / "Data" / "retrospective_report.txt"
-
 def analyze():
     _log.info("Launching automated Feedback & Pattern Analyzer...")
 
-    dna_file = circuit_breaker.DNA_FILE  # single ledger path, shared with the game + breaker
+    dna_file = ledgers.TRADE_DNA_FILE
     if not dna_file.exists() or dna_file.stat().st_size == 0:
         _log.warning("No raw trade DNA history found. Please run bootstrap_dna.py first.")
         return
@@ -110,9 +106,9 @@ def analyze():
                 toxic_patterns_found.append(f"🔴 Buying Overextended Bubble Assets (Z-Score >= 2.5): {len(high_z_losses)} losses, {len(high_z_winners)} wins ({high_z_loss_rate}% loss rate)")
 
         try:
-            with open(RULES_FILE, "w", encoding="utf-8") as f:
+            with open(ledgers.FAILURE_RULES_FILE, "w", encoding="utf-8") as f:
                 json.dump(toxic_rules, f, indent=4)
-            _log.info(f"Dynamically generated {len(toxic_rules)} toxic trade rules and wrote to rules file: {RULES_FILE}")
+            _log.info(f"Dynamically generated {len(toxic_rules)} toxic trade rules and wrote to rules file: {ledgers.FAILURE_RULES_FILE}")
         except Exception as e:
             _log.error(f"Failed to save dynamic rules file: {e}")
 
@@ -208,9 +204,9 @@ def analyze():
         report.append("")
 
     try:
-        with open(REPORT_FILE, "w", encoding="utf-8") as f:
+        with open(ledgers.RETRO_REPORT_FILE, "w", encoding="utf-8") as f:
             f.write("\n".join(report))
-        _log.info(f"Human-readable Retrospective Report generated: {REPORT_FILE}")
+        _log.info(f"Human-readable Retrospective Report generated: {ledgers.RETRO_REPORT_FILE}")
         _log.info("Feedback analysis completed successfully!")
     except Exception as e:
         _log.error(f"Failed to generate Retrospective Report: {e}")
