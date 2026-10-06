@@ -12,6 +12,7 @@ import openpyxl
 
 import notify
 import powergauge
+import rapidapi
 import watchdog
 from config import CFG
 
@@ -238,9 +239,11 @@ def main():
 
             # 2b. OHLCV recovery pass — repair missing/corrupted/stale Symbol_full files via RapidAPI.
             #     This is the evening/night task, which is the perfect time to run this heavy sync!
+            #     Its timeout must cover the whole per-run fetch budget: the 600 s default
+            #     killed every pass after ~42 of ~500 symbols (PROD logs 2026-09-16..30).
             _log.info("Running OHLCV recovery pass (rapidapi.py)...")
             try:
-                run_command([sys.executable, "rapidapi.py"])
+                run_command([sys.executable, "rapidapi.py"], timeout=rapidapi.pass_timeout_seconds())
             except Exception as e:
                 _log.warning(f"Warning: OHLCV recovery failed (non-fatal, daily_task continues): {e}")
 

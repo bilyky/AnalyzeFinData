@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -21,6 +22,7 @@ import requests
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import daily_task
 import rapidapi
 from aether.config import CFG
 
@@ -159,6 +161,48 @@ class TestQuotaStop(_Base):
         res = self.run_pass(self.syms, side_effect=flaky, max_fetches=8)
         self.assertEqual(len(self.fetched), 8)
         self.assertFalse(res["quota_stopped"])
+
+
+
+class TestPassTimeout(_Base):
+    """The caller's kill timeout must cover the whole budget: PROD's daily_task killed every
+    pass at 600 s (~42 of ~500 symbols), which is what starved the rest of the universe."""
+
+    def test_timeout_covers_every_budgeted_fetch_worst_case(self):
+        t = rapidapi.pass_timeout_seconds(400)
+        self.assertGreaterEqual(t, 400 * (rapidapi.SLEEP_SEC + rapidapi.REQUEST_TIMEOUT))
+        self.assertGreater(t, 600)
+        self.assertEqual(rapidapi.pass_timeout_seconds(), rapidapi.pass_timeout_seconds(CFG.rapidapi_max_fetches))
+
+    def test_daily_task_passes_the_budgeted_timeout(self):
+        # The recovery call sits deep inside daily_task's run flow; pin the call site so a
+        # revert to the 600 s default cannot slip back in unnoticed.
+        with open(daily_task.__file__, encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn('run_command([sys.executable, "rapidapi.py"], timeout=rapidapi.pass_timeout_seconds())', src)
+
+    def test_lock_younger_than_a_pass_is_respected(self):
+        lock = os.path.join(os.path.dirname(self.dir), "rapidapi.lock")
+        with open(lock, "w"):
+            pass
+        old = time.time() - 9001                                  # past the OLD 2.5 h TTL
+        os.utime(lock, (old, old))
+        self.seed("A", "2026-09-20")
+        res = self.run_pass(["A"], max_fetches=400)
+        self.assertTrue(res.get("locked"))                        # a 400-fetch pass can still be live
+        self.assertEqual(self.fetched, [])
+
+    def test_lock_older_than_a_pass_is_reclaimed(self):
+        lock = os.path.join(os.path.dirname(self.dir), "rapidapi.lock")
+        with open(lock, "w"):
+            pass
+        old = time.time() - rapidapi.pass_timeout_seconds(400) - 60
+        os.utime(lock, (old, old))
+        self.seed("A", "2026-09-20")
+        with mock.patch.object(rapidapi.trash, "soft_delete", side_effect=lambda p, **k: os.remove(p)):
+            res = self.run_pass(["A"], max_fetches=400)
+        self.assertFalse(res.get("locked"))
+        self.assertEqual(self.fetched, ["A"])
 
 
 if __name__ == "__main__":

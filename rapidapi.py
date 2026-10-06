@@ -44,6 +44,15 @@ MAX_GAP_DAYS = 30   # trigger compact/full fetch if latest entry is this many ca
 SLEEP_SEC    = 14   # 14 s between requests → 4.3 req/min (safe under 5/min limit)
 QUOTA_STOP_AFTER = 3  # consecutive 429s = quota spent: stop the run instead of burning 14 s per symbol
 DORMANT_DAYS = 45     # no real bar this long = likely delisted/dead: queue it LAST, not first
+REQUEST_TIMEOUT = 30  # per-call HTTP timeout (s)
+
+
+def pass_timeout_seconds(max_fetches: int | None = None) -> int:
+    """Wall-clock budget a caller must allow one recovery pass: every budgeted fetch at its
+    worst case (sleep + full HTTP timeout) plus slack for the pre-scan. A caller that kills
+    the pass sooner silently caps it — PROD's daily_task killed it at 600 s (~42 fetches)."""
+    budget = CFG.rapidapi_max_fetches if max_fetches is None else max_fetches
+    return budget * (SLEEP_SEC + REQUEST_TIMEOUT) + 600
 
 _BASE_URL = "https://alpha-vantage.p.rapidapi.com/query"
 _HEADERS  = {
@@ -153,7 +162,7 @@ def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
             "outputsize": outputsize,
             "datatype": "json",
         },
-        timeout=30,
+        timeout=REQUEST_TIMEOUT,
     )
     resp.raise_for_status()
     data = resp.json()
@@ -240,8 +249,8 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
         try:
-            # 2.5 hour TTL to clear stale locks from crashed runs (recovery can take up to 2 hours)
-            if time.time() - os.path.getmtime(lock_path) > 9000:
+            # A lock older than the longest legitimate pass is from a crashed/killed run.
+            if time.time() - os.path.getmtime(lock_path) > pass_timeout_seconds(budget):
                 trash.soft_delete(lock_path, reason="rapidapi-lock-stale", force=True)
                 fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except OSError:
@@ -321,7 +330,7 @@ def get_data(symbol: str, outputsize: str = "compact") -> str:
             "outputsize": outputsize,
             "datatype": "json",
         },
-        timeout=30,
+        timeout=REQUEST_TIMEOUT,
     )
     return resp.text
 
