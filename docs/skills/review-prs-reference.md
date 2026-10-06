@@ -68,12 +68,13 @@ Read the real message from `$_.ErrorDetails.Message`. The PII scrub still applie
 
 ## E. `scripts/utils/prune_merged_worktrees.py` — known limits
 
-Check these against the current script before relying on it:
-- **Transport is `gh api` only.** Where `gh` can't dial, it exits with a traceback; fall back to the
-  manual procedure in the skill's §9.
-- **Pagination.** It must read every page of `pulls?state=closed`; a single `per_page=100` request
-  silently drops older PRs once the repo has more than 100 closed PRs, leaving their branches
-  "unmapped".
-- **Merged-ness** must come from `merged_at` (the list endpoint has no `merged` field) — fixed in #143.
-- **Scope.** It handles worktrees and the branches they hold, not standalone local branches; use the
-  lossless test in the skill's §9 for those.
+Check these against the current script before relying on it (all but the last fixed in #143):
+- **Merged-ness** comes from `merged_at` (the list endpoint has no `merged` field).
+- **Pagination.** Reads every page, newest first; within a scope the newest PR for a head ref wins, and
+  open PRs override closed ones.
+- **Transport is `gh api` only.** If `gh` can't connect, it exits 2 with "Nothing was changed" and the
+  fix (set `HTTPS_PROXY`/`HTTP_PROXY`); otherwise prune by hand per the skill's §9.
+- **Branch deletion is by PR state only (still open).** It also deletes local branches that have no
+  worktree when a merged/closed PR has the same head ref, but it does **not** run the skill's §9
+  lossless test. A local branch with commits never pushed to the PR would lose them. Before
+  `--apply`, check each listed `BRANCH` with the §9 lossless test.

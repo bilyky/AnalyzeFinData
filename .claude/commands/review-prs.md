@@ -119,7 +119,13 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
     non-deterministic IO (fs, network, clock) while the real code runs.
   - **Red-green.** Swap the pre-change file back in and show the new test fails. **No pre-change code**
     (additive module, extraction)? Do a **mutation check**: break the code the way a realistic
-    regression would and confirm a test fails.
+    regression would and confirm a test fails. Red must be a failing **behavior assertion** — an error
+    in setup because old code lacks a new seam is not evidence; mutate each behavior instead. Ask of
+    every fixture: *would the old code satisfy it too?* If so the test proves nothing.
+  - **Did it exercise the path it claims?** A test or incident replay can pass for the wrong reason.
+    Assert the calls that prove the path ran (counts, arguments), and patch the module's own
+    reference — never a shared library global (`datetime.datetime`, `time.time`) that unrelated code
+    also reads.
   - **Combinable?** Same contract at different inputs → one table-driven test; don't merge different
     contracts just to cut lines.
   - **Run it.** Report the real `Ran N … OK (skipped=k)` from the branch (merged with today's `main`
@@ -197,7 +203,8 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
 
 - **"Merged" comes from the PR API, never from ancestry** — squash-merged tips are never ancestors of
   `main`. In list responses use `merged_at != null` (the list endpoint has no `merged` field); read
-  **every page** of results.
+  **every page** of results. Then confirm by **effect**: the change's content is on `main` (a merged
+  badge has been lost to a history rewrite before).
 - **Worktrees:** remove only clean ones, **without `--force`** (a refusal is the safety net —
   `git -C <wt> status --porcelain` non-empty ⇒ leave it and report it). Keep open-PR, dirty, locked,
   and other-session worktrees. **An open PR dominates a shared head ref:** a branch that backs any open
