@@ -22,8 +22,8 @@ _REPO = Path(__file__).resolve().parent.parent
 _PROBE = r"""
 import json, os, sys
 sys.path[:0] = [os.getcwd(), os.path.join(os.getcwd(), "scripts", "backtesting")]
-import ai_portfolio_game, powergauge, rapidapi, backtest_ratings
-from aether import risk_utils
+import ai_portfolio_game, powergauge, rapidapi, backtest_ratings, data_api
+from aether import circuit_breaker, decision_eval, risk_utils, scoring
 print(json.dumps({
     "risk_utils.OHLCV_DIR": str(risk_utils.OHLCV_DIR),
     "rapidapi.OHLCV_DIR": str(rapidapi.OHLCV_DIR),
@@ -31,6 +31,12 @@ print(json.dumps({
     "ai_portfolio_game.SYMBOL_FULL_DIR": str(ai_portfolio_game.SYMBOL_FULL_DIR),
     "backtest_ratings.OHLCV_DIR": str(backtest_ratings.OHLCV_DIR),
     "backtest_ratings.SYM_DIR": str(backtest_ratings.SYM_DIR),
+    "circuit_breaker.SPY_FILE(dir)": str(circuit_breaker.SPY_FILE.parent),
+    "circuit_breaker.VXX_FILE(dir)": str(circuit_breaker.VXX_FILE.parent),
+    "scoring._OHLCV_ROOT": str(scoring._OHLCV_ROOT),
+    "decision_eval.OHLCV_DIR": str(decision_eval.OHLCV_DIR),
+    "data_api._OHLCV_DIR": str(data_api._OHLCV_DIR),
+    "data_api._SYMBOL_DIR": str(data_api._SYMBOL_DIR),
 }))
 """
 
@@ -52,7 +58,10 @@ def _expected(root):
     full, day = norm(os.path.join(str(root), "Symbol_full")), norm(os.path.join(str(root), "Symbol"))
     return {"risk_utils.OHLCV_DIR": full, "rapidapi.OHLCV_DIR": full, "powergauge.OHLCV_DIR": full,
             "ai_portfolio_game.SYMBOL_FULL_DIR": full, "backtest_ratings.OHLCV_DIR": full,
-            "backtest_ratings.SYM_DIR": day}
+            "backtest_ratings.SYM_DIR": day,
+            "circuit_breaker.SPY_FILE(dir)": full, "circuit_breaker.VXX_FILE(dir)": full,
+            "scoring._OHLCV_ROOT": full, "decision_eval.OHLCV_DIR": full,
+            "data_api._OHLCV_DIR": full, "data_api._SYMBOL_DIR": day}
 
 
 class TestCacheDirResolution(unittest.TestCase):

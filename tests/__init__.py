@@ -125,12 +125,20 @@ for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomou
 # AFTER this harness runs, but `unittest discover -s tests` imports test modules as
 # top-level names, so this package can run only after earlier test modules already
 # imported these with the real paths. Rebind them too (same object type as the original).
-for _mod_name, _attr, _resolve in (("aether.risk_utils", "OHLCV_DIR", "ohlcv_dir"),
-                                   ("rapidapi", "OHLCV_DIR", "ohlcv_dir"),
-                                   ("powergauge", "OHLCV_DIR", "ohlcv_dir"),
-                                   ("ai_portfolio_game", "SYMBOL_FULL_DIR", "ohlcv_dir"),
-                                   ("backtest_ratings", "OHLCV_DIR", "ohlcv_dir"),
-                                   ("backtest_ratings", "SYM_DIR", "symbol_dir")):
+# (module, attribute, resolver, is_file): a file constant keeps its own file name.
+for _mod_name, _attr, _resolve, _is_file in (
+        ("aether.risk_utils", "OHLCV_DIR", "ohlcv_dir", False),
+        ("rapidapi", "OHLCV_DIR", "ohlcv_dir", False),
+        ("powergauge", "OHLCV_DIR", "ohlcv_dir", False),
+        ("ai_portfolio_game", "SYMBOL_FULL_DIR", "ohlcv_dir", False),
+        ("backtest_ratings", "OHLCV_DIR", "ohlcv_dir", False),
+        ("backtest_ratings", "SYM_DIR", "symbol_dir", False),
+        ("aether.circuit_breaker", "SPY_FILE", "ohlcv_dir", True),
+        ("aether.circuit_breaker", "VXX_FILE", "ohlcv_dir", True),
+        ("aether.scoring", "_OHLCV_ROOT", "ohlcv_dir", False),
+        ("aether.decision_eval", "OHLCV_DIR", "ohlcv_dir", False),
+        ("data_api", "_OHLCV_DIR", "ohlcv_dir", False),
+        ("data_api", "_SYMBOL_DIR", "symbol_dir", False)):
     try:
         _mod = _importlib.import_module(_mod_name)
     except Exception:
@@ -139,6 +147,8 @@ for _mod_name, _attr, _resolve in (("aether.risk_utils", "OHLCV_DIR", "ohlcv_dir
     if _orig is None:
         continue
     _new = getattr(_paths, _resolve)()
+    if _is_file:
+        _new = str(Path(_new) / Path(_orig).name)
     setattr(_mod, _attr, Path(_new) if isinstance(_orig, Path) else _new)
 
 # ---------------------------------------------------------------------------

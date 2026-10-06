@@ -70,6 +70,7 @@ class TestDataSentinel(_Tmp):
         self.assertIn("10", alerts[0])
         self.assertIn("0", alerts[0])
         self.assertEqual(len(watchdog.check_data_sentinel()), 1, "must keep alerting until restored")
+        self.assertIn(watchdog.DATA_SENTINEL_FILE.name, alerts[0], "alert must say how to accept a planned shrink")
 
     def test_small_drop_does_not_alert_and_updates_the_baseline(self):
         self._fill(10, 10)
@@ -122,6 +123,21 @@ class TestAlertThrottle(_Tmp):
         with mock.patch.object(watchdog.notify, "send_email", return_value=True) as send:
             watchdog.send_data_alerts(["CRITICAL: x"])
             watchdog.send_data_alerts(["CRITICAL: x"])
+        self.assertEqual(send.call_count, 1)
+
+    def test_a_backup_warning_never_silences_a_later_critical(self):
+        # Review #163 reproduction: backup share offline (WARNING emailed first), then a
+        # wipe the same day. One shared daily marker used to swallow the CRITICAL.
+        with mock.patch.object(watchdog.notify, "send_email", return_value=True) as send:
+            watchdog.send_data_alerts(["WARNING: no successful Data backup has been recorded (offline)."])
+            watchdog.send_data_alerts(["CRITICAL: Data/Symbol_full dropped from 578 to 0 entries."])
+        self.assertEqual(send.call_count, 2)
+        self.assertIn("CRITICAL", send.call_args_list[1].args[1])
+
+    def test_same_alert_with_new_counts_is_still_one_alert_per_day(self):
+        with mock.patch.object(watchdog.notify, "send_email", return_value=True) as send:
+            watchdog.send_data_alerts(["CRITICAL: Data/Symbol dropped from 500 to 10 entries."])
+            watchdog.send_data_alerts(["CRITICAL: Data/Symbol dropped from 500 to 0 entries."])
         self.assertEqual(send.call_count, 1)
 
     def test_nothing_to_send_sends_nothing(self):

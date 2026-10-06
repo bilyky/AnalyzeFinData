@@ -578,7 +578,9 @@ def check_data_sentinel():
             if before and after < before * (1 - SENTINEL_MAX_DROP):
                 alerts.append(f"CRITICAL: Data/{name} dropped from {before} to {after} entries since the "
                               f"last watchdog run. Restore it from the backup before running the game or "
-                              f"pipeline (an empty OHLCV cache makes every symbol stale).")
+                              f"pipeline (an empty OHLCV cache makes every symbol stale). If the drop was "
+                              f"intentional (a planned prune), delete {DATA_SENTINEL_FILE.name} to accept "
+                              f"the new size.")
     if not alerts:
         _write_json(DATA_SENTINEL_FILE, {"counts": now, "recorded": datetime.datetime.now().isoformat()})
     return alerts
@@ -613,20 +615,34 @@ def check_backup_health():
     return []
 
 
+def _alert_key(alert):
+    """Identity of an alert for throttling: its text with the numbers blanked, so the same
+    alert repeated hourly (counts unchanged or not) is one key, but a different alert —
+    another folder, or a CRITICAL after a WARNING — is a new one."""
+    return re.sub(r"\d+", "#", alert)
+
+
 def send_data_alerts(alerts):
-    """Email data-loss / backup alerts, at most once per calendar day."""
+    """Email data-loss / backup alerts; each distinct alert at most once per calendar day.
+
+    Throttled PER ALERT, not per day: a single daily marker let the first alert of the
+    day (e.g. an unreachable-backup WARNING) silence a later CRITICAL cache wipe.
+    """
     if not alerts:
         return
     for a in alerts:
         _log.error(a)
     today = datetime.date.today().isoformat()
-    if (_read_json(DATA_ALERT_MARKER) or {}).get("date") == today:
+    marker = _read_json(DATA_ALERT_MARKER) or {}
+    sent = set(marker.get("sent", [])) if marker.get("date") == today else set()
+    new = [a for a in alerts if _alert_key(a) not in sent]
+    if not new:
         return
     body = ("<h3>Project AETHER: data-loss / backup alert</h3><ul>"
-            + "".join(f"<li>{a}</li>" for a in alerts) + "</ul>")
+            + "".join(f"<li>{a}</li>" for a in new) + "</ul>")
     try:
         notify.send_email("🛑 Project AETHER: data-loss / backup alert", body, is_html=True)
-        _write_json(DATA_ALERT_MARKER, {"date": today})
+        _write_json(DATA_ALERT_MARKER, {"date": today, "sent": sorted(sent | {_alert_key(a) for a in new})})
     except Exception as e:
         _log.error(f"❌ Failed to send data alert email: {e}")
 

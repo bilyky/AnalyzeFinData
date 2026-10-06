@@ -23,12 +23,13 @@ import ai_portfolio_game
 import autonomous_pipeline
 import bootstrap_dna
 import daily_task
+import data_api
 import powergauge
 import rapidapi
 import watchdog
 import workbook_read
 from aether import config as aether_config
-from aether import paths, risk_utils, run_guard, trash
+from aether import circuit_breaker, decision_eval, paths, risk_utils, run_guard, scoring, trash
 import tests as harness
 from aether import logger as aether_logger
 
@@ -118,7 +119,13 @@ class TestMarketDataCachesRedirected(unittest.TestCase):
                            ("risk_utils.OHLCV_DIR", risk_utils.OHLCV_DIR),
                            ("rapidapi.OHLCV_DIR", rapidapi.OHLCV_DIR),
                            ("powergauge.OHLCV_DIR", powergauge.OHLCV_DIR),
-                           ("ai_portfolio_game.SYMBOL_FULL_DIR", ai_portfolio_game.SYMBOL_FULL_DIR)]:
+                           ("ai_portfolio_game.SYMBOL_FULL_DIR", ai_portfolio_game.SYMBOL_FULL_DIR),
+                           ("circuit_breaker.SPY_FILE", circuit_breaker.SPY_FILE),
+                           ("circuit_breaker.VXX_FILE", circuit_breaker.VXX_FILE),
+                           ("scoring._OHLCV_ROOT", scoring._OHLCV_ROOT),
+                           ("decision_eval.OHLCV_DIR", decision_eval.OHLCV_DIR),
+                           ("data_api._OHLCV_DIR", data_api._OHLCV_DIR),
+                           ("data_api._SYMBOL_DIR", data_api._SYMBOL_DIR)]:
             with self.subTest(name=name):
                 self.assertFalse(_inside_repo_data(path), f"{name} -> {path}")
 

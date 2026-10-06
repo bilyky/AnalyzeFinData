@@ -34,6 +34,7 @@ Usage::
 import argparse
 import json
 import os
+import stat
 import shutil
 import subprocess
 import sys
@@ -153,8 +154,16 @@ def is_dirty(path):
 
 
 def _is_junction(path):
+    """True for a junction or any other reparse point. Checks the file attribute too, so it
+    fails CLOSED where os.path.isjunction is missing (Python < 3.12) or misses a reparse type."""
     isjunction = getattr(os.path, "isjunction", None)  # Python 3.12+
-    return bool(isjunction and isjunction(path))
+    if isjunction is not None and isjunction(path):
+        return True
+    try:
+        attrs = getattr(os.lstat(path), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return bool(attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
 
 
 def links_inside(path):
@@ -199,7 +208,9 @@ def main_cache_counts():
 
 
 def _shrunk(before, after):
-    return [k for k in before if before[k] is not None and after.get(k) is not None and after[k] < before[k]]
+    """Caches that lost entries, including a folder that vanished outright (count -> None)."""
+    return [k for k in before
+            if before[k] is not None and (after.get(k) is None or after[k] < before[k])]
 
 
 def _is_harness_path(path):

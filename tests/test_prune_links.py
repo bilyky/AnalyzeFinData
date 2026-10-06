@@ -72,6 +72,16 @@ class TestLinksInside(_TempTree):
         self.assertEqual(prune.links_inside(str(self.worktree)), [])
 
 
+class TestJunctionFallback(_TempTree):
+    def test_junction_found_even_without_os_path_isjunction(self):
+        # Python < 3.12 has no os.path.isjunction, and is_symlink() is False for a
+        # junction; the reparse-point attribute check must still catch it (fail closed).
+        if sys.platform != "win32":
+            self.skipTest("junctions are Windows-only")
+        with mock.patch.object(prune.os.path, "isjunction", None, create=True):
+            self.assertEqual([Path(p) for p in prune.links_inside(str(self.worktree))], [self.link])
+
+
 class TestPlanRefusesLinkedWorktrees(_TempTree):
     def test_finished_worktree_with_a_link_is_kept_not_removed(self):
         wt = str(self.worktree)
@@ -88,6 +98,16 @@ class TestPlanRefusesLinkedWorktrees(_TempTree):
         self.assertEqual(len(reasons), 1)
         self.assertIn("link", reasons[0].lower())
         self.assertIn(str(self.link), reasons[0])
+
+
+class TestShrunk(unittest.TestCase):
+    def test_a_vanished_cache_folder_counts_as_a_shrink(self):
+        self.assertEqual(prune._shrunk({"Symbol": 500, "Symbol_full": 578},
+                                       {"Symbol": None, "Symbol_full": 578}), ["Symbol"])
+
+    def test_unchanged_or_growing_is_not_a_shrink(self):
+        self.assertEqual(prune._shrunk({"Symbol": 500, "Symbol_full": None},
+                                       {"Symbol": 510, "Symbol_full": None}), [])
 
 
 class TestExecuteTripwire(unittest.TestCase):
