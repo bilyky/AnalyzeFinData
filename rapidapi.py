@@ -33,7 +33,7 @@ import requests
 
 from aether import trash
 from aether.logger import get_logger as _get_logger
-from bar_provenance import is_provisional
+from bar_provenance import is_provisional, real_dates
 from config import CFG
 from run_history import load_symbols
 
@@ -84,8 +84,8 @@ def _last_real_date(cache: dict | None) -> str:
     """Newest non-placeholder bar date, or "" (sorts first) when there is none/no file."""
     if not cache:
         return ""
-    ts = cache["Time Series (Daily)"]
-    return max((d for d, bar in ts.items() if not is_provisional(bar)), default="")
+    real = real_dates(cache["Time Series (Daily)"])
+    return real[-1] if real else ""
 
 
 def _queue_rank(existing: dict | None, today_str: str, path: str | None = None) -> tuple:
