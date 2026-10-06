@@ -52,8 +52,12 @@ _TASK_DEFS = {
 # The Evening task (daily_task.py) ends with the OHLCV recovery pass, whose own timeout is
 # rapidapi.pass_timeout_seconds() (~5 h worst case for the 400-fetch budget) — a 15-min
 # scheduler limit would kill the whole task long before that.
+# The Evening value must cover daily_task.worst_case_runtime_seconds() (all of that task's
+# step timeouts, recovery pass included); register_agent_tasks.ps1 repeats it for the
+# AETHER_AftermarketReport task. tests/test_task_time_limits.py pins both.
 _DEFAULT_TASK_TIME_LIMIT_MIN = 15
 _TASK_TIME_LIMIT_MIN = {"AnalyzeFinData_Evening": 360}
+SYNC_TIMEOUT_S = 600  # robocopy timeout for sync_data_folder (PR #64 raised it for the cache volume)
 
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 
@@ -653,7 +657,7 @@ def sync_data_folder() -> bool:
             "robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS",
             "/XD", "etrade_chrome_profile"
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=600)
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=SYNC_TIMEOUT_S)
         if result.returncode < 8:
             _log.info(f"✅ Data folder successfully synchronized to {dst}.")
             return True

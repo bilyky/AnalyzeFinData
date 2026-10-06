@@ -32,6 +32,18 @@ if not _log.handlers:
     ch.setFormatter(logging.Formatter("%(message)s"))
     _log.addHandler(ch)
 
+STEP_TIMEOUT_S = 600          # run_command default (run_history.py, main.py)
+UNBOUNDED_STEPS_SLACK_S = 600  # lint, data load, report build + email: no timeout of their own
+
+
+def worst_case_runtime_seconds():
+    """Longest daily_task.main() can legitimately run: every bounded step at its timeout
+    (run_history + main.py, the backup sync, the recovery pass) plus slack for the steps
+    that have none. The Evening task's scheduler limit must be at least this."""
+    return (2 * STEP_TIMEOUT_S + watchdog.SYNC_TIMEOUT_S + rapidapi.pass_timeout_seconds()
+            + UNBOUNDED_STEPS_SLACK_S)
+
+
 def run_ohlcv_recovery():
     """OHLCV recovery pass — repair missing/stale/placeholder Symbol_full bars via RapidAPI.
 
@@ -47,7 +59,7 @@ def run_ohlcv_recovery():
         _log.warning(f"Warning: OHLCV recovery failed (non-fatal): {e}")
 
 
-def run_command(command_list, timeout=600):
+def run_command(command_list, timeout=STEP_TIMEOUT_S):
     _log.info(f"Running: {' '.join(command_list)}")
     # Use Path(__file__) for the script if it's a local script
     if len(command_list) > 1 and command_list[1].endswith(".py"):
