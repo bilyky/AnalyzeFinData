@@ -460,7 +460,7 @@ def scale_out_plan(price, cost, atr, banked_pct=0.0, l60=None, l60_ceiling=None)
     tier is crossed. This mirrors the covered-call flower exclusion (``aether/options``)
     so the two winner-side mechanics share ONE conviction bar: banking a strong flower
     at an ATR tier is the same "a win that dumps a flower is a mistake" error the
-    covered-call writer already avoids (CLAUDE.md dont-sell-winners). Both args default
+    covered-call writer already avoids (plans/roadmap.md, Jul-25 dont-sell-winners). Both args default
     to ``None`` → the guard is inert and legacy callers are unchanged.
 
     Returns (fraction, reason): ``fraction`` in [0, 1] of the ORIGINAL lot to sell now
