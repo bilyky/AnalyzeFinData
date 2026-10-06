@@ -15,6 +15,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import openpyxl
+
 from aether import ai_buildout as ab
 
 
@@ -24,6 +26,18 @@ def _q(start, end, val, filed=None):
 
 def _facts(tags):
     return {"facts": {"us-gaap": {t: {"units": {"USD": v}} for t, v in tags.items()}}}
+
+
+def _research_book(path, symbols):
+    """Minimal state_of_the_day.xlsx: a Research sheet with symbols in column D."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Research"
+    ws.append(["A", "B", "C", "Symbol", "Industry"])
+    for s in symbols:
+        ws.append([None, None, None, s, "x"])
+    wb.create_sheet("Other").append(["ignored", None, None, "NOPE"])
+    wb.save(path)
 
 
 def _bar(c, h=None, l=None, v=1000, **extra):
@@ -215,12 +229,82 @@ class TestCache(unittest.TestCase):
             self.assertIsNone(ab._read_cache("sub_2.json"))
 
 
+class _Resp:
+    def __init__(self, status, data=None):
+        self.status_code = status
+        self._data = data
+
+    def json(self):
+        return self._data
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(self.status_code)
+
+
+class TestEdgarBlock(unittest.TestCase):
+    def setUp(self):
+        self._d = tempfile.TemporaryDirectory()
+        self._env = mock.patch.dict(os.environ, {"AETHER_DATA_DIR": self._d.name})
+        self._env.start()
+        ab._consecutive_403[0] = 0
+        ab._blocked[0] = False
+        self._gap = mock.patch.object(ab, "_REQUEST_GAP_S", 0)
+        self._gap.start()
+
+    def tearDown(self):
+        self._gap.stop()
+        self._env.stop()
+        self._d.cleanup()
+        ab._consecutive_403[0] = 0
+        ab._blocked[0] = False
+
+    def test_stops_requesting_after_consecutive_403s(self):
+        http = mock.Mock(return_value=_Resp(403))
+        with mock.patch.object(ab, "_http_get", http):
+            for i in range(10):
+                self.assertIsNone(ab._get_json(f"u{i}", f"x{i}.json"))
+        self.assertEqual(http.call_count, ab._BLOCK_AFTER_403S)
+        self.assertTrue(ab._blocked[0])
+
+    def test_success_resets_403_count(self):
+        responses = [_Resp(403), _Resp(403), _Resp(200, {"ok": 1}), _Resp(403), _Resp(403)]
+        with mock.patch.object(ab, "_http_get", side_effect=responses):
+            for i in range(5):
+                ab._get_json(f"u{i}", f"y{i}.json")
+        self.assertFalse(ab._blocked[0])
+
+    def test_failed_refresh_falls_back_to_stale_cache(self):
+        cache = Path(self._d.name) / "edgar_cache"
+        cache.mkdir()
+        (cache / "sub_9.json").write_text('{"sic": 4911}', encoding="utf-8")
+        os.utime(cache / "sub_9.json", (0, 0))   # older than any TTL
+        with mock.patch.object(ab, "_http_get", return_value=_Resp(403)):
+            self.assertEqual(ab._get_json("u", "sub_9.json"), {"sic": 4911})
+        ab._blocked[0] = True
+        with mock.patch.object(ab, "_http_get") as http:
+            self.assertEqual(ab._get_json("u", "sub_9.json"), {"sic": 4911})
+            http.assert_not_called()
+
+
+class TestUniverse(unittest.TestCase):
+    def test_reads_research_sheet_column_d(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"AETHER_DATA_DIR": d}):
+            _research_book(Path(d) / "state_of_the_day.xlsx", ["vrt", "ETN", None, " ETN ", "PWR"])
+            self.assertEqual(ab.load_universe(), ["VRT", "ETN", "PWR"])
+
+    def test_missing_workbook_raises(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"AETHER_DATA_DIR": d}):
+            with self.assertRaises(FileNotFoundError):
+                ab.load_universe()
+
+
 class TestScan(unittest.TestCase):
     def test_scan_classifies_and_ranks(self):
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "Symbol_full").mkdir()
-            (Path(d) / "symbols_to_check.txt").write_text(
-                "14\t14\tVRT\n14\t14\tMSFT\n14\t14\tUTIL\n14\t14\tGONE\n14\t14\tSPY\n", encoding="utf-8")
+            _research_book(Path(d) / "state_of_the_day.xlsx",
+                           ["VRT", "MSFT", "UTIL", "GONE", "SPY"])
             subs = {1: {"sic": 3585, "name": "Vertiv"}, 2: {"sic": 7372, "name": "Microsoft"},
                     3: {"sic": 4911, "name": "Some Utility"}}
             cik = {"VRT": 1, "MSFT": 2, "UTIL": 3, "GONE": 4}   # 4: fetch fails
