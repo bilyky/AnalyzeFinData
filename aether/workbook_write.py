@@ -39,7 +39,7 @@ RESEARCH_HEADERS = {
     17: ("LT Trend",    "Long-term price trend from Chaikin.\nStrong / Neutral / Weak\n\nNote: Weak = recovery play; Strong = already extended."),
     18: ("Money Flow",  "Institutional money flow signal.\nStrong / Neutral / Weak"),
     19: ("OB/OS",       "Overbought / Oversold zone.\nOptimal / Early / Neutral / Wait"),
-    20: ("Setup",       "Entry filter: 1 = passed, 0 = failed.\nPass condition: Price > SMA(20) AND Price > Close[3d ago].\nAffects Stop / Target / R/R display only."),
+    20: ("Setup",       "Entry filter: 1 = passed, 0 = failed.\nPass condition: Price > SMA(20) AND Price > Close[3d ago].\nAlso a hard entry gate: the AI game only buys rows with Setup = 1."),
     21: ("BR Score",    "Buying Ratio: composite entry-quality score -10 to +10.\n\nComponents:\n  PGR (1->-2 ... 5->+2)\n  R/R (0->-1, >=0.5->+0.5, >=1->+1, >=2->+1.5, >=3->+2)\n  LT Trend (Weak->+1, Strong->-1)\n  Money Flow (Strong->+0.75, Weak->-0.75)\n  OB/OS (Optimal->+1, Early->+0.25, Wait->-0.25)\n  Industry (Weak->+0.5, Strong->-0.5)\n  PGR Delta (any change->+0.25)\n  Seasonality (-1 to +1)\n\nThresholds: >=4 strong buy | 2-4 moderate | 0-2 weak | -2-0 avoid | <=-2 strong avoid"),
     22: ("Seasonal",    "Week-of-month seasonality score.\n+1.0 strong tailwind  +0.5 mild tailwind\n 0.0 neutral           -0.5 headwind  -1.0 strong headwind\nBlank = less than 3 years of OHLCV data."),
     23: ("Win% 10d",    "Predicted 10-day win% from backtest (238k obs, 466 symbols, 2023-2025).\nBased on Buying Ratio bucket:\n  BR >=  4  -> 64.3%\n  BR 2-4    -> 57.6%\n  BR 0-2    -> 53.1%\n  BR -2-0   -> 50.3%\n  BR <= -2  -> 46.3%"),
