@@ -32,6 +32,21 @@ if not _log.handlers:
     ch.setFormatter(logging.Formatter("%(message)s"))
     _log.addHandler(ch)
 
+def run_ohlcv_recovery():
+    """OHLCV recovery pass — repair missing/stale/placeholder Symbol_full bars via RapidAPI.
+
+    Runs LAST in main() (after the report and the backup sync, even if the report failed)
+    because a full pass is long: its timeout covers the whole per-run fetch budget
+    (rapidapi.pass_timeout_seconds), since the old 600 s default killed every pass after
+    ~42 of ~500 symbols (PROD logs 2026-09-16..30). Running it first would push the
+    evening report back by the length of the pass. Non-fatal by design."""
+    _log.info("Running OHLCV recovery pass (rapidapi.py)...")
+    try:
+        run_command([sys.executable, "rapidapi.py"], timeout=rapidapi.pass_timeout_seconds())
+    except Exception as e:
+        _log.warning(f"Warning: OHLCV recovery failed (non-fatal): {e}")
+
+
 def run_command(command_list, timeout=600):
     _log.info(f"Running: {' '.join(command_list)}")
     # Use Path(__file__) for the script if it's a local script
@@ -236,16 +251,7 @@ def main():
 
             # 2. Run main script to populate Data and Excel
             run_command([sys.executable, "main.py"])
-
-            # 2b. OHLCV recovery pass — repair missing/corrupted/stale Symbol_full files via RapidAPI.
-            #     This is the evening/night task, which is the perfect time to run this heavy sync!
-            #     Its timeout must cover the whole per-run fetch budget: the 600 s default
-            #     killed every pass after ~42 of ~500 symbols (PROD logs 2026-09-16..30).
-            _log.info("Running OHLCV recovery pass (rapidapi.py)...")
-            try:
-                run_command([sys.executable, "rapidapi.py"], timeout=rapidapi.pass_timeout_seconds())
-            except Exception as e:
-                _log.warning(f"Warning: OHLCV recovery failed (non-fatal, daily_task continues): {e}")
+            # (The OHLCV recovery pass runs LAST — see run_ohlcv_recovery in the finally below.)
 
         # 3. Get all processed data
         all_symbols_data = get_all_data(today)
@@ -388,6 +394,9 @@ def main():
             _log.info("Error alert email sent.")
         except Exception as notify_err:
             _log.info(f"Could not send error alert email: {notify_err}")
+    finally:
+        if not report_only:
+            run_ohlcv_recovery()
 
 
 if __name__ == "__main__":

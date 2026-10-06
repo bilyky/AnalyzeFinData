@@ -188,9 +188,12 @@ class TestPassTimeout(_Base):
         old = time.time() - 9001                                  # past the OLD 2.5 h TTL
         os.utime(lock, (old, old))
         self.seed("A", "2026-09-20")
-        res = self.run_pass(["A"], max_fetches=400)
+        with self.assertLogs("aether.rapidapi", level="WARNING") as logs:
+            res = self.run_pass(["A"], max_fetches=400)
         self.assertTrue(res.get("locked"))                        # a 400-fetch pass can still be live
         self.assertEqual(self.fetched, [])
+        # A skip is explained (a killed pass leaves its lock), never silent.
+        self.assertTrue(any("killed pass" in m and "min old" in m for m in logs.output))
 
     def test_lock_older_than_a_pass_is_reclaimed(self):
         lock = os.path.join(os.path.dirname(self.dir), "rapidapi.lock")

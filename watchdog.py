@@ -47,6 +47,13 @@ _TASK_DEFS = {
     "Project_AETHER_Watchdog": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'watchdog.py'}'",              "hourly", None),
 }
 
+# Task Scheduler ExecutionTimeLimit per task (minutes); everything else gets the default.
+# The Evening task (daily_task.py) ends with the OHLCV recovery pass, whose own timeout is
+# rapidapi.pass_timeout_seconds() (~5 h worst case for the 400-fetch budget) — a 15-min
+# scheduler limit would kill the whole task long before that.
+_DEFAULT_TASK_TIME_LIMIT_MIN = 15
+_TASK_TIME_LIMIT_MIN = {"AnalyzeFinData_Evening": 360}
+
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 
 # --- Agnostic AI Self-Healing Tool Configuration ---
@@ -575,7 +582,7 @@ def heal_tasks(missing_tasks, force=False):
                 # 'IgnoreNew' also avoids interrupting an in-flight state write, unlike 'Queue'.)
                 ps_cmd = [
                     "powershell.exe", "-NoProfile", "-Command",
-                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) -ErrorAction SilentlyContinue"
+                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes {_TASK_TIME_LIMIT_MIN.get(task, _DEFAULT_TASK_TIME_LIMIT_MIN)})) -ErrorAction SilentlyContinue"
                 ]
                 subprocess.run(ps_cmd, capture_output=True)
             else:

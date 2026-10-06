@@ -21,6 +21,7 @@ Config (in order of precedence):
     2. config.json  {"rapidapi": {"api_key": "..."}}  (copy from config.json.example)
 """
 
+import argparse
 import datetime
 import json
 import os
@@ -233,9 +234,10 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
 
     Budget: at most max_fetches (default CFG.rapidapi_max_fetches) API calls per run, spent
     MOST-STARVED FIRST — symbols needing repair are ordered by their newest real bar,
-    oldest first (missing files before them, dormant/delisted names after; _queue_rank). A fixed order starved the tail of the list every night once the quota ran
-    out (the same ~23 symbols 429'd daily and were never repaired); now whatever a run
-    misses is first in line for the next. QUOTA_STOP_AFTER consecutive 429s end the run.
+    oldest first (missing files before them, dormant/delisted names after; _queue_rank).
+    A fixed order starved the tail of the list every night once the quota ran out (the
+    same ~23 symbols 429'd daily and were never repaired); now whatever a run misses is
+    first in line for the next. QUOTA_STOP_AFTER consecutive 429s end the run.
     Symbols left for the next run are counted in results["deferred"].
     """
     results = {"updated": 0, "skipped": 0, "errors": [], "deferred": 0, "quota_stopped": False}
@@ -257,7 +259,16 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
             pass
 
     if fd is None:
-        _log.warning("  [RapidAPI] Another process is actively running a recovery pass. Skipping to prevent rate-limit collisions.")
+        # A pass killed by its caller's timeout never reaches the finally that deletes the
+        # lock, so say how old it is and when it expires — a manual run inside that window
+        # must not look like a silent skip.
+        try:
+            age = time.time() - os.path.getmtime(lock_path)
+        except OSError:
+            age = 0.0
+        _log.warning("  [RapidAPI] Recovery lock held (%s, %.0f min old) — another pass is running, or a "
+                     "killed pass left it; it is treated as stale after %.0f min. Skipping to "
+                     "prevent rate-limit collisions.", lock_path, age / 60, pass_timeout_seconds(budget) / 60)
         # ``locked`` distinguishes "another process owns the lock" from "these symbols were
         # already current" — both otherwise look like updated=0. Callers (e.g. the on-demand
         # self-healer) use it to retry later instead of treating the symbol as un-healable.
@@ -359,18 +370,17 @@ def get_quotes(time_frame, year=2022, month=1, day=1, symbol='MSFT'):
 if __name__ == "__main__":
     today_str = str(datetime.date.today())
 
-    argv = sys.argv[1:]
-    force = "--force" in argv
-    max_fetches = None
-    if "--max-fetches" in argv:
-        max_fetches = int(argv[argv.index("--max-fetches") + 1])
-    args = [a for k, a in enumerate(argv)
-            if a not in ("--force", "--max-fetches")
-            and not (k and argv[k - 1] == "--max-fetches")]
+    ap = argparse.ArgumentParser(description="RapidAPI OHLCV recovery pass")
+    ap.add_argument("symbols", nargs="*", help="symbols to repair (default: the Research sheet)")
+    ap.add_argument("--force", action="store_true", help="fetch even symbols that look current")
+    ap.add_argument("--max-fetches", type=int, default=None,
+                    help=f"API calls allowed this run (default {CFG.rapidapi_max_fetches})")
+    cli = ap.parse_args()
+    force, max_fetches = cli.force, cli.max_fetches
 
-    if args:
+    if cli.symbols:
         # Explicit symbols passed on command line
-        syms = [s.upper() for s in args]
+        syms = [s.upper() for s in cli.symbols]
     else:
         # Load all symbols from Research sheet
         syms = load_symbols()
