@@ -23,10 +23,13 @@ import ai_portfolio_game
 import autonomous_pipeline
 import bootstrap_dna
 import daily_task
+import data_api
+import powergauge
+import rapidapi
 import watchdog
 import workbook_read
 from aether import config as aether_config
-from aether import run_guard, trash
+from aether import circuit_breaker, decision_eval, paths, risk_utils, run_guard, scoring, trash
 import tests as harness
 from aether import logger as aether_logger
 
@@ -101,6 +104,31 @@ class TestGameStateRedirected(unittest.TestCase):
         self.assertEqual(ai_portfolio_game.load_game()["balance"], 123.0)
         self.assertTrue(any(ai_portfolio_game.GAME_BACKUP_DIR.glob("ai_portfolio_game_*.json")))
 
+
+class TestMarketDataCachesRedirected(unittest.TestCase):
+    """Every consumer of Data/Symbol and Data/Symbol_full sees the temp cache in tests.
+
+    On 2026-10-06 removing a worktree whose cache dirs were junctions into the main
+    checkout deleted the real caches; the caches now resolve through
+    aether.paths.cache_dir() (AETHER_CACHE_DIR), which the harness pins to temp first.
+    """
+
+    def test_cache_constants_point_outside_repo_data(self):
+        for name, path in [("paths.symbol_dir()", paths.symbol_dir()),
+                           ("paths.ohlcv_dir()", paths.ohlcv_dir()),
+                           ("risk_utils.OHLCV_DIR", risk_utils.OHLCV_DIR),
+                           ("rapidapi.OHLCV_DIR", rapidapi.OHLCV_DIR),
+                           ("powergauge.OHLCV_DIR", powergauge.OHLCV_DIR),
+                           ("ai_portfolio_game.SYMBOL_FULL_DIR", ai_portfolio_game.SYMBOL_FULL_DIR),
+                           ("circuit_breaker.SPY_FILE", circuit_breaker.SPY_FILE),
+                           ("circuit_breaker.VXX_FILE", circuit_breaker.VXX_FILE),
+                           ("scoring._OHLCV_ROOT", scoring._OHLCV_ROOT),
+                           ("decision_eval.OHLCV_DIR", decision_eval.OHLCV_DIR),
+                           ("data_api._OHLCV_DIR", data_api._OHLCV_DIR),
+                           ("data_api._SYMBOL_DIR", data_api._SYMBOL_DIR)]:
+            with self.subTest(name=name):
+                self.assertFalse(_inside_repo_data(path), f"{name} -> {path}")
+
 class TestLocksTrashAndConfigRedirected(unittest.TestCase):
     """Singleton locks, the trash, the run-guard dir and the config stay out of the repo.
 
@@ -116,6 +144,9 @@ class TestLocksTrashAndConfigRedirected(unittest.TestCase):
         for name, path in [("watchdog.WATCHDOG_LOCK_FILE", watchdog.WATCHDOG_LOCK_FILE),
                            ("watchdog.SELF_HEAL_LOCK", watchdog.SELF_HEAL_LOCK),
                            ("watchdog.SELF_HEAL_PROMPT_FILE", watchdog.SELF_HEAL_PROMPT_FILE),
+                           ("watchdog.DATA_SENTINEL_FILE", watchdog.DATA_SENTINEL_FILE),
+                           ("watchdog.BACKUP_STATUS_FILE", watchdog.BACKUP_STATUS_FILE),
+                           ("watchdog.DATA_ALERT_MARKER", watchdog.DATA_ALERT_MARKER),
                            ("autonomous_pipeline.PIPELINE_LOCK_FILE", autonomous_pipeline.PIPELINE_LOCK_FILE),
                            ("trash.TRASH_DIR", trash.TRASH_DIR),
                            ("run_guard._DATA_DIR", run_guard._DATA_DIR)]:

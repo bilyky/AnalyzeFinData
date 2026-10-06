@@ -11,6 +11,7 @@ from pathlib import Path
 import openpyxl
 
 import notify
+from aether import paths
 import powergauge
 import watchdog
 from config import CFG
@@ -81,7 +82,7 @@ def get_all_data(date):
     research_symbols = get_symbols_from_xls()
     if not research_symbols:
         _log.info("Warning: No symbols found in Research sheet. Falling back to all cached symbols.")
-        symbol_dir = BASE_DIR / "Data" / "Symbol"
+        symbol_dir = Path(paths.symbol_dir())
         cached_symbols = []
         if symbol_dir.exists():
             for _root, _dirs, files in os.walk(symbol_dir):
@@ -97,7 +98,7 @@ def get_all_data(date):
             if pg.price == -1:
                 continue
 
-            ohlcv_path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+            ohlcv_path = Path(paths.ohlcv_dir()) / f"{symbol}_daily.json"
             ohlcv_ts = None
             if ohlcv_path.exists():
                 with open(ohlcv_path) as _f:

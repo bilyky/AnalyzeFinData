@@ -30,7 +30,7 @@ import time
 import numpy as np
 import requests
 
-from aether import trash
+from aether import paths, trash
 from aether.logger import get_logger as _get_logger
 from bar_provenance import is_provisional
 from config import CFG
@@ -39,7 +39,7 @@ from run_history import load_symbols
 _log = _get_logger("rapidapi")
 
 _DIR      = os.path.dirname(os.path.abspath(__file__))
-OHLCV_DIR = os.path.join(_DIR, "Data", "Symbol_full")
+OHLCV_DIR = paths.ohlcv_dir()   # $AETHER_CACHE_DIR/Symbol_full, else <checkout>/Data/Symbol_full
 MAX_GAP_DAYS = 30   # trigger compact/full fetch if latest entry is this many calendar days behind
 SLEEP_SEC    = 14   # 14 s between requests → 4.3 req/min (safe under 5/min limit)
 COMPACT_WINDOW_DAYS = 120  # a compact fetch returns ~100 sessions (~140 calendar days)
