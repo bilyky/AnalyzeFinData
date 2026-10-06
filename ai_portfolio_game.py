@@ -540,13 +540,6 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                     continue
                 cost = qty * buy["price"]
 
-            state["balance"] -= cost
-            # Update cumulative bucket counts for sequence
-            if is_scarcity:
-                current_scarcity_usd += cost
-            else:
-                current_standard_usd += cost
-
             atr = risk_utils.calculate_atr(buy["sym"])
             if atr and atr > 0:
                 stop_loss = round(buy["price"] - (rules["atr_multiplier"] * atr), 2)
@@ -554,6 +547,27 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
             else:
                 stop_loss = round(buy["price"] * 0.92, 2)
                 stop_desc = f"8% Fallback{buy.get('bottom_desc', '')}"
+
+            # Per-trade loss cap (Rule of Loss Minimization): positions are sized by cash, so a
+            # wider (honest) ATR stop would otherwise raise the dollar loss of every stop-out.
+            # Trim so (entry - stop) * shares <= equity * CFG.system_max_trade_risk_pct.
+            max_risk_usd = state["equity"] * CFG.system_max_trade_risk_pct
+            risk_cap_usd = risk_utils.risk_capped_cash(buy["price"], stop_loss, max_risk_usd)
+            if risk_cap_usd is not None and cost > risk_cap_usd:
+                old_qty = qty
+                qty = calculate_share_qty(buy["sym"], risk_cap_usd, buy["price"])
+                _log.warning(f"⚠️ Risk-capping {buy['sym']} from {old_qty} to {qty} shares: a stop-out at ${stop_loss} may lose at most ${max_risk_usd:,.2f} ({CFG.system_max_trade_risk_pct:.1%} of equity).")
+                if qty <= 0:
+                    _log.warning(f"🛑 AI BUY REJECTED: Per-trade loss cap leaves less than 1 share of {buy['sym']}.")
+                    continue
+                cost = qty * buy["price"]
+
+            state["balance"] -= cost
+            # Update cumulative bucket counts for sequence
+            if is_scarcity:
+                current_scarcity_usd += cost
+            else:
+                current_standard_usd += cost
 
             state["positions"][buy["sym"]] = {
                 "qty": qty, 
