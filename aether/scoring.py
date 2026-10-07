@@ -9,6 +9,7 @@ import logging
 import os
 import threading
 
+from aether import paths
 from aether.primal_funcs import gann_sq9_levels
 from aether.risk_utils import detect_resistance, detect_support
 from aether.utils import _to_float
@@ -25,8 +26,7 @@ _STREAK_LOOKBACK_SHORT = 15
 _STREAK_LOOKBACK_LONG  = 30
 
 _regime_cache: dict = {}
-_OHLCV_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            "Data", "Symbol_full")
+_OHLCV_ROOT = paths.ohlcv_dir()   # $AETHER_CACHE_DIR-aware (aether.paths)
 
 # ── Digit-sum numerology study ────────────────────────────────────────────────
 # Pre-computed from backtest across 500+ symbols × 9 digits.
