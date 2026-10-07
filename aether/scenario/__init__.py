@@ -68,6 +68,7 @@ __all__ = [
     "Position",
     "Order",
     "Quote",
+    "ResearchRow",
     # helpers (B3)
     "is_market_hours",
     "get_market_regime",

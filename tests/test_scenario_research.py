@@ -13,6 +13,8 @@ unify.
 """
 import unittest
 
+import aether.scenario as aether_scenario
+from aether import workbook_write
 from aether.scenario import ResearchRow as ResearchRowReexport
 from aether.scenario.schema import ResearchRow
 
@@ -98,6 +100,22 @@ class TestResearchRowViewSemantics(unittest.TestCase):
 
     def test_reexported_from_package_root(self):
         self.assertIs(ResearchRowReexport, ResearchRow)
+        # listed in __all__ like the other schema views (Portfolio/Position/Order/Quote)
+        self.assertIn("ResearchRow", aether_scenario.__all__)
+
+    def test_header_backed_columns_match_the_workbook_writer(self):
+        # Drift guard: if the Research sheet layout ever changes in workbook_write, the
+        # lens must change with it, not silently read the wrong column.
+        expected = {"COL_INDUSTRY": "Industry", "COL_PGR": "PGR", "COL_STOP": "Stop",
+                    "COL_PREV_CLOSE_BUY": "Price", "COL_TARGET": "Target", "COL_SETUP": "Setup",
+                    "COL_S10": "Short10", "COL_L60": "Long60"}
+        for const, header in expected.items():
+            with self.subTest(const=const):
+                idx = getattr(ResearchRow, const)
+                self.assertEqual(workbook_write.RESEARCH_HEADERS[idx][0], header)
+        # columns 3 (symbol) and 8 (SELL prev close) are user-owned: no writer header
+        for idx in (ResearchRow.COL_SYMBOL, ResearchRow.COL_PREV_CLOSE_SELL):
+            self.assertNotIn(idx, workbook_write.RESEARCH_HEADERS)
 
     def test_repr_is_informative(self):
         rr = ResearchRow.from_row(_row())

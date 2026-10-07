@@ -379,14 +379,19 @@ class ResearchRow:
 
     THE PREV-CLOSE SPLIT IS DELIBERATE — DO NOT UNIFY
     -------------------------------------------------
-    The Research sheet stores a previous close that the game reads from **two
-    different columns depending on the call-site**, a verified intentional
-    inconsistency (design doc ``plans/scenario-refactor.md``, constraint 4):
+    The game reads the value it calls "prev close" from **two different columns
+    depending on the call-site**, a verified intentional inconsistency (design doc
+    ``plans/scenario-refactor.md``, constraint 4):
 
-    * :attr:`prev_close_sell` = ``row[8]``  — read only in the SELL-decision loop
-      (``ai_portfolio_game.py`` ~L1626: ``float(row[8] or pos["cost"])``).
-    * :attr:`prev_close_buy`  = ``row[10]`` — read in BUY screening (~L1902), the
-      report/get-live-prices fallback (~L1183) and the after-hours queue (~L2151).
+    * :attr:`prev_close_sell` = ``row[8]``  — column I, one of the user-owned columns
+      ``workbook_write`` preserves (it has no ``RESEARCH_HEADERS`` entry). Read only in
+      the SELL-decision loop of ``run_daily_ai_management``
+      (``float(row[8] or pos.get("cost", 0.0))``; ``steps.decide_exits`` mirrors it).
+    * :attr:`prev_close_buy`  = ``row[10]`` — the sheet's **"Price"** column ("Last price
+      from Chaikin API" in ``workbook_write.RESEARCH_HEADERS``). Read in BUY screening,
+      the ``get_live_prices`` workbook fallback and the after-hours queue.
+
+    The accessor names follow the call-sites' variable names, not the sheet headers.
 
     There is **no** unified ``prev_close`` accessor on purpose: each caller keeps
     its existing column so the REPLACE phase stays behaviour-preserving. Unifying
