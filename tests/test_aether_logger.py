@@ -47,6 +47,16 @@ class TestLoggerInit(unittest.TestCase):
         rotating = [h for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)]
         self.assertEqual(len(rotating), 2)
 
+    def test_log_files_are_opened_lazily(self):
+        # The module-level logger builds its handlers at import; files must not appear
+        # until something is actually logged (else importing creates Data/logs/*).
+        import aether_logger
+        aether_logger._init()
+        files = [Path(self.tmp.name) / "aether.log", Path(self.tmp.name) / "aether.jsonl"]
+        self.assertEqual([f for f in files if f.exists()], [])
+        aether_logger.get_logger("lazy_probe").info("first record")
+        self.assertEqual([f for f in files if not f.exists()], [])
+
     def test_get_logger_prefixes_name(self):
         import aether_logger
         log = aether_logger.get_logger("server")

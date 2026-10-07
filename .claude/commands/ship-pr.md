@@ -119,7 +119,7 @@ jobs:
   restarts — if `gh: command not found`, resolve its location portably (`command -v gh`, or
   `Get-Command gh` on PowerShell) and invoke it by that full path. Don't hardcode an OS path.
 - **Auth is interactive:** `gh auth login` needs a browser/prompt a non-interactive shell
-  can't drive. Ask the user to run it (`! gh auth login`), or use a PAT they supply via
+  can't drive. Ask the user to run it in their own terminal, or use a PAT they supply via
   `gh auth login --with-token`. Don't hunt for a hidden token.
 
 ## 5. Verifying PR/CI state behind a restrictive network
