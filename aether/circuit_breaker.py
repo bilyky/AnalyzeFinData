@@ -13,14 +13,14 @@ import json
 import datetime
 import pytz
 from pathlib import Path
-from aether import ledgers, risk_utils
+from aether import ledgers, paths, risk_utils
 from aether.logger import get_logger as _get_logger
 
 _log = _get_logger("circuit_breaker")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-SPY_FILE = BASE_DIR / "Data" / "Symbol_full" / "SPY_daily.json"
-VXX_FILE = BASE_DIR / "Data" / "Symbol_full" / "VXX_daily.json"
+SPY_FILE = Path(paths.ohlcv_dir()) / "SPY_daily.json"   # $AETHER_CACHE_DIR-aware (aether.paths)
+VXX_FILE = Path(paths.ohlcv_dir()) / "VXX_daily.json"
 
 def load_spy_history() -> list[dict]:
     """Load sorted daily price series for the SPY ETF from the local cache."""
