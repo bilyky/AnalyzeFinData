@@ -16,6 +16,7 @@ import pytz
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from scripts.backtesting import backtest_levels
+from aether import ai_buildout as _ai_buildout
 from aether import decision_eval as _decision_eval
 from aether.config import CFG as _cfg
 import ai_portfolio_game
@@ -23,7 +24,7 @@ import instruments
 import risk_utils
 import sell_rules
 import openpyxl
-from aether import etrade
+from aether import etrade, paths
 from workbook_read import (
     get_top_5_picks as _ap_picks,
     get_market_regime as _ap_regime,
@@ -47,6 +48,8 @@ def _google_prices(symbols: list[str]) -> dict[str, float]:
 
 _DIR      = Path(__file__).resolve().parent
 _DATA_DIR = _DIR / "Data"
+_OHLCV_DIR = Path(paths.ohlcv_dir())   # $AETHER_CACHE_DIR-aware (aether.paths)
+_SYMBOL_DIR = Path(paths.symbol_dir())
 _XLSX     = _DATA_DIR / "state_of_the_day.xlsx"
 _GAME     = _DATA_DIR / "ai_portfolio_game.json"
 _LOG      = _DATA_DIR / "autonomous_run.log"
@@ -97,7 +100,7 @@ def _load_latest_close_from_cache(sym: str) -> float | None:
     """Retrieve the latest closing price directly from the local per-symbol OHLCV JSON cache on disk."""
     try:
         sym = (sym or "").strip().upper()
-        path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
+        path = _OHLCV_DIR / f"{sym}_daily.json"
         if not path.exists():
             return None
         with open(path, "r", encoding="utf-8") as f:
@@ -142,7 +145,7 @@ def _get_chaikin_price(sym: str) -> float | None:
     files as they land on disk — a process-lifetime memo would freeze prices and
     defeat the drift detection this feeds."""
     try:
-        symbol_dir = _DATA_DIR / "Symbol" / sym
+        symbol_dir = _SYMBOL_DIR / sym
         if not symbol_dir.exists():
             return None
         json_files = sorted(list(symbol_dir.glob(f"{sym}_*.json")), reverse=True)
@@ -188,7 +191,7 @@ def verify_price_integrity(symbol: str, price: float, source: str) -> None:
     if is_active_nyse_market_hours():
         return
 
-    path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
+    path = _OHLCV_DIR / f"{sym}_daily.json"
     if not path.exists():
         return
     try:
@@ -343,6 +346,35 @@ def read_portfolio() -> dict:
     }
 
 
+def read_written_calls() -> list[dict]:
+    """Active covered calls: game positions carrying a `written_call`.
+
+    Reads the raw game state directly — read_portfolio() returns a flattened
+    display projection (a *list*) that drops the `written_call` field, so the
+    options view must source from the raw positions dict instead."""
+    try:
+        with open(_GAME, encoding="utf-8") as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+    active_options = []
+    for symbol, details in state.get("positions", {}).items():
+        written_call = details.get("written_call")
+        if not written_call:
+            continue
+        active_options.append({
+            "symbol":           symbol,
+            "qty":              written_call.get("qty"),
+            "strike":           written_call.get("strike"),
+            "premium":          written_call.get("premium"),
+            "expiration_date":  written_call.get("expiration_date"),
+            "sigma":            written_call.get("sigma"),
+            "underlying_price": details.get("price") or details.get("cost"),
+        })
+    return active_options
+
+
 # ── Picks & replacements ──────────────────────────────────────────────────────
 
 def read_picks() -> dict:
@@ -378,6 +410,21 @@ def read_reserves() -> dict:
         except Exception as e:
             return {"reserves": [], "error": str(e)}
     return _cached("reserves", 60.0, _load)
+
+
+def read_ai_buildout(theme: str = _ai_buildout.DEFAULT_THEME) -> dict:
+    """Latest theme watch (scripts/monitoring/ai_buildout_watch.py --theme ...).
+    Cached 60s per theme; empty rows when the scan has not run yet."""
+    if theme not in _ai_buildout.THEMES:
+        return {"as_of": None, "rows": [], "error": f"unknown theme {theme!r}"}
+
+    def _load():
+        try:
+            data = _ai_buildout.load_latest(theme=theme)
+            return data or {"as_of": None, "theme": theme, "rows": []}
+        except Exception as e:
+            return {"as_of": None, "theme": theme, "rows": [], "error": str(e)}
+    return _cached(f"theme_watch:{theme}", 60.0, _load)
 
 
 # ── Research sheet (full screener output) ──────────────────────────────────────
@@ -567,7 +614,7 @@ def _get_streak_from_cache(sym: str) -> int:
     Filters out weekend dates and counts consecutive upward (Green) or downward (Red) closing price changes."""
     try:
         sym = (sym or "").strip().upper()
-        path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
+        path = _OHLCV_DIR / f"{sym}_daily.json"
         if not path.exists():
             return None
         with open(path, "r", encoding="utf-8") as f:
@@ -1438,7 +1485,7 @@ def read_symbol(symbol: str) -> dict:
         out["research"] = row
 
         # ── 365-day OHLCV series for the candlestick chart ──────────────────
-        path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
+        path = _OHLCV_DIR / f"{sym}_daily.json"
         chart = []
         if path.exists():
             try:
@@ -1523,7 +1570,7 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
             pg = _pg.get_symbol_data(sym, today, prefer_cache=False, session_id=session)
             if pg and pg.price > 0:
                 # Load OHLCV for stop/target computation
-                ohlcv_path = _DATA_DIR / "Symbol_full" / f"{sym}_daily.json"
+                ohlcv_path = _OHLCV_DIR / f"{sym}_daily.json"
                 ohlcv_ts: dict = {}
                 if ohlcv_path.exists():
                     try:

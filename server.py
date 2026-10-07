@@ -220,22 +220,7 @@ def create_app():
     @app.get("/api/portfolio/options")
     async def portfolio_options():
         try:
-            active_options = []
-            portfolio_data = data_api.read_portfolio()
-            positions = portfolio_data.get("positions", {})
-            for symbol, details in positions.items():
-                written_call = details.get("written_call")
-                if written_call:
-                    active_options.append({
-                        "symbol": symbol,
-                        "qty": written_call.get("qty"),
-                        "strike": written_call.get("strike"),
-                        "premium": written_call.get("premium"),
-                        "expiration_date": written_call.get("expiration_date"),
-                        "sigma": written_call.get("sigma"),
-                        "underlying_price": details.get("price") or details.get("cost")
-                    })
-            return active_options
+            return data_api.read_written_calls()
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -327,6 +312,10 @@ def create_app():
     @app.get("/api/reserves")
     async def reserves():
         return data_api.read_reserves()
+
+    @app.get("/api/ai_buildout")
+    async def ai_buildout(theme: str = Query("ai_buildout")):
+        return data_api.read_ai_buildout(theme)
 
     # ── Accounts (2 real + 1 game) ──────────────────────────────────────────────
 

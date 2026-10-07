@@ -44,6 +44,7 @@ from aether.scenario.schema import (
     Portfolio,
     Position,
     Quote,
+    ResearchRow,
 )
 from aether.scenario.steps import (
     assemble_symbol_universe,
@@ -67,6 +68,7 @@ __all__ = [
     "Position",
     "Order",
     "Quote",
+    "ResearchRow",
     # helpers (B3)
     "is_market_hours",
     "get_market_regime",

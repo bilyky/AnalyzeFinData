@@ -13,7 +13,7 @@ import os
 import numpy as np
 
 from aether import signals as sig
-from bar_provenance import is_provisional
+from bar_provenance import real_dates
 
 
 # ── OHLCV adapter ────────────────────────────────────────────────────────────
@@ -25,12 +25,10 @@ def ohlcv_to_array(ohlcv_ts: dict, date_str: str, lookback: int = 250):
     """
     if not ohlcv_ts:
         return None
-    dates = sorted(ohlcv_ts.keys())
-    past = [d for d in dates if d <= date_str]
-    # Drop trailing provisional bars (Chaikin close-only placeholders): their open/high/low
-    # and volume are unreliable, which would mis-fire volume (MFI) and candlestick logic.
-    while past and is_provisional(ohlcv_ts[past[-1]]):
-        past.pop()
+    # Drop every provisional bar (Chaikin close-only placeholder), not only trailing ones:
+    # a stranded interior placeholder is a flat zero-volume bar whose fake open/high/low
+    # would shrink ATR and mis-fire volume (MFI) and candlestick logic.
+    past = [d for d in real_dates(ohlcv_ts) if d <= date_str]
     if len(past) < 10:
         return None
     window = past[-lookback:]

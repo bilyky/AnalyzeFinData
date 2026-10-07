@@ -4,12 +4,17 @@ No real tasks registered; only the subprocess boundary (schtasks / PowerShell) i
 the real check_task_scheduler branching runs against fabricated tool output.
 """
 import os
+import subprocess
 import sys
 import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import watchdog
+
+
+# Stand-in result for the patched subprocess boundary: success, no output.
+_NO_OP_PROC = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
 
 class TestWatchdogSchedulerAuditing(unittest.TestCase):
@@ -90,6 +95,9 @@ class TestWatchdogSchedulerAuditing(unittest.TestCase):
 
 
 class TestWatchdogNightHoursSkip(unittest.TestCase):
+    # run_watchdog() would otherwise launch REAL children: the process supervisor
+    # (taskkill of duplicate server.py / orphaned consoles) and `ai_portfolio_game.py --report`.
+    @mock.patch("watchdog.subprocess.run", new=mock.MagicMock(return_value=_NO_OP_PROC))
     @mock.patch("watchdog.notify.send_email")
     @mock.patch("watchdog.is_pid_running")
     @mock.patch("watchdog.check_data_freshness")
@@ -122,6 +130,9 @@ class TestWatchdogNightHoursSkip(unittest.TestCase):
         self.assertEqual(mock_check_logs.call_count, 2)
         mock_log.info.assert_any_call("💤 [Night-Hours Skip] Skipping heavy process supervisor and port sentry overnight.")
 
+    # run_watchdog() would otherwise launch REAL children: the process supervisor
+    # (taskkill of duplicate server.py / orphaned consoles) and `ai_portfolio_game.py --report`.
+    @mock.patch("watchdog.subprocess.run", new=mock.MagicMock(return_value=_NO_OP_PROC))
     @mock.patch("watchdog.notify.send_email")
     @mock.patch("watchdog.is_pid_running")
     @mock.patch("watchdog.check_data_freshness")
@@ -148,7 +159,7 @@ class TestWatchdogNightHoursSkip(unittest.TestCase):
         try:
             watchdog.run_watchdog()
         except Exception:
-            pass # we mock out subprocesses, so subsequent steps may raise, which is fine as long as check_logs was hit!
+            pass  # later steps may raise against the mocked boundary; we only assert check_logs was hit
 
         # Verify session keeps WERE run
         mock_reauth.assert_called_once_with("production", weekend_mint=False)
