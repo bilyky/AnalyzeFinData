@@ -4,14 +4,15 @@ Compare several stocks and produce ONE decision-ready summary: an objective side
 their factors, a ranked recommendation, and an explicit WHY for each — grounding the numbers
 against real-world news/events. Any agent can run this; it is surface-agnostic.
 
-Symbols come from the invocation arguments (e.g. `/compare-stocks TG CC DAVE IBM`): `$ARGUMENTS`.
-If none are given, ask the user which symbols to compare, then proceed.
+Symbols are the ones the user named (e.g. `TG CC DAVE IBM`; agents that pass command arguments,
+such as Claude Code's `$ARGUMENTS`, supply them directly). If none are given, ask which symbols to
+compare, then proceed. Below, `<SYMBOLS>` means that space-separated list.
 
 ## Step 1 — Get the structured data (single source of truth)
 
 Run the deterministic engine and capture its JSON (logs go to stderr; `2>/dev/null` keeps stdout clean):
 ```bash
-python scripts/analysis/compare_stocks.py $ARGUMENTS --json 2>/dev/null
+python scripts/analysis/compare_stocks.py <SYMBOLS> --json 2>/dev/null
 ```
 This returns `{as_of, symbols, rows[], ranking[], meta{...}}`. Every number you report MUST come
 from this payload — do not recompute, estimate, or invent factor values. (Equivalent HTTP form:

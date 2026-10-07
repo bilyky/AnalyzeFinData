@@ -29,6 +29,9 @@ thing. Anchor on intent, then judge the code against that intent.
 5. **Claims in commit messages and PR bodies are claims too** — an incident, a dataset ("rejected in
    both runs"), a "no behavior change". Check them against the logs/data/code they cite; say which you
    could not verify.
+6. **Statistical claims (studies, backtests):** check the unit of independence — observations sharing a
+   date, or overlapping horizons, inflate a plain t (see `run-study.md`). If the decision statistic
+   changed after the result was seen, the write-up must state the verdict under the original rule.
 
 (Worked examples: definition divergence PR #27, relocated vulnerability PR #54 → reference §A.)
 
@@ -168,7 +171,9 @@ a time so the §6 scrub runs on every body. If `gh` cannot reach the API, POST t
 
 `gh repo view <owner>/<repo> --json visibility`. If public, mask everything the review quotes as a
 leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posting script must abort on
-`PUBLIC` without a per-file scrub.
+`PUBLIC` without a per-file scrub. When printing any config or credential file
+(even to a console), mask by value shape as well as key name — a key-name list misses keys like `pass` —
+and test the mask on a fixture before running it on the real file.
 
 ## 7. Network & auth
 
