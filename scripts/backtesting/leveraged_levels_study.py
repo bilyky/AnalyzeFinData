@@ -6,7 +6,7 @@ The level backtest (backtest_levels.py) found the long swing-low/high framework
 (median win-rate ~65%) but FAILS on the leveraged / inverse / crypto ETF cohort
 (SQQQ, TQQQ, BITO, SOXL, SOXS, …) — those clustered at 33-49% win-rate. As a
 temporary stopgap that cohort is excluded from new long BUYs (instruments.is_excluded)
-and routed to a generic ATR stop/target (price ± 2.5·ATR). The CLAUDE.md Aug-8 roadmap
+and routed to a generic ATR stop/target (price ± 2.5·ATR). The Aug-8 session in plans/roadmap.md
 asks for a proper direction-aware / volatility-band / mean-reversion algorithm,
 BACKTEST-VALIDATED before the exclusion is lifted (the Jul-18 optimizer discipline).
 

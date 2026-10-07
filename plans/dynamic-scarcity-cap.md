@@ -108,7 +108,7 @@ ceiling clamp.
 | DEFENSIVE   | 0.20 | 0.25    | 10.0                     | 16.0         | 0.10               |
 
 \* `relax_full` is calibrated against the empirical `total` score distribution (see the
-Jul-18 optimizer discipline in CLAUDE.md and `scripts/backtesting/validate_scarcity_cap.py`).
+Jul-18 optimizer discipline in `plans/roadmap.md` and `scripts/backtesting/validate_scarcity_cap.py`).
 DEFENSIVE deliberately has the **lowest ceiling** (0.25) and the **highest** `relax_start` —
 it takes the most conviction to earn the least extra concentration, matching the Rule of
 Loss Minimization.
