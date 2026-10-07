@@ -30,6 +30,9 @@ pre-flight (test command, linters, commit conventions) comes from the repo's own
   `per-file-ignores` entries) without the user's explicit say-so, reason in the config comment.
 - **Stage deliberately** (`git add <paths>`, never `-A`) so scratch, generated and secret files stay
   out. Never commit secrets, tokens or PII.
+- **Text written by a script is unreviewed text.** String escapes silently rewrite Windows paths
+  (`"Data\notes"` gains a newline, `"Data\rapidapi.lock"` a carriage return). Prefer the editor
+  tool or raw strings, then scan the result for control characters and re-read every path in it.
 - **Follow the repo's commit-message convention**, including any trailer the environment mandates. The
   first commit's subject becomes the PR title (§2), so make it describe the whole change.
 - **Always actually push** once the gate is green — showing a diff and waiting is not shipping.
@@ -48,6 +51,8 @@ git add <paths> && git commit -m "<type>: <summary>" && git push -u origin HEAD
   pattern).
 - **Keep title and body true.** When a later push changes the payload or the conclusion (a study's
   verdict, a scope cut), edit them: `gh pr edit <n> --title … --body-file …`.
+- **Several open PRs at once?** Each merge puts the others behind. Re-merge `main` into each, and when
+  git auto-merged a file both edited, check that both sides' content survived before re-running tests.
 - **CI:** a bot-opened PR may not trigger `pull_request` runs; the push-triggered run is the gate.
   Read the check-runs for the head SHA, not the PR badge.
 
@@ -84,6 +89,9 @@ When the REST API is unreachable but `git` works, verify over the git transport:
   (`git show origin/main:<path>`). A history rewrite can drop a "merged" commit.
 - **Merged ≠ deployed.** A deploy that pulls `main` ships every merge since the target last updated —
   list them (`git log --oneline <deployed-sha>..origin/main`) before calling a change "ready for PROD".
+  Read each one for steps the pull does not perform: scheduler or service re-registration, new config
+  keys whose **defaults change behavior**, migrations, env vars. Time the deploy by checking that no
+  job is running (lock files, processes), not by a clock window — schedules change with the code.
 - **CI logs** the agent can't reach: point the user at `https://github.com/<owner>/<repo>/actions`.
 
 "Can't fetch GitHub" is usually the tool's egress lacking the proxy, not an outage — verify with

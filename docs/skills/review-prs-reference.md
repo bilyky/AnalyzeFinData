@@ -60,6 +60,9 @@ Read the real message from `$_.ErrorDetails.Message`. The PII scrub still applie
   and time out; set `HTTPS_PROXY` to the proxy `git` uses, or use a proxy-aware client (§C).
 - **Git Bash (MSYS) path conversion** rewrites arguments such as `refs/x:.claude/file` into Windows
   paths, producing `ambiguous argument` errors. Prefix commands with `MSYS_NO_PATHCONV=1`.
+- **`git merge-tree --write-tree X Y` takes commits.** Given a tree id it exits non-zero, which reads
+  like a conflict. To test several branches together, merge them in sequence in a detached scratch
+  worktree.
 - **Windows directory locks.** `git worktree remove` fails with *Permission denied* if any process —
   including your own shell — has its cwd inside the worktree. `cd` out first; if git already
   unregistered it, delete the now-empty directory.
