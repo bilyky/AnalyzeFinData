@@ -20,10 +20,11 @@ root, unchanged:
    the high-conviction hold is logged.
 5. **Gap guard** (frozen ⇒ ``stop_loss=None``), lazy ``_sma50``, and the **AI
    override** precedence (real-time → stored key → stored ``verdicts``).
-6. **Call-time seam** (``_pkg()``) and the package re-export.
 
 Every collaborator is patched on the live module and ``ws`` is a hermetic fake —
-no network or disk.
+no network or disk. The ``_pkg()`` call-time seam needs no test of its own: every test here patches the
+live module, so an import-time binding would fail them (mutation-checked); the
+package re-export is pinned once, in ``test_scenario_steps.TestPackageReexports``.
 """
 import os
 import sys
@@ -33,7 +34,6 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game  # noqa: E402
-from aether.scenario import decide_exits as decide_reexport  # noqa: E402
 from aether.scenario.steps import decide_exits  # noqa: E402
 
 
@@ -237,6 +237,14 @@ class TestProfitLock(unittest.TestCase):
         # default 2.5x: ratchet to 110-12.5=97.5, then breakeven lifts to cost 100.
         self.assertEqual(state["positions"]["AAA"]["stop_loss"], 100.0)
 
+    def test_ratchet_default_multiplier_is_2_5(self):
+        # No profile atr_multiplier: trail at 2.5x. Past 1.0x ATR but under 1.5x, so the
+        # breakeven lock stays out of the way: 105 - 2.5*4 = 95.0 (3.0x would give 93.0).
+        state = _state()
+        with _Harness(atr=4.0):
+            _run(state, prices={"AAA": 105.0}, rules={})
+        self.assertEqual(state["positions"]["AAA"]["stop_loss"], 95.0)
+
     def test_no_atr_means_no_ratchet(self):
         state = _state()
         with _Harness(atr=None):
@@ -260,6 +268,16 @@ class TestScaleOut(unittest.TestCase):
         self.assertIn("Scale-out (Bank-As-You-Go): tier1", txs[0]["details"])
         h.plan.assert_called_once_with(104.0, 100.0, 5.0, 0.0, l60=4.0,
                                        l60_ceiling=game.CFG.system_covered_call_l60_ceiling)
+
+    def test_later_tier_sized_off_original_lot_not_remaining(self):
+        # 7 sh left after banking 30% of an original 10: the next 30% tier is 30% of 10
+        # (3 sh), not of the 7 remaining (2 sh); banked_pct accumulates to 0.6.
+        state = _state(qty=7, banked_pct=0.3)
+        with _Harness(atr=5.0, plan=(0.3, "tier2")) as h:
+            _, txs = _run(state, prices={"AAA": 104.0})
+        pos = state["positions"]["AAA"]
+        self.assertEqual((txs[0]["qty"], pos["qty"], pos["banked_pct"]), (3, 4, 0.6))
+        self.assertEqual(h.plan.call_args.args[3], 0.3)
 
     def test_keeps_at_least_one_share(self):
         state = _state(qty=2)
@@ -345,16 +363,6 @@ class TestAiOverride(unittest.TestCase):
         with _Harness(action="SELL", verdicts={"ai": "SELL"}):
             out, _ = _run(_state())
         self.assertEqual(out, {"AAA": "r"})
-
-
-class TestSeam(unittest.TestCase):
-    def test_collaborators_resolved_at_call_time(self):
-        with _Harness(action="SELL") as h:
-            _run(_state())
-        h.build.assert_called_once()
-
-    def test_reexported_from_package_root(self):
-        self.assertIs(decide_reexport, decide_exits)
 
 
 if __name__ == "__main__":
