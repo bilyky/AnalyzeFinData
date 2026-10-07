@@ -143,7 +143,27 @@ def _steps_is_clean():
     return res.returncode == 0
 
 
+def _is_main_checkout():
+    """True in the repo's main working tree (where the live app runs), False in a worktree.
+
+    A linked worktree has its own git dir under <common>/worktrees/<name>; the main
+    checkout's git dir IS the common dir.
+    """
+    def rev_parse(flag):
+        out = subprocess.run(["git", "rev-parse", flag], cwd=ROOT, capture_output=True, text=True)
+        return os.path.normcase(os.path.realpath(os.path.join(ROOT, out.stdout.strip())))
+    return rev_parse("--git-dir") == rev_parse("--git-common-dir")
+
+
 def main():
+    # The script rewrites aether/scenario/steps.py with deliberate bugs while it runs.
+    # Once the REPLACE phase wires steps.py into the live game, doing that in the main
+    # checkout would put buggy code under live processes, so it only runs in a worktree.
+    if _is_main_checkout() and "--allow-main-checkout" not in sys.argv[1:]:
+        sys.stderr.write("Refusing to run in the main checkout: this script temporarily rewrites "
+                         "aether/scenario/steps.py. Run it in a git worktree "
+                         "(or pass --allow-main-checkout if no live process imports it).\n")
+        return 2
     if not _steps_is_clean():
         sys.stderr.write("steps.py has uncommitted changes; commit or revert them first.\n")
         return 2
