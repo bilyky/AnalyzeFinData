@@ -363,7 +363,7 @@ def check_rd_roadmap_sync() -> bool:
         road_items = set(re.findall(r"^\s*(\d+)\.\s+\*\*", road_text, re.MULTILINE))
 
         # The Claude auto-memory MEMORY.md is an index of memory links, not the numbered
-        # R&D ledger (that lives in CLAUDE.md here); it structurally has 0 numbered items.
+        # R&D ledger (that lives in plans/roadmap.md); it structurally has 0 numbered items.
         # Also, if MEMORY.md is a "Session State Snapshot" or contains "Active Portfolio Standing",
         # it is a portfolio state tracker and not an R&D ledger, so we should skip this sync check.
         # Only enforce the sync when the memory file actually IS a numbered R&D ledger,
@@ -565,8 +565,11 @@ def main():
             #   REPLACE step routes the root script through the package.
             # - aether/scenario/helpers.py: same `_pkg()` idiom (B3) — thin call-time
             #   delegation to the root's stateless helpers, patch-preserving.
+            # - aether/scenario/steps.py: same `_pkg()` idiom (B5) — extracted stateful
+            #   stages resolve the root's collaborators at CALL TIME, patch-preserving.
             _skip_imports = ("workbook_write.py", "test_", "powergauge.py", "run_history.py",
-                             "etrade/store.py", "scenario/prices.py", "scenario/helpers.py")
+                             "etrade/store.py", "scenario/prices.py", "scenario/helpers.py",
+                             "scenario/steps.py")
             if not any(x in fpath for x in _skip_imports):
                 if not check_no_inline_imports(fpath):
                     success = False
