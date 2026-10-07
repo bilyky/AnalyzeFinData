@@ -149,8 +149,24 @@ class TestDataHealth(_Base):
 
     def test_placeholder_share(self):
         self._series("MSFT", provisional_every=3)
-        self.assertAlmostEqual(ovc.placeholder_share(self.dir, "MSFT"), 10 / 30)
-        self.assertIsNone(ovc.placeholder_share(self.dir, "NOPE"))
+        root = os.path.join(self.dir, "Symbol_full")
+        self.assertAlmostEqual(ovc.placeholder_share(root, "MSFT"), 10 / 30)
+        self.assertIsNone(ovc.placeholder_share(root, "NOPE"))
+
+    def test_default_ohlcv_root_honors_the_cache_dir(self):
+        # No data_dir -> OHLCV comes from paths.ohlcv_dir() ($AETHER_CACHE_DIR, #163), not
+        # from <data dir>/Symbol_full. AETHER_DATA_DIR keeps the game JSON etc. here.
+        cache = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, cache, True)
+        os.makedirs(os.path.join(cache, "Symbol_full"))
+        shutil.copy(os.path.join(self.dir, "Symbol_full", "AAPL_daily.json"),
+                    os.path.join(cache, "Symbol_full", "AAPL_daily.json"))
+        os.remove(os.path.join(self.dir, "Symbol_full", "AAPL_daily.json"))
+        env = {"AETHER_DATA_DIR": self.dir, "AETHER_CACHE_DIR": cache}
+        with mock.patch.dict(os.environ, env),              mock.patch.object(ovc.etrade, "keep_alive", return_value=None):
+            pack = ovc.build_oceanview_context(now=NOW)
+        self.assertEqual(pack["state"]["data_health"]["no_ohlcv"], [])   # found in the cache dir
+        self.assertEqual(pack["state"]["portfolio"]["closed_sells"], 1)  # still read from data dir
 
 
 class TestStudyGates(_Base):

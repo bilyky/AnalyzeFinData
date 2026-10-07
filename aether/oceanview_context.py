@@ -24,6 +24,7 @@ import json
 import os
 
 from aether import etrade
+from aether import paths
 from aether.paths import data_dir as _default_data_dir
 from bar_provenance import is_provisional
 
@@ -184,9 +185,9 @@ def _study_gates(ddir: str) -> dict:
     return out
 
 
-def placeholder_share(ddir: str, symbol: str) -> float | None:
+def placeholder_share(ohlcv_root: str, symbol: str) -> float | None:
     """Share of the last RECENT_BARS OHLCV bars that are Chaikin placeholders."""
-    path = os.path.join(ddir, "Symbol_full", f"{symbol}_daily.json")
+    path = os.path.join(ohlcv_root, f"{symbol}_daily.json")
     try:
         with open(path, encoding="utf-8") as f:
             ts = json.load(f).get("Time Series (Daily)") or {}
@@ -196,8 +197,8 @@ def placeholder_share(ddir: str, symbol: str) -> float | None:
     return sum(is_provisional(ts[d]) for d in recent) / len(recent) if recent else None
 
 
-def _data_health(ddir: str, symbols) -> dict:
-    shares = {s: placeholder_share(ddir, s) for s in sorted(set(symbols))}
+def _data_health(ohlcv_root: str, symbols) -> dict:
+    shares = {s: placeholder_share(ohlcv_root, s) for s in sorted(set(symbols))}
     bad = {s: round(v, 2) for s, v in shares.items() if v is not None and v > PLACEHOLDER_SHARE_LIMIT}
     missing = [s for s, v in shares.items() if v is None]
     return {"checked": len(shares), "placeholder_heavy": bad, "no_ohlcv": missing,
@@ -228,9 +229,11 @@ def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
                             now: datetime.datetime | None = None) -> dict:
     """Assemble the Context Pack. Always returns a health verdict (ok / degraded / failed).
 
-    data_dir only relocates the pack's own files (cache, game JSON, studies, OHLCV). The
-    broker token is resolved by aether.etrade via paths.data_dir() ($AETHER_DATA_DIR), so
-    from a worktree set AETHER_DATA_DIR rather than passing data_dir.
+    data_dir relocates the pack's own files (cache, game JSON, studies, OHLCV) to one folder.
+    Without it: pack files under paths.data_dir() ($AETHER_DATA_DIR), OHLCV under
+    paths.ohlcv_dir() ($AETHER_CACHE_DIR). The broker token is always resolved by
+    aether.etrade via paths.data_dir(), so from a worktree set the env vars rather than
+    passing data_dir — and never link a worktree's Data/ into the real one (#163).
     """
     ddir = data_dir or _default_data_dir()
     now = now or _now()
@@ -269,7 +272,10 @@ def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
         warnings.append("ai_portfolio_game.json unreadable — paper-game summary missing")
     held = [p.get("symbol") for p in (broker or {}).get("positions", []) if p.get("symbol")]
     held += (portfolio or {}).get("positions", [])
-    data_health = _data_health(ddir, held)
+    # OHLCV lives under the cache root (#163: $AETHER_CACHE_DIR, else <checkout>/Data); an
+    # explicit data_dir keeps everything, OHLCV included, under that one folder.
+    ohlcv_root = os.path.join(data_dir, "Symbol_full") if data_dir else paths.ohlcv_dir()
+    data_health = _data_health(ohlcv_root, held)
     if data_health["placeholder_heavy"]:
         warnings.append("ATR stops unreliable for " + ", ".join(
             f"{s} ({v:.0%} placeholder bars)" for s, v in data_health["placeholder_heavy"].items()))
