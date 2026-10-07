@@ -3,9 +3,10 @@
 > 🛡️ **MANDATE:** You MUST read and strictly adhere to the unified workspace instructions in [AGENT.md](./AGENT.md) as your absolute first priority before executing any operations or reasoning in this workspace!
 
 `AGENT.md` is the single source for every workspace rule — cognitive and factual auditing, temporal
-zero-trust, testing and hermeticity, git safety, E*TRADE capabilities, price fetching, profile modes,
-the feedback loop, and the reusable skills index. This file holds only what is specific to the Gemini
-CLI; do not copy rules here.
+zero-trust, testing and hermeticity, resource cleanup, git safety, and the reusable skills index. How the
+trading system itself behaves (E*TRADE capabilities, price fetching, profile modes, the feedback loop)
+is in `AETHER_REFERENCE.md` §9. This file holds only what is specific to the Gemini CLI; do not copy
+rules here.
 
 ## 🧠 The Custom `aether-copilot` Workspace Agent Skill
 This repository has a custom **Gemini CLI Agent Skill** at `.gemini/skills/aether-copilot`.
