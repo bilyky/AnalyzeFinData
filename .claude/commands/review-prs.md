@@ -1,367 +1,254 @@
 # Code-Review Open PRs → paste-ready findings → post as PR comments
 
-Rigorously code-review the repo's **open pull requests, one at a time**, against a fixed rubric,
-produce **paste-ready markdown** under `reviews/`, then post each as a **PR comment**. Companion to
-[ship-pr.md](./ship-pr.md) (that one *opens* PRs; this one *reviews* them).
+Review the repo's **open pull requests one at a time** against the fixed rubric below, write
+**paste-ready markdown** to `reviews/PR-<n>-<slug>.md`, then post each as a **PR comment**.
+Companion to [ship-pr.md](./ship-pr.md) (that one *opens* PRs; this one *reviews* them).
+Agent-agnostic: any agent can read and follow this file; shell snippets are POSIX `git`/`gh`.
+Environment-specific troubleshooting and the full worked examples live in
+[docs/skills/review-prs-reference.md](../../docs/skills/review-prs-reference.md) — open it only when
+a step below points you there.
 
-Optional args: a PR number or list (`/review-prs 5` or `/review-prs 2 3 4 5`). With none, review
-every open PR **except the one you authored**.
+Args: a PR number or list (`/review-prs 5`, `/review-prs 2 3 4 5`). None → every open PR. A review of a
+change you authored has little independent value — say so in the write-up when it applies.
 
-## 0. Understand the PR's GOAL and REASON before reviewing a single line
+## 0. Understand the GOAL before reading a single line of diff
 
-Never open the diff first. A review that only checks whether the code is internally *consistent*
-will happily bless code that is consistent **but does the wrong thing**. Anchor on intent, then
-judge the code against that intent — not against itself.
+A review that only checks the code is internally *consistent* will bless code that does the wrong
+thing. Anchor on intent, then judge the code against that intent.
 
-1. **Read the stated goal.** PR title + body, commit messages
-   (`git log origin/main..<head> --pretty=full`), and any linked issue / roadmap item.
-2. **Find the AUTHORITATIVE definition of the feature.** In this repo, features are numbered
-   **R&D items**, and their definition is single-sourced in three places — read all three before
-   forming an opinion:
-   - `CLAUDE.md` → **Saturday R&D Roadmap**: the prose intent of each R&D # / session.
-   - `scripts/utils/pre_commit_validator.py` → **`FEATURE_CHECKS`**: the machine contract —
-     each R&D feature's canonical code anchor (`signature`) + its required `test_keyword`. This
-     tells you *which helper/gate the feature is supposed to live in.*
-   - the feature's **own unit test** (e.g. `test_high_score_pgr_bypass`) — the executable spec
-     of what the feature is DEFINED to do.
-3. **Review the code against the definition.** The key question is not "does this code work?" but
-   "does it implement what the R&D item says, **using the canonical gate/helper the definition
-   names** — or does it re-implement the behavior inline with different thresholds?" A second,
-   divergent copy of a defined feature is a multiple-source-of-truth bug even when it compiles and
-   its own tests pass.
+1. **Read the stated goal:** title, body, commit messages (`git log origin/main..<head> --pretty=full`),
+   linked issue / roadmap item.
+2. **Find the authoritative definition.** Here features are numbered **R&D items**, single-sourced in:
+   `plans/roadmap.md` (prose intent) · `scripts/utils/pre_commit_validator.py::FEATURE_CHECKS` (the
+   canonical code anchor + required test keyword) · the feature's own unit test (the executable spec).
+3. **Judge against the definition:** does it implement what the item says *through the canonical
+   helper/gate it names*, or re-implement it inline with different thresholds? A divergent second
+   copy is a multiple-source-of-truth bug even when it compiles and its own tests pass.
+4. **For "protect / decouple / isolate X" goals, trace the real data flow** — which file is *written*,
+   which is *read* — and confirm the mechanism removes the problem instead of relocating it.
+5. **Claims in commit messages and PR bodies are claims too** — an incident, a dataset ("rejected in
+   both runs"), a "no behavior change". Check them against the logs/data/code they cite; say which you
+   could not verify.
 
-> **Worked example (PR #27, verified):** R&D #13 "High-Score PGR Bypass" is DEFINED as the two-factor
-> gate `risk_utils.is_elite_breakout_candidate(total_score, short10)` (both a score floor AND an s10
-> floor, CFG-sourced; see `test_high_score_pgr_bypass` + the `FEATURE_CHECKS` anchor). PR #27
-> re-implemented it inline as a **hardcoded `score >= 10.0` alone** — no s10, not CFG-sourced, not the
-> canonical helper. A code-only review passed it; a definition-first review catches the divergence.
-> Start from the definition.
+(Worked examples: definition divergence PR #27, relocated vulnerability PR #54 → reference §A.)
 
-**For a PR whose goal is "protect / decouple / isolate X," trace the actual data flow — don't trust
-the framing.** Follow which file is *written* and which is *read*, end to end, and confirm the
-mechanism achieves the goal instead of relocating the problem.
-> **Worked example (PR #54, verified):** goal = stop `git reset --hard` clobbering the manual-input
-> workbook by splitting an untracked working copy from a git-tracked template. But the code copied the
-> untracked manual file **into** the new *tracked* `…_src.xlsx` and the pipeline then *read the tracked
-> file* — so a hard reset still wiped the manual inputs (vulnerability relocated, not removed). A
-> tracked↔untracked split only works if the **live/read** file is the untracked one; verify the
-> direction, don't accept the title's claim. (Same PR: the `.gitignore` line it added was a literal
-> PowerShell `` `n `` escape written as text — read the *raw added line* of any config/ignore change;
-> a shell-escape baked into a file is a real, feature-breaking bug the diff shows you.)
+## 1. Enumerate PRs and read the existing conversation FIRST
 
-Only once the goal is understood do you apply the §3 rubric.
-
-## 1. Enumerate open PRs (works behind a blocked API)
-
-Don't assume the GitHub API is reachable — verify over the git transport, which has the proxy `git`
-already uses:
 ```bash
-git ls-remote origin 'refs/pull/*/head'      # every open PR advertises refs/pull/<n>/head
+git ls-remote origin 'refs/pull/*/head'      # works even when the REST API is unreachable
 ```
-Map each `<n>` to its branch/head SHA. **Exclude the PR you authored** (the review is for *others'*
-changes; a self-review has no independent value and `gh pr review --request-changes` is blocked on
-your own PRs anyway).
-
-**MANDATORY — read the existing review conversation BEFORE you review.** A PR is rarely a blank slate:
-prior reviewers (human or a previous agent pass) may have already filed findings, and the author may
-have replied or pushed fixes. Reviewing without reading them re-derives known issues, re-raises items
-already resolved, and misses author sign-offs that are still outstanding. For each PR fetch all three
-comment surfaces (they are distinct endpoints — issue comments, review verdicts, and inline
-line-anchored comments do NOT overlap):
+For each PR fetch **all three** comment surfaces — they are distinct endpoints and do not overlap:
 ```bash
-gh api repos/<owner>/<repo>/issues/<n>/comments   --jq '.[] | "\(.user.login): \(.body)"'   # PR-level discussion
-gh api repos/<owner>/<repo>/pulls/<n>/reviews     --jq '.[] | "\(.user.login) [\(.state)]: \(.body)"'  # APPROVED / CHANGES_REQUESTED verdicts
-gh api repos/<owner>/<repo>/pulls/<n>/comments    --jq '.[] | "\(.user.login) \(.path):\(.line): \(.body)"'  # inline code comments
+gh api repos/<owner>/<repo>/issues/<n>/comments   # PR-level discussion
+gh api repos/<owner>/<repo>/pulls/<n>/reviews     # APPROVED / CHANGES_REQUESTED verdicts
+gh api repos/<owner>/<repo>/pulls/<n>/comments    # inline, line-anchored
 ```
-If `gh` is blocked, use the git-transport / `Invoke-RestMethod` fallback in §5 against the same three
-paths. Then:
-- Treat every prior 🔴/🟠/🟡 finding as a **re-review checklist** — for each one, verify against current
-  branch source (Zero-Trust, §2) whether it is now **fixed**, **still open**, or **was never valid**, and
-  say which in the write-up. Do not silently drop a prior finding.
-- Carry any unresolved **author sign-off** items (risk calls the author must make — ban-safety posture,
-  alert SLA, merge coordination) into the §3 prod-readiness verdict as explicit open questions; they are
-  the author's decision to make, not yours to close.
-- Don't re-file a finding the conversation already resolved; if you disagree with a resolution, reference
-  it explicitly rather than raising it fresh.
+- Every prior 🔴/🟠/🟡 is a **re-review checklist**: mark each **fixed / still open / never valid**
+  against current branch source. Never silently drop one; if you were wrong earlier, say so.
+- Carry unresolved **author sign-offs** (risk posture, merge order, ops timing) into the §3 verdict as
+  open questions — they are the author's call, not yours to close. Don't re-file a finding the thread
+  already resolved; if you disagree with the resolution, reference it explicitly.
+- **"Re-review after fixes" starts by comparing heads.** If the head is still the SHA you reviewed,
+  there is nothing to re-review — report that (and any *new comments*), don't re-run the review.
+- **Merged since your last review?** If a fix push landed and merged unreviewed, do a **post-merge
+  review** of `<last-reviewed-head>..<merged-head>` and post it on the merged PR; new behavior that
+  reached `main` without review is the highest-priority read.
 
-## 2. Review the BRANCH source, not the working tree
+## 2. Review the BRANCH source, in a scratch worktree
 
-The working tree is usually on `main`; the PR isn't. Read the actual changed code from the ref:
 ```bash
-git diff --stat origin/main...<head-sha>          # scope: files + churn
-git log origin/main..<head-sha> --pretty='- %s'   # commit-by-commit story
-git show <head-sha>:<path>                         # a file AS IT IS ON THE BRANCH
-git show <sha> -- <path>                           # one commit's change to a file
+git fetch <remote> '+refs/pull/<n>/head:refs/review/pull/<n>'   # private namespace, deleted afterwards
+git worktree add --detach <scratch-dir> refs/review/pull/<n>
+git diff --stat origin/main...<head>     # scope       git show <head>:<path>   # file as on the branch
 ```
-**Rule of Zero-Trust applies to review too:** verify every claim against branch source before
-writing it. If you assert a key doesn't exist, a sign is negative, a call site is missing — prove it
-with `git show`, and say in the write-up that you verified it. Never infer from the diff alone what
-the whole-file context would disprove.
+- **Fail-stop if you are not where you think.** In any multi-step script: `set -e`, then after `cd`
+  assert `[ "$(git rev-parse --show-toplevel)" = "<scratch-dir>" ]` before the first mutating command.
+  A failed `worktree add` followed by unguarded commands mutates whatever checkout you are still in.
+- **Use `--detach` scratch worktrees** for running and red-checking; a branch already checked out in
+  another worktree (possibly another session's) makes `worktree add <branch>` fail.
+- **Shared repos change under you.** Other sessions fetch, prune and push concurrently: fetch into
+  your own `refs/review/*` namespace, and treat `bad revision` / `ambiguous argument` as a *tooling*
+  error to fix and re-run — never as evidence of a diff. Re-fetch `main` before every verdict.
+- **Zero-Trust applies to review:** prove every assertion (missing key, wrong sign, absent caller) with
+  branch source, and say in the write-up that you verified it.
+- **Stacked PRs** re-include the parent's payload in `main...B`; check
+  `git merge-base --is-ancestor <A> <B>`, review only the incremental commits, and note the PR
+  inherits every blocker beneath it.
+- **Know what "green" means.** Read the check-runs and the failing log (`gh run view <id> --log-failed`);
+  a red check's exact line *is* a finding. A gate proves only what it runs — if CI lints but skips
+  tests, say so. **Check which gate runs the commit-time rules:** here CI's `quality-gate` job now runs
+  `pre_commit_validator.py` on the PR's diff (soft-reset to the base, then validate the staged change),
+  so a red `quality-gate` is often an inline import or silent except. Reproduce it the same way
+  locally; the validator stops at the first hit per file and exempts `test_*.py`, so confirm a fix by
+  re-running it. Ruff `E402` is module-level only and does not catch a function-body import. A branch far behind `main` may predate
+  whole CI jobs, so its green set is smaller than today's gate. Reproduce the gate locally when you can.
 
-**Stacked PRs:** if PR #B branches off PR #A (not `main`), `git diff main...B` re-includes A's whole
-payload. Check with `git merge-base --is-ancestor <A-sha> <B-sha>`. A stacked PR **inherits every
-blocker of the PR beneath it** — call that out as its own finding and review only its incremental
-commits on their merits.
-
-**Pull the merge gate — and know what "green" means.** The PR's own CI is primary evidence; a defect
-that a code read cannot see (a lint/validator rule the diff trips) is sitting in the failing log.
-Read it, don't assume:
-```bash
-gh pr checks <n> --repo <owner>/<repo>                       # pass/fail per required check
-gh api repos/<owner>/<repo>/commits/<head-sha>/check-runs \
-  --jq '.check_runs[] | "\(.name): \(.status)/\(.conclusion)"'
-gh run view <run-id> --repo <owner>/<repo> --log-failed      # the actual failing lines
-```
-If a required check is red, **the exact failure IS a finding** — quote the offending line. Then read
-*what the CI config runs*: a green gate proves only what it exercises. If it byte-compiles + lints but
-skips the test suite, "CI green" is not "code tested" — say so precisely rather than implying coverage
-the gate never ran. When you can, reproduce the gate locally (run the same validator/linter against
-the change set the way CI does) so your verdict matches what the merge button will do.
-
-**Know which gate catches what — a rule enforced by the *pre-commit hook* is usually NOT in CI.** In
-this repo the AETHER `scripts/utils/pre_commit_validator.py` rules (`check_no_inline_imports`,
-no-silent-except, doc-sync, wiki-drift) run at **commit** time, not in the CI `lint`/`quality-gate`
-jobs — so a green CI does **not** prove a change is inline-import-clean. Also don't conflate rules:
-ruff **`E402` is module-level only** (imports after code at module scope); an import inside a
-*function body* is a *lazy inline import* that E402 ignores but the AETHER validator flags. When you
-cite an inline-import finding, name the **pre-commit validator**, not E402/CI, and say CI-green
-doesn't cover it. (And a branch far behind `main` may predate whole CI jobs — e.g. a 114-behind fork
-with no `lint` check-run at all — so its green set is smaller than today's merge gate.)
-
-## 3. The fixed rubric — review from ALL these perspectives
-
-For each PR, look for and address every one of these (this is the standing review contract):
+## 3. The fixed rubric — address every perspective
 
 - **Corner cases, bad smell, over-engineering.**
 - **Design / architecture / performance / security / simplification / unification.**
-- **DB / IO: extra calls, N+1, redundant fetches.**
+  - **Architecture fit — respect the project's actual seams** (AETHER: a modular monolith, ports &
+    adapters around external dependencies such as the E*TRADE `store`, a strangler-fig extraction
+    `ai_portfolio_game.py → aether/scenario/`, call-time `_pkg()` lazy resolution). Flag a call site
+    that bypasses a port, a reach into another package's internals, logic duplicated instead of routed
+    to its single home, an eager import where the codebase resolves lazily, and **copy-not-move**
+    stages. A "verbatim extraction" claim is checkable: normalize (strip comments/indent/module
+    prefix) and diff the extracted body against the live source block; a copy that must track a
+    still-live source needs a **parity test**, or it drifts silently. Recommend the seam the project
+    already uses — don't invent one.
+  - **Config-dependent wiring — check it under PRODUCTION config.** When a change routes calls through a
+    factory or adapter selector, confirm which backend it returns with production's real settings, not
+    only the test/dev default (e.g. a store factory keyed off an app-wide `DATABASE_URL` silently picked
+    an unimplemented backend on PROD — #144). A test that runs the real factory under a prod-like config
+    is the guard.
+- **DB / IO:** extra calls, N+1, redundant fetches.
 - **Anti-patterns, missing patterns, parallelism** left on the table.
-- **Code duplication & multiple sources of truth** — one fact, one home.
-- **Confidential/secure data** — ids, emails, usernames, passwords, tokens, internal IPs, UNC
-  paths, account/CUSIP ids. Flag every leak AND do not reproduce it unmasked in a public channel
-  (see §6).
-- **Documentation** — missing, obsolete, or contradicting the code.
-  - **A doc that *promises* cross-referencing / "so the two files don't drift" must actually CARRY the
-    links — verify the linkage exists, both ways; don't accept the doc's own claim that it's tracked.**
-    A one-way reference (doc→roadmap) with no back-link and no *dedicated* tracked action is a
-    multiple-source-of-truth / drift bug even in a docs-only PR.
-    > **Worked example (PR #84, verified):** `plans/systemic-failure-retro.md` stated its remediation
-    > was "tracked as numbered items in `plans/roadmap.md` … so the two files don't drift," but only
-    > Step 3 → R&D #36 was actually tracked. The open Step 1 (persistent non-interactive scheduling)
-    > had **no dedicated tracked action** — it fell in the *seam* between R&D #30 (scheduler drift
-    > *detection*) and R&D #41 (token minting), owned by neither — and every reference was one-way with
-    > no back-links. Fix folded into the **same PR**: extend an existing R&D item to *own* the orphan
-    > (R&D #30 gained the Step 1 remediation scope), note the §5 open question on R&D #41, and add the
-    > bidirectional links — so the doc's own no-drift promise lands atomically with the doc.
-- **Tests have value** — they test *real behavior*, are **red-green** (would fail against the
-  pre-change code), not tautologies that restate the implementation or pass for the wrong reason.
-  Three questions to ask of every test file in the diff:
-  - **Any test with no value / everything mocked?** If a test mocks out the very unit under test (or
-    every collaborator), it asserts only that the mock returns what the mock was told to — it proves
-    nothing about production. Mocking is legitimate ONLY to isolate expensive/non-deterministic IO
-    (filesystem, network, clock) while the real SUT still runs. Flag "fully-mocked" tests; keep
-    "IO-isolated" ones. (Example done right: `test_breakout_overrides` mocks only
-    `is_bottom_confirmed`'s file read, but calls the real `check_failure_rules` against a real
-    on-disk rules file.)
-  - **Can we combine some tests?** Look for methods that exercise the *same contract* at different
-    inputs (same SUT, same setup, only the fixture/expected value differs) — those should be one
-    table-driven/parametrized test, not N near-duplicate methods (watch for a case in method 1 that
-    is identical to a case in method 2). Do NOT merge tests with different SUTs or different setup
-    just to cut line count — combine for shared contract, not for brevity.
-  - **Are we green locally?** Actually RUN the branch's suite (`python -m unittest discover tests`,
-    `PYTHONIOENCODING=utf-8` on Windows) and report the real count (`Ran N … OK (skipped=k)`), not
-    an inferred "should pass." A review that claims tests pass without running them is a Zero-Trust
-    violation. Also flag test-hygiene noise the run surfaces (e.g. `ResourceWarning: unclosed file`
-    from `open().read()` without a context manager).
-- **AI-ish smell** — hype/grandiose framing ("Enshrine", "Mandate", "100% trustable"), decorative
-  emoji in production logs, bot co-author trailers, docstrings that lie about the code.
-- **Packaging honesty** — does the title/commit message match the payload? A "move one import"
-  commit that rewrites 15 files is unreviewable and unrevertable; call for a split.
-  - **Churn with no semantics** is its own smell: a large `+N/−N` whose *normalized* diff is tiny
-    means a whole-file **line-ending / encoding / whitespace reflow** (LF↔CRLF, BOM, tab↔space) is
-    hiding the real change and will collide with the next PR that touches the file. Detect it — diff
-    `git show <head>:<path>` against `git show origin/main:<path>` and compare CR/byte counts (a
-    symmetric `+N/−N` with CR-count flipping 0↔N is the fingerprint) — and call for a re-commit as a
-    clean minimal diff (plus a `.gitattributes eol` rule if the repo lacks one).
-- **Re-review discipline (fixes regress).** On a follow-up push, re-verify each prior finding is
-  *actually* resolved AND review the new delta on its own merits — a fix routinely introduces a fresh
-  blocker (e.g. a cleanup that adds a banned inline import, or re-flows line endings). "Addressed your
-  comments" is a claim to verify, not a state to assume.
-- **Confidence** — are you sure? List assumptions and anything **not** verified.
-- **Is this PR/change ready for PROD?** — the capstone question every review must answer explicitly,
-  not leave implied by the severity list. Separate two axes and state both:
-  - **Code quality gate** (objective): validator green, branch suite green (run, not inferred), no
-    open 🔴, packaging honest, tests real. If any fails, it is NOT prod-ready — say so plainly.
-  - **Behavioral/risk gate** (judgment): what does this change actually DO in production, and is that
-    the intended posture? A change can be flawless code and still be a risk-appetite decision the
-    author must consciously accept — e.g. loosening a buy-side filter, widening a stop, raising an
-    allocation cap. Name the live effect (per CLAUDE.md Rule of Loss-Minimization, flag anything that
-    increases exposure or reduces capital protection), and whether the backtest/data supports it.
-    Never wave a risk-changing PR through on green tests alone — green tests prove it does what it
-    says, not that what it says is the right risk. State the verdict as: **prod-ready**,
-    **prod-ready pending author sign-off on <the risk decision>**, or **not prod-ready: <blocker>**.
+- **Duplication & multiple sources of truth** — one fact, one home (incl. repeated constants: a value
+  that "matches" another literal elsewhere should reference it).
+- **Confidential data** — ids, emails, usernames, tokens, internal IPs, UNC paths, account ids. Flag
+  every leak, and never reproduce one unmasked in a public channel (§6).
+- **Documentation stays true — verify it, don't assume it.** For every behavior the PR changes, grep
+  every doc surface for the *old* behavior: README and `*.md`, design/plan docs, roadmap **status
+  lines**, wiki/About text, skills, docstrings, comments, and log/alert text. A doc left describing the
+  old behavior is a finding in the same PR. Check first any doc that states a **safety invariant**
+  ("never opens a browser", "zero calls", "only a human may…"): those are the docs people trust. Also
+  check that identifiers meant to be unique (e.g. roadmap item numbers) still are, and that a doc
+  promising cross-references actually carries them both ways (reference §A, PR #84).
+- **Tests have value** — real behavior, not tautologies:
+  - **Fully mocked?** Mocking the unit under test proves nothing; mock only expensive or
+    non-deterministic IO (fs, network, clock) while the real code runs.
+  - **Red-green.** Swap the pre-change file back in and show the new test fails. **No pre-change code**
+    (additive module, extraction)? Do a **mutation check**: break the code the way a realistic
+    regression would and confirm a test fails.
+  - **Combinable?** Same contract at different inputs → one table-driven test; don't merge different
+    contracts just to cut lines.
+  - **Run it.** Report the real `Ran N … OK (skipped=k)` from the branch (merged with today's `main`
+    when it is behind) — never an inferred "should pass". Note hygiene noise (`ResourceWarning`, test
+    runs writing into real data dirs).
+- **AI-ish smell** — hype framing, decorative emoji in logs, docstrings or log lines that assert
+  causes the code doesn't know.
+- **Packaging honesty** — title/commit match the payload; split unreviewable mixes. A big symmetric
+  `+N/−N` with a tiny normalized diff is a line-ending/encoding reflow hiding the change (reference §B).
+- **Re-review discipline** — fixes regress: re-verify each prior finding *and* review the new delta on
+  its own merits. "Addressed" is a claim to verify.
+- **Confidence** — list assumptions and what you did **not** verify.
+- **Is it ready for PROD?** — answer explicitly, on two axes:
+  - **Code-quality gate** (objective): suite run green, validator green, no open 🔴, tests real,
+    packaging honest.
+  - **Behavioral/risk gate** (judgment): what does it actually change in production, and is that the
+    intended posture? Per the project's Rule of Loss-Minimization, flag anything that increases
+    exposure or weakens protection (looser filters, wider stops, more broker logins). Green tests prove
+    it does what it says, not that what it says is the right risk.
+  - Verdict: **prod-ready** · **prod-ready pending author sign-off on <risk>** · **not prod-ready:
+    <blocker>**. Name what only production can confirm.
 
-## 4. House format
+## 4. House format (see existing `reviews/PR-*.md`)
 
-Use the existing `reviews/PR-*.md` as templates:
+1. **Verdict** — `Approve` / `Request changes` / `Comment` + one-line gist + the prod-readiness call.
+2. **Summary** — packaging and the 2-3 dominant points.
+3. **Findings by severity** (🔴 blocker / 🟠 major / 🟡 minor), each anchored to `file:line` with a
+   quoted snippet.
+4. **What's good** — credit real improvements.
+5. **Confidence / scope** — what was run vs inferred, what was not checked; correct any earlier error
+   explicitly.
 
-1. **Verdict** line — `Request changes` / `Approve` / `Comment` + one-sentence gist, AND an
-   explicit **prod-readiness** call phrased per the §3 "ready for PROD?" bullet (code-quality gate
-   AND risk gate).
-2. **Summary comment** — the top-level narrative (packaging, the 2-3 dominant problems).
-3. **Inline comments** — findings ordered by severity, each **anchored to `file:line` + a quoted
-   code snippet** so it pastes into GitHub's "Files changed" view. Severity: 🔴 blocker / 🟠 major /
-   🟡 minor.
-4. **What's good** — credit real improvements; a review that only lists faults is untrustworthy.
-5. **Confidence / scope notes** — what was runtime/branch-verified vs. inferred; what you did NOT
-   check (e.g. "did not run the branch test suite", "did not scan every `Data/*.json`"). Correct
-   any earlier fabrication explicitly (e.g. a mis-quoted docstring) rather than silently.
+Keep it short: verified facts, one line each; FYI items last.
 
-## 5. Post each review as a PR **comment**
+## 5. Post as a PR comment — one PR at a time
 
-Use `gh pr comment` — it works on **any** PR including self-authored, unlike
-`gh pr review --request-changes` (blocked on your own). One comment per PR, body from the file:
 ```bash
 gh pr comment <n> --repo <owner>/<repo> --body-file reviews/PR-<n>-<slug>.md
 ```
-Post **one PR at a time by hand** — it's the safest default, since it forces the §6 PII check on each
-body before it goes public. Only batch the loop behind a script if that script runs the §6 guard per
-file (see below); a blind `for f in reviews/*.md` that mis-maps a filename to the wrong PR number, or
-skips the PII scrub, is worse than posting by hand.
+A comment works on any PR, including your own (a `--request-changes` review does not). Post one PR at
+a time so the §6 scrub runs on every body. If `gh` cannot reach the API, POST the same body to
+`repos/<owner>/<repo>/issues/<n>/comments` with any HTTP client using the token from `gh auth token`
+(reference §C has a verified PowerShell recipe and its error decoder).
 
-**Fallback when `gh` cannot connect (VERIFIED WORKING on this box, 2026-09-15).** `gh pr comment` is
-the front door, but here `gh`'s Go TLS stack times out dialing api.github.com (`dial tcp …:443
-connectex failed`) even though `git` (schannel) and .NET (WinINET) reach it fine — so §7's
-`HTTPS_PROXY` retry does NOT rescue it. The credential is still recoverable *cleanly*: `gh auth token`
-prints a valid `gho_` OAuth token from gh's own `hosts.yml` (a SANCTIONED store via gh's official
-command — this is NOT the forbidden origin-URL scrape of §8). Post via .NET `Invoke-RestMethod` to the
-**issue-comments** endpoint (works for PRs):
-```powershell
-$tok = (& "C:\Program Files\GitHub CLI\gh.exe" auth token | Select-Object -First 1).Trim()
-$h = @{ Authorization="token $tok"; 'User-Agent'='claude-review'; 'Accept'='application/vnd.github+json' }
-# CRITICAL: read the body as a PURE .NET string. `Get-Content -Raw` returns a string decorated with
-# ETS note-properties (PSPath/PSDrive/…); ConvertTo-Json then serializes {"body":{"value":"…",PSPath:…}}
-# and GitHub rejects it 422 "…is not a string". ReadAllText also fixes em-dash → â€” mojibake.
-$body  = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
-$bytes = [System.Text.Encoding]::UTF8.GetBytes((@{ body = $body } | ConvertTo-Json -Depth 3))
-Invoke-RestMethod -Uri "https://api.github.com/repos/<owner>/<repo>/issues/<n>/comments" `
-  -Method Post -Headers $h -Body $bytes -ContentType "application/json; charset=utf-8"
-```
-Error decoder: **400** = you JSON-encoded a raw non-string; **422 "is not a string"** = the ETS-decorated-string
-bug above (fix = `ReadAllText`, not `-Compress`). Read the real error with `$_.ErrorDetails.Message` —
-the response StreamReader comes back empty. The §6 PII scrub still applies before this POST.
+## 6. PII guard for public repos
 
-## 6. PII guard before posting to a PUBLIC repo
+`gh repo view <owner>/<repo> --json visibility`. If public, mask everything the review quotes as a
+leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posting script must abort on
+`PUBLIC` without a per-file scrub.
 
-The reviews **quote** the internal IP / username / UNC path / CUSIP-like id they flag as findings.
-Posting them verbatim to a public repo re-leaks exactly the PII the review calls out. Before posting:
-```bash
-gh repo view <owner>/<repo> --json visibility --jq '.visibility'
-```
-If `PUBLIC`, scrub those strings (mask to `10.0.0.x` / `<user>` / `<account-id>`) first, or keep the
-findings but replace the literal evidence with a masked form. If you wrap posting in a script, it MUST
-run this visibility check and abort on `PUBLIC` unless an explicit override is set — never post a
-batch to a public repo without the per-file scrub.
+## 7. Network & auth
 
-## 7. Network reality — don't trust a naive `curl` "unreachable"
+- Don't trust one client's "unreachable": TLS stacks differ behind corporate proxies (reference §D) —
+  try `git ls-remote`, `gh`, and a proxy-aware HTTP client before concluding the API is down.
+- `gh` not on PATH? Resolve it portably (`command -v gh` / `Get-Command gh`) — never hardcode a path.
+- Authenticate with `gh auth login` (ask the user to run it in their own terminal — it is interactive)
+  or a `GH_TOKEN` they supply. `gh auth token` is a sanctioned way to reuse gh's stored credential.
+- ⚠️ **Never** extract a token embedded in a remote URL (`git remote -v`) — advise rotating it instead.
 
-Behind a revocation-blocking corporate proxy, **the GitHub API is reachable even when `curl` says it
-isn't.** Windows `curl` uses schannel, which does an online cert-revocation check; when the proxy
-can't reach the revocation responder, `curl https://api.github.com/...` fails with
-`CRYPT_E_REVOCATION_OFFLINE` — a TLS-handshake failure, *not* a block. Prove reachability by skipping
-just that check: `curl -sS -m 15 --ssl-no-revoke -x <proxy> https://api.github.com/zen` returns a
-quote → the host is up.
+## 8. Bring a PR current with `main` — merge in, never rebase
 
-Practical consequence: **use `gh` and `git`, not `curl`, for GitHub.** `gh` (Go `crypto/tls`, no
-online revocation) reaches the API through the proxy, and `git ls-remote origin` uses git's own proxy
-path — both work when schannel `curl` can't. If `gh` still dials direct and times out, set
-`HTTPS_PROXY`/`HTTP_PROXY` to the same proxy `git` uses, then retry.
+- **`git merge --no-ff origin/main`** on the PR branch, re-run the suite, then a plain fast-forward
+  `git push`. A rebase needs a force-push, which agent runtimes typically (and rightly) gate as
+  destructive. If you already rebased locally, `git checkout -B <branch> <pushed-sha>` and merge
+  instead. Verify `behind=0` and a clean merge state afterwards.
+- **Parent was squash-merged (stacked PR being retargeted to `main`)?** Every line both PRs touched
+  will conflict, because the merge base predates the squash. First prove `main`'s copy of each file the
+  child touches equals the parent branch's final tip; only then resolve **from the child branch** with
+  `git merge -X ours origin/main` (ours = the checked-out branch; `-X theirs` here would silently put
+  the parent's old lines back). Confirm the result's PR files equal the child's head.
+- **Don't push to a branch checked out in another worktree** — another session may be mid-edit.
+  Test-merge in a detached scratch worktree and report the exact command instead.
 
-## 8. gh auth — supply it cleanly, never scrape it
+## 9. Clean up once PRs are merged or closed
 
-`gh` may be installed but **not on PATH**, and/or **not authenticated**. If `gh` isn't found,
-resolve it portably (`command -v gh`, or `Get-Command gh` on PowerShell) and call it by that path —
-don't hardcode an OS path. Authenticate via one of:
-- `gh auth login` (interactive — ask the user to run `! gh auth login`), or
-- `export GH_TOKEN=<PAT>` the user supplies.
+- **"Merged" comes from the PR API, never from ancestry** — squash-merged tips are never ancestors of
+  `main`. In list responses use `merged_at != null` (the list endpoint has no `merged` field); read
+  **every page** of results.
+- **Links first (data-loss rule, `AGENT.md` §4 "No Links Into Data/"):** `git status` cannot see a
+  junction or symlink under gitignored `Data/`, and removing a worktree deletes *through* it — on
+  2026-10-06 that wiped the main checkout's `Data/Symbol` + `Data/Symbol_full`. Before removing any
+  worktree, scan it for links (`prune_merged_worktrees.links_inside(<wt>)`, or
+  `Get-ChildItem <wt> -Recurse -Force -Attributes ReparsePoint`). If any: remove the **link itself**
+  (`cmd /c rmdir <link>` — removes only the link), re-scan, and get the owner's OK for any link that
+  pointed into `Data/`. Never remove a worktree that still contains one.
+- **Worktrees:** remove only clean ones, **without `--force`** (a refusal is the safety net —
+  `git -C <wt> status --porcelain` non-empty ⇒ leave it and report it). Keep open-PR, dirty, locked,
+  and other-session worktrees. **An open PR dominates a shared head ref:** a branch that backs any open
+  PR is kept even if another PR with the same head ref was merged or closed. `scripts/utils/prune_merged_worktrees.py` automates this (dry-run first,
+  then `--apply`); its known limits are in reference §E.
+- **Local branches (with or without a worktree):** delete only when **lossless** — every commit still
+  exists on the remote:
+  1. tip reachable from `origin/main` or any `refs/pull/*/head`
+     (`git for-each-ref --count=1 --contains <sha> refs/remotes/origin/main refs/review/pull` — one call
+     per branch; per-ref `merge-base` loops are far too slow);
+  2. else merging it into `main` changes nothing (`git merge-tree --write-tree origin/main <b>` equals
+     `main`'s tree);
+  3. else every file it touched is byte-identical to some commit in its **merged** PR's history.
 
-> ⚠️ **Security boundary (hard rule):** NEVER scrape/extract the push token embedded in the `origin`
-> remote URL (`git remote -v` may expose a `ghp_…` PAT) to authenticate the API — your agent
-> runtime's security policy should block this, and correctly so. If you notice such a token, advise
-> **rotating** it and moving to a credential helper — do not print or reuse its value.
+  Anything else holds unique work → keep and list it. `-D` is correct only for branches proven
+  lossless (squash-merged branches make `-d` refuse). Log `name sha` to a backup file first so any
+  deletion is one `git branch <name> <sha>` away from undo.
+- Batch removals are irreversible local changes: present the classified plan, get the go-ahead, and
+  delete your own scratch (temp refs, worktrees, files) when done.
 
-## 9. Clean up the local footprint once a PR is MERGED
+## 9b. Post-merge doc audit (after a batch of merges, or when asked)
 
-A review/prepare campaign leaves a trail: a per-PR `_wt_*` worktree, a local branch, and `/tmp`
-scratch (`*.ps1`, `*.txt`). Once the PR is **merged**, that footprint is dead weight — retire it, but
-only the part whose work is provably safe.
+Docs drift between PRs even when each review was careful. After a batch lands:
+1. Bring the main checkout current (`git merge --ff-only origin/main`, only when the user asks, and only
+   if no local edit conflicts).
+2. List the merges since the last audit and, for each, the behavior it changed.
+3. Grep every doc surface (§3 *Documentation*) for each old behavior, plus status lines of tracked items
+   ("UNBUILT" for something built) and duplicate identifiers.
+4. Verify each replacement claim against code on `main` (callers, defaults, gates, thresholds) before
+   writing it. A behavior gap you find (code doing something unintended) is reported for a decision,
+   not silently "fixed" inside the docs PR.
+5. Land the fixes as one docs PR from a fresh branch off latest `main`.
 
-**Verify "merged" by the PR API, NOT by git ancestry.** PRs here are **squash-merged**, so the branch
-tip is a *new* commit that is **never an ancestor of `origin/main`** — `git merge-base --is-ancestor
-<tip> origin/main` returns false for a squash-merged branch, which looks identical to "not merged."
-Do not gate cleanup on ancestry. Gate on the PR's own state:
-```bash
-gh api repos/<owner>/<repo>/pulls/<n> --jq '.state,.merged'   # want: closed / true
-```
-(or the .NET `Invoke-RestMethod` fallback of §5 when `gh` can't dial — read `merged==True`).
+## 10. Checklist
 
-**Only ever remove a worktree WITHOUT `--force`.** A clean `git worktree remove <path>` *refuses* if
-the worktree has uncommitted changes — that refusal is the safety net, so let it fire. `--force`
-throws away uncommitted work irreversibly; never reach for it to "get past" a refusal. Inspect first
-and leave anything dirty for the user:
-```bash
-git -C <wt> status --porcelain     # non-empty ⇒ uncommitted work ⇒ DO NOT remove; report it
-git worktree remove <wt>           # no --force: clean ones go, dirty ones self-protect
-git branch -D <branch>             # squash-merged ⇒ -d refuses ("not fully merged"); -D is correct
-                                   #   ONLY after the API confirmed merged==true
-git worktree prune                 # drop stale administrative refs
-```
-
-**Use the automated prune tool — it encodes every rule in this section.** The reusable helper does the
-API-state join and the safe removals inside a single script process (outside the Bash classifier), so
-the whole prune runs in one gated call instead of many per-branch ones:
-```bash
-python scripts/utils/prune_merged_worktrees.py            # dry-run FIRST (read-only plan)
-python scripts/utils/prune_merged_worktrees.py --apply    # then apply
-#   --merged-only / --closed-only narrow scope; default prunes both
-```
-Run it **whenever a tracked PR flips to merged OR closed** (the "cleanup on merge and on close" hook)
-and at the end of every campaign. Its buckets, matching this section's contract:
-- **PRUNE** — backing PR is `merged==true` **or** closed-unmerged (`state==closed && merged==false`)
-  AND the worktree is clean → worktree removed (no `--force`) + branch deleted.
-- **KEEP** — PR still **OPEN**. **OPEN dominates a shared head ref**: a branch backing any open PR
-  (e.g. `feat/ruff-linting-minimal`, backing both closed #61 and open #96) is always kept — the script
-  queries open **last** so it wins, a safety guarantee not a cosmetic order.
-- **REVIEW (never auto-delete)** — a clean-vs-dirty check leaves any worktree with uncommitted changes
-  as `KEEP … DIRTY`, and detached/no-branch or unmapped-branch cases are left in place. Hand these to
-  the user; do not decide their fate yourself.
-
-**Scope + permission.** This is destructive to *local* state — the auto-mode classifier flags a batch
-`worktree remove` loop as "Irreversible Local Destruction" and will (correctly) gate it. Do the
-self-owned, unambiguous removals (the worktree/branch **you** created for the just-merged PR) and,
-for the rest, present the classified table + the exact prune commands and let the user run/approve
-them. `/tmp` scratch (`*.ps1`, `*.txt`) is pure ephemera — safe to `rm` freely; it does not need a
-gate. Per "prepare, you click," cleanup follows the same contract: prepare the safe deletions, hand
-off the irreversible batch.
-
-## 10. Verification checklist
-
-Confirm each before finishing — the full rule lives in the cited section:
-- **§0** goal read first; each change judged against the R&D definition, and divergence from the
-  canonical gate/helper is itself a finding.
-- **§1** existing review conversation fetched (issue comments + reviews + inline comments) BEFORE
-  reviewing; every prior 🔴/🟠/🟡 resolved as fixed / still-open / never-valid against branch source;
-  unresolved author sign-offs carried into the §3 verdict.
-- **§2 / §4** every finding cites branch-verified `file:line` + quoted code; assumptions labeled.
-- **§3** tests audited — none fully-mocked/valueless, same-contract cases flagged, branch suite
-  **actually run** with the real `Ran N … OK` reported.
-- **§3 capstone** prod-readiness stated (both gates); no risk-changing PR waved through on green tests.
-- **§6** no unmasked PII in anything hitting a public channel.
-- **§9** once a tracked PR is merged **or** closed, the local footprint is pruned via
-  `scripts/utils/prune_merged_worktrees.py` (dry-run, then `--apply`) — open-PR branches, dirty
-  worktrees, and `.claude/` agent worktrees left untouched.
-- **§5** posted as **comments** (`gh pr comment`, not `--request-changes`).
-- **§7 / §8** reachability proven with `--ssl-no-revoke` before claiming the API up/down; push token
-  never scraped (rotation advised if seen).
-- **§9** merged-PR footprint retired — merge confirmed by PR API (not ancestry), worktrees removed
-  without `--force` (dirty ones left for review), open-PR worktrees kept, irreversible batch handed off.
+- §0 goal + authoritative definition read first; PR/commit claims checked against their evidence.
+- §1 all three comment surfaces read; prior findings resolved fixed/open/never-valid; heads compared
+  before any "re-review"; merged-unreviewed fixes get a post-merge review.
+- §2 branch source in a detached, fail-stop scratch worktree; private `refs/review/*`; a red check's log
+  read and the gate reproduced locally.
+- §3 docs re-verified for every changed behavior (old-behavior grep, status lines, safety invariants,
+  unique identifiers); §9b audit run after a batch of merges.
+- §3 every perspective covered; tests red-green or mutation-checked and actually run; architecture-fit
+  and extraction faithfulness checked; prod-readiness stated on both gates.
+- §4/§5/§6 house format, posted as a comment, PII masked.
+- §8 brought current by merge-in (never force-push); squash-parent retargets resolved with proof.
+- §9 merged-ness from the API (all pages); only lossless deletions, logged; no `--force`.

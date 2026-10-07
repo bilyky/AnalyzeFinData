@@ -281,7 +281,7 @@ class TestCrossProcessLock(unittest.TestCase):
         # A lock older than the TTL (crashed run) must not block recovery forever.
         with open(self.lock_path, "w"):
             pass
-        old = time.time() - 9001                           # just past the 2.5h TTL
+        old = time.time() - rapidapi.pass_timeout_seconds() - 1   # just past the longest legit pass
         os.utime(self.lock_path, (old, old))
         with mock.patch.object(rapidapi, "SLEEP_SEC", 0), \
              mock.patch.object(rapidapi, "_fetch_raw", return_value=self._raw()) as m:

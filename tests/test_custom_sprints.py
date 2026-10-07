@@ -111,6 +111,38 @@ class TestExecuteBuys(unittest.TestCase):
         self.assertEqual(n, 1)
 
 
+class TestPerTradeLossCap(unittest.TestCase):
+    """_execute_buys trims a buy so a stop-out loses at most equity * max_trade_risk_pct.
+    Positions are sized by cash, so without this a wider ATR stop means a bigger loss."""
+
+    def _buy(self, atr, risk_pct=0.01, price=10.0):
+        state = {"balance": 10000.0, "equity": 10000.0, "positions": {}, "history": []}
+        rules = {"scarcity_allocation_pct": 0.20, "max_allocation_pct": 0.50, "atr_multiplier": 2.5}
+        top = [{"sym": "AAA", "price": price, "total": 5.0, "industry": "Software", "bottom_desc": ""}]
+        new_tx = []
+        with mock.patch.object(game.CFG, "system_max_trade_risk_pct", risk_pct),              mock.patch.object(game, "calculate_bubble_z_score", return_value=None),              mock.patch.object(game, "backtrack_verify", return_value=(True, "Verified")),              mock.patch.object(game.instruments, "is_scarcity_asset", return_value=False),              mock.patch("risk_utils.calculate_atr", return_value=atr):
+            game._execute_buys(state, top, 1, 0.0, rules, "2026-10-06", "10:00", new_tx,
+                               prices={"AAA": price})
+        return state["positions"].get("AAA")
+
+    def test_wide_stop_is_trimmed_to_one_percent_risk(self):
+        # Stop 10 - 2.5*1.0 = 7.50 -> $2.50 risk/share; 1% of $10k = $100 -> 40 shares.
+        pos = self._buy(atr=1.0)
+        self.assertEqual(pos["qty"], 40)
+        self.assertLessEqual(pos["qty"] * (pos["cost"] - pos["stop_loss"]), 100.0 + 1e-9)
+
+    def test_tight_stop_is_not_trimmed(self):
+        # Stop 10 - 2.5*0.04 = 9.90 -> $0.10/share; the 50% ceiling ($5,000 = 500 sh)
+        # risks $50 < $100, so the loss cap does not bind.
+        self.assertEqual(self._buy(atr=0.04)["qty"], 500)
+
+    def test_cap_level_is_configurable(self):
+        self.assertEqual(self._buy(atr=1.0, risk_pct=0.02)["qty"], 80)
+
+    def test_default_is_one_percent(self):
+        self.assertEqual(game.CFG.system_max_trade_risk_pct, 0.01)
+
+
 class TestWatchdogLogScanning(unittest.TestCase):
     def test_ignore_success_with_0_errors(self):
         mock_log = "Status: [2026-07-09 05:36:24] OHLCV: 1 recovered, 514 already current, 0 errors\n"
@@ -151,6 +183,15 @@ class TestBubbleZScoreCalculation(unittest.TestCase):
 
 
 class TestCoreSatelliteAllocation(unittest.TestCase):
+    def setUp(self):
+        # These tests pin the allocation caps (scarcity / standard bucket, per-position
+        # ceiling). Their fixture stop (ATR 1.0 x 2.5 on a $10 stock = 25% below entry)
+        # would otherwise trip the separate per-trade loss cap and mask the rule under
+        # test; that cap has its own tests (TestPerTradeLossCap).
+        patcher = mock.patch.object(game.CFG, "system_max_trade_risk_pct", 1.0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_scarcity_asset_downsizing_and_caps(self):
         # Scenario: Portfolio equity = $10,000. Scarcity Cap = 20% ($2,000). Standard Cap = 80% ($8,000).
         # Cash = $5,000. Min Cash required = $0.

@@ -12,12 +12,14 @@ try:
     from playwright_stealth import Stealth
 except ImportError:
     Stealth = None
+from aether import paths
 from aether.notify import send_email
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from utils import _to_float
+from bar_provenance import is_weekend
 from aether_logger import get_logger as _get_logger
 import risk_utils
 import instruments
@@ -221,7 +223,7 @@ class LazyCacheFileIndex(dict):
     def __init__(self):
         super().__init__()
         self._scanned_symbols = set()
-        self._symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
+        self._symbol_dir = paths.symbol_dir()
         try:
             if os.path.isdir(self._symbol_dir):
                 for d in os.listdir(self._symbol_dir):
@@ -356,7 +358,7 @@ def _get_http_session() -> requests.Session:
 SRC_XLSX  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state_of_the_day.xlsx")
 XLSX_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "state_of_the_day.xlsx")
 XLSX_BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Backup")
-OHLCV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full")
+OHLCV_DIR = paths.ohlcv_dir()   # $AETHER_CACHE_DIR/Symbol_full, else <checkout>/Data/Symbol_full
 
 # ── Chaikin API ───────────────────────────────────────────────────────────────
 # OMNI (/api/*) app key. It is sent as `x-api-key` (alongside `x-app-id: omni`) on
@@ -1080,7 +1082,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
     data_jsn = {}
 
     if date and prefer_cache:
-        _base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
+        _base = paths.symbol_dir()
         file = os.path.join(_base, symbol, f"{symbol}_{date}.json")
         if not os.path.exists(file):
             file = os.path.join(_base, f"{symbol}_{date}.json")  # flat fallback
@@ -1114,7 +1116,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
             # Overwrite the Chaikin price fields with the official, settled close from Symbol_full.
             # This guarantees that Chaikin (pg), RapidAPI (Symbol_full), and E*TRADE (live) are 100% synchronized!
             try:
-                ohlcv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol_full", f"{symbol}_daily.json")
+                ohlcv_path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
                 if os.path.exists(ohlcv_path):
                     with open(ohlcv_path) as _f:
                         ohlcv_data = json.load(_f)
@@ -1137,7 +1139,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
             except Exception as e:
                 _pg_log.warning(f"Failed to reconcile price: {e}")
 
-            symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol", symbol)
+            symbol_dir = os.path.join(paths.symbol_dir(), symbol)
             os.makedirs(symbol_dir, exist_ok=True)
             cache_date = date if date else datetime.date.today()
             # Safeguard: only persist a genuine "ok" payload. A 200 that the adapter
@@ -1380,6 +1382,8 @@ def _append_ohlcv_entry(symbol: str, date_str: str, power_g: "PowerGauge", ohlcv
 
     if date_str in ts:
         return  # already have an entry for this date
+    if is_weekend(date_str):
+        return  # not a session: the API never returns it, so it could never be repaired
 
     path = os.path.join(OHLCV_DIR, f"{symbol}_daily.json")
     if not os.path.exists(path):

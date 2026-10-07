@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import powergauge
+from aether import paths
 from aether.logger import get_logger
 
 _log = get_logger("run_history")
@@ -73,7 +74,7 @@ def load_symbols() -> list[str]:
 
 
 def days_missing(symbols: list[str], day: datetime.date) -> list[str]:
-    symbol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "Symbol")
+    symbol_dir = paths.symbol_dir()
     if day < datetime.date.today():
         return [s for s in symbols
                 if not (os.path.exists(os.path.join(symbol_dir, s, f"{s}_{day}.json")) or
