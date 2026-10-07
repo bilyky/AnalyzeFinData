@@ -276,7 +276,7 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
         # flower with a covered call costs 5-10x the premium edge of a mid-conviction name
         # (scripts/backtesting/covered_call_winner_study.py: the >50%-momentum cohort loses
         # -0.488%/write vs -0.046% in the 0-25% middle). Above the CFG L60 ceiling the position
-        # is left uncapped — the code form of CLAUDE.md's "a win that dumps a flower is a mistake".
+        # is left uncapped — the code form of the roadmap's "a win that dumps a flower is a mistake" (Jul-25 session, plans/roadmap.md).
         l60 = l60_map.get(sym, 0.0)
         is_high_conviction = l60 >= CFG.system_covered_call_l60_ceiling
 

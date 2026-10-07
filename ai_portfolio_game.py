@@ -1686,7 +1686,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 # Pass the conviction bar into the pure planner: a high-conviction
                 # flower (L60 >= the covered-call ceiling) is never trimmed, mirroring
                 # the covered-call flower exclusion so the two winner-side mechanics
-                # share ONE conviction bar (CLAUDE.md dont-sell-winners). The planner
+                # share ONE conviction bar (plans/roadmap.md, Jul-25 dont-sell-winners). The planner
                 # returns frac 0.0 + a "held: high-conviction flower" reason when it
                 # suppresses a would-be bank; surface that so the hold is visible.
                 so_frac, so_reason = risk_utils.scale_out_plan(

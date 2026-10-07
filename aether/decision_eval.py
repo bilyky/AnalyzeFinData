@@ -7,7 +7,7 @@ N-day-forward close so provider choice is backed by data, not a single anecdote.
 
 Scores every close, gains included: a SELL of a position in profit that then rose is
 a winner-selling miss (the "cutting a flower" error) — outcome is not the same as
-decision quality (CLAUDE.md, Jul-25 principle 6).
+decision quality (plans/roadmap.md, Jul-25 principle 6).
 
 score_log takes an injectable forward-price function so it is unit-testable without
 real data.

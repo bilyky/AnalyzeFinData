@@ -363,7 +363,7 @@ def check_rd_roadmap_sync() -> bool:
         road_items = set(re.findall(r"^\s*(\d+)\.\s+\*\*", road_text, re.MULTILINE))
 
         # The Claude auto-memory MEMORY.md is an index of memory links, not the numbered
-        # R&D ledger (that lives in CLAUDE.md here); it structurally has 0 numbered items.
+        # R&D ledger (that lives in plans/roadmap.md); it structurally has 0 numbered items.
         # Also, if MEMORY.md is a "Session State Snapshot" or contains "Active Portfolio Standing",
         # it is a portfolio state tracker and not an R&D ledger, so we should skip this sync check.
         # Only enforce the sync when the memory file actually IS a numbered R&D ledger,
