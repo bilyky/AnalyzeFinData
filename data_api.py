@@ -383,16 +383,19 @@ def read_reserves() -> dict:
     return _cached("reserves", 60.0, _load)
 
 
-def read_ai_buildout() -> dict:
-    """Latest AI-buildout supply-chain watch (scripts/monitoring/ai_buildout_watch.py).
-    Cached 60s; empty rows when the scan has not run yet."""
+def read_ai_buildout(theme: str = _ai_buildout.DEFAULT_THEME) -> dict:
+    """Latest theme watch (scripts/monitoring/ai_buildout_watch.py --theme ...).
+    Cached 60s per theme; empty rows when the scan has not run yet."""
+    if theme not in _ai_buildout.THEMES:
+        return {"as_of": None, "rows": [], "error": f"unknown theme {theme!r}"}
+
     def _load():
         try:
-            data = _ai_buildout.load_latest(_DATA_DIR / "ai_buildout_watch.json")
-            return data or {"as_of": None, "rows": []}
+            data = _ai_buildout.load_latest(theme=theme)
+            return data or {"as_of": None, "theme": theme, "rows": []}
         except Exception as e:
-            return {"as_of": None, "rows": [], "error": str(e)}
-    return _cached("ai_buildout", 60.0, _load)
+            return {"as_of": None, "theme": theme, "rows": [], "error": str(e)}
+    return _cached(f"theme_watch:{theme}", 60.0, _load)
 
 
 # ── Research sheet (full screener output) ──────────────────────────────────────

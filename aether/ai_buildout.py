@@ -16,15 +16,22 @@ early signals that a supplier's results are growing:
 The ranking is NOT validated and adds no buy weight. It is a watchlist only until a
 backtest shows the signals have a forward-return spread.
 
-Theme membership: a curated seed list first, then the company's SEC SIC code.
+Themes (see THEMES): each has a curated seed list and, optionally, SEC SIC codes that
+pull in more universe symbols. The signals are the same for every theme.
+  - ai_buildout:  power / cooling / electrical / construction (seed + SIC)
+  - robot_vision: what robots need to see: sensors, vision chips, perception
+                  software (seed only; SIC 3674/7372 would pull in every chip and
+                  software company)
 """
 
 import datetime
 import json
 import os
 import time
+import warnings
 from pathlib import Path
 
+import openpyxl
 import requests
 import urllib3
 
@@ -33,8 +40,6 @@ from aether.config import CFG
 from aether.logger import get_logger as _get_logger
 
 _log = _get_logger("ai_buildout")
-
-BUCKETS = ("power", "cooling", "electrical", "construction")
 
 # Curated names with known AI-data-center exposure. Takes precedence over SIC codes.
 SEED_THEME = {
@@ -68,6 +73,33 @@ SIC_BUCKET = {
     3241: "construction", 8711: "construction",
 }
 
+# Robot vision: eyes (lidar, radar, machine vision, thermal, image sensors), chips that
+# process what the eyes capture, and perception / autonomy software. Robot makers
+# themselves are left out. Foreign filers without quarterly XBRL (Innoviz, Hesai,
+# Pony, WeRide) are left out because the SEC signals would all be empty.
+ROBOT_VISION_SEED = {
+    "OUST": "eyes", "AEVA": "eyes", "MVIS": "eyes", "ARBE": "eyes",
+    "CGNX": "eyes", "ZBRA": "eyes", "TDY": "eyes", "ON": "eyes",
+    "AMBA": "chips", "LSCC": "chips", "INDI": "chips", "CEVA": "chips",
+    "MBLY": "software", "AUR": "software",
+}
+
+THEMES = {
+    "ai_buildout": {
+        "title": "AI-buildout supply chain",
+        "buckets": ("power", "cooling", "electrical", "construction"),
+        "seed": SEED_THEME,
+        "sic": SIC_BUCKET,
+    },
+    "robot_vision": {
+        "title": "Robot vision: eyes, chips, software",
+        "buckets": ("eyes", "chips", "software"),
+        "seed": ROBOT_VISION_SEED,
+        "sic": {},
+    },
+}
+DEFAULT_THEME = "ai_buildout"
+
 _REVENUE_TAGS = (
     "RevenueFromContractWithCustomerExcludingAssessedTax",
     "Revenues",
@@ -78,6 +110,9 @@ _RPO_TAG = "RevenueRemainingPerformanceObligation"
 # RPO swings beyond this are usually a reporting change or an acquisition, not
 # organic backlog growth (e.g. AES $7M -> $435M, CEG $1.0B -> $12.0B). Shown, not scored.
 RPO_SUSPECT_PCT = 300
+# Revenue / RPO periods older than this are shown but not scored. Domestic filers
+# report within ~45 days of quarter end; foreign filers (20-F) can be 9+ months old.
+STALE_DAYS = 200
 
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
@@ -88,13 +123,20 @@ _RETRIES = 2
 _RETRY_BACKOFF_S = 5
 
 
-def bucket_for(symbol, sic=None):
+def _theme(theme):
+    if theme not in THEMES:
+        raise ValueError(f"Unknown theme {theme!r}; known: {', '.join(THEMES)}")
+    return THEMES[theme]
+
+
+def bucket_for(symbol, sic=None, theme=DEFAULT_THEME):
     """Theme bucket for a symbol, or None. Seed list wins over the SIC code."""
+    t = _theme(theme)
     s = (symbol or "").upper().strip()
-    if s in SEED_THEME:
-        return SEED_THEME[s]
+    if s in t["seed"]:
+        return t["seed"][s]
     try:
-        return SIC_BUCKET.get(int(sic)) if sic not in (None, "") else None
+        return t["sic"].get(int(sic)) if sic not in (None, "") else None
     except (TypeError, ValueError):
         return None
 
@@ -121,6 +163,12 @@ def _user_agent() -> str:
 
 _last_request = [0.0]
 _tls_fallback = [False]
+# SEC's Akamai front end answers 403 when it rate-blocks the caller (or the shared
+# corporate egress). After this many 403s in a row, stop requesting for the rest of
+# the run and use cached copies only, instead of sending hundreds more blocked requests.
+_BLOCK_AFTER_403S = 3
+_consecutive_403 = [0]
+_blocked = [False]
 
 
 def _http_get(url):
@@ -135,19 +183,25 @@ def _http_get(url):
             _log.warning(f"EDGAR TLS verification failed ({e.__class__.__name__}); "
                          "using unverified requests for this run (public data).")
             _tls_fallback[0] = True
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    return requests.get(url, headers=headers, timeout=30, verify=False)
+    with warnings.catch_warnings():
+        # Silence the insecure-request warning for this call only, not process-wide.
+        warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
+        return requests.get(url, headers=headers, timeout=30, verify=False)
 
 
-def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
-    """GET a SEC JSON document through a file cache. Returns None on failure."""
+def _read_cache(cache_name: str):
+    """Cached SEC JSON regardless of age, or None. No network."""
     path = _cache_dir() / cache_name
-    if path.exists() and (time.time() - path.stat().st_mtime) < ttl_hours * 3600:
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception as e:
-            _log.warning(f"Bad EDGAR cache file {path.name}, refetching: {e}")
-    data = None
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    except Exception as e:
+        _log.warning(f"Bad EDGAR cache file {path.name}: {e}")
+        return None
+
+
+def _fetch(url: str):
+    """One SEC GET with retries on 5xx / timeouts. Returns parsed JSON or None.
+    Counts consecutive 403s and trips _blocked so the run stops requesting."""
     for attempt in range(_RETRIES + 1):
         wait = _REQUEST_GAP_S - (time.time() - _last_request[0])
         if wait > 0:
@@ -155,6 +209,18 @@ def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
         try:
             r = _http_get(url)
             _last_request[0] = time.time()
+            if r.status_code == 403:
+                _consecutive_403[0] += 1
+                if _consecutive_403[0] >= _BLOCK_AFTER_403S and not _blocked[0]:
+                    _blocked[0] = True
+                    _log.error(f"EDGAR returned 403 {_consecutive_403[0]} times in a row "
+                               "(rate block or missing contact in User-Agent; set "
+                               "AETHER_SEC_CONTACT). No more SEC requests this run; "
+                               "using cached data only.")
+                else:
+                    _log.warning(f"EDGAR 403 for {url}")
+                return None
+            _consecutive_403[0] = 0
             if r.status_code == 404:
                 return None
             if r.status_code >= 500 and attempt < _RETRIES:
@@ -162,8 +228,7 @@ def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
                 time.sleep(_RETRY_BACKOFF_S * (attempt + 1))
                 continue
             r.raise_for_status()
-            data = r.json()
-            break
+            return r.json()
         except requests.exceptions.Timeout as e:
             if attempt < _RETRIES:
                 time.sleep(_RETRY_BACKOFF_S * (attempt + 1))
@@ -173,6 +238,24 @@ def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
         except Exception as e:
             _log.warning(f"EDGAR fetch failed for {url}: {e}")
             return None
+    return None
+
+
+def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
+    """GET a SEC JSON document through a file cache. A fresh cache is used as is.
+    Otherwise fetch; if the fetch fails (or SEC has blocked this run) fall back to
+    the stale cached copy rather than losing the symbol. None if neither exists."""
+    path = _cache_dir() / cache_name
+    if path.exists() and (time.time() - path.stat().st_mtime) < ttl_hours * 3600:
+        cached = _read_cache(cache_name)
+        if cached is not None:
+            return cached
+    data = None if _blocked[0] else _fetch(url)
+    if data is None:
+        stale = _read_cache(cache_name)
+        if stale is not None:
+            _log.debug(f"Using stale EDGAR cache for {cache_name}")
+        return stale
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data), encoding="utf-8")
     return data
@@ -183,12 +266,12 @@ def ticker_cik_map() -> dict:
     return {v["ticker"].upper(): int(v["cik_str"]) for v in data.values()}
 
 
-def submissions(cik: int):
-    return _get_json(_SUBMISSIONS_URL.format(cik=cik), f"sub_{cik}.json")
+def submissions(cik: int, ttl_hours: float = _CACHE_TTL_HOURS):
+    return _get_json(_SUBMISSIONS_URL.format(cik=cik), f"sub_{cik}.json", ttl_hours)
 
 
-def company_facts(cik: int):
-    return _get_json(_FACTS_URL.format(cik=cik), f"facts_{cik}.json")
+def company_facts(cik: int, ttl_hours: float = _CACHE_TTL_HOURS):
+    return _get_json(_FACTS_URL.format(cik=cik), f"facts_{cik}.json", ttl_hours)
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +280,13 @@ def company_facts(cik: int):
 
 def _d(s):
     return datetime.date.fromisoformat(s)
+
+
+def _known_by(e, as_of):
+    """True if the fact's period had ended AND it had been filed by as_of. Filtering
+    on the filing date keeps a backtest point-in-time (a quarter is filed weeks after
+    it ends, and restatements are filed later still)."""
+    return not as_of or (e["end"] <= as_of and e.get("filed", "") <= as_of)
 
 
 def _latest_per_end(entries):
@@ -233,7 +323,7 @@ def revenue_yoy(facts, as_of=None):
     for tag in _REVENUE_TAGS:
         quarters = []
         for e in gaap.get(tag, {}).get("units", {}).get("USD", []):
-            if "start" not in e or (as_of and e["end"] > as_of):
+            if "start" not in e or not _known_by(e, as_of):
                 continue
             if 80 <= (_d(e["end"]) - _d(e["start"])).days <= 100:
                 quarters.append(e)
@@ -251,7 +341,7 @@ def rpo_yoy(facts, as_of=None):
     """(latest end, YoY % change) of remaining performance obligation, or (None, None)."""
     gaap = (facts or {}).get("facts", {}).get("us-gaap", {})
     points = [e for e in gaap.get(_RPO_TAG, {}).get("units", {}).get("USD", [])
-              if e.get("val") and not (as_of and e["end"] > as_of)]
+              if e.get("val") and _known_by(e, as_of)]
     if not points:
         return (None, None)
     by_end = _latest_per_end(points)
@@ -312,8 +402,11 @@ def chaikin_money_flow(bars, n=20):
 def watch_score(row):
     """Simple points ranking of the leading signals. Unvalidated; for sorting only."""
     pts = 0
+    stale = row.get("stale") or ()
     for key in ("revenue_yoy", "rpo_yoy"):
         v = row.get(key)
+        if key in stale:
+            continue
         if key == "rpo_yoy" and v is not None and abs(v) > RPO_SUSPECT_PCT:
             continue
         if v is not None:
@@ -329,12 +422,14 @@ def watch_score(row):
     return pts
 
 
-def build_row(symbol, bucket, sub, facts, ohlcv_ts, spy_bars, as_of):
-    """All signals for one symbol as a flat dict (missing data -> None)."""
+def build_row(symbol, bucket, sub, facts, ohlcv_ts, spy_bars, as_of, bars=None):
+    """All signals for one symbol as a flat dict (missing data -> None). `bars` may
+    be passed pre-sliced (real bars up to as_of) to skip re-parsing ohlcv_ts."""
     rev_end, rev = revenue_yoy(facts, as_of)
     rpo_end, rpo = rpo_yoy(facts, as_of)
     n_agr, agr_dates = material_agreements(sub, as_of)
-    bars = _real_bars(ohlcv_ts, as_of) if ohlcv_ts else []
+    if bars is None:
+        bars = _real_bars(ohlcv_ts, as_of) if ohlcv_ts else []
     r60, spy60 = return_pct(bars, 60), return_pct(spy_bars, 60)
     row = {
         "symbol": symbol,
@@ -348,6 +443,9 @@ def build_row(symbol, bucket, sub, facts, ohlcv_ts, spy_bars, as_of):
         "rs_60d": round(r60 - spy60, 1) if r60 is not None and spy60 is not None else None,
         "cmf_20": chaikin_money_flow(bars),
     }
+    row["stale"] = [key for key, end in (("revenue_yoy", rev_end), ("rpo_yoy", rpo_end))
+                    if end and (_d(as_of) - _d(end)).days > STALE_DAYS]
+    row["rpo_suspect"] = rpo is not None and abs(rpo) > RPO_SUSPECT_PCT
     row["watch_score"] = watch_score(row)
     return row
 
@@ -356,19 +454,30 @@ def build_row(symbol, bucket, sub, facts, ohlcv_ts, spy_bars, as_of):
 # Universe scan
 # ---------------------------------------------------------------------------
 
+RESEARCH_SHEET = "Research"
+RESEARCH_SYMBOL_COL = 3   # column D, the same column the game reads
+
+
 def load_universe(path=None):
-    """Symbols from Data/symbols_to_check.txt (tab-separated, symbol is the last column)."""
-    path = Path(path or Path(paths.data_dir()) / "symbols_to_check.txt")
-    syms = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        parts = line.strip().split("\t")
-        if parts and parts[-1].strip():
-            syms.append(parts[-1].strip().upper())
-    return syms
+    """Symbols on the Research sheet of Data/state_of_the_day.xlsx: the same list the
+    game trades from (ai_portfolio_game._active_setup_symbols reads column D of it).
+    Order kept, duplicates and blanks dropped."""
+    path = Path(path or Path(paths.data_dir()) / "state_of_the_day.xlsx")
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        ws = wb[RESEARCH_SHEET]
+        syms = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            v = row[RESEARCH_SYMBOL_COL] if len(row) > RESEARCH_SYMBOL_COL else None
+            if v is not None and str(v).strip():
+                syms.append(str(v).strip().upper())
+    finally:
+        wb.close()
+    return list(dict.fromkeys(syms))
 
 
 def _load_ohlcv(symbol):
-    p = Path(paths.data_dir()) / "Symbol_full" / f"{symbol}_daily.json"
+    p = Path(paths.ohlcv_dir()) / f"{symbol}_daily.json"
     if not p.exists():
         return None
     try:
@@ -378,15 +487,18 @@ def _load_ohlcv(symbol):
         return None
 
 
-def scan(as_of, universe=None, failed=None):
-    """Classify universe + seed names into buckets and compute signals.
-    Returns a list of rows sorted by watch_score (high first). Symbols whose SEC
-    submissions could not be fetched are appended to `failed` (if given) so the
-    caller can report them instead of dropping them silently."""
+def scan(as_of, universe=None, failed=None, theme=DEFAULT_THEME):
+    """Classify universe + seed names into the theme's buckets and compute signals.
+    A seed-only theme (no SIC codes) scans just its seed list. Returns a list of
+    rows sorted by watch_score (high first). Symbols whose SEC submissions could
+    not be fetched are appended to `failed` (if given) so the caller can report
+    them instead of dropping them silently."""
+    t = _theme(theme)
     cik_map = ticker_cik_map()
     if not cik_map:
         raise RuntimeError("SEC ticker map unavailable; cannot scan.")
-    symbols = list(dict.fromkeys((universe or load_universe()) + list(SEED_THEME)))
+    base = (universe or load_universe()) if t["sic"] else []
+    symbols = list(dict.fromkeys(base + list(t["seed"])))
     spy_bars = _real_bars(_load_ohlcv("SPY") or {}, as_of)
 
     rows = []
@@ -397,7 +509,7 @@ def scan(as_of, universe=None, failed=None):
         sub = submissions(cik)
         if sub is None and failed is not None:
             failed.append(sym)
-        bucket = bucket_for(sym, (sub or {}).get("sic"))
+        bucket = bucket_for(sym, (sub or {}).get("sic"), theme)
         if not bucket:
             continue
         rows.append(build_row(sym, bucket, sub, company_facts(cik),
@@ -406,17 +518,24 @@ def scan(as_of, universe=None, failed=None):
     return rows
 
 
-def save(rows, as_of, out_path=None, failed=None):
-    out_path = Path(out_path or Path(paths.data_dir()) / "ai_buildout_watch.json")
-    out_path.write_text(json.dumps({"as_of": as_of, "rows": rows,
+def output_path(theme=DEFAULT_THEME, suffix=".json") -> Path:
+    """Data/<theme>_watch.json (or .html)."""
+    _theme(theme)
+    return Path(paths.data_dir()) / f"{theme}_watch{suffix}"
+
+
+def save(rows, as_of, out_path=None, failed=None, theme=DEFAULT_THEME):
+    out_path = Path(out_path or output_path(theme))
+    out_path.write_text(json.dumps({"as_of": as_of, "theme": theme,
+                                    "title": THEMES[theme]["title"], "rows": rows,
                                     "fetch_failed": sorted(failed or [])}, indent=2),
                         encoding="utf-8")
     return out_path
 
 
-def load_latest(path=None):
+def load_latest(path=None, theme=DEFAULT_THEME):
     """Last saved scan, or None. Used by the web endpoint."""
-    path = Path(path or Path(paths.data_dir()) / "ai_buildout_watch.json")
+    path = Path(path or output_path(theme))
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
