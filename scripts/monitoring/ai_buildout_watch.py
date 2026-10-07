@@ -43,7 +43,7 @@ _COLS = [
     ("Qtr end", lambda r: r["revenue_q_end"] or "-"),
     ("Rev YoY%", lambda r: _fmt(r["revenue_yoy"]) + (" old" if "revenue_yoy" in r.get("stale", []) else "")),
     ("RPO YoY%", lambda r: _fmt(r["rpo_yoy"]) + (
-        "?" if r["rpo_yoy"] is not None and abs(r["rpo_yoy"]) > ai_buildout.RPO_SUSPECT_PCT else "") + (
+        "?" if r.get("rpo_suspect") else "") + (
         " old" if "rpo_yoy" in r.get("stale", []) else "")),
     ("8-K 1.01 (90d)", lambda r: r["agreements_90d"]),
     ("Last agreement", lambda r: (r["agreement_dates"] or ["-"])[0]),

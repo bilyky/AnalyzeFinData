@@ -28,6 +28,7 @@ import datetime
 import json
 import os
 import time
+import warnings
 from pathlib import Path
 
 import openpyxl
@@ -182,8 +183,10 @@ def _http_get(url):
             _log.warning(f"EDGAR TLS verification failed ({e.__class__.__name__}); "
                          "using unverified requests for this run (public data).")
             _tls_fallback[0] = True
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    return requests.get(url, headers=headers, timeout=30, verify=False)
+    with warnings.catch_warnings():
+        # Silence the insecure-request warning for this call only, not process-wide.
+        warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
+        return requests.get(url, headers=headers, timeout=30, verify=False)
 
 
 def _read_cache(cache_name: str):
@@ -442,6 +445,7 @@ def build_row(symbol, bucket, sub, facts, ohlcv_ts, spy_bars, as_of, bars=None):
     }
     row["stale"] = [key for key, end in (("revenue_yoy", rev_end), ("rpo_yoy", rpo_end))
                     if end and (_d(as_of) - _d(end)).days > STALE_DAYS]
+    row["rpo_suspect"] = rpo is not None and abs(rpo) > RPO_SUSPECT_PCT
     row["watch_score"] = watch_score(row)
     return row
 
@@ -473,7 +477,7 @@ def load_universe(path=None):
 
 
 def _load_ohlcv(symbol):
-    p = Path(paths.data_dir()) / "Symbol_full" / f"{symbol}_daily.json"
+    p = Path(paths.ohlcv_dir()) / f"{symbol}_daily.json"
     if not p.exists():
         return None
     try:

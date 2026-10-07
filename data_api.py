@@ -391,7 +391,7 @@ def read_ai_buildout(theme: str = _ai_buildout.DEFAULT_THEME) -> dict:
 
     def _load():
         try:
-            data = _ai_buildout.load_latest(_DATA_DIR / f"{theme}_watch.json")
+            data = _ai_buildout.load_latest(theme=theme)
             return data or {"as_of": None, "theme": theme, "rows": []}
         except Exception as e:
             return {"as_of": None, "theme": theme, "rows": [], "error": str(e)}

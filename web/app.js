@@ -784,7 +784,7 @@ async function loadAiBuildout() {
                 <td class="font-bold ${cls(r.watch_score)}">${num(r.watch_score, 0)}</td>
                 <td class="text-xs">${esc(r.revenue_q_end || "—")}</td>
                 <td class="${cls(r.revenue_yoy)}">${num(r.revenue_yoy)}${(r.stale || []).includes("revenue_yoy") ? " <span class=\"mut\">old</span>" : ""}</td>
-                <td class="${cls(r.rpo_yoy)}">${num(r.rpo_yoy)}${r.rpo_yoy !== null && Math.abs(r.rpo_yoy) > 300 ? "?" : ""}${(r.stale || []).includes("rpo_yoy") ? " <span class=\"mut\">old</span>" : ""}</td>
+                <td class="${cls(r.rpo_yoy)}">${num(r.rpo_yoy)}${r.rpo_suspect ? "?" : ""}${(r.stale || []).includes("rpo_yoy") ? " <span class=\"mut\">old</span>" : ""}</td>
                 <td>${esc(r.agreements_90d)}</td>
                 <td class="text-xs">${esc((r.agreement_dates || [])[0] || "—")}</td>
                 <td class="${cls(r.rs_60d)}">${num(r.rs_60d)}</td>

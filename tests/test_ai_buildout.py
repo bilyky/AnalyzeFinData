@@ -10,12 +10,15 @@ import os
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import openpyxl
+import requests
+import urllib3
 
 from aether import ai_buildout as ab
 
@@ -192,6 +195,23 @@ class TestWatchScore(unittest.TestCase):
         self.assertEqual(ab.watch_score(strong), 9)
         self.assertEqual(ab.watch_score(weak), -4)
 
+    def test_build_row_flags_suspect_rpo(self):
+        facts = _facts({"RevenueRemainingPerformanceObligation": [
+            {"end": "2025-06-30", "val": 7e6, "filed": "2025-08-01"},
+            {"end": "2026-06-30", "val": 258e6, "filed": "2026-08-01"},
+        ]})
+        row = ab.build_row("AES", "power", {}, facts, None, [], "2026-10-02")
+        self.assertTrue(row["rpo_suspect"])
+        self.assertFalse(ab.build_row("X", "power", {}, {}, None, [], "2026-10-02")["rpo_suspect"])
+
+    def test_ohlcv_reads_cache_dir_not_data_dir(self):
+        with tempfile.TemporaryDirectory() as cache, tempfile.TemporaryDirectory() as data:
+            (Path(cache) / "Symbol_full").mkdir()
+            (Path(cache) / "Symbol_full" / "VRT_daily.json").write_text(
+                json.dumps({"Time Series (Daily)": {"2026-01-02": _bar(10)}}), encoding="utf-8")
+            with mock.patch.dict(os.environ, {"AETHER_CACHE_DIR": cache, "AETHER_DATA_DIR": data}):
+                self.assertIn("2026-01-02", ab._load_ohlcv("VRT"))
+
     def test_suspect_rpo_jump_not_scored(self):
         base = {"revenue_yoy": None, "agreements_90d": 0, "rs_60d": None, "cmf_20": None}
         self.assertEqual(ab.watch_score({**base, "rpo_yoy": 3585.7}), 0)
@@ -287,6 +307,28 @@ class TestEdgarBlock(unittest.TestCase):
             http.assert_not_called()
 
 
+class TestTlsFallback(unittest.TestCase):
+    def tearDown(self):
+        ab._tls_fallback[0] = False
+
+    def test_insecure_warning_silenced_only_for_the_call(self):
+        def fake_get(url, headers=None, timeout=None, verify=True):
+            if verify:
+                raise requests.exceptions.SSLError("intercepted")
+            warnings.warn("unverified", urllib3.exceptions.InsecureRequestWarning, stacklevel=2)
+            return "resp"
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            before = list(warnings.filters)
+            with mock.patch.object(ab.requests, "get", side_effect=fake_get):
+                self.assertEqual(ab._http_get("https://x"), "resp")
+            # filters unchanged right after the call: nothing added process-wide
+            self.assertEqual(warnings.filters, before)
+            self.assertFalse([w for w in caught
+                              if issubclass(w.category, urllib3.exceptions.InsecureRequestWarning)])
+
+
 class TestUniverse(unittest.TestCase):
     def test_reads_research_sheet_column_d(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"AETHER_DATA_DIR": d}):
@@ -311,7 +353,7 @@ class TestScan(unittest.TestCase):
             facts = {1: _facts({"Revenues": [_q("2025-04-01", "2025-06-30", 100),
                                              _q("2026-04-01", "2026-06-30", 140)]}),
                      3: {}}
-            with mock.patch.dict(os.environ, {"AETHER_DATA_DIR": d}), \
+            with mock.patch.dict(os.environ, {"AETHER_DATA_DIR": d, "AETHER_CACHE_DIR": d}), \
                  mock.patch.object(ab, "ticker_cik_map", return_value=cik), \
                  mock.patch.object(ab, "submissions", side_effect=subs.get), \
                  mock.patch.object(ab, "company_facts", side_effect=facts.get):
