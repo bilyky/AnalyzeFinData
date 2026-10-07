@@ -28,8 +28,10 @@ import datetime
 import json
 import os
 import time
+import warnings
 from pathlib import Path
 
+import openpyxl
 import requests
 import urllib3
 
@@ -161,6 +163,12 @@ def _user_agent() -> str:
 
 _last_request = [0.0]
 _tls_fallback = [False]
+# SEC's Akamai front end answers 403 when it rate-blocks the caller (or the shared
+# corporate egress). After this many 403s in a row, stop requesting for the rest of
+# the run and use cached copies only, instead of sending hundreds more blocked requests.
+_BLOCK_AFTER_403S = 3
+_consecutive_403 = [0]
+_blocked = [False]
 
 
 def _http_get(url):
@@ -175,19 +183,25 @@ def _http_get(url):
             _log.warning(f"EDGAR TLS verification failed ({e.__class__.__name__}); "
                          "using unverified requests for this run (public data).")
             _tls_fallback[0] = True
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    return requests.get(url, headers=headers, timeout=30, verify=False)
+    with warnings.catch_warnings():
+        # Silence the insecure-request warning for this call only, not process-wide.
+        warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
+        return requests.get(url, headers=headers, timeout=30, verify=False)
 
 
-def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
-    """GET a SEC JSON document through a file cache. Returns None on failure."""
+def _read_cache(cache_name: str):
+    """Cached SEC JSON regardless of age, or None. No network."""
     path = _cache_dir() / cache_name
-    if path.exists() and (time.time() - path.stat().st_mtime) < ttl_hours * 3600:
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception as e:
-            _log.warning(f"Bad EDGAR cache file {path.name}, refetching: {e}")
-    data = None
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    except Exception as e:
+        _log.warning(f"Bad EDGAR cache file {path.name}: {e}")
+        return None
+
+
+def _fetch(url: str):
+    """One SEC GET with retries on 5xx / timeouts. Returns parsed JSON or None.
+    Counts consecutive 403s and trips _blocked so the run stops requesting."""
     for attempt in range(_RETRIES + 1):
         wait = _REQUEST_GAP_S - (time.time() - _last_request[0])
         if wait > 0:
@@ -195,6 +209,18 @@ def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
         try:
             r = _http_get(url)
             _last_request[0] = time.time()
+            if r.status_code == 403:
+                _consecutive_403[0] += 1
+                if _consecutive_403[0] >= _BLOCK_AFTER_403S and not _blocked[0]:
+                    _blocked[0] = True
+                    _log.error(f"EDGAR returned 403 {_consecutive_403[0]} times in a row "
+                               "(rate block or missing contact in User-Agent; set "
+                               "AETHER_SEC_CONTACT). No more SEC requests this run; "
+                               "using cached data only.")
+                else:
+                    _log.warning(f"EDGAR 403 for {url}")
+                return None
+            _consecutive_403[0] = 0
             if r.status_code == 404:
                 return None
             if r.status_code >= 500 and attempt < _RETRIES:
@@ -202,8 +228,7 @@ def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
                 time.sleep(_RETRY_BACKOFF_S * (attempt + 1))
                 continue
             r.raise_for_status()
-            data = r.json()
-            break
+            return r.json()
         except requests.exceptions.Timeout as e:
             if attempt < _RETRIES:
                 time.sleep(_RETRY_BACKOFF_S * (attempt + 1))
@@ -213,6 +238,24 @@ def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
         except Exception as e:
             _log.warning(f"EDGAR fetch failed for {url}: {e}")
             return None
+    return None
+
+
+def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
+    """GET a SEC JSON document through a file cache. A fresh cache is used as is.
+    Otherwise fetch; if the fetch fails (or SEC has blocked this run) fall back to
+    the stale cached copy rather than losing the symbol. None if neither exists."""
+    path = _cache_dir() / cache_name
+    if path.exists() and (time.time() - path.stat().st_mtime) < ttl_hours * 3600:
+        cached = _read_cache(cache_name)
+        if cached is not None:
+            return cached
+    data = None if _blocked[0] else _fetch(url)
+    if data is None:
+        stale = _read_cache(cache_name)
+        if stale is not None:
+            _log.debug(f"Using stale EDGAR cache for {cache_name}")
+        return stale
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data), encoding="utf-8")
     return data
@@ -223,12 +266,12 @@ def ticker_cik_map() -> dict:
     return {v["ticker"].upper(): int(v["cik_str"]) for v in data.values()}
 
 
-def submissions(cik: int):
-    return _get_json(_SUBMISSIONS_URL.format(cik=cik), f"sub_{cik}.json")
+def submissions(cik: int, ttl_hours: float = _CACHE_TTL_HOURS):
+    return _get_json(_SUBMISSIONS_URL.format(cik=cik), f"sub_{cik}.json", ttl_hours)
 
 
-def company_facts(cik: int):
-    return _get_json(_FACTS_URL.format(cik=cik), f"facts_{cik}.json")
+def company_facts(cik: int, ttl_hours: float = _CACHE_TTL_HOURS):
+    return _get_json(_FACTS_URL.format(cik=cik), f"facts_{cik}.json", ttl_hours)
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +280,13 @@ def company_facts(cik: int):
 
 def _d(s):
     return datetime.date.fromisoformat(s)
+
+
+def _known_by(e, as_of):
+    """True if the fact's period had ended AND it had been filed by as_of. Filtering
+    on the filing date keeps a backtest point-in-time (a quarter is filed weeks after
+    it ends, and restatements are filed later still)."""
+    return not as_of or (e["end"] <= as_of and e.get("filed", "") <= as_of)
 
 
 def _latest_per_end(entries):
@@ -273,7 +323,7 @@ def revenue_yoy(facts, as_of=None):
     for tag in _REVENUE_TAGS:
         quarters = []
         for e in gaap.get(tag, {}).get("units", {}).get("USD", []):
-            if "start" not in e or (as_of and e["end"] > as_of):
+            if "start" not in e or not _known_by(e, as_of):
                 continue
             if 80 <= (_d(e["end"]) - _d(e["start"])).days <= 100:
                 quarters.append(e)
@@ -291,7 +341,7 @@ def rpo_yoy(facts, as_of=None):
     """(latest end, YoY % change) of remaining performance obligation, or (None, None)."""
     gaap = (facts or {}).get("facts", {}).get("us-gaap", {})
     points = [e for e in gaap.get(_RPO_TAG, {}).get("units", {}).get("USD", [])
-              if e.get("val") and not (as_of and e["end"] > as_of)]
+              if e.get("val") and _known_by(e, as_of)]
     if not points:
         return (None, None)
     by_end = _latest_per_end(points)
@@ -372,12 +422,14 @@ def watch_score(row):
     return pts
 
 
-def build_row(symbol, bucket, sub, facts, ohlcv_ts, spy_bars, as_of):
-    """All signals for one symbol as a flat dict (missing data -> None)."""
+def build_row(symbol, bucket, sub, facts, ohlcv_ts, spy_bars, as_of, bars=None):
+    """All signals for one symbol as a flat dict (missing data -> None). `bars` may
+    be passed pre-sliced (real bars up to as_of) to skip re-parsing ohlcv_ts."""
     rev_end, rev = revenue_yoy(facts, as_of)
     rpo_end, rpo = rpo_yoy(facts, as_of)
     n_agr, agr_dates = material_agreements(sub, as_of)
-    bars = _real_bars(ohlcv_ts, as_of) if ohlcv_ts else []
+    if bars is None:
+        bars = _real_bars(ohlcv_ts, as_of) if ohlcv_ts else []
     r60, spy60 = return_pct(bars, 60), return_pct(spy_bars, 60)
     row = {
         "symbol": symbol,
@@ -393,6 +445,7 @@ def build_row(symbol, bucket, sub, facts, ohlcv_ts, spy_bars, as_of):
     }
     row["stale"] = [key for key, end in (("revenue_yoy", rev_end), ("rpo_yoy", rpo_end))
                     if end and (_d(as_of) - _d(end)).days > STALE_DAYS]
+    row["rpo_suspect"] = rpo is not None and abs(rpo) > RPO_SUSPECT_PCT
     row["watch_score"] = watch_score(row)
     return row
 
@@ -401,19 +454,30 @@ def build_row(symbol, bucket, sub, facts, ohlcv_ts, spy_bars, as_of):
 # Universe scan
 # ---------------------------------------------------------------------------
 
+RESEARCH_SHEET = "Research"
+RESEARCH_SYMBOL_COL = 3   # column D, the same column the game reads
+
+
 def load_universe(path=None):
-    """Symbols from Data/symbols_to_check.txt (tab-separated, symbol is the last column)."""
-    path = Path(path or Path(paths.data_dir()) / "symbols_to_check.txt")
-    syms = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        parts = line.strip().split("\t")
-        if parts and parts[-1].strip():
-            syms.append(parts[-1].strip().upper())
-    return syms
+    """Symbols on the Research sheet of Data/state_of_the_day.xlsx: the same list the
+    game trades from (ai_portfolio_game._active_setup_symbols reads column D of it).
+    Order kept, duplicates and blanks dropped."""
+    path = Path(path or Path(paths.data_dir()) / "state_of_the_day.xlsx")
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        ws = wb[RESEARCH_SHEET]
+        syms = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            v = row[RESEARCH_SYMBOL_COL] if len(row) > RESEARCH_SYMBOL_COL else None
+            if v is not None and str(v).strip():
+                syms.append(str(v).strip().upper())
+    finally:
+        wb.close()
+    return list(dict.fromkeys(syms))
 
 
 def _load_ohlcv(symbol):
-    p = Path(paths.data_dir()) / "Symbol_full" / f"{symbol}_daily.json"
+    p = Path(paths.ohlcv_dir()) / f"{symbol}_daily.json"
     if not p.exists():
         return None
     try:
