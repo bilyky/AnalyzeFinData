@@ -13,15 +13,14 @@ import json
 import datetime
 import pytz
 from pathlib import Path
-from aether import risk_utils
+from aether import ledgers, paths, risk_utils
 from aether.logger import get_logger as _get_logger
 
 _log = _get_logger("circuit_breaker")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-SPY_FILE = BASE_DIR / "Data" / "Symbol_full" / "SPY_daily.json"
-VXX_FILE = BASE_DIR / "Data" / "Symbol_full" / "VXX_daily.json"
-DNA_FILE = BASE_DIR / "Data" / "trade_history_dna.json"
+SPY_FILE = Path(paths.ohlcv_dir()) / "SPY_daily.json"   # $AETHER_CACHE_DIR-aware (aether.paths)
+VXX_FILE = Path(paths.ohlcv_dir()) / "VXX_daily.json"
 
 def load_spy_history() -> list[dict]:
     """Load sorted daily price series for the SPY ETF from the local cache."""
@@ -150,13 +149,14 @@ def check_systemic_risk(prices=None) -> tuple[bool, str]:
 
 def log_circuit_breaker_trigger_dna(reason: str, state: dict, prices=None, _spy_series=None):
     """Backfeed the systemic trigger event directly into the unified Trade History DNA Ledger."""
-    DNA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    dna_file = ledgers.TRADE_DNA_FILE
+    dna_file.parent.mkdir(parents=True, exist_ok=True)
     today = str(datetime.date.today())
 
     records = []
-    if DNA_FILE.exists():
+    if dna_file.exists():
         try:
-            with open(DNA_FILE, "r", encoding="utf-8") as f:
+            with open(dna_file, "r", encoding="utf-8") as f:
                 records = json.load(f)
         except Exception:
             records = []
@@ -197,7 +197,7 @@ def log_circuit_breaker_trigger_dna(reason: str, state: dict, prices=None, _spy_
     records.append(record)
     
     try:
-        with open(DNA_FILE, "w", encoding="utf-8") as f:
+        with open(dna_file, "w", encoding="utf-8") as f:
             json.dump(records, f, indent=4)
         _log.warning(f"  [Breaker Backfeed] Logged systemic trigger DNA to unified ledger (trade_history_dna.json)!")
     except Exception as e:

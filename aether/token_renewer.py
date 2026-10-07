@@ -16,7 +16,6 @@ Usage:
     fresh = renewer.ensure()  # returns valid token or None
 """
 
-import contextlib
 import ctypes
 import json
 import logging
@@ -143,8 +142,9 @@ def _acquire_lock(lock_path: str, lock_ttl: int) -> int | None:
     contender can distinguish a dead-owner lock (reclaim immediately) from a live one (TTL fallback).
     A lock owned by a dead PID on this host is reclaimed at once; otherwise a lock whose mtime is
     older than ``lock_ttl`` is treated as stale (crashed/wedged holder) and reclaimed. The single
-    definition of the file-lock acquire, shared by TokenRenewer and single_flight() — so both the
-    renew ladder and the non-blocking single-flight door get the same dead-PID reclaim."""
+    definition of the file-lock acquire, shared by TokenRenewer and
+    ``aether.etrade.store.FileLockProvider`` — so both the renew ladder and the non-blocking
+    single-flight door (``store.lock.single_flight``) get the same dead-PID reclaim."""
     os.makedirs(os.path.dirname(lock_path), exist_ok=True)
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -186,34 +186,6 @@ def _release_lock(lock_path: str, fd: int) -> None:
             f"until its TTL expires or the owning process exits. Check for a "
             f"leaked/open file handle."
         )
-
-
-@contextlib.contextmanager
-def single_flight(lock_path: str, lock_ttl: int = 300):
-    """Non-blocking cross-process single-flight guard over the shared file-lock primitive.
-
-    Yields ``True`` to exactly one holder (which must do the guarded work) and ``False`` to any
-    concurrent caller (work is already in flight — the loser must NOT start a second copy). Unlike
-    ``TokenRenewer.ensure`` there is no wait loop: a loser returns immediately. The holder always
-    releases the lock on exit (even on exception); a loser releases nothing. Stale locks (mtime
-    older than ``lock_ttl``) are reclaimed by ``_acquire_lock``, so a crashed holder can never
-    wedge the guard forever.
-
-    Usage::
-
-        with single_flight("Data/etrade_reauth.lock", lock_ttl=300) as won:
-            if not won:
-                return {"reason": "in_progress"}
-            do_the_one_browser_mint()
-    """
-    fd = _acquire_lock(lock_path, lock_ttl)
-    if fd is None:
-        yield False
-        return
-    try:
-        yield True
-    finally:
-        _release_lock(lock_path, fd)
 
 
 class TokenRenewer:

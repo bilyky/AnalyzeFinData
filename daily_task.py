@@ -11,7 +11,9 @@ from pathlib import Path
 import openpyxl
 
 import notify
+from aether import paths
 import powergauge
+import rapidapi
 import watchdog
 from config import CFG
 
@@ -31,7 +33,34 @@ if not _log.handlers:
     ch.setFormatter(logging.Formatter("%(message)s"))
     _log.addHandler(ch)
 
-def run_command(command_list, timeout=600):
+STEP_TIMEOUT_S = 600          # run_command default (run_history.py, main.py)
+UNBOUNDED_STEPS_SLACK_S = 600  # lint, data load, report build + email: no timeout of their own
+
+
+def worst_case_runtime_seconds():
+    """Longest daily_task.main() can legitimately run: every bounded step at its timeout
+    (run_history + main.py, the backup sync, the recovery pass) plus slack for the steps
+    that have none. The Evening task's scheduler limit must be at least this."""
+    return (2 * STEP_TIMEOUT_S + watchdog.SYNC_TIMEOUT_S + rapidapi.pass_timeout_seconds()
+            + UNBOUNDED_STEPS_SLACK_S)
+
+
+def run_ohlcv_recovery():
+    """OHLCV recovery pass — repair missing/stale/placeholder Symbol_full bars via RapidAPI.
+
+    Runs LAST in main() (after the report and the backup sync, even if the report failed)
+    because a full pass is long: its timeout covers the whole per-run fetch budget
+    (rapidapi.pass_timeout_seconds), since the old 600 s default killed every pass after
+    ~42 of ~500 symbols (PROD logs 2026-09-16..30). Running it first would push the
+    evening report back by the length of the pass. Non-fatal by design."""
+    _log.info("Running OHLCV recovery pass (rapidapi.py)...")
+    try:
+        run_command([sys.executable, "rapidapi.py"], timeout=rapidapi.pass_timeout_seconds())
+    except Exception as e:
+        _log.warning(f"Warning: OHLCV recovery failed (non-fatal): {e}")
+
+
+def run_command(command_list, timeout=STEP_TIMEOUT_S):
     _log.info(f"Running: {' '.join(command_list)}")
     # Use Path(__file__) for the script if it's a local script
     if len(command_list) > 1 and command_list[1].endswith(".py"):
@@ -81,7 +110,7 @@ def get_all_data(date):
     research_symbols = get_symbols_from_xls()
     if not research_symbols:
         _log.info("Warning: No symbols found in Research sheet. Falling back to all cached symbols.")
-        symbol_dir = BASE_DIR / "Data" / "Symbol"
+        symbol_dir = Path(paths.symbol_dir())
         cached_symbols = []
         if symbol_dir.exists():
             for _root, _dirs, files in os.walk(symbol_dir):
@@ -97,7 +126,7 @@ def get_all_data(date):
             if pg.price == -1:
                 continue
 
-            ohlcv_path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+            ohlcv_path = Path(paths.ohlcv_dir()) / f"{symbol}_daily.json"
             ohlcv_ts = None
             if ohlcv_path.exists():
                 with open(ohlcv_path) as _f:
@@ -235,14 +264,7 @@ def main():
 
             # 2. Run main script to populate Data and Excel
             run_command([sys.executable, "main.py"])
-
-            # 2b. OHLCV recovery pass — repair missing/corrupted/stale Symbol_full files via RapidAPI.
-            #     This is the evening/night task, which is the perfect time to run this heavy sync!
-            _log.info("Running OHLCV recovery pass (rapidapi.py)...")
-            try:
-                run_command([sys.executable, "rapidapi.py"])
-            except Exception as e:
-                _log.warning(f"Warning: OHLCV recovery failed (non-fatal, daily_task continues): {e}")
+            # (The OHLCV recovery pass runs LAST — see run_ohlcv_recovery in the finally below.)
 
         # 3. Get all processed data
         all_symbols_data = get_all_data(today)
@@ -385,6 +407,9 @@ def main():
             _log.info("Error alert email sent.")
         except Exception as notify_err:
             _log.info(f"Could not send error alert email: {notify_err}")
+    finally:
+        if not report_only:
+            run_ohlcv_recovery()
 
 
 if __name__ == "__main__":

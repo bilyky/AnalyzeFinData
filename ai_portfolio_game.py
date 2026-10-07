@@ -5,12 +5,12 @@ import os
 import pytz
 import re
 import requests
-from aether import etrade
+from aether import etrade, paths
 import rapidapi
 import sys
 import console_safe
 import circuit_breaker
-from aether import trash
+from aether import ledgers, trash
 import aether.notify as notify
 import argparse
 from pathlib import Path
@@ -27,9 +27,10 @@ console_safe.install()
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
 AI_GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
+GAME_BACKUP_DIR = BASE_DIR / "Data" / "Backup" / "Game"   # timestamped save_game backups (keeps last 15)
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 AI_PERF_XLSX = BASE_DIR / "Data" / "ai_portfolio_performance.xlsx"
-SYMBOL_FULL_DIR = BASE_DIR / "Data" / "Symbol_full"   # OHLCV cache — one source of truth
+SYMBOL_FULL_DIR = Path(paths.ohlcv_dir())   # OHLCV cache — one source of truth ($AETHER_CACHE_DIR-aware)
 INITIAL_BALANCE = 10000.0
 
 # Import risk utils safely
@@ -53,7 +54,7 @@ def _load_symbol_today_cache(symbol: str, today_str: str) -> dict:
     if symbol in _SYMBOL_DAY_CACHE:
         return _SYMBOL_DAY_CACHE[symbol]
         
-    cache_path = BASE_DIR / "Data" / "Symbol" / symbol / f"{symbol}_{today_str}.json"
+    cache_path = Path(paths.symbol_dir()) / symbol / f"{symbol}_{today_str}.json"
     cache = {}
     if cache_path.exists():
         try:
@@ -67,7 +68,7 @@ def _load_symbol_today_cache(symbol: str, today_str: str) -> dict:
 
 def check_failure_rules(symbol, pgr, score, z_score, industry, s10=0.0) -> tuple[bool, str]:
     """Check if the candidate matches any active toxic rules in Data/failure_dna_rules.json or dynamic filters."""
-    rules_file = BASE_DIR / "Data" / "failure_dna_rules.json"
+    rules_file = ledgers.FAILURE_RULES_FILE
     
     # ── Earnings-Shock Failure Gate (Pillar 1 Guard) ──
     # Programmatic, un-bypassable veto on any symbol that has just reported a massive earnings miss
@@ -133,7 +134,7 @@ def log_closed_trade_dna(sym, pos, price, today_str):
         buy_date = buy_dna.get("buy_date", today_str)
         pnl_pct = round(((price - pos["cost"]) / pos["cost"]) * 100, 2) if pos["cost"] else 0.0
         
-        dna_file = BASE_DIR / "Data" / "trade_history_dna.json"
+        dna_file = ledgers.TRADE_DNA_FILE
         dna_list = []
         if dna_file.exists() and dna_file.stat().st_size > 0:
             with open(dna_file, "r", encoding="utf-8") as f:
@@ -539,13 +540,6 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                     continue
                 cost = qty * buy["price"]
 
-            state["balance"] -= cost
-            # Update cumulative bucket counts for sequence
-            if is_scarcity:
-                current_scarcity_usd += cost
-            else:
-                current_standard_usd += cost
-
             atr = risk_utils.calculate_atr(buy["sym"])
             if atr and atr > 0:
                 stop_loss = round(buy["price"] - (rules["atr_multiplier"] * atr), 2)
@@ -553,6 +547,27 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
             else:
                 stop_loss = round(buy["price"] * 0.92, 2)
                 stop_desc = f"8% Fallback{buy.get('bottom_desc', '')}"
+
+            # Per-trade loss cap (Rule of Loss Minimization): positions are sized by cash, so a
+            # wider (honest) ATR stop would otherwise raise the dollar loss of every stop-out.
+            # Trim so (entry - stop) * shares <= equity * CFG.system_max_trade_risk_pct.
+            max_risk_usd = state["equity"] * CFG.system_max_trade_risk_pct
+            risk_cap_usd = risk_utils.risk_capped_cash(buy["price"], stop_loss, max_risk_usd)
+            if risk_cap_usd is not None and cost > risk_cap_usd:
+                old_qty = qty
+                qty = calculate_share_qty(buy["sym"], risk_cap_usd, buy["price"])
+                _log.warning(f"⚠️ Risk-capping {buy['sym']} from {old_qty} to {qty} shares: a stop-out at ${stop_loss} may lose at most ${max_risk_usd:,.2f} ({CFG.system_max_trade_risk_pct:.1%} of equity).")
+                if qty <= 0:
+                    _log.warning(f"🛑 AI BUY REJECTED: Per-trade loss cap leaves less than 1 share of {buy['sym']}.")
+                    continue
+                cost = qty * buy["price"]
+
+            state["balance"] -= cost
+            # Update cumulative bucket counts for sequence
+            if is_scarcity:
+                current_scarcity_usd += cost
+            else:
+                current_standard_usd += cost
 
             state["positions"][buy["sym"]] = {
                 "qty": qty, 
@@ -804,7 +819,7 @@ def should_pyramid_into_winner(is_winner: bool, has_peak: bool, s10: float, l60:
 def load_game():
     if not AI_GAME_FILE.exists() or AI_GAME_FILE.stat().st_size == 0:
         # Try to find a backup to restore from
-        backup_dir = BASE_DIR / "Data" / "Backup" / "Game"
+        backup_dir = GAME_BACKUP_DIR
         if backup_dir.exists():
             backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
             for b in backups:
@@ -831,7 +846,7 @@ def load_game():
         except Exception as e:
             # Corruption detected! Try to restore from backup
             _log.warning(f"  [⚠️ AETHER SELF-HEALER] Error loading {AI_GAME_FILE.name}: {e}. Attempting automated recovery from backup...")
-            backup_dir = BASE_DIR / "Data" / "Backup" / "Game"
+            backup_dir = GAME_BACKUP_DIR
             if backup_dir.exists():
                 backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
                 for b in backups:
@@ -859,7 +874,7 @@ def save_game(state):
     # --- Mandatory Backup before Write ---
     if AI_GAME_FILE.exists():
         try:
-            backup_dir = BASE_DIR / "Data" / "Backup" / "Game"
+            backup_dir = GAME_BACKUP_DIR
             backup_dir.mkdir(parents=True, exist_ok=True)
             
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -881,7 +896,7 @@ def save_game(state):
 def backtrack_verify(symbol):
     """Verify the consistency of a price trend over the last 3 trading days using local daily history."""
     try:
-        path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+        path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
         if not path.exists():
             return False, "No local daily history found."
         
@@ -910,7 +925,7 @@ def backtrack_verify(symbol):
 def is_bottom_confirmed(symbol):
     """Verify if a stock is forming a technical bottom based on its 3-day price slope."""
     try:
-        path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+        path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
         if not path.exists():
             return False, "No local daily history found."
         
@@ -1528,7 +1543,8 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         "date": today, "time": now_time, "type": "SELL", 
                         "symbol": sym, "price": price, "qty": pos["qty"], 
                         "pnl": round((price - pos["cost"]) * pos["qty"], 2),
-                        "details": f"Queued Sell: {order['reason']}"
+                        "details": f"Queued Sell: {order['reason']}",
+                        "stop_loss": pos.get("stop_loss"),
                     }
                     state["history"].append(tx)
                     new_transactions.append(tx)
@@ -1612,7 +1628,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
         # SELL logic — unified deterministic exit policy (sell_rules.exit_decision):
         # hard ATR stop > soft momentum signal (winner-protected) > hold.
-        symbols_to_sell = []
+        symbols_to_sell = {}  # sym -> exit reason, recorded on the SELL tx
         decision_entries = []
         for sym in list(state["positions"].keys()):
             pos = state["positions"][sym]
@@ -1783,22 +1799,23 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
             decision_entries.append(entry)
             if entry["rules_action"] == "SELL":
+                exit_reason = entry["rules_reason"] or "Technical exit"
                 if not is_market_hours():
                     # Queue the sell instead of executing immediately
                     if not any(q["symbol"] == sym and q["type"] == "SELL" for q in state.get("queued_orders", [])):
                         state.setdefault("queued_orders", []).append({
-                            "type": "SELL", "symbol": sym, "reason": f"Exit triggered: {entry['rules_reason'] or 'Technical exit'}"
+                            "type": "SELL", "symbol": sym, "reason": f"Exit triggered: {exit_reason}"
                         })
                         _log.info(f"📝 [Queued] After-hours SELL queued for {sym}: {entry['rules_reason']}")
                 else:
-                    symbols_to_sell.append(sym)
+                    symbols_to_sell[sym] = exit_reason
             elif entry["rules_action"] == "REVIEW":
                 # Winner above its 50-DMA on a soft signal — hold, don't dump.
                 _log.info(f"🌸 AI HOLD (winner-protected): {sym} — {entry['rules_reason']}")
         if decision_entries:
             decision_eval.log_decisions(decision_entries)
 
-        for sym in symbols_to_sell:
+        for sym, exit_reason in symbols_to_sell.items():
             pos = state["positions"][sym]
             price = prices.get(sym, pos["cost"])
             options.unwind_option_liability_if_held(sym, pos, state, price, today)
@@ -1807,13 +1824,16 @@ def run_daily_ai_management(force=False, manual_profile=None):
             # Slippage-Protected Limit Stop (STP LMT - R&D #8): Execute at exactly the stop price
             # if the market close price dropped below our stop-loss floor, preventing slippage leaks.
             stop_loss = pos.get("stop_loss", 0.0)
-            if stop_loss > 0.0 and price <= stop_loss:
+            stop_fill = stop_loss > 0.0 and price <= stop_loss
+            if stop_fill:
                 _log.info(f"🛡️ [STP LMT] Executed {sym} stop-loss at Limit price ${stop_loss:.2f} (protected against market gap ${price:.2f}).")
                 price = stop_loss
                 
             proceeds = pos["qty"] * price
             state["balance"] += proceeds
-            tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2)}
+            tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2),
+                  "details": f"Exit: {exit_reason}" + (" [STP LMT fill]" if stop_fill else ""),
+                  "stop_loss": pos.get("stop_loss")}
             state["history"].append(tx)
             new_transactions.append(tx)
             _log.info(f"🤖 AI LIVE SELL: {sym} at ${price} (Time: {now_time})")
@@ -1981,7 +2001,9 @@ def run_daily_ai_management(force=False, manual_profile=None):
                         "bottom_desc": bottom_desc,
                         "industry": row[4]
                     })
-        
+                else:
+                    _log.warning(f"🛑 AI BUY REJECTED (Profile Threshold): {sym} - Combined score {round(total_score, 2)} is below the {profile} minimum of {rules['min_score_threshold']} and no confirmed bottom.")
+
         # ── R&D #32 Overbought Breakout Guard score penalty ──
         for buy_cand in top_buys:
             sym_upper = buy_cand["sym"].upper()

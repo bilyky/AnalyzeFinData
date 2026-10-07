@@ -1,6 +1,6 @@
 # Plan: Decompose `ai_portfolio_game.py` into an `aether/scenario/` package (entities + action ports + composable scenarios)
 
-> Reference plan saved 2026-09-16. Status: **approved, not yet implemented** (docs land first; code follows in small verifiable PRs).
+> Reference plan saved 2026-09-16. Status (2026-10-02): **partly built, not used yet.** B1–B3, B5 and four B6 stages are merged, with a test that checks each stage still matches the game code. B4 (#122) is open. The other B6 stages, B7 and the switch-over haven't started. See R&D #44 in [`plans/roadmap.md`](./roadmap.md) for the current state.
 > Origin: request to refactor `ai_portfolio_game.py` ("that is total mess") into **objects for entities** and **interfaces for actions**, with the script becoming a **starting place for different scenarios** — "even maybe split it on smaller scenario-specific entry points." Refined through dialogue: mirror the existing `aether/etrade/` schema ("we have etrade schema to follow already"), **build-then-replace** ("build object and functionality and then replace it inside ai_portfolio_game script"), **prepare everything first, then refactor in small verifiable steps**, and keep it **generic** — use `scenario`, not "game."
 
 ## Context
@@ -45,6 +45,8 @@ Named `runners.py` (not `scenarios.py`) to avoid an `aether.scenario.scenarios` 
 
 Each build step ships its own `tests/test_scenario_*.py` (hand-written fakes injected via constructor args, mirroring the E*TRADE per-door test style) and keeps `python -m unittest discover -s tests` fully green.
 
+While BUILD lasts, every B6 stage is a *copy* of a block that still runs in `run_daily_ai_management`. `tests/test_scenario_parity.py` fails the moment a stage drifts from its root block, so **register every new stage in its `_CHECKED` tuple** (its registry test fails otherwise). Delete that file together with the root copies once REPLACE lands.
+
 ## REPLACE order (one seam per PR — characterization harness built before R3)
 
 `tests/test_scenario_characterization.py` — snapshot `run_daily_ai_management` on a frozen fixture (final `state` dict, ordered `new_transactions`, ordered `_log` calls); behavior-identical = snapshot unchanged. Run every replace PR.
@@ -78,8 +80,9 @@ R1 `get_live_prices` → `make_price_source` (guarded by `test_game_pricing.py`)
 
 ## Verification (every PR)
 
-1. `python -m unittest discover -s tests -v` — full suite green (baseline ~824 OK).
+1. `python -m unittest discover -s tests -v` — full suite green.
 2. `python -m unittest tests.test_executables` — root-file compile guard.
 3. From R3 on: `tests/test_scenario_characterization.py` snapshot unchanged.
-4. New package tests (`tests/test_scenario_*.py`) green; `tests/test_game_pricing.py` green across the R1 boundary.
+4. New package tests (`tests/test_scenario_*.py`) green; `tests/test_game_pricing.py` green across the R1 boundary; `tests/test_scenario_parity.py` green (stage ↔ root).
+4a. When adding, removing or consolidating stage tests: `python scripts/utils/mutate_scenario_steps.py` — exits non-zero if any mutant survives (a coverage gap) or an anchor is stale; add mutants for new stages.
 5. Branch from latest `origin/main` in an isolated worktree; keep each PR small and self-contained.

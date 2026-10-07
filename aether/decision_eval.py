@@ -16,14 +16,14 @@ real data.
 import json
 from pathlib import Path
 
-from aether import ai_client, sell_eval, sell_rules
+from aether import ai_client, paths, sell_eval, sell_rules
 from aether.logger import get_logger as _get_logger
 
 _log = _get_logger("decision_eval")
 
 _DIR = Path(__file__).resolve().parent.parent
 LOG = _DIR / "Data" / "decision_log.jsonl"
-OHLCV_DIR = _DIR / "Data" / "Symbol_full"
+OHLCV_DIR = Path(paths.ohlcv_dir())   # $AETHER_CACHE_DIR-aware (aether.paths)
 _MAX_LOG_LINES = 5000   # bound the append-only log; keep the most recent decisions
 
 
@@ -59,10 +59,11 @@ def build_entry(symbol, price, cost, stop_loss, s10, l60, sma50=None,
     return entry
 
 
-def log_decisions(entries, path=LOG):
-    """Append decision records as JSON lines (best-effort; never raises)."""
+def log_decisions(entries, path=None):
+    """Append decision records as JSON lines (best-effort; never raises).
+    path=None resolves LOG at call time, so a redirected LOG is honored."""
     try:
-        path = Path(path)
+        path = Path(path or LOG)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             for e in entries:
@@ -83,9 +84,10 @@ def _trim_log(path, max_lines=_MAX_LOG_LINES):
         f.writelines(lines[-max_lines:])
 
 
-def read_log(path=LOG):
+def read_log(path=None):
     """Read the append-only log, skipping blank or malformed lines (a crash can
     leave a half-written final line — one bad row must not sink the scorecard)."""
+    path = Path(path or LOG)
     entries = []
     try:
         with open(path, encoding="utf-8") as f:

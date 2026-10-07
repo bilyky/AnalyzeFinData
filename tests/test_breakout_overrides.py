@@ -74,14 +74,8 @@ class TestScoringRegimeConditionalPenalties(unittest.TestCase):
 
 class TestPGRWaiverRules(unittest.TestCase):
     def setUp(self):
-        # Create a temporary failure_dna_rules.json inside the dev Data folder for testing
-        self.rules_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Data")
-        os.makedirs(self.rules_dir, exist_ok=True)
-        self.rules_path = os.path.join(self.rules_dir, "failure_dna_rules.json")
-        self.had_rules = os.path.exists(self.rules_path)
-        if self.had_rules:
-            self.old_content = open(self.rules_path, "r", encoding="utf-8").read()
-            
+        # The harness points FAILURE_RULES_FILE at a temp path — never the real Data/ file.
+        self.rules_path = str(ai_portfolio_game.ledgers.FAILURE_RULES_FILE)
         test_rules = [
             {
                 "field": "pgr",
@@ -93,13 +87,8 @@ class TestPGRWaiverRules(unittest.TestCase):
             json.dump(test_rules, f)
 
     def tearDown(self):
-        # Restore old rules file if it existed, else delete the test file
-        if self.had_rules:
-            with open(self.rules_path, "w", encoding="utf-8") as f:
-                f.write(self.old_content)
-        else:
-            if os.path.exists(self.rules_path):
-                os.remove(self.rules_path)
+        if os.path.exists(self.rules_path):
+            os.remove(self.rules_path)
 
     def test_pgr_waiver_rules_bypassed_on_high_conviction(self):
         # Mock is_bottom_confirmed to return False
