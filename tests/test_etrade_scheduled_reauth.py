@@ -17,6 +17,7 @@ Everything here is mocked at the true I/O seams (no E*TRADE contact, no real bro
 no PowerShell). The circuit-breaker mechanics live in test_etrade_reauth_circuit_breaker.py.
 """
 import contextlib
+import datetime
 import io
 import os
 import sys
@@ -28,6 +29,7 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import tests  # globally locks hermeticity and redirects prod Data/ to temp
 from aether import etrade
+import server
 from aether import notify
 
 
@@ -187,6 +189,86 @@ class TestScheduledReauth(unittest.TestCase):
         self.assertFalse(res["ok"])
         self.assertEqual(res["reason"], "failed")
         self.assertTrue(res["browser_opened"])          # browser ran; _login_headless escalated
+
+
+class TestScheduledReauthWeekendGate(TestScheduledReauth):
+    """Scheduled callers pass weekend_mint=False, so on an ET weekend they only renew. Manual
+    callers keep the default and can still log in on a weekend."""
+
+    def _run_gate(self, *, weekend, weekend_mint, alive):
+        patches = self._patches(alive=alive, trust="trusted")
+        for p in patches.values():
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches.values()])
+        pw = mock.patch.object(etrade, "_et_is_weekend", return_value=weekend)
+        pw.start()
+        self.addCleanup(pw.stop)
+        tokens = {"issued_date_et": etrade._et_today()}
+        lh = mock.patch.object(etrade, "_login_headless", return_value=tokens)
+        m_lh = lh.start()
+        self.addCleanup(lh.stop)
+        return etrade.scheduled_reauth("production", weekend_mint=weekend_mint), m_lh
+
+    def test_weekend_gate_matrix(self):
+        alive = {"issued_date_et": etrade._et_today()}
+        cases = [
+            # weekend, weekend_mint, live token, expected reason, browser opened
+            (True,  False, None,  "weekend",  False),  # scheduled, weekend, dead token: no login
+            (True,  False, alive, "renewed",  False),  # a live token is still renewed on a weekend
+            (False, False, None,  "reauthed", True),   # scheduled, weekday: logs in as before
+            (True,  True,  None,  "reauthed", True),   # manual (default) can log in on a weekend
+        ]
+        for weekend, weekend_mint, live, reason, browser in cases:
+            with self.subTest(weekend=weekend, weekend_mint=weekend_mint, live=bool(live)):
+                res, m_lh = self._run_gate(weekend=weekend, weekend_mint=weekend_mint, alive=live)
+                self.assertEqual(res["reason"], reason)
+                self.assertEqual(res["browser_opened"], browser)
+                self.assertEqual(m_lh.called, browser)
+                self.doCleanups()
+
+
+class TestEtIsWeekend(unittest.TestCase):
+    """The weekend check uses the ET calendar, not the machine's local date."""
+
+    def test_et_calendar_boundaries(self):
+        et = etrade._ET
+        cases = [
+            ((2026, 10, 2, 23, 30), False),   # Fri 23:30 ET (already Sat in UTC)
+            ((2026, 10, 3, 0, 30),  True),    # Sat 00:30 ET (= Fri 21:30 PT, the preflight run)
+            ((2026, 10, 4, 23, 59), True),    # Sun 23:59 ET
+            ((2026, 10, 5, 0, 0),   False),   # Mon 00:00 ET (= Sun 21:00 PT): Monday's token
+        ]
+        for (y, mo, d, h, mi), expected in cases:
+            with self.subTest(et=f"{y}-{mo:02d}-{d:02d} {h:02d}:{mi:02d}"):
+                epoch = _et_epoch(et, y, mo, d, h, mi)
+                with mock.patch.object(etrade.time, "time", return_value=epoch):
+                    self.assertEqual(etrade._et_is_weekend(), expected)
+
+
+def _et_epoch(et, y, mo, d, h, mi):
+    naive = datetime.datetime(y, mo, d, h, mi)
+    aware = et.localize(naive) if hasattr(et, "localize") else naive.replace(tzinfo=et)
+    return aware.timestamp()
+
+
+class TestScheduledCliWeekendExit(unittest.TestCase):
+    """`server.py etrade-reauth --scheduled` passes weekend_mint=False and exits 0 for a weekend
+    skip, so the Task Scheduler run doesn't show as failed on weekends."""
+
+    def test_scheduled_flag_and_exit_codes(self):
+        cases = [
+            # scheduled, result from the door,                    weekend_mint passed, exit code
+            (True,  {"ok": False, "reason": "weekend"},            False, 0),
+            (True,  {"ok": False, "reason": "failed"},             False, 1),
+            (True,  {"ok": True,  "reason": "reauthed"},           False, 0),
+            (False, {"ok": True,  "reason": "reauthed"},           True,  0),
+        ]
+        for scheduled, result, weekend_mint, code in cases:
+            with self.subTest(scheduled=scheduled, reason=result["reason"]),                  mock.patch.object(server.etrade, "scheduled_reauth", return_value=result) as door,                  mock.patch.object(server.notify, "send_reauth_alert"):
+                with self.assertRaises(SystemExit) as cm:
+                    server.cmd_etrade_reauth(scheduled=scheduled)
+                self.assertEqual(cm.exception.code, code)
+                door.assert_called_once_with("production", weekend_mint=weekend_mint)
 
 
 # ---------------------------------------------------------------------------

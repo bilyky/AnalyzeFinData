@@ -123,7 +123,7 @@ class TestWatchdogNightHoursSkip(unittest.TestCase):
         watchdog.run_watchdog()
 
         # Verify session keeps WERE run
-        mock_reauth.assert_called_once_with("production")
+        mock_reauth.assert_called_once_with("production", weekend_mint=False)
         mock_session.assert_called_once()
 
         # Verify that task/log audits WERE successfully run overnight (no blind spots!)
@@ -162,7 +162,7 @@ class TestWatchdogNightHoursSkip(unittest.TestCase):
             pass  # later steps may raise against the mocked boundary; we only assert check_logs was hit
 
         # Verify session keeps WERE run
-        mock_reauth.assert_called_once_with("production")
+        mock_reauth.assert_called_once_with("production", weekend_mint=False)
         mock_session.assert_called_once()
 
         # Verify check_logs WAS called (full diagnostics executed!)
