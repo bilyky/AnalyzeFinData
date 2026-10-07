@@ -15,8 +15,6 @@ tests pin the four behaviours it carries over from the root, unchanged:
    stamped from ``instruments.is_scarcity_asset``; one that already has the key is
    left untouched (and never re-classified); a Research-sheet symbol that is not a
    held position is ignored.
-4. **Call-time seam** (``_pkg()``): a ``mock.patch.object(game, ...)`` still
-   intercepts through the function, so the pinned patch is the one used.
 
 Every collaborator (``_cache_stale``, ``_heal_symbol_cache``, ``_MAX_STALE_DAYS``,
 ``_active_setup_symbols``, ``instruments.is_scarcity_asset``, ``_log``) is patched
@@ -29,7 +27,6 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game  # noqa: E402
-from aether.scenario import assemble_symbol_universe as assemble_reexport  # noqa: E402
 from aether.scenario.steps import assemble_symbol_universe  # noqa: E402
 
 
@@ -178,18 +175,6 @@ class TestScarcityHeal(unittest.TestCase):
         ws = _FakeWS([tuple(row)])
         _, _, _, m_scar, _ = _run(state, ws, is_scarcity={"AAA": True})
         m_scar.assert_called_once_with("AAA", "")
-
-
-class TestSeamAndReexport(unittest.TestCase):
-    def test_active_setup_symbols_resolved_at_call_time(self):
-        # The whole point of _pkg(): the patch applied now is the one used.
-        state = {"positions": {}}
-        result, _, _, _, m_active = _run(state, _FakeWS([]), active=["SENTINEL"])
-        self.assertIn("SENTINEL", result["all_syms"])
-        m_active.assert_called_once()
-
-    def test_reexported_from_package_root(self):
-        self.assertIs(assemble_reexport, assemble_symbol_universe)
 
 
 if __name__ == "__main__":

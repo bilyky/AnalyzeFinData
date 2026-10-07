@@ -9,6 +9,7 @@ Provenance model for a bar in Data/Symbol_full/{sym}_daily.json:
     Written by powergauge._append_ohlcv_entry; repaired by the RapidAPI recovery pass.
   - not provisional — real bar (volume > 0), trusted and usable by volume/range consumers.
 """
+import datetime
 
 
 def is_provisional(bar: dict) -> bool:
@@ -26,3 +27,18 @@ def is_provisional(bar: dict) -> bool:
         return float(bar.get("5. volume", 0) or 0) <= 0
     except (TypeError, ValueError):
         return False
+
+
+def real_dates(ts: dict) -> list[str]:
+    """Chronological dates of the REAL bars in a daily series (placeholders dropped).
+
+    The shared filter for range/volume consumers (ATR, swing levels, candlestick and chart
+    patterns): a placeholder anywhere in the window — not just a trailing one — is a flat
+    zero-volume bar that shrinks true range, so it must never enter those calculations.
+    """
+    return sorted(d for d, bar in ts.items() if not is_provisional(bar))
+
+
+def is_weekend(date_str: str) -> bool:
+    """True for a Saturday/Sunday 'YYYY-MM-DD' — never a US equity session."""
+    return datetime.date.fromisoformat(date_str).weekday() >= 5
