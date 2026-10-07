@@ -112,6 +112,11 @@ class _Config:
         # ── RapidAPI / Alpha Vantage ──────────────────────────────────────────
         rapidapi = raw.get("rapidapi") or {}
         self.rapidapi_key = os.environ.get("RAPIDAPI_KEY") or rapidapi.get("api_key", "")
+        # Fetches allowed per recovery run (the plan's per-run budget). The universe is
+        # larger, so the pass works most-starved-first and the next run picks up the rest.
+        self.rapidapi_max_fetches = int(
+            os.environ.get("RAPIDAPI_MAX_FETCHES", "") or rapidapi.get("max_fetches_per_run", 400)
+        )
 
         # ── Email Intelligence (multiple mailboxes configuration) ────────────
         email_intel = raw.get("email_intel") or {}
