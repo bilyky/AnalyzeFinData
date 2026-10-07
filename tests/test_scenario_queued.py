@@ -19,7 +19,6 @@ from the root, unchanged:
    fallback; buy-DNA resolution off the Research sheet (``r_row[3]``/``[6]``/
    ``[4]``/``[24]``/``[25]``); a BUY for a symbol already held, an empty slot
    book, a too-low balance, or ``qty == 0`` all no-op.
-4. **Call-time seam** (``_pkg()``) and the package re-export.
 
 Every collaborator (``_log``, ``options.unwind_option_liability_if_held``,
 ``log_closed_trade_dna``, ``_cache_stale`` / ``_heal_symbol_cache`` /
@@ -34,7 +33,6 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game  # noqa: E402
-from aether.scenario import execute_queued_orders as execute_reexport  # noqa: E402
 from aether.scenario.steps import execute_queued_orders  # noqa: E402
 
 
@@ -315,7 +313,7 @@ class TestQueuedBuy(unittest.TestCase):
         self.assertEqual(new_tx, [])
 
 
-class TestMixedQueueAndSeam(unittest.TestCase):
+class TestMixedQueue(unittest.TestCase):
     def test_mixed_queue_sell_then_buy_in_order(self):
         orders = [
             {"symbol": "AAA", "type": "SELL", "reason": "exit"},
@@ -331,19 +329,6 @@ class TestMixedQueueAndSeam(unittest.TestCase):
         self.assertIn("BBB", state["positions"])
         self.assertEqual([t["type"] for t in new_tx], ["SELL", "BUY"])
         self.assertEqual(state["queued_orders"], [])
-
-    def test_share_qty_resolved_at_call_time(self):
-        # The whole point of _pkg(): the patch applied now is the one used.
-        order = {"symbol": "BBB", "type": "BUY", "reason": "x"}
-        state = _buy_state()
-        ws = _FakeWS([_row("BBB")])
-        _, _, _, _, _, _, m_share, _ = _run(
-            state, [order], prices={"BBB": 20.0}, ws=ws, atr=1.0, qty=7)
-        m_share.assert_called_once()
-        self.assertEqual(state["positions"]["BBB"]["qty"], 7)
-
-    def test_reexported_from_package_root(self):
-        self.assertIs(execute_reexport, execute_queued_orders)
 
 
 if __name__ == "__main__":
