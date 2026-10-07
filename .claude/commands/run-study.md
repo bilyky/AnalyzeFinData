@@ -19,8 +19,9 @@ rule fixed in advance, and the result recorded where the project tracks R&D (her
 - **No look-ahead:** inputs use only data available at decision time; outcomes start after it.
 - **Count independent evidence, not rows.** Observations on the same date share one market move —
   compare groups *within* each date and test across dates. Overlapping horizons (10-day returns on
-  consecutive days) are serially correlated: use a HAC / Newey-West t (lag = horizon − 1), and report
-  the plain t only as context.
+  consecutive days) are serially correlated: use a HAC / Newey-West t with lag = (horizon in sampling
+  periods) − 1 — daily samples of a 10-day return → lag 9; month-end samples of a 20-day return → lag 0
+  — and report the plain t only as context.
 - **A small, real sample is still a sample.** One portfolio's ledger shows direction and magnitude,
   not significance — say so.
 - **Reuse the project's data loaders and adjustments** (e.g. split-adjusted prices); ledger prices
