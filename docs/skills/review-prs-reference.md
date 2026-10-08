@@ -73,10 +73,55 @@ Read the real message from `$_.ErrorDetails.Message`. The PII scrub still applie
 
 Check these against the current script before relying on it:
 - **Transport is `gh api` only.** Where `gh` can't dial, it exits with a traceback; fall back to the
-  manual procedure in the skill's §9.
+  manual procedure in §F.
 - **Pagination.** It must read every page of `pulls?state=closed`; a single `per_page=100` request
   silently drops older PRs once the repo has more than 100 closed PRs, leaving their branches
   "unmapped".
 - **Merged-ness** must come from `merged_at` (the list endpoint has no `merged` field) — fixed in #143.
 - **Scope.** It handles worktrees and the branches they hold, not standalone local branches; use the
-  lossless test in the skill's §9 for those.
+  lossless test in §F for those.
+
+## F. Clean up once PRs are merged or closed
+
+- **"Merged" comes from the PR API, never from ancestry** — squash-merged tips are never ancestors of
+  `main`. In list responses use `merged_at != null` (the list endpoint has no `merged` field); read
+  **every page** of results.
+- **Links first (data-loss rule, `AGENT.md` §4 "No Links Into Data/"):** `git status` cannot see a
+  junction or symlink under gitignored `Data/`, and removing a worktree deletes *through* it — on
+  2026-10-06 that wiped the main checkout's `Data/Symbol` + `Data/Symbol_full`. Before removing any
+  worktree, scan it for links (`prune_merged_worktrees.links_inside(<wt>)`, or
+  `Get-ChildItem <wt> -Recurse -Force -Attributes ReparsePoint`). If any: remove the **link itself**
+  (`cmd /c rmdir <link>` — removes only the link), re-scan, and get the owner's OK for any link that
+  pointed into `Data/`. Never remove a worktree that still contains one.
+- **Worktrees:** remove only clean ones, **without `--force`** (a refusal is the safety net —
+  `git -C <wt> status --porcelain` non-empty ⇒ leave it and report it). Keep open-PR, dirty, locked,
+  and other-session worktrees. **An open PR dominates a shared head ref:** a branch that backs any open
+  PR is kept even if another PR with the same head ref was merged or closed. `scripts/utils/prune_merged_worktrees.py` automates this (dry-run first,
+  then `--apply`); its known limits are in §E.
+- **Local branches (with or without a worktree):** delete only when **lossless** — every commit still
+  exists on the remote:
+  1. tip reachable from `origin/main` or any `refs/pull/*/head`
+     (`git for-each-ref --count=1 --contains <sha> refs/remotes/origin/main refs/review/pull` — one call
+     per branch; per-ref `merge-base` loops are far too slow);
+  2. else merging it into `main` changes nothing (`git merge-tree --write-tree origin/main <b>` equals
+     `main`'s tree);
+  3. else every file it touched is byte-identical to some commit in its **merged** PR's history.
+
+  Anything else holds unique work → keep and list it. `-D` is correct only for branches proven
+  lossless (squash-merged branches make `-d` refuse). Log `name sha` to a backup file first so any
+  deletion is one `git branch <name> <sha>` away from undo.
+- Batch removals are irreversible local changes: present the classified plan, get the go-ahead, and
+  delete your own scratch (temp refs, worktrees, files) when done.
+
+## G. Post-merge doc audit (after a batch of merges, or when asked)
+
+Docs drift between PRs even when each review was careful. After a batch lands:
+1. Bring the main checkout current (`git merge --ff-only origin/main`, only when the user asks, and only
+   if no local edit conflicts).
+2. List the merges since the last audit and, for each, the behavior it changed.
+3. Grep every doc surface (the skill's §3 *Documentation*) for each old behavior, plus status lines of tracked items
+   ("UNBUILT" for something built) and duplicate identifiers.
+4. Verify each replacement claim against code on `main` (callers, defaults, gates, thresholds) before
+   writing it. A behavior gap you find (code doing something unintended) is reported for a decision,
+   not silently "fixed" inside the docs PR.
+5. Land the fixes as one docs PR from a fresh branch off latest `main`.
