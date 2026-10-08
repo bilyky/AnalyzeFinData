@@ -329,6 +329,52 @@ class TestTlsFallback(unittest.TestCase):
                               if issubclass(w.category, urllib3.exceptions.InsecureRequestWarning)])
 
 
+class TestStaleSecLabel(unittest.TestCase):
+    def setUp(self):
+        self._d = tempfile.TemporaryDirectory()
+        self._env = mock.patch.dict(os.environ, {"AETHER_DATA_DIR": self._d.name,
+                                                 "AETHER_CACHE_DIR": self._d.name})
+        self._env.start()
+        ab._blocked[0] = True          # no network: every expired file is served stale
+        cache = Path(self._d.name) / "edgar_cache"
+        cache.mkdir()
+        for name, body in (("sub_1.json", {"sic": 3585, "name": "Vertiv"}),
+                           ("facts_1.json", {}),
+                           ("sub_2.json", {"sic": 4911, "name": "Util"}),
+                           ("facts_2.json", {})):
+            (cache / name).write_text(json.dumps(body), encoding="utf-8")
+        os.utime(cache / "sub_1.json", (0, 0))    # expired -> served stale
+        os.utime(cache / "facts_1.json", (0, 0))
+
+    def tearDown(self):
+        ab._blocked[0] = False
+        ab._stale_served.clear()
+        self._env.stop()
+        self._d.cleanup()
+
+    def test_rows_from_expired_cache_are_labeled_and_reported(self):
+        stale = []
+        with mock.patch.object(ab, "ticker_cik_map", return_value={"VRT": 1, "UTIL": 2}), \
+             self.assertLogs(ab._log, "WARNING") as logs:
+            rows = ab.scan("2026-10-02", universe=["VRT", "UTIL"], stale=stale)
+        by = {r["symbol"]: r for r in rows}
+        self.assertTrue(by["VRT"]["sec_cache_stale"])
+        self.assertFalse(by["UTIL"]["sec_cache_stale"])   # fresh cache, not labeled
+        self.assertEqual(stale, ["VRT"])
+        self.assertTrue(any("VRT" in m and "older cached SEC data" in m for m in logs.output))
+        out = ab.save(rows, "2026-10-02", stale=stale)
+        self.assertEqual(json.loads(out.read_text(encoding="utf-8"))["sec_cache_stale"], ["VRT"])
+
+    def test_label_does_not_leak_into_next_scan(self):
+        with mock.patch.object(ab, "ticker_cik_map", return_value={"VRT": 1}):
+            ab.scan("2026-10-02", universe=["VRT"])
+        (Path(self._d.name) / "edgar_cache" / "sub_1.json").touch()     # now fresh
+        (Path(self._d.name) / "edgar_cache" / "facts_1.json").touch()
+        with mock.patch.object(ab, "ticker_cik_map", return_value={"VRT": 1}):
+            rows = ab.scan("2026-10-02", universe=["VRT"])
+        self.assertFalse(rows[0]["sec_cache_stale"])
+
+
 class TestUniverse(unittest.TestCase):
     def test_reads_research_sheet_column_d(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"AETHER_DATA_DIR": d}):

@@ -9,8 +9,11 @@ Exits non-zero when the sync fails so the scheduler records a failed run
 (LastTaskResult != 0) rather than a silent success.
 """
 
+import os
 import sys
 
+# The scheduler runs this file directly, which puts only scripts/utils on sys.path.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import watchdog
 
 

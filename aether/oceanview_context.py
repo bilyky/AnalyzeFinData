@@ -14,8 +14,11 @@ Fail-safe contract — there is no silent success path:
   - Live success  -> source "live", broker snapshot cached to Data/oceanview_context.json.
   - Live failure  -> broker snapshot from that cache: age <= max_stale_hours -> "degraded",
                      older or no cache -> "failed". Local sections are always re-read fresh.
-  - Data health   -> held symbols whose recent OHLCV is mostly Chaikin placeholder bars
-                     (bar_provenance.is_provisional) make ATR stops unreliable -> "degraded".
+  - Data health   -> a held symbol with no OHLCV file, or whose recent OHLCV is mostly
+                     Chaikin placeholder bars (bar_provenance.is_provisional), makes its ATR
+                     stop unavailable / unreliable -> "degraded".
+The account -> sleeve map (e.g. overlay-anchor, active-margin) comes from config.json
+(`oceanview.sleeves`, keyed by account last-4): account digits never live in source.
 `failed` means: do not advise on numbers. Recommend-only — nothing here can place an order.
 """
 import datetime
@@ -24,13 +27,13 @@ import json
 import os
 
 from aether import etrade
+from aether.config import CFG
 from aether import paths
 from aether.paths import data_dir as _default_data_dir
 from bar_provenance import is_provisional
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_NAME = "oceanview_context.json"
-SLEEVES = {"3766": "overlay-anchor", "1315": "active-margin"}
 RECENT_BARS = 30
 PLACEHOLDER_SHARE_LIMIT = 0.20   # above this, a symbol's ATR stop is not trustworthy
 _HEALTH_RANK = {"ok": 0, "degraded": 1, "failed": 2}
@@ -106,6 +109,14 @@ def _capabilities() -> dict:
 
 # ── Broker (live, ban-safe) ─────────────────────────────────────────────────────
 
+def _cash(comp: dict) -> float:
+    """netCash when the broker reports it (0 is a real value), else cashBalance."""
+    raw = comp.get("netCash")
+    if raw in (None, ""):
+        raw = comp.get("cashBalance")
+    return float(raw or 0)
+
+
 def read_broker(env: str = "production") -> dict:
     """Accounts + positions via the renew-only token path. Raises LiveUnavailable."""
     tokens = etrade.keep_alive(env)
@@ -129,9 +140,9 @@ def read_broker(env: str = "production") -> dict:
             accounts.append({
                 "account_last4": last4,
                 "desc": a.get("accountDesc", ""),
-                "sleeve": SLEEVES.get(last4),
+                "sleeve": CFG.oceanview_sleeves.get(last4),
                 "net_value": float(comp.get("RealTimeValues", {}).get("totalAccountValue", 0) or 0),
-                "cash": float(comp.get("netCash", 0) or 0) or float(comp.get("cashBalance", 0) or 0),
+                "cash": _cash(comp),
             })
         positions = [{**p, "date_acquired": p["date_acquired"].isoformat() if p.get("date_acquired") else None}
                      for p in etrade.fetch_positions(tokens, env)]
@@ -279,8 +290,13 @@ def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
     if data_health["placeholder_heavy"]:
         warnings.append("ATR stops unreliable for " + ", ".join(
             f"{s} ({v:.0%} placeholder bars)" for s, v in data_health["placeholder_heavy"].items()))
-        if _HEALTH_RANK[health] < _HEALTH_RANK["degraded"]:
-            health = "degraded"
+    if data_health["no_ohlcv"]:
+        # Worse than placeholder-heavy: with no file the stop resolver falls back to 8% off
+        # price for every such position (the state a cache wipe leaves behind).
+        warnings.append("ATR stops unavailable (no OHLCV file) for " + ", ".join(data_health["no_ohlcv"]))
+    stops_affected = data_health["placeholder_heavy"] or data_health["no_ohlcv"]
+    if stops_affected and _HEALTH_RANK[health] < _HEALTH_RANK["degraded"]:
+        health = "degraded"
 
     return {
         "meta": {"generated_at": now.isoformat(timespec="seconds"), "source": source,
@@ -290,7 +306,7 @@ def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
         "state": {
             "accounts": (broker or {}).get("accounts"),
             "positions": (broker or {}).get("positions"),
-            "sleeves": SLEEVES,
+            "sleeves": CFG.oceanview_sleeves,
             "portfolio": portfolio,
             "study_gates": _study_gates(ddir),
             "data_health": data_health,
