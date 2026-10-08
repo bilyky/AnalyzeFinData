@@ -104,6 +104,15 @@ class TestOneHolidayList(unittest.TestCase):
         self.assertIn("2026-09-07", game.NYSE_HOLIDAYS)
         self.assertIn("2026-06-19", game.NYSE_HOLIDAYS)
 
+    def test_holiday_list_covers_this_year_and_next(self):
+        """Review of #176: a year missing from the list makes its holidays look like sessions, so
+        the morning after one the gate would block a fresh workbook as stale. This fails once the
+        list runs out, so someone adds the next year (NYSE publishes it well ahead)."""
+        years = {d[:4] for d in game.NYSE_HOLIDAYS}
+        this_year = datetime.date.today().year
+        for y in (this_year, this_year + 1):
+            self.assertIn(str(y), years, f"NYSE_HOLIDAYS has no {y} dates; add them from nyse.com")
+
 
 if __name__ == "__main__":
     unittest.main()
