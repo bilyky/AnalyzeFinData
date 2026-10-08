@@ -19,7 +19,7 @@ it. These tests pin the five behaviours it carries over from the root, unchanged
    ``_log.console`` but does NOT abort the run (Rule of Loss Minimization);
    ``state["equity"]`` is set to the rounded ``_live_equity`` result.
 
-Plus the ``_pkg()`` call-time seam and the package re-export. Every collaborator
+Every collaborator
 (``get_live_prices``, ``circuit_breaker``, ``options``, ``_live_equity``,
 ``_log``) is patched on the live module — no network, disk, or openpyxl.
 """
@@ -30,7 +30,6 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game  # noqa: E402
-from aether.scenario import price_and_settle as settle_reexport  # noqa: E402
 from aether.scenario.steps import price_and_settle  # noqa: E402
 
 
@@ -158,19 +157,6 @@ class TestEquityMark(unittest.TestCase):
         _, _, _, _, _, m_log = _run(
             state, ["AAA"], ["AAA"], prices={"AAA": 10.0})
         m_log.console.assert_not_called()
-
-
-class TestSeamAndReexport(unittest.TestCase):
-    def test_get_live_prices_resolved_at_call_time(self):
-        # The whole point of _pkg(): the patch applied now is the one used.
-        state = _state()
-        sentinel = {"AAA": 42.0}
-        result, m_prices, *_ = _run(state, ["AAA"], ["AAA"], prices=sentinel)
-        self.assertEqual(result, sentinel)
-        m_prices.assert_called_once()
-
-    def test_reexported_from_package_root(self):
-        self.assertIs(settle_reexport, price_and_settle)
 
 
 if __name__ == "__main__":

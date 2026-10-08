@@ -2,7 +2,7 @@
 
 > **STATUS: NOT YET IMPLEMENTED**
 > This plan references `highest_close_since_acq`, the Gap-Down Guard, and position peak-tracking
-> fields that do not yet exist in the codebase. See the Jul-11 R&D roadmap session in CLAUDE.md
+> fields that do not yet exist in the codebase. See the Jul-11 R&D roadmap session in `plans/roadmap.md`
 > for the implementation timeline (Flower Protection trailing stop).
 
 ## 1. Objective

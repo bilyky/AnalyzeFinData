@@ -16,6 +16,7 @@ import pytz
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from scripts.backtesting import backtest_levels
+from aether import ai_buildout as _ai_buildout
 from aether import decision_eval as _decision_eval
 from aether.config import CFG as _cfg
 import ai_portfolio_game
@@ -345,6 +346,35 @@ def read_portfolio() -> dict:
     }
 
 
+def read_written_calls() -> list[dict]:
+    """Active covered calls: game positions carrying a `written_call`.
+
+    Reads the raw game state directly — read_portfolio() returns a flattened
+    display projection (a *list*) that drops the `written_call` field, so the
+    options view must source from the raw positions dict instead."""
+    try:
+        with open(_GAME, encoding="utf-8") as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+    active_options = []
+    for symbol, details in state.get("positions", {}).items():
+        written_call = details.get("written_call")
+        if not written_call:
+            continue
+        active_options.append({
+            "symbol":           symbol,
+            "qty":              written_call.get("qty"),
+            "strike":           written_call.get("strike"),
+            "premium":          written_call.get("premium"),
+            "expiration_date":  written_call.get("expiration_date"),
+            "sigma":            written_call.get("sigma"),
+            "underlying_price": details.get("price") or details.get("cost"),
+        })
+    return active_options
+
+
 # ── Picks & replacements ──────────────────────────────────────────────────────
 
 def read_picks() -> dict:
@@ -380,6 +410,21 @@ def read_reserves() -> dict:
         except Exception as e:
             return {"reserves": [], "error": str(e)}
     return _cached("reserves", 60.0, _load)
+
+
+def read_ai_buildout(theme: str = _ai_buildout.DEFAULT_THEME) -> dict:
+    """Latest theme watch (scripts/monitoring/ai_buildout_watch.py --theme ...).
+    Cached 60s per theme; empty rows when the scan has not run yet."""
+    if theme not in _ai_buildout.THEMES:
+        return {"as_of": None, "rows": [], "error": f"unknown theme {theme!r}"}
+
+    def _load():
+        try:
+            data = _ai_buildout.load_latest(theme=theme)
+            return data or {"as_of": None, "theme": theme, "rows": []}
+        except Exception as e:
+            return {"as_of": None, "theme": theme, "rows": [], "error": str(e)}
+    return _cached(f"theme_watch:{theme}", 60.0, _load)
 
 
 # ── Research sheet (full screener output) ──────────────────────────────────────
