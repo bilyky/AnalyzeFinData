@@ -12,7 +12,7 @@ import notify
 from aether import etrade
 import powergauge
 from pathlib import Path
-from aether import paths, trash
+from aether import oceanview_context, paths, trash
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("watchdog")
@@ -40,6 +40,7 @@ DATA_ALERT_MARKER = BASE_DIR / "Data" / "data_alert_sent.json"     # once-a-day 
 SENTINEL_DIRS = ("Symbol", "Symbol_full")
 SENTINEL_MAX_DROP = 0.20     # alert when a cache loses more than 20% of its entries between runs
 BACKUP_STALE_DAYS = 3        # alert when no backup has succeeded for this long
+PACK_STATUS_STALE_H = 30     # the evening pipeline rebuilds the OceanView pack daily; older = missed
 
 python_exe = sys.executable
 run_agent = BASE_DIR / "run_agent.cmd"
@@ -633,6 +634,34 @@ def check_backup_health():
     return []
 
 
+def check_context_pack_health():
+    """Alert when the OceanView context pack's last build was "failed", or it stopped being
+    rebuilt (status older than PACK_STATUS_STALE_H). Reads the verdict the pack writes on every
+    build (oceanview_context.STATUS_NAME). No status yet (never built, e.g. right after a deploy)
+    is not an alert: the next evening pipeline creates it. "degraded" is logged by the pack
+    itself, not emailed here."""
+    status = _read_json(Path(paths.data_dir()) / oceanview_context.STATUS_NAME)
+    if status is None:
+        return []
+    at = status.get("generated_at")
+    try:
+        built = datetime.datetime.fromisoformat(at)
+    except (TypeError, ValueError):
+        return [f"WARNING: the OceanView context pack status is unreadable (generated_at={at!r})."]
+    if built.tzinfo is None:
+        built = built.astimezone()                     # naive = local time
+    age_h = (datetime.datetime.now(datetime.timezone.utc) - built).total_seconds() / 3600
+    alerts = []
+    if age_h > PACK_STATUS_STALE_H:
+        alerts.append(f"WARNING: the OceanView context pack was last built {age_h:.0f} h ago ({at}). "
+                      f"The evening pipeline (daily_task) should rebuild it every day.")
+    if status.get("health") == "failed":
+        detail = "; ".join(status.get("warnings") or [])[:400]
+        alerts.append(f"CRITICAL: the OceanView context pack's last build ({at}) is FAILED, so "
+                      f"don't advise on account numbers until it recovers. {detail}")
+    return alerts
+
+
 def _alert_key(alert):
     """Identity of an alert for throttling: its text with the numbers blanked, so the same
     alert repeated hourly (counts unchanged or not) is one key, but a different alert —
@@ -640,7 +669,8 @@ def _alert_key(alert):
     return re.sub(r"\d+", "#", alert)
 
 
-def send_data_alerts(alerts):
+def send_data_alerts(alerts, subject="🛑 Project AETHER: data-loss / backup alert",
+                     heading="Project AETHER: data-loss / backup alert"):
     """Email data-loss / backup alerts; each distinct alert at most once per calendar day.
 
     Throttled PER ALERT, not per day: a single daily marker let the first alert of the
@@ -656,10 +686,9 @@ def send_data_alerts(alerts):
     new = [a for a in alerts if _alert_key(a) not in sent]
     if not new:
         return
-    body = ("<h3>Project AETHER: data-loss / backup alert</h3><ul>"
-            + "".join(f"<li>{a}</li>" for a in new) + "</ul>")
+    body = (f"<h3>{heading}</h3><ul>" + "".join(f"<li>{a}</li>" for a in new) + "</ul>")
     try:
-        notify.send_email("🛑 Project AETHER: data-loss / backup alert", body, is_html=True)
+        notify.send_email(subject, body, is_html=True)
         _write_json(DATA_ALERT_MARKER, {"date": today, "sent": sorted(sent | {_alert_key(a) for a in new})})
     except Exception as e:
         _log.error(f"❌ Failed to send data alert email: {e}")
@@ -969,6 +998,10 @@ def run_watchdog():
     #     below is only sent for healing actions or log errors, so a data issue never emailed.
     data_alerts = check_data_sentinel() + check_backup_health()
     send_data_alerts(data_alerts)
+    # 1a'. OceanView context pack health gate (pack rebuilt by the evening daily_task).
+    send_data_alerts(check_context_pack_health(),
+                     subject="🛑 Project AETHER: OceanView context pack alert",
+                     heading="Project AETHER: OceanView context pack alert")
     
     # 1b. Clean up any stray/duplicate AETHER tasks (Pillar 1 Self-Sanitation)
     purge_stray_tasks()

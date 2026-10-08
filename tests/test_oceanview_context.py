@@ -213,6 +213,34 @@ class TestReviewFixes(_Base):
         self.assertFalse(hasattr(ovc, "SLEEVES"))
 
 
+class TestStatusFile(_Base):
+    """Every build records its verdict for the watchdog gate — including failed ones, which
+    write no cache. The status holds meta only: no accounts, positions or sleeves."""
+
+    def _status(self):
+        with open(os.path.join(self.dir, ovc.STATUS_NAME), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_failed_build_still_writes_its_verdict(self):
+        with mock.patch.object(ovc.etrade, "keep_alive", return_value=None):
+            self.build()
+        st = self._status()
+        self.assertEqual(st["health"], "failed")
+        self.assertFalse(os.path.exists(os.path.join(self.dir, ovc.CACHE_NAME)))   # no cache written
+        self.assertEqual(set(st), {"generated_at", "source", "broker_as_of", "staleness_hours",
+                                   "health", "warnings"})
+
+    def test_live_build_records_ok(self):
+        with self._live() as m:
+            m["keep_alive"].return_value = {"oauth_token": "t"}
+            m["get_accounts"].return_value = _FakeAccounts()
+            m["fetch_positions"].return_value = []
+            self.build()
+        st = self._status()
+        self.assertEqual((st["health"], st["source"]), ("ok", "live"))
+        self.assertNotIn("accounts", json.dumps(st))
+
+
 class TestStudyGates(_Base):
     def test_reports_only_what_the_file_states(self):
         for name, body in {"a": {"as_of": "2026-09-01", "verdict": "PASS"},
