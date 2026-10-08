@@ -29,6 +29,7 @@ BASE_DIR = Path(__file__).resolve().parent
 AI_GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
 GAME_BACKUP_DIR = BASE_DIR / "Data" / "Backup" / "Game"   # timestamped save_game backups (keeps last 15)
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
+
 AI_PERF_XLSX = BASE_DIR / "Data" / "ai_portfolio_performance.xlsx"
 SYMBOL_FULL_DIR = Path(paths.ohlcv_dir())   # OHLCV cache — one source of truth ($AETHER_CACHE_DIR-aware)
 INITIAL_BALANCE = 10000.0
@@ -43,6 +44,53 @@ from aether import options
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
+
+# Full-day NYSE closures (one list: is_market_hours and the stale-workbook gate both use it).
+NYSE_HOLIDAYS = frozenset({
+    "2026-01-01",  # New Year's Day
+    "2026-01-19",  # Martin Luther King Jr. Day
+    "2026-02-16",  # Presidents' Day
+    "2026-04-03",  # Good Friday
+    "2026-05-25",  # Memorial Day
+    "2026-06-19",  # Juneteenth National Independence Day
+    "2026-07-03",  # Independence Day (Observed)
+    "2026-09-07",  # Labor Day
+    "2026-11-26",  # Thanksgiving Day
+    "2026-12-25",  # Christmas Day
+    
+    # Future Years Support (2027)
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24"
+})
+
+_SESSION_CLOSE_LA = (13, 0)  # 4:00 PM ET
+
+
+def _previous_session_close(now):
+    """13:00 America/Los_Angeles on the last weekday before `now`'s date that wasn't an NYSE holiday."""
+    tz_la = pytz.timezone("America/Los_Angeles")
+    day = now.astimezone(tz_la).date() - datetime.timedelta(days=1)
+    while day.weekday() >= 5 or day.isoformat() in NYSE_HOLIDAYS:
+        day -= datetime.timedelta(days=1)
+    return tz_la.localize(datetime.datetime(day.year, day.month, day.day, *_SESSION_CLOSE_LA))
+
+
+def workbook_staleness(path=None, now=None):
+    """Why the workbook is too old to trade on, or None when it is fresh enough.
+
+    Fresh = last written after the previous trading session's close: at the 07:00 run the
+    previous close is the newest data there can be, whether the evening or the morning
+    refresh wrote it."""
+    path = Path(path or XLSX_FILE)
+    now = now or datetime.datetime.now(pytz.timezone("America/Los_Angeles"))
+    cutoff = _previous_session_close(now)
+    if not path.exists():
+        return f"workbook {path.name} is missing"
+    written = datetime.datetime.fromtimestamp(path.stat().st_mtime, tz=cutoff.tzinfo)
+    if written < cutoff:
+        return (f"workbook {path.name} was last written {written:%Y-%m-%d %H:%M %Z}, before the "
+                f"previous session's close ({cutoff:%Y-%m-%d %H:%M %Z}); both refreshes since then failed")
+    return None
 
 
 _SYMBOL_DAY_CACHE = {}
@@ -1018,25 +1066,9 @@ def is_market_hours():
             return False
             
         # 3. Static US Stock Market Holiday (NYSE)
-        holidays_2026 = {
-            "2026-01-01",  # New Year's Day
-            "2026-01-19",  # Martin Luther King Jr. Day
-            "2026-02-16",  # Presidents' Day
-            "2026-04-03",  # Good Friday
-            "2026-05-25",  # Memorial Day
-            "2026-06-19",  # Juneteenth National Independence Day
-            "2026-07-03",  # Independence Day (Observed)
-            "2026-09-07",  # Labor Day
-            "2026-11-26",  # Thanksgiving Day
-            "2026-12-25",  # Christmas Day
-            
-            # Future Years Support (2027)
-            "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
-            "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24"
-        }
         
         today_str = now_la.strftime("%Y-%m-%d")
-        if today_str in holidays_2026:
+        if today_str in NYSE_HOLIDAYS:
             return False
             
         # 4. Dynamic Live Verification (Clock API + SPY Ticker)
@@ -1468,6 +1500,19 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
         if not XLSX_FILE.exists():
             _log.info("Workbook not found. AI Management deferred.")
+            return
+
+        # Live-data-only mandate: never trade on a workbook neither refresh updated.
+        stale = workbook_staleness(XLSX_FILE)
+        if stale:
+            _log.error(f"🛑 Refusing to trade on a stale workbook: {stale}.")
+            try:
+                notify.send_email(f"ALERT: AI trades skipped - stale workbook ({today})",
+                                  f"The trade run did not act because the {stale}.\n\n"
+                                  "Check the evening daily_task and morning pipeline logs, refresh the "
+                                  "workbook (python main.py), then rerun: python ai_portfolio_game.py --run --force")
+            except Exception as e:
+                _log.error(f"Could not send the stale-workbook alert: {e}")
             return
 
         wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
