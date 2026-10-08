@@ -115,8 +115,9 @@ $Tasks = @(
         )
         Script   = "venv_new\Scripts\python.exe daily_task.py"
         # daily_task ends with the OHLCV recovery pass (~5 h worst case for its 400-fetch
-        # budget, see rapidapi.pass_timeout_seconds) — the default 15-min limit would kill it.
-        TimeLimitMin = 360
+        # budget, see rapidapi.pass_timeout_seconds), after run_history + main.py (30 min cap each,
+        # see daily_task.worst_case_runtime_seconds) — the default 15-min limit would kill it.
+        TimeLimitMin = 420
         Log      = "aftermarket_report_agent.log"
         Desc     = "Generates and emails the final post-market closing equity and daily performance report at 5:00 PM PST."
     },

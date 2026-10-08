@@ -40,7 +40,7 @@ class TestTaskTimeLimits(unittest.TestCase):
 
     def test_evening_task_outlives_the_whole_daily_task(self):
         # Every step timeout in daily_task.main(), not just the recovery pass: run_history +
-        # main.py + backup sync + pass + slack. Raising the fetch budget past what 360 min
+        # main.py + backup sync + pass + slack. Raising a step budget past what the Evening limit
         # covers fails here instead of having Windows stop the task mid-pass.
         limit_s = self._limits(["AnalyzeFinData_Evening"])["AnalyzeFinData_Evening"] * 60
         self.assertGreaterEqual(limit_s, daily_task.worst_case_runtime_seconds())
