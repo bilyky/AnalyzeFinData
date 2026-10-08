@@ -76,6 +76,13 @@ class TestContextPackGate(unittest.TestCase):
         self.assertEqual(send.call_count, 1)                      # same alert: once a day
         self.assertIn("OceanView context pack alert", send.call_args[0][0])
 
+    def test_alert_text_is_html_escaped(self):
+        with mock.patch.object(watchdog.notify, "send_email") as send:
+            watchdog.send_data_alerts(["CRITICAL: boom <script>x</script> & more"], subject="s", heading="h")
+        body = send.call_args[0][1]
+        self.assertIn("&lt;script&gt;", body)
+        self.assertNotIn("<script>", body)
+
 
 if __name__ == "__main__":
     unittest.main()

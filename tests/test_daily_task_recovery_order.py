@@ -66,7 +66,7 @@ class TestRecoveryRunsLast(unittest.TestCase):
                       if isinstance(c, str) and c.startswith("email:AETHER Daily Rotation"))
         self.assertLess(report, self._recovery_index(calls))
         self.assertLess(calls.index("sync"), self._recovery_index(calls))
-        self.assertEqual(calls[-2:], [calls[self._recovery_index(calls)], "pack"])  # repair, then pack, last
+        self.assertEqual(calls[-2:], ["pack", calls[self._recovery_index(calls)]])  # pack, then repair, last
 
     def test_recovery_uses_the_budgeted_timeout(self):
         calls = self._main()
@@ -75,13 +75,22 @@ class TestRecoveryRunsLast(unittest.TestCase):
     def test_recovery_still_runs_when_the_report_fails(self):
         calls = self._main(data=RuntimeError("workbook locked"))
         self.assertTrue(any(isinstance(c, str) and c.startswith("email:ALERT") for c in calls))
-        self.assertEqual(calls[-2][:2], ("cmd", "rapidapi.py"))
-        self.assertEqual(calls[-1], "pack")
+        self.assertEqual(calls[-2], "pack")
+        self.assertEqual(calls[-1][:2], ("cmd", "rapidapi.py"))
 
     def test_recovery_still_runs_on_the_no_data_early_return(self):
         calls = self._main(data=())
-        self.assertEqual(calls[-2][:2], ("cmd", "rapidapi.py"))
-        self.assertEqual(calls[-1], "pack")
+        self.assertEqual(calls[-2], "pack")
+        self.assertEqual(calls[-1][:2], ("cmd", "rapidapi.py"))
+
+    def test_pack_runs_after_the_report_and_before_the_repair(self):
+        # The pack's live broker read needs the same-day ET token (gone at 21:00 PT); the
+        # repair pass can run for hours, so the pack is built after the report, BEFORE it.
+        calls = self._main()
+        report = next(i for i, c in enumerate(calls)
+                      if isinstance(c, str) and c.startswith("email:AETHER Daily Rotation"))
+        self.assertLess(report, calls.index("pack"))
+        self.assertLess(calls.index("pack"), self._recovery_index(calls))
 
     def test_report_only_never_runs_recovery(self):
         calls = self._main(argv=["--report-only"])

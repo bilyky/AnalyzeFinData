@@ -7,6 +7,7 @@ import pytz
 import subprocess
 import re
 import ctypes
+import html
 import json
 import notify
 from aether import etrade
@@ -686,7 +687,9 @@ def send_data_alerts(alerts, subject="🛑 Project AETHER: data-loss / backup al
     new = [a for a in alerts if _alert_key(a) not in sent]
     if not new:
         return
-    body = (f"<h3>{heading}</h3><ul>" + "".join(f"<li>{a}</li>" for a in new) + "</ul>")
+    # Escaped: alert text can carry exception messages (e.g. the pack's warnings).
+    body = (f"<h3>{html.escape(heading)}</h3><ul>"
+            + "".join(f"<li>{html.escape(a)}</li>" for a in new) + "</ul>")
     try:
         notify.send_email(subject, body, is_html=True)
         _write_json(DATA_ALERT_MARKER, {"date": today, "sent": sorted(sent | {_alert_key(a) for a in new})})

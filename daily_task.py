@@ -63,8 +63,13 @@ def build_context_pack():
     Ban-safe: the broker read inside goes through etrade.keep_alive (renew-only, never a
     browser). The pack writes its cache (Data/oceanview_context.json) on a live success and
     its verdict (Data/oceanview_context_status.json) on every build; watchdog alerts when the
-    verdict is "failed" or goes stale. Runs after the recovery pass so its data health sees
-    the repaired bars. Non-fatal by design: the report has already gone out."""
+    verdict is "failed" or goes stale. Non-fatal by design: the report has already gone out.
+
+    Runs BEFORE the RapidAPI recovery pass: the broker read needs a same-day ET token, and
+    the token's day ends at midnight ET (21:00 PT), while the pass can run for hours (PROD
+    2026-10-07: 17:15 -> 18:56 PT; worst case ~5 h). Building first keeps the live read well
+    inside the token's day; the trade-off is that data health reflects the bars before
+    tonight's repair."""
     _log.info("Building the OceanView context pack...")
     try:
         meta = oceanview_context.build_oceanview_context(
@@ -439,8 +444,8 @@ def main():
             _log.info(f"Could not send error alert email: {notify_err}")
     finally:
         if not report_only:
+            build_context_pack()       # before the long repair: needs the same-day ET token
             run_ohlcv_recovery()
-            build_context_pack()
 
 
 if __name__ == "__main__":
