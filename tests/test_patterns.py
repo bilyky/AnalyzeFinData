@@ -146,8 +146,7 @@ class TestCandlestickScore(unittest.TestCase):
         known = dict(patterns.CANDLESTICK_WEIGHTS)
         known.update({"engulfing": 1.5, "double_trouble": 1.6})
         with mock.patch.object(patterns, "CANDLESTICK_WEIGHTS", known), \
-             mock.patch.object(patterns, "_SATURATION_DIVISOR", 5.0), \
-             mock.patch.object(patterns, "_CANDLESTICK_SIGN", 1):
+             mock.patch.object(patterns, "_SATURATION_DIVISOR", 5.0):
             up = patterns.candlestick_score(self._engulfing_series(False), "2026-04-15")
             dn = patterns.candlestick_score(self._engulfing_series(mirror=True), "2026-04-15")
         # patterns actually fired (compute path ran, not a guard short-circuit)
@@ -201,7 +200,7 @@ class TestCandlestickCalibrationLoader(unittest.TestCase):
             os.path.join(tempfile.gettempdir(), "no_such_candlestick_study.json")
         )
         self.assertAlmostEqual(divisor, patterns._DEFAULT_SATURATION_DIVISOR)
-        self.assertEqual(sign, 1)
+        self.assertIsNone(sign)  # no study -> no verdict (reported, never applied)
         self.assertEqual(set(weights.keys()), set(patterns._PATTERN_NAMES))
         self.assertTrue(all(v == 1.0 for v in weights.values()))
 
@@ -216,20 +215,21 @@ class TestCandlestickCalibrationLoader(unittest.TestCase):
         finally:
             os.unlink(path)
         self.assertAlmostEqual(divisor, patterns._DEFAULT_SATURATION_DIVISOR)
-        self.assertEqual(sign, 1)
+        self.assertIsNone(sign)
         self.assertTrue(all(v == 1.0 for v in weights.values()))
 
-    def test_candlestick_score_respects_calibrated_contrarian_sign(self):
-        # When _CANDLESTICK_SIGN is -1, the output score must be flipped negative!
+    def test_candlestick_score_ignores_study_sign(self):
+        # The contrarian sign is applied ONLY in scoring; candlestick_score must return the
+        # raw tally whatever the study verdict, or the factor is double-negated.
         known = dict(patterns.CANDLESTICK_WEIGHTS)
         known.update({"engulfing": 1.5, "double_trouble": 1.6})
+        ts = TestCandlestickScore._engulfing_series(False)
         with mock.patch.object(patterns, "CANDLESTICK_WEIGHTS", known), \
              mock.patch.object(patterns, "_SATURATION_DIVISOR", 5.0), \
-             mock.patch.object(patterns, "_CANDLESTICK_SIGN", -1):
-            up_contrarian = patterns.candlestick_score(TestCandlestickScore._engulfing_series(False), "2026-04-15")
-        
-        # Pre-calibration (sign=1) was -1.24; under contrarian (sign=-1) it must be +1.24!
-        self.assertAlmostEqual(up_contrarian, 1.24, places=2)
+             mock.patch.object(patterns, "CANDLESTICK_STUDY_SIGN", -1):
+            under_contrarian = patterns.candlestick_score(ts, "2026-04-15")
+        # Same raw golden as test_fires_bounded_and_sign_antisymmetric (bearish tally).
+        self.assertAlmostEqual(under_contrarian, -1.24, places=2)
 
 
 if __name__ == "__main__":
