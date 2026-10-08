@@ -25,7 +25,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 STEPS = ROOT / "aether" / "scenario" / "steps.py"
 MODULES = ["tests.test_scenario_steps", "tests.test_scenario_assemble", "tests.test_scenario_settle",
-           "tests.test_scenario_queued", "tests.test_scenario_exits"]
+           "tests.test_scenario_queued", "tests.test_scenario_exits",
+           "tests.test_scenario_sell_exec"]
 
 # (label, exact text in steps.py, replacement). Each anchor must occur exactly once.
 MUTANTS = [
@@ -104,6 +105,23 @@ MUTANTS += [  # round 2: targets behaviours round 1 never touched
     ("exits: scale-out after hours", 'and pos.get("qty", 0) > 1 and game.is_market_hours():', 'and pos.get("qty", 0) > 1:'),
     ("exits: conviction log off", 'if so_frac <= 0 and so_reason.startswith("held: high-conviction"):', 'if False:'),
     ("exits: original-lot sizing off", 'original_qty = pos["qty"] / (1.0 - banked_pct)', 'original_qty = pos["qty"]'),
+]
+
+MUTANTS += [  # execute_exits (SELL execution loop)
+    ("sell: price fallback 0", 'price = prices.get(sym, pos["cost"])', 'price = prices.get(sym, 0.0)'),
+    ("sell: no call unwind", 'pos["cost"])\n        game.options.unwind_option_liability_if_held(sym, pos, state, price, today)',
+     'pos["cost"])\n        pass'),
+    ("sell: position kept", '        state["positions"].pop(sym)\n\n        # Slippage', '        pass\n\n        # Slippage'),
+    ("sell: stp <= -> <", 'stop_fill = stop_loss > 0.0 and price <= stop_loss', 'stop_fill = stop_loss > 0.0 and price < stop_loss'),
+    ("sell: stp ignores zero stop", 'stop_fill = stop_loss > 0.0 and price', 'stop_fill = stop_loss >= 0.0 and price'),
+    ("sell: stp fills at market", '            price = stop_loss\n\n        proceeds', '            pass\n\n        proceeds'),
+    ("sell: no credit", '        proceeds = pos["qty"] * price\n        state["balance"] += proceeds',
+     '        proceeds = pos["qty"] * price\n        state["balance"] += 0'),
+    ("sell: no stp tag", '(" [STP LMT fill]" if stop_fill else "")', '""'),
+    ("sell: tx drops stop_loss", '"stop_loss": pos.get("stop_loss")}', '"stop_loss": None}'),
+    ("sell: no history", '        state["history"].append(tx)\n        new_transactions.append(tx)\n        game._log.info(f"🤖 AI LIVE SELL', '        new_transactions.append(tx)\n        game._log.info(f"🤖 AI LIVE SELL'),
+    ("sell: no dna", '(Time: {now_time})")\n        game.log_closed_trade_dna(sym, pos, price, today)',
+     '(Time: {now_time})")\n        pass'),
 ]
 
 
