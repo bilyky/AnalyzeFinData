@@ -183,9 +183,17 @@ import aether.trash as _trash
 _test_lock_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
 _lock_tmp = Path(_test_lock_dir.name)
 _trash.TRASH_DIR = str(_lock_tmp / ".trash")
+# OceanView context pack: its default folder (cache + status file) -> temp, so a test that
+# runs the real daily_task.main() can never write Data/oceanview_context*.json.
+# Its own subfolder, so a pack built by one test never shows up as the watchdog's
+# PACK_STATUS_FILE (redirected to the lock folder below) in another.
+import aether.oceanview_context as _oceanview_context
+(_lock_tmp / "oceanview").mkdir(exist_ok=True)
+_oceanview_context._default_data_dir = lambda: str(_lock_tmp / "oceanview")
 _run_guard._DATA_DIR = _lock_tmp
 for _mod_name, _attrs in (("watchdog", ("WATCHDOG_LOCK_FILE", "SELF_HEAL_LOCK", "SELF_HEAL_PROMPT_FILE",
-                                       "DATA_SENTINEL_FILE", "BACKUP_STATUS_FILE", "DATA_ALERT_MARKER")),
+                                       "DATA_SENTINEL_FILE", "BACKUP_STATUS_FILE", "DATA_ALERT_MARKER",
+                                       "PACK_STATUS_FILE")),
                           ("autonomous_pipeline", ("PIPELINE_LOCK_FILE",))):
     try:
         _mod = _importlib.import_module(_mod_name)

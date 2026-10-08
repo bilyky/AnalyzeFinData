@@ -11,7 +11,7 @@ from pathlib import Path
 import openpyxl
 
 import notify
-from aether import paths
+from aether import oceanview_context, paths
 import powergauge
 import rapidapi
 import watchdog
@@ -40,6 +40,9 @@ STEP_TIMEOUT_S = 600          # run_command default
 RUN_HISTORY_TIMEOUT_S = 1800
 MAIN_TIMEOUT_S = 1800
 UNBOUNDED_STEPS_SLACK_S = 600  # lint, data load, report build + email: no timeout of their own
+CONTEXT_PACK_SLACK_S = 300     # OceanView pack build: a few broker reads + local files
+PACK_MAX_STALE_H = 24          # weekday: a broker snapshot older than this -> health "failed"
+PACK_MAX_STALE_WEEKEND_H = 72  # Sat/Sun: no fresh token, Friday's snapshot is expected
 
 
 def worst_case_runtime_seconds():
@@ -47,7 +50,39 @@ def worst_case_runtime_seconds():
     (run_history, main.py, the backup sync, the recovery pass) plus slack for the steps
     that have none. The Evening task's scheduler limit must be at least this."""
     return (RUN_HISTORY_TIMEOUT_S + MAIN_TIMEOUT_S + watchdog.SYNC_TIMEOUT_S + rapidapi.pass_timeout_seconds()
-            + UNBOUNDED_STEPS_SLACK_S)
+            + UNBOUNDED_STEPS_SLACK_S + CONTEXT_PACK_SLACK_S)
+
+
+def pack_max_stale_hours(today=None):
+    """How old the cached broker snapshot may be before the pack calls itself "failed".
+
+    No E*TRADE token is minted on weekends, so Saturday/Sunday builds fall back to Friday's
+    snapshot (~24-48 h old): allowing 72 h there keeps a normal weekend from alerting."""
+    today = today or datetime.date.today()
+    return PACK_MAX_STALE_WEEKEND_H if today.weekday() >= 5 else PACK_MAX_STALE_H
+
+
+def build_context_pack():
+    """OceanView Context Pack — rebuild it and record its health for the watchdog gate.
+
+    Ban-safe: the broker read inside goes through etrade.keep_alive (renew-only, never a
+    browser). The pack writes its cache (Data/oceanview_context.json) on a live success and
+    its verdict (Data/oceanview_context_status.json) on every build; watchdog alerts when the
+    verdict is "failed" or goes stale. Non-fatal by design: the report has already gone out.
+
+    Runs BEFORE the RapidAPI recovery pass: the broker read needs a same-day ET token, and
+    the token's day ends at midnight ET (21:00 PT), while the pass can run for hours (PROD
+    2026-10-07: 17:15 -> 18:56 PT; worst case ~5 h). Building first keeps the live read well
+    inside the token's day; the trade-off is that data health reflects the bars before
+    tonight's repair."""
+    _log.info("Building the OceanView context pack...")
+    try:
+        meta = oceanview_context.build_oceanview_context(
+            live=True, max_stale_hours=pack_max_stale_hours())["meta"]
+        _log.info(f"OceanView context pack: health={meta['health']} source={meta['source']} "
+                  f"warnings={len(meta['warnings'])}")
+    except Exception as e:
+        _log.warning(f"Warning: OceanView context pack build failed (non-fatal): {e}")
 
 
 def run_ohlcv_recovery():
@@ -436,6 +471,7 @@ def main():
             _log.info(f"Could not send error alert email: {notify_err}")
     finally:
         if not report_only:
+            build_context_pack()       # before the long repair: needs the same-day ET token
             run_ohlcv_recovery()
 
     if fatal or _failed_steps:

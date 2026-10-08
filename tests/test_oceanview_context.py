@@ -167,8 +167,9 @@ class TestDataHealth(_Base):
         shutil.copy(os.path.join(self.dir, "Symbol_full", "AAPL_daily.json"),
                     os.path.join(cache, "Symbol_full", "AAPL_daily.json"))
         os.remove(os.path.join(self.dir, "Symbol_full", "AAPL_daily.json"))
-        env = {"AETHER_DATA_DIR": self.dir, "AETHER_CACHE_DIR": cache}
-        with mock.patch.dict(os.environ, env),              mock.patch.object(ovc.etrade, "keep_alive", return_value=None):
+        # No data_dir argument: the pack's default folder (here self.dir) holds the game JSON,
+        # while OHLCV comes from paths.ohlcv_dir() ($AETHER_CACHE_DIR).
+        with mock.patch.dict(os.environ, {"AETHER_CACHE_DIR": cache}),              mock.patch.object(ovc, "_default_data_dir", return_value=self.dir),              mock.patch.object(ovc.etrade, "keep_alive", return_value=None):
             pack = ovc.build_oceanview_context(now=NOW)
         self.assertEqual(pack["state"]["data_health"]["no_ohlcv"], [])   # found in the cache dir
         self.assertEqual(pack["state"]["portfolio"]["closed_sells"], 1)  # still read from data dir
@@ -211,6 +212,34 @@ class TestReviewFixes(_Base):
             pack = self._live_pack([])
         self.assertEqual({a["sleeve"] for a in pack["state"]["accounts"]}, {None})
         self.assertFalse(hasattr(ovc, "SLEEVES"))
+
+
+class TestStatusFile(_Base):
+    """Every build records its verdict for the watchdog gate — including failed ones, which
+    write no cache. The status holds meta only: no accounts, positions or sleeves."""
+
+    def _status(self):
+        with open(os.path.join(self.dir, ovc.STATUS_NAME), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_failed_build_still_writes_its_verdict(self):
+        with mock.patch.object(ovc.etrade, "keep_alive", return_value=None):
+            self.build()
+        st = self._status()
+        self.assertEqual(st["health"], "failed")
+        self.assertFalse(os.path.exists(os.path.join(self.dir, ovc.CACHE_NAME)))   # no cache written
+        self.assertEqual(set(st), {"generated_at", "source", "broker_as_of", "staleness_hours",
+                                   "health", "warnings"})
+
+    def test_live_build_records_ok(self):
+        with self._live() as m:
+            m["keep_alive"].return_value = {"oauth_token": "t"}
+            m["get_accounts"].return_value = _FakeAccounts()
+            m["fetch_positions"].return_value = []
+            self.build()
+        st = self._status()
+        self.assertEqual((st["health"], st["source"]), ("ok", "live"))
+        self.assertNotIn("accounts", json.dumps(st))
 
 
 class TestStudyGates(_Base):

@@ -34,6 +34,10 @@ from bar_provenance import is_provisional
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_NAME = "oceanview_context.json"
+# Verdict of the LAST build (ok / degraded / failed), written on every build — the cache above
+# is only written on a live success, so a failed build would otherwise leave no trace. Read by
+# watchdog.check_context_pack_health. Holds only meta (no accounts, positions or sleeves).
+STATUS_NAME = "oceanview_context_status.json"
 RECENT_BARS = 30
 PLACEHOLDER_SHARE_LIMIT = 0.20   # above this, a symbol's ATR stop is not trustworthy
 _HEALTH_RANK = {"ok": 0, "degraded": 1, "failed": 2}
@@ -298,10 +302,15 @@ def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
     if stops_affected and _HEALTH_RANK[health] < _HEALTH_RANK["degraded"]:
         health = "degraded"
 
+    meta = {"generated_at": now.isoformat(timespec="seconds"), "source": source,
+            "broker_as_of": broker_as_of, "staleness_hours": staleness,
+            "health": health, "warnings": warnings}
+    try:
+        _write_cache(os.path.join(ddir, STATUS_NAME), meta)
+    except OSError as e:
+        warnings.append(f"could not write {STATUS_NAME}: {e}")
     return {
-        "meta": {"generated_at": now.isoformat(timespec="seconds"), "source": source,
-                 "broker_as_of": broker_as_of, "staleness_hours": staleness,
-                 "health": health, "warnings": warnings},
+        "meta": meta,
         "knowledge": _knowledge(),
         "state": {
             "accounts": (broker or {}).get("accounts"),
