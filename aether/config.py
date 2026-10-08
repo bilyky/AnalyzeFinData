@@ -110,6 +110,11 @@ class _Config:
         )
 
         # ── RapidAPI / Alpha Vantage ──────────────────────────────────────────
+        # ── OceanView ── account last-4 -> sleeve label. PII: lives only in config.json
+        # (gitignored), never in source or tests.
+        oceanview = raw.get("oceanview") or {}
+        self.oceanview_sleeves = {str(k): str(v) for k, v in (oceanview.get("sleeves") or {}).items()}
+
         rapidapi = raw.get("rapidapi") or {}
         self.rapidapi_key = os.environ.get("RAPIDAPI_KEY") or rapidapi.get("api_key", "")
         # Fetches allowed per recovery run (the plan's per-run budget). The universe is
