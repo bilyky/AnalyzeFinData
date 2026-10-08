@@ -169,6 +169,9 @@ _tls_fallback = [False]
 _BLOCK_AFTER_403S = 3
 _consecutive_403 = [0]
 _blocked = [False]
+# Cache files served past their lifetime because a refresh failed. scan() turns
+# these into a per-row label and one warning, so stale SEC data is never silent.
+_stale_served = set()
 
 
 def _http_get(url):
@@ -254,6 +257,7 @@ def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
     if data is None:
         stale = _read_cache(cache_name)
         if stale is not None:
+            _stale_served.add(cache_name)
             _log.debug(f"Using stale EDGAR cache for {cache_name}")
         return stale
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -487,13 +491,17 @@ def _load_ohlcv(symbol):
         return None
 
 
-def scan(as_of, universe=None, failed=None, theme=DEFAULT_THEME):
+def scan(as_of, universe=None, failed=None, theme=DEFAULT_THEME, stale=None):
     """Classify universe + seed names into the theme's buckets and compute signals.
     A seed-only theme (no SIC codes) scans just its seed list. Returns a list of
     rows sorted by watch_score (high first). Symbols whose SEC submissions could
     not be fetched are appended to `failed` (if given) so the caller can report
-    them instead of dropping them silently."""
+    them instead of dropping them silently. Rows built from an expired SEC cache
+    (refresh failed) get sec_cache_stale=True, are appended to `stale` (if given),
+    and are summarized in one warning."""
     t = _theme(theme)
+    _stale_served.clear()
+    stale = [] if stale is None else stale
     cik_map = ticker_cik_map()
     if not cik_map:
         raise RuntimeError("SEC ticker map unavailable; cannot scan.")
@@ -512,8 +520,14 @@ def scan(as_of, universe=None, failed=None, theme=DEFAULT_THEME):
         bucket = bucket_for(sym, (sub or {}).get("sic"), theme)
         if not bucket:
             continue
-        rows.append(build_row(sym, bucket, sub, company_facts(cik),
-                              _load_ohlcv(sym), spy_bars, as_of))
+        row = build_row(sym, bucket, sub, company_facts(cik), _load_ohlcv(sym), spy_bars, as_of)
+        row["sec_cache_stale"] = bool({f"sub_{cik}.json", f"facts_{cik}.json"} & _stale_served)
+        if row["sec_cache_stale"]:
+            stale.append(sym)
+        rows.append(row)
+    if stale:
+        _log.warning(f"SEC refresh failed for {len(stale)} symbol(s); their rows use older "
+                     f"cached SEC data (labeled): {', '.join(stale)}")
     rows.sort(key=lambda r: (-r["watch_score"], r["symbol"]))
     return rows
 
@@ -524,11 +538,12 @@ def output_path(theme=DEFAULT_THEME, suffix=".json") -> Path:
     return Path(paths.data_dir()) / f"{theme}_watch{suffix}"
 
 
-def save(rows, as_of, out_path=None, failed=None, theme=DEFAULT_THEME):
+def save(rows, as_of, out_path=None, failed=None, theme=DEFAULT_THEME, stale=None):
     out_path = Path(out_path or output_path(theme))
     out_path.write_text(json.dumps({"as_of": as_of, "theme": theme,
                                     "title": THEMES[theme]["title"], "rows": rows,
-                                    "fetch_failed": sorted(failed or [])}, indent=2),
+                                    "fetch_failed": sorted(failed or []),
+                                    "sec_cache_stale": sorted(stale or [])}, indent=2),
                         encoding="utf-8")
     return out_path
 
