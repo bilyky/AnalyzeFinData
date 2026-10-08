@@ -67,14 +67,27 @@ class TestSingletonLockReclaim(unittest.TestCase):
         t = time.time() - age_min * 60
         os.utime(self.lock, (t, t))
 
-    def _acquire(self, pid_running=True):
+    def _acquire(self, pid_running=True, cmdline="python.exe watchdog.py"):
+        def fake_run(args, **kwargs):
+            if args[0] == "powershell" and "Win32_Process" in args[-1]:
+                return subprocess.CompletedProcess(args, 0, stdout=cmdline + "\n", stderr="")
+            return _OK
         with mock.patch.object(watchdog, "WATCHDOG_LOCK_FILE", self.lock), \
              mock.patch("watchdog.is_pid_running", return_value=pid_running), \
-             mock.patch("subprocess.run", return_value=_OK) as run, \
+             mock.patch("subprocess.run", side_effect=fake_run) as run, \
              mock.patch("watchdog.atexit.register"), \
              mock.patch("watchdog._log") as log:
             got = watchdog._acquire_singleton_lock()
         return got, run, log
+
+    def test_stale_lock_whose_pid_is_now_another_python_is_reclaimed_without_kill(self):
+        """Windows reuses PIDs. After a reboot the lock's PID can belong to server.py or the game;
+        killing that (with /T) mid-write is worse than the hang."""
+        self._write_lock(4242, age_min=watchdog.WATCHDOG_LOCK_MAX_AGE_MIN + 5)
+        got, run, _ = self._acquire(cmdline="python.exe ai_portfolio_game.py")
+        self.assertTrue(got)
+        self.assertEqual(self.lock.read_text(), str(os.getpid()))
+        self.assertEqual([c for c in run.call_args_list if c.args[0][0] == "taskkill"], [])
 
     def test_fresh_lock_held_by_live_pid_blocks(self):
         self._write_lock(4242, age_min=10)

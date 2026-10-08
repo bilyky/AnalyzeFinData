@@ -836,11 +836,26 @@ def _recovery_next_steps_html(compilation_passed, ai_triggered) -> str:
     return "\n                    ".join(items)
 
 
+def _pid_is_watchdog(pid: int) -> bool:
+    """True when the process's command line runs watchdog.py. False when it doesn't or can't be read."""
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"],
+            capture_output=True, text=True, errors="replace", stdin=subprocess.DEVNULL,
+            timeout=_SCHTASKS_TIMEOUT_S)
+        return "watchdog.py" in (res.stdout or "").lower()
+    except Exception as e:
+        _log.warning(f"⚠️ Could not read the command line of PID={pid}: {e}")
+        return False
+
+
 def _acquire_singleton_lock() -> bool:
     """Take the cross-process watchdog lock. Returns False when a live, recent instance holds it.
 
     A lock older than WATCHDOG_LOCK_MAX_AGE_MIN whose PID is still alive belongs to a hung cycle:
-    kill that process tree (it may be stuck in a child such as schtasks) and take over.
+    if that PID is really running watchdog.py, kill its process tree (it may be stuck in a child
+    such as schtasks); either way take over the lock.
     """
     lock_file = WATCHDOG_LOCK_FILE
     if lock_file.exists():
@@ -852,10 +867,20 @@ def _acquire_singleton_lock() -> bool:
                 if age_min < WATCHDOG_LOCK_MAX_AGE_MIN:
                     _log.warning(f"⚠️ Watchdog execution blocked: another instance is already running (PID={old_pid}). Exiting.")
                     return False
-                _log.error(f"🛑 Watchdog PID={old_pid} has held the lock for {age_min:.0f} min "
-                           f"(limit {WATCHDOG_LOCK_MAX_AGE_MIN}); treating it as hung, killing it and taking over.")
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(old_pid)], capture_output=True,
-                               stdin=subprocess.DEVNULL, timeout=_SCHTASKS_TIMEOUT_S)
+                if not _pid_is_watchdog(old_pid):
+                    # Windows reuses PIDs: after a reboot the lock can name another python process
+                    # (server, game, pipeline). Never kill that; the lock itself is just stale.
+                    _log.warning(f"⚠️ Stale watchdog lock ({age_min:.0f} min) names PID={old_pid}, which is not "
+                                 "running watchdog.py. Taking the lock without killing it.")
+                else:
+                    _log.error(f"🛑 Watchdog PID={old_pid} has held the lock for {age_min:.0f} min "
+                               f"(limit {WATCHDOG_LOCK_MAX_AGE_MIN}); treating it as hung, killing it and taking over.")
+                    kill = subprocess.run(["taskkill", "/F", "/T", "/PID", str(old_pid)], capture_output=True,
+                                          text=True, errors="replace", stdin=subprocess.DEVNULL,
+                                          timeout=_SCHTASKS_TIMEOUT_S)
+                    if kill.returncode != 0:
+                        _log.error(f"❌ taskkill PID={old_pid} failed (rc={kill.returncode}): "
+                                   f"{(kill.stderr or kill.stdout or '').strip()}. Continuing alongside it.")
         except Exception as e:
             _log.warning(f"⚠️ Lock file unreadable or corrupt ({e}). Overriding...")
 
