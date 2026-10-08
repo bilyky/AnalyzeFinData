@@ -500,7 +500,7 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             # Pass the conviction bar into the pure planner: a high-conviction
             # flower (L60 >= the covered-call ceiling) is never trimmed, mirroring
             # the covered-call flower exclusion so the two winner-side mechanics
-            # share ONE conviction bar (CLAUDE.md dont-sell-winners). The planner
+            # share ONE conviction bar (plans/roadmap.md, Jul-25 dont-sell-winners). The planner
             # returns frac 0.0 + a "held: high-conviction flower" reason when it
             # suppresses a would-be bank; surface that so the hold is visible.
             so_frac, so_reason = game.risk_utils.scale_out_plan(
@@ -629,3 +629,55 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
     if decision_entries:
         game.decision_eval.log_decisions(decision_entries)
     return symbols_to_sell
+
+
+def execute_exits(state, symbols_to_sell, prices, today, now_time, new_transactions):
+    """Liquidate the positions :func:`decide_exits` picked (B6).
+
+    Extracted verbatim from the live SELL execution loop in
+    ``run_daily_ai_management`` — the stage right after :func:`decide_exits` and
+    before BUY screening. For each ``{symbol: exit_reason}`` entry, in order,
+    unchanged from the root:
+
+    * the price falls back to cost when the symbol is unquoted;
+    * ``options.unwind_option_liability_if_held`` buys back a written covered
+      call first, so no naked call is left behind;
+    * the position is popped from ``state["positions"]``;
+    * **STP LMT fill** (R&D #8) — if the price is at or below a positive
+      ``stop_loss``, the fill is the stop price, not the gapped market price, and
+      the tx details get ``[STP LMT fill]``;
+    * the proceeds are credited to ``state["balance"]``; the SELL tx (with
+      ``pnl``, ``Exit: <reason>`` and the position's ``stop_loss``, #136) is
+      appended to ``state["history"]`` and ``new_transactions``;
+    * ``log_closed_trade_dna`` records the closed trade.
+
+    Returns nothing; every change lands on the caller's ``state`` and
+    ``new_transactions``. ``_log``, ``options`` and ``log_closed_trade_dna`` are
+    resolved off the live root module at call time via :func:`_pkg`, so
+    ``mock.patch.object(game, ...)`` still intercepts.
+    """
+    game = _pkg()
+
+    for sym, exit_reason in symbols_to_sell.items():
+        pos = state["positions"][sym]
+        price = prices.get(sym, pos["cost"])
+        game.options.unwind_option_liability_if_held(sym, pos, state, price, today)
+        state["positions"].pop(sym)
+
+        # Slippage-Protected Limit Stop (STP LMT - R&D #8): Execute at exactly the stop price
+        # if the market close price dropped below our stop-loss floor, preventing slippage leaks.
+        stop_loss = pos.get("stop_loss", 0.0)
+        stop_fill = stop_loss > 0.0 and price <= stop_loss
+        if stop_fill:
+            game._log.info(f"🛡️ [STP LMT] Executed {sym} stop-loss at Limit price ${stop_loss:.2f} (protected against market gap ${price:.2f}).")
+            price = stop_loss
+
+        proceeds = pos["qty"] * price
+        state["balance"] += proceeds
+        tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2),
+              "details": f"Exit: {exit_reason}" + (" [STP LMT fill]" if stop_fill else ""),
+              "stop_loss": pos.get("stop_loss")}
+        state["history"].append(tx)
+        new_transactions.append(tx)
+        game._log.info(f"🤖 AI LIVE SELL: {sym} at ${price} (Time: {now_time})")
+        game.log_closed_trade_dna(sym, pos, price, today)

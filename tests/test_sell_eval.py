@@ -47,8 +47,8 @@ class TestParse(unittest.TestCase):
 class TestEvaluateExit(unittest.TestCase):
     def test_returns_verdict_with_provider(self):
         with mock.patch("sell_eval.ai_client.primary", return_value="github_gpt"), \
-             mock.patch("sell_eval.ai_client.evaluate",
-                        return_value='{"verdict":"FLAG-FOR-REVIEW","note":"selling a +63% winner"}'):
+             mock.patch("sell_eval.ai_client.evaluate_with_provider",
+                        return_value=('{"verdict":"FLAG-FOR-REVIEW","note":"selling a +63% winner"}', "github_gpt")):
             out = sell_eval.evaluate_exit(_CTX)
         self.assertEqual(out["verdict"], "FLAG-FOR-REVIEW")
         self.assertEqual(out["provider"], "github_gpt")
@@ -60,19 +60,28 @@ class TestEvaluateExit(unittest.TestCase):
 
     def test_ai_returns_blank_yields_empty(self):
         with mock.patch("sell_eval.ai_client.primary", return_value="github_gpt"), \
-             mock.patch("sell_eval.ai_client.evaluate", return_value=""):
+             mock.patch("sell_eval.ai_client.evaluate_with_provider", return_value=("", "github_gpt")):
             self.assertEqual(sell_eval.evaluate_exit(_CTX), {})
 
     def test_explicit_provider_passed_through(self):
-        with mock.patch("sell_eval.ai_client.evaluate",
-                        return_value='{"verdict":"AGREE","note":"ok"}') as ev:
+        with mock.patch("sell_eval.ai_client.evaluate_with_provider",
+                        return_value=('{"verdict":"AGREE","note":"ok"}', "claude")) as ev:
             out = sell_eval.evaluate_exit(_CTX, provider="claude")
         self.assertEqual(out["provider"], "claude")
         self.assertEqual(ev.call_args.kwargs["provider"], "claude")
 
+    def test_default_provider_uses_the_fallback_chain(self):
+        """Without an explicit provider, ai_client.evaluate must get provider=None so it walks
+        primary -> other enabled providers. Passing the primary's name skipped the fallback."""
+        with mock.patch("sell_eval.ai_client.primary", return_value="openrouter"),              mock.patch("sell_eval.ai_client.evaluate_with_provider",
+                        return_value=('{"verdict":"AGREE","note":"ok"}', "openrouter_fb")) as ev:
+            out = sell_eval.evaluate_exit(_CTX)
+        self.assertIsNone(ev.call_args.kwargs["provider"])
+        self.assertEqual(out["provider"], "openrouter_fb")  # the provider that answered, not the primary
+
     def test_evaluate_exit_handles_exceptions_gracefully(self):
         with mock.patch("sell_eval.ai_client.primary", return_value="github_gpt"), \
-             mock.patch("sell_eval.ai_client.evaluate", side_effect=RuntimeError("API Failure")):
+             mock.patch("sell_eval.ai_client.evaluate_with_provider", side_effect=RuntimeError("API Failure")):
             out = sell_eval.evaluate_exit(_CTX)
         self.assertEqual(out, {})
 

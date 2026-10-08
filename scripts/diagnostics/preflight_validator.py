@@ -25,6 +25,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 import notify
 import powergauge
+import watchdog
 from aether import etrade
 from aether import trash
 from aether.config import CFG
@@ -414,7 +415,19 @@ def check_watchdog_health(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
             issues.append(f"Log Freshness: Failed to audit watchdog log modification time: {e}")
     else:
         issues.append("Log Freshness: 'watchdog_agent.log' does not exist (Watchdog has never run).")
-        
+
+    # A hung cycle keeps the log fresh: every later hourly run writes "another instance is already
+    # running" and exits. The lock's age is what shows the hang.
+    lock_file = base_dir / "Data" / "watchdog_run.lock"
+    if lock_file.exists():
+        try:
+            lock_age_min = (time.time() - lock_file.stat().st_mtime) / 60
+            if lock_age_min > watchdog.WATCHDOG_LOCK_MAX_AGE_MIN:
+                issues.append(f"Hung cycle: 'Data/watchdog_run.lock' has been held for {lock_age_min:.0f} mins "
+                              f"(limit {watchdog.WATCHDOG_LOCK_MAX_AGE_MIN}); the watchdog is not completing cycles.")
+        except OSError as e:
+            issues.append(f"Hung cycle: failed to read 'Data/watchdog_run.lock' age: {e}")
+
     if issues:
         for iss in issues:
             _log.console(f"  ❌ Watchdog: {iss}")

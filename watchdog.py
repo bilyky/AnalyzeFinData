@@ -12,7 +12,7 @@ import notify
 from aether import etrade
 import powergauge
 from pathlib import Path
-from aether import trash
+from aether import paths, trash
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("watchdog")
@@ -32,6 +32,14 @@ AETHER_JSONL = BASE_DIR / "Data" / "logs" / "aether.jsonl"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 TASKS = ["AnalyzeFinData_Morning", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_Summary", "AnalyzeFinData_Evening", "AnalyzeFinData_ETrade_Reauth"]
 SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
+WATCHDOG_LOCK_FILE = BASE_DIR / "Data" / "watchdog_run.lock"   # cross-process singleton (PID)
+# Data-loss / backup detection (see check_data_sentinel / check_backup_health).
+DATA_SENTINEL_FILE = BASE_DIR / "Data" / "data_sentinel.json"      # last good cache entry counts
+BACKUP_STATUS_FILE = BASE_DIR / "Data" / "backup_status.json"      # sync_data_folder() outcomes
+DATA_ALERT_MARKER = BASE_DIR / "Data" / "data_alert_sent.json"     # once-a-day email throttle
+SENTINEL_DIRS = ("Symbol", "Symbol_full")
+SENTINEL_MAX_DROP = 0.20     # alert when a cache loses more than 20% of its entries between runs
+BACKUP_STALE_DAYS = 3        # alert when no backup has succeeded for this long
 
 python_exe = sys.executable
 run_agent = BASE_DIR / "run_agent.cmd"
@@ -46,6 +54,24 @@ _TASK_DEFS = {
     "AnalyzeFinData_ETrade_Reauth": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'server.py'}' etrade-reauth --scheduled", "daily", "05:15"),
     "Project_AETHER_Watchdog": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'watchdog.py'}'",              "hourly", None),
 }
+
+# Task Scheduler ExecutionTimeLimit per task (minutes); everything else gets the default.
+# The Evening task (daily_task.py) ends with the OHLCV recovery pass, whose own timeout is
+# rapidapi.pass_timeout_seconds() (~5 h worst case for the 400-fetch budget) — a 15-min
+# scheduler limit would kill the whole task long before that.
+# The Evening value must cover daily_task.worst_case_runtime_seconds() (all of that task's
+# step timeouts, recovery pass included); register_agent_tasks.ps1 repeats it for the
+# AETHER_AftermarketReport task. tests/test_task_time_limits.py pins both.
+_DEFAULT_TASK_TIME_LIMIT_MIN = 15
+# schtasks / Set-ScheduledTask must never block a watchdog cycle. On PROD (09-22 .. 10-08) a
+# schtasks /create with no timeout and an inherited stdin never returned, and the hung run held
+# the singleton lock for days.
+_SCHTASKS_TIMEOUT_S = 60
+# A watchdog cycle that still holds the lock after this long is treated as hung: it is killed
+# and the lock is reclaimed. Preflight uses the same limit.
+WATCHDOG_LOCK_MAX_AGE_MIN = 120
+_TASK_TIME_LIMIT_MIN = {"AnalyzeFinData_Evening": 360}
+SYNC_TIMEOUT_S = 600  # robocopy timeout for sync_data_folder (PR #64 raised it for the cache volume)
 
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 
@@ -529,6 +555,115 @@ def check_data_freshness():
         return f"WARNING: Data is stale. Last updated: {mtime}"
     return None
 
+
+def _read_json(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _write_json(path, data):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _cache_entry_counts():
+    """Entries in each market-data cache dir (one listdir each). Honors AETHER_CACHE_DIR."""
+    counts = {}
+    for name in SENTINEL_DIRS:
+        d = Path(paths.cache_dir()) / name
+        counts[name] = len(os.listdir(d)) if d.is_dir() else 0
+    return counts
+
+
+def check_data_sentinel():
+    """Alert when a market-data cache shrank sharply since the last run.
+
+    Returns a list of alert strings. On 2026-10-06 Data/Symbol (551,396 files) and
+    Data/Symbol_full (578) were wiped and nothing noticed. While alerting, the LAST GOOD
+    baseline is kept, so the alert repeats on every run until the data is restored.
+    """
+    now = _cache_entry_counts()
+    prev = (_read_json(DATA_SENTINEL_FILE) or {}).get("counts")
+    alerts = []
+    if prev:
+        for name, before in prev.items():
+            after = now.get(name, 0)
+            if before and after < before * (1 - SENTINEL_MAX_DROP):
+                alerts.append(f"CRITICAL: Data/{name} dropped from {before} to {after} entries since the "
+                              f"last watchdog run. Restore it from the backup before running the game or "
+                              f"pipeline (an empty OHLCV cache makes every symbol stale). If the drop was "
+                              f"intentional (a planned prune), delete {DATA_SENTINEL_FILE.name} to accept "
+                              f"the new size.")
+    if not alerts:
+        _write_json(DATA_SENTINEL_FILE, {"counts": now, "recorded": datetime.datetime.now().isoformat()})
+    return alerts
+
+
+def _record_backup_status(result):
+    """Record a sync_data_folder() outcome; keeps the time of the last success."""
+    status = _read_json(BACKUP_STATUS_FILE) or {}
+    now = datetime.datetime.now().isoformat()
+    status.update(last_attempt=now, last_result=result)
+    if result == "ok":
+        status["last_success"] = now
+    try:
+        _write_json(BACKUP_STATUS_FILE, status)
+    except OSError as e:
+        _log.warning(f"⚠️ Could not record backup status: {e}")
+
+
+def check_backup_health():
+    """Alert when no backup has succeeded for BACKUP_STALE_DAYS (or ever)."""
+    status = _read_json(BACKUP_STATUS_FILE) or {}
+    last_ok, last_result = status.get("last_success"), status.get("last_result", "unknown")
+    if not last_ok:
+        return [f"WARNING: no successful Data backup has been recorded (last result: {last_result})."]
+    try:
+        age = datetime.datetime.now() - datetime.datetime.fromisoformat(last_ok)
+    except ValueError:
+        return [f"WARNING: backup status is unreadable (last_success={last_ok!r})."]
+    if age.days >= BACKUP_STALE_DAYS:
+        return [f"WARNING: last successful Data backup was {age.days} days ago ({last_ok}); "
+                f"last result: {last_result}. The backup share may be unreachable."]
+    return []
+
+
+def _alert_key(alert):
+    """Identity of an alert for throttling: its text with the numbers blanked, so the same
+    alert repeated hourly (counts unchanged or not) is one key, but a different alert —
+    another folder, or a CRITICAL after a WARNING — is a new one."""
+    return re.sub(r"\d+", "#", alert)
+
+
+def send_data_alerts(alerts):
+    """Email data-loss / backup alerts; each distinct alert at most once per calendar day.
+
+    Throttled PER ALERT, not per day: a single daily marker let the first alert of the
+    day (e.g. an unreachable-backup WARNING) silence a later CRITICAL cache wipe.
+    """
+    if not alerts:
+        return
+    for a in alerts:
+        _log.error(a)
+    today = datetime.date.today().isoformat()
+    marker = _read_json(DATA_ALERT_MARKER) or {}
+    sent = set(marker.get("sent", [])) if marker.get("date") == today else set()
+    new = [a for a in alerts if _alert_key(a) not in sent]
+    if not new:
+        return
+    body = ("<h3>Project AETHER: data-loss / backup alert</h3><ul>"
+            + "".join(f"<li>{a}</li>" for a in new) + "</ul>")
+    try:
+        notify.send_email("🛑 Project AETHER: data-loss / backup alert", body, is_html=True)
+        _write_json(DATA_ALERT_MARKER, {"date": today, "sent": sorted(sent | {_alert_key(a) for a in new})})
+    except Exception as e:
+        _log.error(f"❌ Failed to send data alert email: {e}")
+
 def heal_tasks(missing_tasks, force=False):
     """Attempt to re-register tasks that have disappeared, failed, or need environment upgrades."""
     # Check for administrative privileges first to avoid UAC and privilege failures in background runs
@@ -565,7 +700,8 @@ def heal_tasks(missing_tasks, force=False):
         if st:
             args += ["/st", st]
         try:
-            result = subprocess.run(args, capture_output=True)
+            result = subprocess.run(args, capture_output=True, stdin=subprocess.DEVNULL,
+                                    timeout=_SCHTASKS_TIMEOUT_S)
             if result.returncode == 0:
                 _log.info(f"✅ Task {task} successfully registered with native UTF-8 environment.")
                 # Apply advanced reliability settings (WakeToRun, StartWhenAvailable, IgnoreNew, ExecutionTimeLimit) via PowerShell.
@@ -575,11 +711,14 @@ def heal_tasks(missing_tasks, force=False):
                 # 'IgnoreNew' also avoids interrupting an in-flight state write, unlike 'Queue'.)
                 ps_cmd = [
                     "powershell.exe", "-NoProfile", "-Command",
-                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) -ErrorAction SilentlyContinue"
+                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes {_TASK_TIME_LIMIT_MIN.get(task, _DEFAULT_TASK_TIME_LIMIT_MIN)})) -ErrorAction SilentlyContinue"
                 ]
-                subprocess.run(ps_cmd, capture_output=True)
+                subprocess.run(ps_cmd, capture_output=True, stdin=subprocess.DEVNULL,
+                               timeout=_SCHTASKS_TIMEOUT_S)
             else:
                 _log.error(f"❌ schtasks failed for {task} (rc={result.returncode}): {result.stderr.decode(errors='replace').strip()}")
+        except subprocess.TimeoutExpired as e:
+            _log.error(f"❌ Healing {task} timed out after {e.timeout}s ({e.cmd[0]}); skipped.")
         except Exception as e:
             _log.error(f"❌ Failed to heal {task}: {e}")
 
@@ -633,6 +772,7 @@ def sync_data_folder() -> bool:
         z_drive = dst_path.anchor
         if not os.path.exists(z_drive):
             _log.warning(f"⚠️ Backup drive {z_drive} is not connected or accessible. Skipping Data sync.")
+            _record_backup_status("offline")  # check_backup_health() makes a long outage loud
             return True # Not a failure of sync itself, just offline
             
         dst_path.mkdir(parents=True, exist_ok=True)
@@ -645,18 +785,22 @@ def sync_data_folder() -> bool:
             "robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS",
             "/XD", "etrade_chrome_profile"
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=600)
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=SYNC_TIMEOUT_S)
         if result.returncode < 8:
             _log.info(f"✅ Data folder successfully synchronized to {dst}.")
+            _record_backup_status("ok")
             return True
         else:
             _log.error(f"❌ Robocopy sync failed (rc={result.returncode}). Stderr: {result.stderr.strip()}")
+            _record_backup_status("error")
             return False
     except subprocess.TimeoutExpired:
         _log.warning("⚠️ Data folder sync timed out (600s limit reached). This is an incomplete backup.")
+        _record_backup_status("timeout")
         return False # Treat timeout as a failure, not a success, per mandatory backup policy
     except Exception as e:
         _log.error(f"❌ Failed to sync Data folder to Z: drive: {e}", exc_info=True)
+        _record_backup_status("error")
         return False
 
 def is_pid_running(pid: int) -> bool:
@@ -664,7 +808,8 @@ def is_pid_running(pid: int) -> bool:
     if pid <= 0:
         return False
     try:
-        res = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, errors="replace")
+        res = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, errors="replace",
+                             stdin=subprocess.DEVNULL, timeout=_SCHTASKS_TIMEOUT_S)
         return "No tasks" not in res.stdout and str(pid) in res.stdout and "python" in res.stdout.lower()
     except Exception:
         return False
@@ -691,16 +836,51 @@ def _recovery_next_steps_html(compilation_passed, ai_triggered) -> str:
     return "\n                    ".join(items)
 
 
-def run_watchdog():
-    # Enforce a strict cross-process execution singleton to prevent 2 watchdogs from running concurrently
-    lock_file = BASE_DIR / "Data" / "watchdog_run.lock"
+def _pid_is_watchdog(pid: int) -> bool:
+    """True when the process's command line runs watchdog.py. False when it doesn't or can't be read."""
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"],
+            capture_output=True, text=True, errors="replace", stdin=subprocess.DEVNULL,
+            timeout=_SCHTASKS_TIMEOUT_S)
+        return "watchdog.py" in (res.stdout or "").lower()
+    except Exception as e:
+        _log.warning(f"⚠️ Could not read the command line of PID={pid}: {e}")
+        return False
+
+
+def _acquire_singleton_lock() -> bool:
+    """Take the cross-process watchdog lock. Returns False when a live, recent instance holds it.
+
+    A lock older than WATCHDOG_LOCK_MAX_AGE_MIN whose PID is still alive belongs to a hung cycle:
+    if that PID is really running watchdog.py, kill its process tree (it may be stuck in a child
+    such as schtasks); either way take over the lock.
+    """
+    lock_file = WATCHDOG_LOCK_FILE
     if lock_file.exists():
         try:
             with open(lock_file, "r") as f:
                 old_pid = int(f.read().strip())
             if is_pid_running(old_pid):
-                _log.warning(f"⚠️ Watchdog execution blocked: another instance is already running (PID={old_pid}). Exiting.")
-                return
+                age_min = (datetime.datetime.now().timestamp() - lock_file.stat().st_mtime) / 60
+                if age_min < WATCHDOG_LOCK_MAX_AGE_MIN:
+                    _log.warning(f"⚠️ Watchdog execution blocked: another instance is already running (PID={old_pid}). Exiting.")
+                    return False
+                if not _pid_is_watchdog(old_pid):
+                    # Windows reuses PIDs: after a reboot the lock can name another python process
+                    # (server, game, pipeline). Never kill that; the lock itself is just stale.
+                    _log.warning(f"⚠️ Stale watchdog lock ({age_min:.0f} min) names PID={old_pid}, which is not "
+                                 "running watchdog.py. Taking the lock without killing it.")
+                else:
+                    _log.error(f"🛑 Watchdog PID={old_pid} has held the lock for {age_min:.0f} min "
+                               f"(limit {WATCHDOG_LOCK_MAX_AGE_MIN}); treating it as hung, killing it and taking over.")
+                    kill = subprocess.run(["taskkill", "/F", "/T", "/PID", str(old_pid)], capture_output=True,
+                                          text=True, errors="replace", stdin=subprocess.DEVNULL,
+                                          timeout=_SCHTASKS_TIMEOUT_S)
+                    if kill.returncode != 0:
+                        _log.error(f"❌ taskkill PID={old_pid} failed (rc={kill.returncode}): "
+                                   f"{(kill.stderr or kill.stdout or '').strip()}. Continuing alongside it.")
         except Exception as e:
             _log.warning(f"⚠️ Lock file unreadable or corrupt ({e}). Overriding...")
 
@@ -713,6 +893,13 @@ def run_watchdog():
         atexit.register(lambda: trash.soft_delete(lock_file, reason="watchdog-lock", force=True))
     except Exception as e:
         _log.error(f"❌ Failed to write watchdog lock file: {e}")
+        return False
+    return True
+
+
+def run_watchdog():
+    # Enforce a strict cross-process execution singleton to prevent 2 watchdogs from running concurrently
+    if not _acquire_singleton_lock():
         return
 
     _log.console(f"[{datetime.datetime.now()}] Project AETHER Healer starting...")
@@ -725,7 +912,8 @@ def run_watchdog():
     #    down; it latches 'sms_required' and we alert a human. A token momentarily dead between
     #    midnight-ET and the 05:15 refresh is normal — we log it, we do NOT fail the run.
     try:
-        rr = etrade.scheduled_reauth("production")
+        # On ET weekends this only renews; it won't log in (reason 'weekend').
+        rr = etrade.scheduled_reauth("production", weekend_mint=False)
     except Exception as e:
         rr = {"ok": False, "reason": "error"}
         _log.error(f"  [Healer] E*TRADE scheduled_reauth raised: {e}", exc_info=True)
@@ -777,6 +965,10 @@ def run_watchdog():
     initial_errors = check_logs()
     missing_tasks, failed_tasks = check_task_scheduler()
     data_issue = check_data_freshness()
+    # 1a. Data-loss sentinel + backup health. They alert on their own: the recovery report
+    #     below is only sent for healing actions or log errors, so a data issue never emailed.
+    data_alerts = check_data_sentinel() + check_backup_health()
+    send_data_alerts(data_alerts)
     
     # 1b. Clean up any stray/duplicate AETHER tasks (Pillar 1 Self-Sanitation)
     purge_stray_tasks()

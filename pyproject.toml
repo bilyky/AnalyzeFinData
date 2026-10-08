@@ -47,7 +47,7 @@ ignore = [
     # These 305 pre-existing violations are parked so the CI gate can start blocking on
     # everything else (notably E402 no-inline-imports and E722 no-bare-except, both at 0).
     # Each is tightened rule-by-rule and removed from this block per the R&D "Enable Ruff
-    # Enforcement" roadmap item (CLAUDE.md). Do NOT add new codes here — fix the violation.
+    # Enforcement" roadmap item (plans/roadmap.md). Do NOT add new codes here — fix the violation.
     "I001",   # unsorted-imports (176) — auto-fixable; deferred to avoid 113-file reorder churn
     "E401",   # multiple-imports-on-one-line (25) — auto-fixable
     "E703",   # useless-semicolon (1) — auto-fixable

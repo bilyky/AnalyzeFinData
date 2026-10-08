@@ -10,7 +10,7 @@ holdings stay protected. Exclusion only:
   2. routes their stop/target to the ATR method instead of the long swing-low.
 
 This is a stopgap until a proper mean-reversion / volatility-band / inverse-aware
-algorithm is built for these instruments (see CLAUDE.md R&D roadmap).
+algorithm is built for these instruments (see the Aug-8 session in plans/roadmap.md).
 """
 
 import json

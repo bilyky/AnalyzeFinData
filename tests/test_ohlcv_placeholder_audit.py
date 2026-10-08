@@ -51,5 +51,23 @@ class TestAuditSeries(unittest.TestCase):
         self.assertAlmostEqual(audit.audit_series(clean, "2026-01-01")["atr_ratio"], 1.0)
 
 
+class TestStaleStops(unittest.TestCase):
+    def test_newest_real_bar_decides_staleness_after_the_fix(self):
+        today = datetime.date(2026, 10, 6)
+        # Real bars end 2026-09-15 (21 d old); placeholders keep the series "current".
+        lagging = {f"2026-09-{d:02d}": _real(100) for d in range(1, 16)}
+        lagging.update({f"2026-10-0{d}": _placeholder(100) for d in range(1, 6)})
+        fresh = {f"2026-10-0{d}": _real(100) for d in range(1, 6)}
+        per_sym = {"LAG": audit.audit_series(lagging, "2026-01-01"),
+                   "OK": audit.audit_series(fresh, "2026-01-01")}
+        st = audit.stale_stops(per_sym, today, limit=10)
+        self.assertEqual((st["before"], st["after"]), (0, 1))
+        self.assertEqual(st["newly_stale"], ["LAG"])
+
+    def test_no_real_bar_is_stale(self):
+        per_sym = {"DEAD": audit.audit_series({"2026-10-01": _placeholder(1)}, "2026-01-01")}
+        self.assertEqual(audit.stale_stops(per_sym, datetime.date(2026, 10, 6))["after"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,3 +1,14 @@
+# Market-data caches (Data/Symbol, Data/Symbol_full) -> temp, FIRST, before any module
+# computes its cache constants at import (aether.paths.cache_dir() reads AETHER_CACHE_DIR).
+# A suite run then never reads or writes the real caches, whether the checkout's Data/
+# holds them directly or through a junction. Unconditional, like the ledger guard.
+# Guarded by tests/test_log_hermetic.py::TestMarketDataCachesRedirected.
+import os as _os_early
+import tempfile as _tempfile_early
+
+_test_cache_dir = _tempfile_early.TemporaryDirectory(ignore_cleanup_errors=True)
+_os_early.environ["AETHER_CACHE_DIR"] = _test_cache_dir.name
+
 # Globally mock notify.send_email during all unit test executions
 # to completely prevent test email spam and keep production code clean.
 import unittest.mock as _mock
@@ -11,6 +22,7 @@ _root_notify.send_email = _mock.MagicMock(return_value=True)
 # to prevent tests from writing to or polluting production logs.
 import tempfile
 from pathlib import Path
+import aether.paths as _paths
 import aether.logger
 
 _test_log_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -109,6 +121,36 @@ for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomou
     # powergauge stores a str (os.path.join), the others a Path — preserve each.
     _mod.XLSX_FILE = _test_xlsx_path if isinstance(_orig_xlsx_const, Path) else str(_test_xlsx_path)
 
+# Market-data cache constants: AETHER_CACHE_DIR (set at the top) covers modules imported
+# AFTER this harness runs, but `unittest discover -s tests` imports test modules as
+# top-level names, so this package can run only after earlier test modules already
+# imported these with the real paths. Rebind them too (same object type as the original).
+# (module, attribute, resolver, is_file): a file constant keeps its own file name.
+for _mod_name, _attr, _resolve, _is_file in (
+        ("aether.risk_utils", "OHLCV_DIR", "ohlcv_dir", False),
+        ("rapidapi", "OHLCV_DIR", "ohlcv_dir", False),
+        ("powergauge", "OHLCV_DIR", "ohlcv_dir", False),
+        ("ai_portfolio_game", "SYMBOL_FULL_DIR", "ohlcv_dir", False),
+        ("backtest_ratings", "OHLCV_DIR", "ohlcv_dir", False),
+        ("backtest_ratings", "SYM_DIR", "symbol_dir", False),
+        ("aether.circuit_breaker", "SPY_FILE", "ohlcv_dir", True),
+        ("aether.circuit_breaker", "VXX_FILE", "ohlcv_dir", True),
+        ("aether.scoring", "_OHLCV_ROOT", "ohlcv_dir", False),
+        ("aether.decision_eval", "OHLCV_DIR", "ohlcv_dir", False),
+        ("data_api", "_OHLCV_DIR", "ohlcv_dir", False),
+        ("data_api", "_SYMBOL_DIR", "symbol_dir", False)):
+    try:
+        _mod = _importlib.import_module(_mod_name)
+    except Exception:
+        continue
+    _orig = getattr(_mod, _attr, None)
+    if _orig is None:
+        continue
+    _new = getattr(_paths, _resolve)()
+    if _is_file:
+        _new = str(Path(_new) / Path(_orig).name)
+    setattr(_mod, _attr, Path(_new) if isinstance(_orig, Path) else _new)
+
 # ---------------------------------------------------------------------------
 # Learning-ledger guard — no test may write the decision log, the trade-DNA
 # ledger, or the failure-DNA rules. Test fixtures (P1..P6, TSCO cost 100/stop 80)
@@ -125,7 +167,43 @@ _ledgers.TRADE_DNA_FILE = _ledger_tmp / "trade_history_dna.json"
 _ledgers.FAILURE_RULES_FILE = _ledger_tmp / "failure_dna_rules.json"
 _ledgers.RETRO_REPORT_FILE = _ledger_tmp / "retrospective_report.txt"
 
+# ---------------------------------------------------------------------------
+# Singleton-lock / trash / run-guard guard. run_watchdog() and
+# autonomous_pipeline.main() overwrite their PID lock (tests mock "is the holder
+# alive?" to False) and force-delete it at exit, and run_watchdog() purges the
+# trash — so a suite run deleted the REAL Data/watchdog_run.lock, pipeline_run.lock
+# and every >30-day file in Data/.trash, and could steal a live watchdog's or
+# pipeline's lock. Unconditional: live tests never need the real locks either.
+# Guarded by tests/test_log_hermetic.py::TestLocksTrashAndConfigRedirected.
+# ---------------------------------------------------------------------------
+import aether.config as _config
+import aether.run_guard as _run_guard
+import aether.trash as _trash
+
+_test_lock_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+_lock_tmp = Path(_test_lock_dir.name)
+_trash.TRASH_DIR = str(_lock_tmp / ".trash")
+_run_guard._DATA_DIR = _lock_tmp
+for _mod_name, _attrs in (("watchdog", ("WATCHDOG_LOCK_FILE", "SELF_HEAL_LOCK", "SELF_HEAL_PROMPT_FILE",
+                                       "DATA_SENTINEL_FILE", "BACKUP_STATUS_FILE", "DATA_ALERT_MARKER")),
+                          ("autonomous_pipeline", ("PIPELINE_LOCK_FILE",))):
+    try:
+        _mod = _importlib.import_module(_mod_name)
+    except Exception:
+        continue
+    for _attr in _attrs:
+        if hasattr(_mod, _attr):
+            setattr(_mod, _attr, _lock_tmp / Path(getattr(_mod, _attr)).name)
+
 if not _os.getenv("AETHER_LIVE_TESTS"):
+    # -- Config side: never load the real config.json. Its E*TRADE TOTP secret opens
+    # get_tokens' automated login path, so the suite behaved differently in the main
+    # checkout than in a worktree (which has none). Rebuild CFG IN PLACE from a missing
+    # file: modules that did `from aether.config import CFG` see the same object, and
+    # nothing copies CFG values at import. Env-var overrides still apply, as in prod.
+    _config._CFG_PATH = str(_lock_tmp / "config.json")  # deliberately absent
+    _config.CFG.__init__()
+
     # -- State side: redirect prod auth-state / cache files to a throwaway temp dir --
     # A test that reaches get_tokens() finds no saved browser state (so the automated
     # headless path is skipped entirely — never even attempted) and any breaker

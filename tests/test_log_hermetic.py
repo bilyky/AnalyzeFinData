@@ -23,7 +23,13 @@ import ai_portfolio_game
 import autonomous_pipeline
 import bootstrap_dna
 import daily_task
+import data_api
+import powergauge
+import rapidapi
+import watchdog
 import workbook_read
+from aether import config as aether_config
+from aether import circuit_breaker, decision_eval, paths, risk_utils, run_guard, scoring, trash
 import tests as harness
 from aether import logger as aether_logger
 
@@ -97,6 +103,70 @@ class TestGameStateRedirected(unittest.TestCase):
         ai_portfolio_game.save_game(state)  # 2nd save backs up the 1st into GAME_BACKUP_DIR
         self.assertEqual(ai_portfolio_game.load_game()["balance"], 123.0)
         self.assertTrue(any(ai_portfolio_game.GAME_BACKUP_DIR.glob("ai_portfolio_game_*.json")))
+
+
+class TestMarketDataCachesRedirected(unittest.TestCase):
+    """Every consumer of Data/Symbol and Data/Symbol_full sees the temp cache in tests.
+
+    On 2026-10-06 removing a worktree whose cache dirs were junctions into the main
+    checkout deleted the real caches; the caches now resolve through
+    aether.paths.cache_dir() (AETHER_CACHE_DIR), which the harness pins to temp first.
+    """
+
+    def test_cache_constants_point_outside_repo_data(self):
+        for name, path in [("paths.symbol_dir()", paths.symbol_dir()),
+                           ("paths.ohlcv_dir()", paths.ohlcv_dir()),
+                           ("risk_utils.OHLCV_DIR", risk_utils.OHLCV_DIR),
+                           ("rapidapi.OHLCV_DIR", rapidapi.OHLCV_DIR),
+                           ("powergauge.OHLCV_DIR", powergauge.OHLCV_DIR),
+                           ("ai_portfolio_game.SYMBOL_FULL_DIR", ai_portfolio_game.SYMBOL_FULL_DIR),
+                           ("circuit_breaker.SPY_FILE", circuit_breaker.SPY_FILE),
+                           ("circuit_breaker.VXX_FILE", circuit_breaker.VXX_FILE),
+                           ("scoring._OHLCV_ROOT", scoring._OHLCV_ROOT),
+                           ("decision_eval.OHLCV_DIR", decision_eval.OHLCV_DIR),
+                           ("data_api._OHLCV_DIR", data_api._OHLCV_DIR),
+                           ("data_api._SYMBOL_DIR", data_api._SYMBOL_DIR)]:
+            with self.subTest(name=name):
+                self.assertFalse(_inside_repo_data(path), f"{name} -> {path}")
+
+class TestLocksTrashAndConfigRedirected(unittest.TestCase):
+    """Singleton locks, the trash, the run-guard dir and the config stay out of the repo.
+
+    run_watchdog() / autonomous_pipeline.main() overwrite their PID lock and
+    force-delete it at exit, and run_watchdog() purges the trash, so before this
+    guard a suite run deleted the REAL Data/watchdog_run.lock, pipeline_run.lock
+    and every >30-day file in Data/.trash (proved by planting probe files). Tests
+    also read the real config.json, whose E*TRADE TOTP secret changes which
+    get_tokens path runs, so the suite behaved differently in the main checkout.
+    """
+
+    def test_lock_trash_and_run_guard_paths_redirected(self):
+        for name, path in [("watchdog.WATCHDOG_LOCK_FILE", watchdog.WATCHDOG_LOCK_FILE),
+                           ("watchdog.SELF_HEAL_LOCK", watchdog.SELF_HEAL_LOCK),
+                           ("watchdog.SELF_HEAL_PROMPT_FILE", watchdog.SELF_HEAL_PROMPT_FILE),
+                           ("watchdog.DATA_SENTINEL_FILE", watchdog.DATA_SENTINEL_FILE),
+                           ("watchdog.BACKUP_STATUS_FILE", watchdog.BACKUP_STATUS_FILE),
+                           ("watchdog.DATA_ALERT_MARKER", watchdog.DATA_ALERT_MARKER),
+                           ("autonomous_pipeline.PIPELINE_LOCK_FILE", autonomous_pipeline.PIPELINE_LOCK_FILE),
+                           ("trash.TRASH_DIR", trash.TRASH_DIR),
+                           ("run_guard._DATA_DIR", run_guard._DATA_DIR)]:
+            with self.subTest(name=name):
+                self.assertFalse(_inside_repo_data(path), f"{name} -> {path}")
+
+    def test_trash_purge_only_touches_the_temp_trash(self):
+        self.assertFalse(_inside_repo_data(trash.TRASH_DIR))  # must hold BEFORE purging
+        os.makedirs(trash.TRASH_DIR, exist_ok=True)
+        probe = Path(trash.TRASH_DIR) / "20000101T000000.probe.json"
+        probe.write_text("{}", encoding="utf-8")
+        os.utime(probe, (946684800, 946684800))  # 2000-01-01, far past retention
+        self.assertGreaterEqual(trash.purge_trash(), 1)
+        self.assertFalse(probe.exists())
+
+    @unittest.skipIf(os.getenv("AETHER_LIVE_TESTS"), "live mode uses the real config on purpose")
+    def test_real_config_json_is_not_loaded(self):
+        self.assertFalse(Path(aether_config._CFG_PATH).exists(), aether_config._CFG_PATH)
+        self.assertEqual(aether_config.CFG.etrade_totp_secret, os.environ.get("ETRADE_TOTP_SECRET", ""))
+
 
 class TestProcessSideEffectsBlocked(unittest.TestCase):
     def test_kill_game_launch_and_scheduler_changes_are_refused(self):

@@ -8,15 +8,16 @@ that selects the transport:
     anthropic          — POST https://api.anthropic.com/v1/messages
     gemini_cli         — shell out to the `gemini` CLI
 
-Advisory only: `evaluate()` returns "" on any failure / missing key / disabled
-provider, and callers MUST degrade to deterministic behavior. This module never
-raises to its callers and never gates a trade.
+Advisory only: `evaluate()` RAISES when every provider tried fails (missing key,
+disabled provider, HTTP error, empty answer). Callers MUST catch that and degrade
+to deterministic behavior. This module never gates a trade.
 """
 
 import os
 import subprocess
 import sys
 import tempfile
+import time
 
 import requests
 from aether_logger import get_logger as _get_logger
@@ -25,6 +26,10 @@ from aether.config import CFG
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 _TIMEOUT = 180  # generous for chat; context build can take ~9s on cold Research cache
+# Free OpenRouter routes answer 429 when their shared pool is busy. Retry once, waiting for
+# Retry-After when it is sent, but never longer than this.
+_RETRY_429_DEFAULT_WAIT_S = 3.0
+_RETRY_429_MAX_WAIT_S = 10.0
 
 
 # ── Key resolution ─────────────────────────────────────────────────────────────
@@ -103,6 +108,10 @@ def _parse_openai_response(resp) -> str:
         raise ValueError(f"Unexpected JSON response: 'message' is not a dict: {data}")
 
     content = message.get("content")
+    if content is None and choice.get("finish_reason") == "length":
+        raise ValueError("Model ran out of tokens before answering (finish_reason=length, content empty). "
+                         "Reasoning models spend max_tokens on reasoning first; set the provider's "
+                         "extra_body to {\"reasoning\": {\"enabled\": false}} or pick a non-reasoning model.")
     if not isinstance(content, str):
         raise ValueError(f"Unexpected JSON response: 'content' is not a string: {data}")
 
@@ -147,19 +156,32 @@ def _require_key(pcfg, name) -> str:
 
 
 def _call_openai_compatible(pcfg, key, messages, max_tokens, temperature) -> str:
-    resp = requests.post(
-        pcfg.get("endpoint", ""),
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json={
-            "model": pcfg.get("model", ""),
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        },
-        timeout=_TIMEOUT,
-    )
-    resp.raise_for_status()
-    return _parse_openai_response(resp)
+    # extra_body: provider-specific request fields from config (e.g. OpenRouter's
+    # {"reasoning": {"enabled": false}}). The core fields below always win.
+    payload = dict(pcfg.get("extra_body") or {})
+    payload.update({
+        "model": pcfg.get("model", ""),
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    })
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    for attempt in (1, 2):
+        resp = requests.post(pcfg.get("endpoint", ""), headers=headers, json=payload, timeout=_TIMEOUT)
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError:
+            if attempt == 2 or getattr(resp, "status_code", None) != 429:
+                raise
+            try:
+                wait = float(resp.headers.get("Retry-After", _RETRY_429_DEFAULT_WAIT_S))
+            except (TypeError, ValueError):
+                wait = _RETRY_429_DEFAULT_WAIT_S
+            wait = min(max(wait, 0.0), _RETRY_429_MAX_WAIT_S)
+            _get_logger("ai_client").warning(f"AI provider returned 429; retrying once in {wait:.0f}s.")
+            time.sleep(wait)
+            continue
+        return _parse_openai_response(resp)
 
 
 def _call_anthropic(pcfg, key, system, messages, max_tokens) -> str:
@@ -288,10 +310,16 @@ def _chat_one(messages: list, system: str, name: str, max_tokens: int, temperatu
 
 def evaluate(system: str, user: str, provider: str | None = None,
              max_tokens: int = 200, temperature: float = 0.3) -> str:
-    """Run one advisory evaluation on `provider` (defaults to primary()).
-    Returns the model's text. Raises on failure."""
+    """Run one advisory evaluation on `provider` (defaults to primary(), then the other enabled
+    providers). Returns the model's text. Raises on failure."""
+    return evaluate_with_provider(system, user, provider, max_tokens, temperature)[0]
+
+
+def evaluate_with_provider(system: str, user: str, provider: str | None = None,
+                           max_tokens: int = 200, temperature: float = 0.3) -> tuple[str, str]:
+    """Like evaluate(), but returns (text, name of the provider that answered)."""
     if provider:
-        return _evaluate_one(system, user, provider, max_tokens, temperature)
+        return _evaluate_one(system, user, provider, max_tokens, temperature), provider
 
     primary_name = primary()
     if not primary_name:
@@ -302,7 +330,7 @@ def evaluate(system: str, user: str, provider: str | None = None,
     last_err = None
     for name in providers_to_try:
         try:
-            return _evaluate_one(system, user, name, max_tokens, temperature)
+            return _evaluate_one(system, user, name, max_tokens, temperature), name
         except Exception as e:
             try:
                 _ai_client_log = _get_logger("ai_client")

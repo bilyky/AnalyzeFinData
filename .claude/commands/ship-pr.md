@@ -1,145 +1,105 @@
 # Ship a Change → PR → CI (auto-PR on push)
 
-A repo-agnostic workflow for landing a change: branch, validate, commit, push — and let
-**GitHub open the pull request itself**. The key idea: don't open PRs from the agent side
-at all. A GitHub Actions workflow opens (or reuses) the PR on push, using the runner's
-built-in `GITHUB_TOKEN` — no local `gh` auth, no credential handling on your side. Once set
-up, `git push` is the entire "open a PR" step, in any repo.
+A repo-agnostic workflow for landing a change: branch, validate, commit, push — and let **GitHub open
+the pull request itself**. A GitHub Actions workflow opens (or reuses) the PR on push using the
+runner's `GITHUB_TOKEN`, so `git push` is the whole "open a PR" step. Agent-agnostic: any agent can
+follow this file; snippets are POSIX `git`/`gh`. One-time setup and tool installation live in
+[docs/skills/ship-pr-reference.md](../../docs/skills/ship-pr-reference.md) — open it only when a step
+points you there.
 
-Substitute `<owner>/<repo>`, `<branch>`, and the default base branch (`main`/`master`) for
-the current repo. Delegate all project-specific pre-flight to the repo's own docs
-(`CONTRIBUTING`, `CLAUDE.md`/`AGENTS.md`, `README`) — this skill only owns the PR/CI plumbing.
+Substitute `<owner>/<repo>`, `<branch>` and the default base branch for the current repo. Project
+pre-flight (test command, linters, commit conventions) comes from the repo's own docs
+(`CONTRIBUTING`, `AGENT.md`/`CLAUDE.md`, `README`); this skill owns only the PR/CI plumbing.
 
-## 1. Branch, validate, commit (generic hygiene)
+## 1. Branch, validate, commit
 
-- **On the default branch? Branch first.** Never commit feature work straight to `main`:
-  `git switch -c feat/<short-slug>`. Use a conventional prefix (`feat/ fix/ chore/ refactor/
-  ci/ docs/ perf/`) — the Auto-PR workflow below keys off these.
-- **Run the repo's own pre-flight before committing** and paste real output (don't claim
-  green without it): its test suite, linters/formatters, type-checks, and build — whatever
-  the repo defines. If it has a pre-commit hook, let it run; **never** `--no-verify` or
-  bypass signing. If a hook fails, fix the cause.
-- **No new lint debt — enforce this on every push, without being asked.** The change must
-  not introduce any of: a raw `print()` (route to the project logger — `_log.console` for
-  progress, `_log.info`/`_log.error`/`_log.warning` for operational lines — or, for
-  intentional user-facing CLI output and data tables, `sys.stdout.write`/`sys.stderr.write`,
-  which stay unprefixed); an inline / mid-file import (keep imports at top-of-file); a bare
-  `except`; or a silent `except: … pass`. And **do not add a new lint suppression to buy a
-  green gate** — no fresh `# noqa`, and no new code added to `pyproject.toml`'s ruff `ignore`
-  or `per-file-ignores`. A newly-introduced violation must be *fixed*, never parked. If one
-  genuinely cannot be avoided, **stop and ask the user before adding any suppression**;
-  proceed with an ignore only on their explicit say-so, with the reason in the config comment.
-- **Always actually push — don't stop at a preview.** "Ship" means the full branch → push →
-  auto-PR chain runs; showing a diff and waiting for a nudge is not shipping. Push once the
-  gate above is green (or the user has explicitly waived a specific item).
-- **Stage deliberately** (`git add <paths>`, not `git add -A`) so scratch/generated/secret
-  files stay out. Never commit secrets, tokens, or PII.
-- **Follow the repo's commit-message convention** (Conventional Commits + any required
-  trailer/footer the environment mandates).
+- **Start from the latest default branch, in its own worktree or branch** — never commit feature work
+  to `main`: `git fetch origin && git switch -c feat/<slug> origin/main`. Use a conventional prefix
+  (`feat/ fix/ chore/ refactor/ ci/ docs/ perf/`); the Auto-PR workflow keys off it. Pick a branch name
+  no other session uses (`git branch -a --list '*<slug>*'` first).
+- **Run the repo's pre-flight and paste real output** — test suite, linters, type-checks, build. Never
+  `--no-verify`; if a hook fails, fix the cause.
+- **Prove every new test is red without the change.** Commit (or copy) your work first, swap the
+  pre-change file in with `git show origin/main:<path> > <path>`, run the test, then restore with
+  `git checkout HEAD -- <path>` (or from your private copy). Never restore from the shared stash or from
+  `stash@{0}` — another session's entry may be on top. A test that passes either way proves nothing.
+- **No new lint debt.** The change must not add a raw `print()` (use the project logger, or
+  `sys.stdout.write` for intentional CLI output), an inline/mid-file import, a bare `except`, or a
+  silent `except: … pass`. Touching a file makes its pre-existing violations yours when the gate checks
+  whole files — fix them rather than parking them. **No new suppressions** (`# noqa`, new `ignore` /
+  `per-file-ignores` entries) without the user's explicit say-so, reason in the config comment.
+- **Stage deliberately** (`git add <paths>`, never `-A`) so scratch, generated and secret files stay
+  out. Never commit secrets, tokens or PII.
+- **Text written by a script is unreviewed text.** String escapes silently rewrite Windows paths
+  (`"Data\notes"` gains a newline, `"Data\rapidapi.lock"` a carriage return). Prefer the editor
+  tool or raw strings, then scan the result for control characters and re-read every path in it.
+- **Follow the repo's commit-message convention**, including any trailer the environment mandates. The
+  first commit's subject becomes the PR title (§2), so make it describe the whole change.
+- **Always actually push** once the gate is green — showing a diff and waiting is not shipping.
 
 ```bash
-git add <paths>
-git commit -m "<type>: <summary>"
-git push -u origin HEAD
+git add <paths> && git commit -m "<type>: <summary>" && git push -u origin HEAD
 ```
 
-## 2. The Auto-PR pattern (the reusable core)
+## 2. The PR the push opens
 
-Drop this workflow into `.github/workflows/auto-pr.yml`. On push to a prefixed branch it
-opens or reuses a PR to the default branch — idempotent (later pushes update the existing
-PR, never duplicate). Set `--base` to the repo's default branch.
+- Auto-PR opens a PR **to the default branch** titled with the latest commit subject, and reuses it on
+  later pushes. Not set up in this repo? See reference §A, or the fallbacks in §4.
+- **Stacked change** (depends on an unmerged PR)? Auto-PR still targets `main` (or may not open one —
+  use §4); retarget right after the push — `gh pr edit <n> --base <parent-branch>` — and note the
+  dependency in the body. When the parent squash-merges, retarget to `main` and merge `main` in
+  (review-prs §8 covers the conflict pattern).
+  - **Keep it current** by merging down in order: `main` into the bottom, then each parent into its
+    child. Each PR's diff stays its own; no rebase.
+  - **Land it** in order, or fold it: merge each child PR into its parent from the top, check the
+    bottom's `^{tree}` equals the reviewed top head's, then sync with `main`. If a higher PR fixes a
+    lower one's bug, say on the lower PR that they land together.
+- **Keep title and body true.** When a later push changes the payload or the conclusion (a study's
+  verdict, a scope cut), edit them: `gh pr edit <n> --title … --body-file …`.
+- **Several open PRs at once?** Each merge puts the others behind. Re-merge `main` into each, and when
+  git auto-merged a file both edited, check that both sides' content survived before re-running tests.
+- **CI:** a bot-opened PR may not trigger `pull_request` runs; the push-triggered run is the gate.
+  Read the check-runs for the head SHA, not the PR badge. A failed job that ran **zero steps** never
+  checked the code: `gh run rerun <run-id>`, don't debug it.
+- **After it merges,** clean up branches and worktrees losslessly (review-prs reference §F).
 
-```yaml
-name: Auto-PR
-on:
-  push:
-    branches: ['feat/**','fix/**','chore/**','refactor/**','ci/**','docs/**','perf/**']
-permissions:
-  contents: read
-  pull-requests: write
-concurrency:
-  group: auto-pr-${{ github.ref }}
-  cancel-in-progress: true
-jobs:
-  open-pr:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - name: Open or reuse a PR to the default branch
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          BR="${GITHUB_REF_NAME}"
-          existing="$(gh pr list --head "$BR" --state open --json number --jq '.[0].number')"
-          if [ -n "$existing" ]; then echo "PR #$existing already open"; exit 0; fi
-          title="$(git log -1 --pretty=%s)"
-          commits="$(git log origin/main..HEAD --pretty='- %s')"   # adjust base if not 'main'
-          body="$(printf 'Auto-opened on push to `%s`.\n\n## Commits\n%s\n' "$BR" "$commits")"
-          gh pr create --base main --head "$BR" --title "$title" --body "$body"
-```
+## 3. Respond to review (author side)
 
-**Two things that make or break it:**
+1. Fetch **all three** comment surfaces (`issues/<n>/comments`, `pulls/<n>/reviews`,
+   `pulls/<n>/comments`) — reviews here are often plain PR comments.
+2. Treat each finding as a checklist item: fix it, or reply why not. A finding that changes the
+   conclusion (a statistic, a verdict) changes the title, body and docs too.
+3. Re-prove what the review questioned: red-check new tests, re-run the mutation the reviewer named,
+   re-run the suite on the branch merged with today's `main`.
+4. Reply once with an item → commit map and the evidence (real `Ran N … OK`, red-check output). Claim
+   only what you ran; say what you could not verify.
+5. Behind `main`? Merge it in (review-prs §8) — never rebase + force-push.
 
-1. **One-time repo setting** — *Settings → Actions → General → Workflow permissions →*
-   check **"Allow GitHub Actions to create and approve pull requests"**. Defaults to **off**
-   in many orgs; without it the `open-pr` step fails with a `403` / "not permitted to create
-   pull requests". (`https://github.com/<owner>/<repo>/settings/actions`.)
+## 4. Manual fallbacks (no Auto-PR, or a non-prefixed branch)
 
-2. **Run CI on _push_, not only on the PR.** A PR opened by `GITHUB_TOKEN` does **not**
-   trigger downstream `pull_request` workflow runs (GitHub's recursion guard). So any CI/
-   quality-gate workflow must also trigger on push to the same prefixed branches, or
-   bot-opened PRs land ungated. e.g.:
-   ```yaml
-   on:
-     pull_request: { branches: [ main ] }
-     push:
-       branches: [ main, 'feat/**','fix/**','chore/**','refactor/**','ci/**','docs/**','perf/**' ]
-   concurrency: { group: ci-${{ github.ref }}, cancel-in-progress: true }
-   ```
+- **`gh`:** `gh pr create --base <default> --head <branch> --title "<t>" --body-file <f>` (install,
+  auth and proxy notes: reference §B).
+- **No auth at all:** open `https://github.com/<owner>/<repo>/pull/new/<branch>` in a browser.
 
-## 3. Manual fallbacks (no Auto-PR set up, or a non-prefixed branch)
+> ⚠️ Don't scrape a token out of the `origin` remote URL or any credential store. Use the Actions
+> `GITHUB_TOKEN`, `gh auth login`, or `gh auth token` (gh's own stored credential).
 
-- **`gh` CLI** (once authenticated — see §4): `gh pr create --base <default> --head <branch>
-  --title "<t>" --body "<b>"`.
-- **No auth at all** (works from any proxy-aware browser): open
-  `https://github.com/<owner>/<repo>/pull/new/<branch>` and paste the title/body.
+## 5. Verify state — including behind a restrictive network
 
-> ⚠️ **Security boundary:** do NOT scrape a push token out of the `origin` remote URL (or
-> any credential store) to hit the GitHub API — your agent runtime's security policy should
-> block this, and correctly so. Use the Actions `GITHUB_TOKEN` (Auto-PR) or interactive
-> `gh auth login`.
+When the REST API is unreachable but `git` works, verify over the git transport:
 
-## 4. gh CLI setup notes
+- **Open PRs:** `git ls-remote origin 'refs/pull/*/head'`. **A push landed:**
+  `git ls-remote origin 'refs/heads/<branch>'`.
+- **A merge landed — by effect, not the badge.** Get the merge commit
+  (`gh api repos/<owner>/<repo>/pulls/<n> --jq .merge_commit_sha`), check
+  `git merge-base --is-ancestor <sha> origin/main`, and confirm the change's content is on `main`
+  (`git show origin/main:<path>`). A history rewrite can drop a "merged" commit.
+- **Merged ≠ deployed.** A deploy that pulls `main` ships every merge since the target last updated —
+  list them (`git log --oneline <deployed-sha>..origin/main`) before calling a change "ready for PROD".
+  Read each one for steps the pull does not perform: scheduler or service re-registration, new config
+  keys whose **defaults change behavior**, migrations, env vars. Time the deploy by checking that no
+  job is running (lock files, processes), not by a clock window — schedules change with the code.
+- **CI logs** the agent can't reach: point the user at `https://github.com/<owner>/<repo>/actions`.
 
-- **Install:** varies by OS (`winget`/`brew`/`apt`). On winget, pin the source to avoid an
-  interactive store prompt: `winget install --id GitHub.cli -e --source winget
-  --accept-source-agreements --accept-package-agreements`.
-- **PATH:** a freshly-installed `gh` may not be on the running tool-host's PATH until it
-  restarts — if `gh: command not found`, resolve its location portably (`command -v gh`, or
-  `Get-Command gh` on PowerShell) and invoke it by that full path. Don't hardcode an OS path.
-- **Auth is interactive:** `gh auth login` needs a browser/prompt a non-interactive shell
-  can't drive. Ask the user to run it (`! gh auth login`), or use a PAT they supply via
-  `gh auth login --with-token`. Don't hunt for a hidden token.
-
-## 5. Verifying PR/CI state behind a restrictive network
-
-Some environments block the GitHub REST API and/or the agent's web-fetch egress (corporate
-proxy) even though `git` and the user's browser reach GitHub fine. When the API is
-unreachable, **verify over the git transport**, which uses the same proxy git already has:
-
-- **Open PRs:** `git ls-remote origin 'refs/pull/*/head'` — every open PR advertises a
-  `refs/pull/<n>/head` ref; empty output = no open PR.
-- **Confirm a push landed:** `git ls-remote origin 'refs/heads/<branch>'`.
-- **Confirm a MERGE landed — by ancestry, not the badge.** A GitHub "Merged" badge is not
-  proof the commit is in the base branch (a later history rewrite can drop it). Verify the
-  merge commit is actually reachable from the default branch:
-  `git fetch -q origin && git merge-base --is-ancestor <merge_sha> origin/main` (exit 0 =
-  merged for real). Get `<merge_sha>` from `gh api repos/<owner>/<repo>/pulls/<n> --jq
-  .merge_commit_sha`. For extra assurance, confirm the change's *effect* is on the base
-  branch (`git show origin/main:<path>`), not just that a merge commit exists.
-- **CI run logs** (if the API/browser is blocked from the agent): only the user can see
-  them — point them at `https://github.com/<owner>/<repo>/actions`.
-
-Don't assume "can't fetch GitHub" = outage/regression; it's usually the tool's egress path
-lacking the proxy, not the network being down. Verify with `git`, which does have it.
+"Can't fetch GitHub" is usually the tool's egress lacking the proxy, not an outage — verify with
+`git`, which has it.
