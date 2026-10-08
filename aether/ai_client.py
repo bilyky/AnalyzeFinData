@@ -8,9 +8,9 @@ that selects the transport:
     anthropic          — POST https://api.anthropic.com/v1/messages
     gemini_cli         — shell out to the `gemini` CLI
 
-Advisory only: `evaluate()` returns "" on any failure / missing key / disabled
-provider, and callers MUST degrade to deterministic behavior. This module never
-raises to its callers and never gates a trade.
+Advisory only: `evaluate()` RAISES when every provider tried fails (missing key,
+disabled provider, HTTP error, empty answer). Callers MUST catch that and degrade
+to deterministic behavior. This module never gates a trade.
 """
 
 import os
@@ -310,10 +310,16 @@ def _chat_one(messages: list, system: str, name: str, max_tokens: int, temperatu
 
 def evaluate(system: str, user: str, provider: str | None = None,
              max_tokens: int = 200, temperature: float = 0.3) -> str:
-    """Run one advisory evaluation on `provider` (defaults to primary()).
-    Returns the model's text. Raises on failure."""
+    """Run one advisory evaluation on `provider` (defaults to primary(), then the other enabled
+    providers). Returns the model's text. Raises on failure."""
+    return evaluate_with_provider(system, user, provider, max_tokens, temperature)[0]
+
+
+def evaluate_with_provider(system: str, user: str, provider: str | None = None,
+                           max_tokens: int = 200, temperature: float = 0.3) -> tuple[str, str]:
+    """Like evaluate(), but returns (text, name of the provider that answered)."""
     if provider:
-        return _evaluate_one(system, user, provider, max_tokens, temperature)
+        return _evaluate_one(system, user, provider, max_tokens, temperature), provider
 
     primary_name = primary()
     if not primary_name:
@@ -324,7 +330,7 @@ def evaluate(system: str, user: str, provider: str | None = None,
     last_err = None
     for name in providers_to_try:
         try:
-            return _evaluate_one(system, user, name, max_tokens, temperature)
+            return _evaluate_one(system, user, name, max_tokens, temperature), name
         except Exception as e:
             try:
                 _ai_client_log = _get_logger("ai_client")
