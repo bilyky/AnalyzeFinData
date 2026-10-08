@@ -61,7 +61,7 @@ git add <paths> && git commit -m "<type>: <summary>" && git push -u origin HEAD
 - **CI:** a bot-opened PR may not trigger `pull_request` runs; the push-triggered run is the gate.
   Read the check-runs for the head SHA, not the PR badge. A failed job that ran **zero steps** never
   checked the code: `gh run rerun <run-id>`, don't debug it.
-- **After it merges,** clean up branches and worktrees losslessly per review-prs §9.
+- **After it merges,** clean up branches and worktrees losslessly (review-prs reference §F).
 
 ## 3. Respond to review (author side)
 
