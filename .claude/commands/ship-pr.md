@@ -45,16 +45,23 @@ git add <paths> && git commit -m "<type>: <summary>" && git push -u origin HEAD
 
 - Auto-PR opens a PR **to the default branch** titled with the latest commit subject, and reuses it on
   later pushes. Not set up in this repo? See reference §A, or the fallbacks in §4.
-- **Stacked change** (depends on an unmerged PR)? Auto-PR still targets `main`; retarget right after
-  the push — `gh pr edit <n> --base <parent-branch>` — and note the dependency in the body. When the
-  parent squash-merges, retarget to `main` and merge `main` in (review-prs §8 covers the conflict
-  pattern).
+- **Stacked change** (depends on an unmerged PR)? Auto-PR still targets `main` (or may not open one —
+  use §4); retarget right after the push — `gh pr edit <n> --base <parent-branch>` — and note the
+  dependency in the body. When the parent squash-merges, retarget to `main` and merge `main` in
+  (review-prs §8 covers the conflict pattern).
+  - **Keep it current** by merging down in order: `main` into the bottom, then each parent into its
+    child. Each PR's diff stays its own; no rebase.
+  - **Land it** in order, or fold it: merge each child PR into its parent from the top, check the
+    bottom's `^{tree}` equals the reviewed top head's, then sync with `main`. If a higher PR fixes a
+    lower one's bug, say on the lower PR that they land together.
 - **Keep title and body true.** When a later push changes the payload or the conclusion (a study's
   verdict, a scope cut), edit them: `gh pr edit <n> --title … --body-file …`.
 - **Several open PRs at once?** Each merge puts the others behind. Re-merge `main` into each, and when
   git auto-merged a file both edited, check that both sides' content survived before re-running tests.
 - **CI:** a bot-opened PR may not trigger `pull_request` runs; the push-triggered run is the gate.
-  Read the check-runs for the head SHA, not the PR badge.
+  Read the check-runs for the head SHA, not the PR badge. A failed job that ran **zero steps** never
+  checked the code: `gh run rerun <run-id>`, don't debug it.
+- **After it merges,** clean up branches and worktrees losslessly per review-prs §9.
 
 ## 3. Respond to review (author side)
 
