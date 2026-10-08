@@ -28,11 +28,11 @@ def _bar(px, vol=1000, provisional=False):
 class _FakeAccounts:
     def list_accounts(self, resp_format="json"):
         return {"AccountListResponse": {"Accounts": {"Account": [
-            {"accountId": "000123766", "accountIdKey": "K1", "accountDesc": "Brokerage"},
-            {"accountId": "000111315", "accountIdKey": "K2", "accountDesc": "Margin"}]}}}
+            {"accountId": "000014444", "accountIdKey": "K1", "accountDesc": "Brokerage"},
+            {"accountId": "000025555", "accountIdKey": "K2", "accountDesc": "Margin"}]}}}
 
     def get_account_balance(self, key, resp_format="json"):
-        val = {"K1": 274708.0, "K2": 41394.0}[key]
+        val = {"K1": 100000.0, "K2": 20000.0}[key]
         return {"BalanceResponse": {"Computed": {"RealTimeValues": {"totalAccountValue": val},
                                                  "netCash": 1000.0}}}
 
@@ -51,6 +51,11 @@ class _Base(unittest.TestCase):
         self._no_mint = mock.patch.object(ovc.etrade, "get_tokens",
                                           side_effect=AssertionError("get_tokens must never be called"))
         self._no_mint.start()
+        # Sleeves come from config.json in real use; made-up account digits here (never real ones).
+        sleeves = mock.patch.object(ovc.CFG, "oceanview_sleeves",
+                                    {"4444": "overlay-anchor", "5555": "active-margin"})
+        sleeves.start()
+        self.addCleanup(sleeves.stop)
 
     def tearDown(self):
         self._no_mint.stop()
@@ -84,7 +89,7 @@ class TestFailSafe(_Base):
         self.assertEqual((pack["meta"]["source"], pack["meta"]["health"]), ("live", "ok"))
         self.assertEqual(pack["meta"]["warnings"], [])
         sleeves = {a["account_last4"]: (a["sleeve"], a["net_value"]) for a in pack["state"]["accounts"]}
-        self.assertEqual(sleeves, {"3766": ("overlay-anchor", 274708.0), "1315": ("active-margin", 41394.0)})
+        self.assertEqual(sleeves, {"4444": ("overlay-anchor", 100000.0), "5555": ("active-margin", 20000.0)})
         self.assertEqual(pack["state"]["positions"][0]["date_acquired"], "2026-01-02")
         self.assertTrue(os.path.exists(os.path.join(self.dir, ovc.CACHE_NAME)))
 
@@ -101,7 +106,7 @@ class TestFailSafe(_Base):
     def _seed_cache(self, hours_old):
         as_of = (NOW - datetime.timedelta(hours=hours_old)).isoformat(timespec="seconds")
         with open(os.path.join(self.dir, ovc.CACHE_NAME), "w", encoding="utf-8") as f:
-            json.dump({"broker_as_of": as_of, "broker": {"accounts": [{"account_last4": "3766"}],
+            json.dump({"broker_as_of": as_of, "broker": {"accounts": [{"account_last4": "4444"}],
                                                           "positions": []}}, f)
 
     def test_dead_token_fresh_cache_is_degraded(self):
@@ -110,7 +115,7 @@ class TestFailSafe(_Base):
             pack = self.build()
         self.assertEqual((pack["meta"]["source"], pack["meta"]["health"]), ("cache", "degraded"))
         self.assertEqual(pack["meta"]["staleness_hours"], 5.0)
-        self.assertEqual(pack["state"]["accounts"], [{"account_last4": "3766"}])
+        self.assertEqual(pack["state"]["accounts"], [{"account_last4": "4444"}])
 
     def test_dead_token_stale_cache_is_failed(self):
         self._seed_cache(hours_old=30)
@@ -167,6 +172,45 @@ class TestDataHealth(_Base):
             pack = ovc.build_oceanview_context(now=NOW)
         self.assertEqual(pack["state"]["data_health"]["no_ohlcv"], [])   # found in the cache dir
         self.assertEqual(pack["state"]["portfolio"]["closed_sells"], 1)  # still read from data dir
+
+
+class TestReviewFixes(_Base):
+    def _live_pack(self, positions, comp=None):
+        acct = _FakeAccounts()
+        if comp is not None:
+            acct.get_account_balance = lambda key, resp_format="json": {"BalanceResponse": {"Computed": comp}}
+        with self._live() as m:
+            m["keep_alive"].return_value = {"oauth_token": "t"}
+            m["get_accounts"].return_value = acct
+            m["fetch_positions"].return_value = positions
+            return self.build()
+
+    def test_held_symbol_without_ohlcv_degrades(self):
+        # A missing file is worse than placeholder-heavy: its stop falls back to 8%.
+        pack = self._live_pack([{"symbol": "TSLA", "qty": 1, "date_acquired": None}])
+        self.assertEqual(pack["meta"]["health"], "degraded")
+        self.assertEqual(pack["state"]["data_health"]["no_ohlcv"], ["TSLA"])
+        self.assertTrue(any("ATR stops unavailable" in w and "TSLA" in w for w in pack["meta"]["warnings"]))
+
+    def test_all_ohlcv_present_stays_ok(self):
+        pack = self._live_pack([{"symbol": "AAPL", "qty": 1, "date_acquired": None}])
+        self.assertEqual((pack["meta"]["health"], pack["state"]["data_health"]["no_ohlcv"]), ("ok", []))
+
+    def test_zero_net_cash_is_not_replaced_by_cash_balance(self):
+        comp = {"RealTimeValues": {"totalAccountValue": 5.0}, "netCash": 0, "cashBalance": 999.0}
+        pack = self._live_pack([], comp=comp)
+        self.assertEqual({a["cash"] for a in pack["state"]["accounts"]}, {0.0})
+
+    def test_cash_balance_used_only_when_net_cash_missing(self):
+        comp = {"RealTimeValues": {"totalAccountValue": 5.0}, "cashBalance": 999.0}
+        pack = self._live_pack([], comp=comp)
+        self.assertEqual({a["cash"] for a in pack["state"]["accounts"]}, {999.0})
+
+    def test_sleeves_come_from_config_not_source(self):
+        with mock.patch.object(ovc.CFG, "oceanview_sleeves", {}):
+            pack = self._live_pack([])
+        self.assertEqual({a["sleeve"] for a in pack["state"]["accounts"]}, {None})
+        self.assertFalse(hasattr(ovc, "SLEEVES"))
 
 
 class TestStudyGates(_Base):
