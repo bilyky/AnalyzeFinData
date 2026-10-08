@@ -78,7 +78,7 @@ def build_context_pack():
     _log.info("Building the OceanView context pack...")
     try:
         meta = oceanview_context.build_oceanview_context(
-            live=True, max_stale_hours=pack_max_stale_hours())["meta"]
+            live=True, max_stale_hours=pack_max_stale_hours(), record_status=True)["meta"]
         _log.info(f"OceanView context pack: health={meta['health']} source={meta['source']} "
                   f"warnings={len(meta['warnings'])}")
     except Exception as e:

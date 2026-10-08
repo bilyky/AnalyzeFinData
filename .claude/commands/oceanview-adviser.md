@@ -11,6 +11,37 @@ Engine: `aether/options_adviser.py` (pure, unit-tested, interface-agnostic). CLI
 at any holding. This skill runs the **offline** path and reports the menu; it recommends
 only — it never places an order.
 
+## Step 0 — Boot from the OceanView Context Pack
+
+Before advising, load the **Context Pack** (`aether/oceanview_context.py`): one manifest of
+account state, the paper-game summary, study gates, data health and guardrails, with a health
+verdict. The evening pipeline (`daily_task`) rebuilds it every day; read it **offline**
+(`live=False` never touches the broker and writes nothing: the pipeline's verdict file, which the
+watchdog gate reads, is only written by the scheduled build):
+
+```bash
+python -c "from aether.oceanview_context import build_oceanview_context as b; import json; p=b(live=False); print(json.dumps({'meta': p['meta'], 'data_health': p['state']['data_health'], 'portfolio': p['state']['portfolio']}, indent=1, default=str))"
+```
+
+Let the verdict (`meta.health`) decide what you may say:
+
+| health | meaning | what you may do |
+|---|---|---|
+| `ok` | live broker snapshot, data healthy | use the numbers; still cite `meta.broker_as_of` |
+| `degraded` | snapshot from cache (≤ 24 h, 72 h on weekends) and/or data-health warnings | every account/position number carries its as-of stamp (`broker_as_of`, `staleness_hours`) |
+| `failed` | no snapshot, or a stale one | **don't quote current account or position numbers.** Strategy math with explicit hypothetical inputs (`--spot/--qty/--cost …`) is still fine; say the pack is failed and why (`meta.warnings`) |
+
+- **Data health of the symbol you're advising on:** if it's in `data_health.placeholder_heavy`
+  or `data_health.no_ohlcv`, its AETHER ATR stop is unreliable or missing (8% fallback). Don't
+  anchor the protective-put strike to that stop without saying so; pass `--stop` explicitly or
+  flag it.
+- **Guardrails** (`pack["guardrails"]`) travel with the pack: recommend-only (a human
+  executes; there is no order path), ban-safe (no browser), backup-before-write.
+- **Private data:** the full pack (`state.accounts`, `state.sleeves`) holds real account
+  digits and balances. Keep them in the private conversation. Never paste them into a PR,
+  issue, commit or anything public. The command above prints only meta, data health and the
+  paper-game summary.
+
 ## Step 1 — Run the adviser (offline)
 
 Pull the position + AETHER stop/target automatically from the workbook when present.
@@ -48,6 +79,10 @@ Summarize for the user:
 | Protective put | debit | $ | — | holding-period |
 | Covered call | credit | — | $ | §1092 QCC |
 | Cash-secured put | credit | — | — | §1091 wash sale |
+
+Start the summary with the pack's verdict, e.g. "Context pack: **degraded**, broker snapshot
+as of 2026-10-08 17:31 PT (cache, 15 h old)". If it's **failed**, say so and keep to the
+hypothetical inputs.
 
 Then state a recommendation grounded in the numbers — e.g. "for an appreciated lot
 **near the 1-year mark**, a wide collar caps risk cheaply but any forced assignment
