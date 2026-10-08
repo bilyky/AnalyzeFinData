@@ -33,7 +33,12 @@ if not _log.handlers:
     ch.setFormatter(logging.Formatter("%(message)s"))
     _log.addHandler(ch)
 
-STEP_TIMEOUT_S = 600          # run_command default (run_history.py, main.py)
+STEP_TIMEOUT_S = 600          # run_command default
+# run_history.py and main.py are slow, not hung: on PROD (2026-09-25 .. 10-07) both were still
+# logging progress seconds before the 600 s cap killed them, on most evenings. run_history only
+# fills missing days, so a kill loses that run's work but not earlier progress.
+RUN_HISTORY_TIMEOUT_S = 1800
+MAIN_TIMEOUT_S = 1800
 UNBOUNDED_STEPS_SLACK_S = 600  # lint, data load, report build + email: no timeout of their own
 CONTEXT_PACK_SLACK_S = 300     # OceanView pack build: a few broker reads + local files
 PACK_MAX_STALE_H = 24          # weekday: a broker snapshot older than this -> health "failed"
@@ -42,9 +47,9 @@ PACK_MAX_STALE_WEEKEND_H = 72  # Sat/Sun: no fresh token, Friday's snapshot is e
 
 def worst_case_runtime_seconds():
     """Longest daily_task.main() can legitimately run: every bounded step at its timeout
-    (run_history + main.py, the backup sync, the recovery pass) plus slack for the steps
+    (run_history, main.py, the backup sync, the recovery pass) plus slack for the steps
     that have none. The Evening task's scheduler limit must be at least this."""
-    return (2 * STEP_TIMEOUT_S + watchdog.SYNC_TIMEOUT_S + rapidapi.pass_timeout_seconds()
+    return (RUN_HISTORY_TIMEOUT_S + MAIN_TIMEOUT_S + watchdog.SYNC_TIMEOUT_S + rapidapi.pass_timeout_seconds()
             + UNBOUNDED_STEPS_SLACK_S + CONTEXT_PACK_SLACK_S)
 
 
@@ -95,22 +100,38 @@ def run_ohlcv_recovery():
         _log.warning(f"Warning: OHLCV recovery failed (non-fatal): {e}")
 
 
+# Steps that failed in this run (timeout or non-zero exit). main() reports them and exits 1.
+_failed_steps: list[str] = []
+
+
 def run_command(command_list, timeout=STEP_TIMEOUT_S):
     _log.info(f"Running: {' '.join(command_list)}")
     # Use Path(__file__) for the script if it's a local script
     if len(command_list) > 1 and command_list[1].endswith(".py"):
         command_list[1] = str(Path(__file__).resolve().parent / command_list[1])
-    
+    step = os.path.basename(command_list[1]) if len(command_list) > 1 else command_list[0]
+
     try:
-        result = subprocess.run(command_list, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(command_list, capture_output=True, text=True, timeout=timeout,
+                                encoding="utf-8", errors="replace")
         if result.returncode != 0:
-            _log.info(f"Error (exit code {result.returncode}): {result.stderr}")
+            _failed_steps.append(f"{step}: exit code {result.returncode}")
+            _log.error(f"🚨 {step} failed (exit code {result.returncode}): {(result.stderr or '')[-2000:]}")
         else:
             _log.info("Command completed successfully.")
         return result.stdout
     except subprocess.TimeoutExpired:
-        _log.warning(f"🚨 Command timed out after {timeout}s: {' '.join(command_list)}")
+        _failed_steps.append(f"{step}: timed out after {timeout}s")
+        _log.error(f"🚨 Command timed out after {timeout}s: {' '.join(command_list)}")
         return ""
+
+
+def _step_failure_banner(failed: list[str]) -> str:
+    items = "".join(f"<li>{f}</li>" for f in failed)
+    return ('<div style="border:2px solid #c62828;background:#ffebee;padding:10px;margin:10px 0;">'
+            f"<b>STEP FAILURES in this run:</b><ul>{items}</ul>"
+            "The data in this report may be incomplete.</div>")
+
 
 def get_symbols_from_xls():
     wb = None
@@ -250,6 +271,8 @@ def main():
 
     today = datetime.date.today()
     _log.info(f"Starting daily automation for {today}")
+    _failed_steps.clear()
+    fatal = False
 
     # ── Configuration Placeholder Audit ──
     if getattr(CFG, "has_placeholders", False):
@@ -295,17 +318,18 @@ def main():
                 _log.info(f"Warning: Self-validation skipped (ruff package not available): {e}")
 
             # 1. Sync last 5 days history
-            run_command([sys.executable, "run_history.py", "5"])
+            run_command([sys.executable, "run_history.py", "5"], timeout=RUN_HISTORY_TIMEOUT_S)
 
             # 2. Run main script to populate Data and Excel
-            run_command([sys.executable, "main.py"])
+            run_command([sys.executable, "main.py"], timeout=MAIN_TIMEOUT_S)
             # (The OHLCV recovery pass runs LAST — see run_ohlcv_recovery in the finally below.)
 
         # 3. Get all processed data
         all_symbols_data = get_all_data(today)
         if not all_symbols_data:
-            _log.info("Error: No symbol data retrieved for report.")
-            return
+            _log.error("Error: No symbol data retrieved for report.")
+            fatal = True
+            return 1
 
         # 4. Generate Tables (Same logic as Excel Picks sheet)
         p_map = {'Bu+': 5, 'Bu': 4, 'N': 3, 'Be': 2, 'Be-': 1}
@@ -429,12 +453,15 @@ def main():
 
         if sync_warning_html:
             html = html.replace("</body>", f"{sync_warning_html}</body>")
+        if _failed_steps:
+            subject_line = f"[STEP FAILURE] {subject_line}"
+            html = html.replace("<body>", f"<body>{_step_failure_banner(_failed_steps)}", 1)
 
         _log.info("Generating rich HTML report...")
         notify.send_email(subject_line, html, is_html=True)
-        _log.info("Automation completed successfully.")
 
     except Exception as e:
+        fatal = True
         error_msg = f"Automation Failed for {today}\n\nError: {str(e)}\n\nFull Traceback:\n{traceback.format_exc()}"
         _log.info(f"FATAL ERROR: {error_msg}")
         try:
@@ -447,6 +474,12 @@ def main():
             build_context_pack()       # before the long repair: needs the same-day ET token
             run_ohlcv_recovery()
 
+    if fatal or _failed_steps:
+        _log.error(f"Automation finished with failures: {'; '.join(_failed_steps) or 'see the error above'}")
+        return 1
+    _log.info("Automation completed successfully.")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

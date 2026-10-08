@@ -510,7 +510,7 @@ def main():
                 )
                 log("History backfilled.")
             except subprocess.TimeoutExpired:
-                log("Warning: run_history.py timed out after 600s (Playwright hang likely). Bypassing backfill...")
+                log("Warning: run_history.py was still running after 600s; skipped. It only fills missing days, so the next run picks up where it stopped.")
             except subprocess.CalledProcessError as e:
                 log(f"Warning: run_history.py failed (will continue): {e.stderr}")
 

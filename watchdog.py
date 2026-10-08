@@ -72,7 +72,7 @@ _SCHTASKS_TIMEOUT_S = 60
 # A watchdog cycle that still holds the lock after this long is treated as hung: it is killed
 # and the lock is reclaimed. Preflight uses the same limit.
 WATCHDOG_LOCK_MAX_AGE_MIN = 120
-_TASK_TIME_LIMIT_MIN = {"AnalyzeFinData_Evening": 360}
+_TASK_TIME_LIMIT_MIN = {"AnalyzeFinData_Evening": 420}
 SYNC_TIMEOUT_S = 600  # robocopy timeout for sync_data_folder (PR #64 raised it for the cache volume)
 
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
