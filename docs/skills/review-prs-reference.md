@@ -77,7 +77,10 @@ Read the real message from `$_.ErrorDetails.Message`. The PII scrub still applie
 - **The default git credential can't push** (a 403 for a different account): push once with gh's
   stored token, never saving it — `git -c credential.helper= push
   "https://x-access-token:$(gh auth token)@github.com/<owner>/<repo>.git" HEAD:<branch>`, piping the
-  output through a filter that masks the token. Confirm the origin URL still has no token afterwards.
+  output through a filter that masks the token. **Never add `-u`** to that push: it saves the
+  token-bearing URL as the branch's upstream in `.git/config`. Set the upstream separately
+  (`git branch --set-upstream-to=origin/<branch>`) and confirm no `x-access-token` remains in
+  `git config --get-regexp .`.
 
 ## E. `scripts/utils/prune_merged_worktrees.py` — known limits
 
