@@ -31,7 +31,27 @@ else:
 "
 ```
 
-If all three sources are empty: **"No errors found in the last hour. All systems nominal."** — stop.
+If all three sources are empty **and nothing failed** (no failure email, no FAIL verdict, no user
+report): **"No errors found in the last hour. All systems nominal."** — stop. If something did fail,
+go to Step 1b: many real failures raise no exception.
+
+## Step 1b — No traceback, or the failure happened on another machine
+
+- **Search for the failing check's own message, not just ERROR level.** A gate can fail by returning
+  `False` / `FAIL` / `WAIVED` and logging at INFO or console level. Grep the job's log for the check's
+  name and the verdict line, then read the lines just before it.
+- **Logs from another host:** ask for that host's log folder (zipped). Don't read config or token files
+  you don't need, and never print secrets; check a config key's *presence*, not its value. Some job
+  logs are UTF-16 (shell redirects on Windows), so plain grep finds nothing until you decode them.
+- **Establish which code version ran there.** The host may not have pulled the latest fix. Compare
+  distinctive log messages with what each version of the code prints.
+- **Build a timeline across processes** (timestamp + pid): who touched the resource last, and what
+  happened between the last success and the failure.
+- **Check the external system's documented behavior** (vendor/API docs) before designing a fix
+  around an assumption about it.
+- **Reproduce through the real entry point** with only the network, browser and clock stubbed, using
+  the production configuration (not dev defaults). Assert the calls that prove the failing path ran;
+  a replay that passes for the wrong reason is worse than none.
 
 ## Step 2 — Identify the root error
 

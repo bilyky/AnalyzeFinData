@@ -71,21 +71,23 @@ Read the real message from `$_.ErrorDetails.Message`. The PII scrub still applie
 
 ## E. `scripts/utils/prune_merged_worktrees.py` — known limits
 
-Check these against the current script before relying on it:
-- **Transport is `gh api` only.** Where `gh` can't dial, it exits with a traceback; fall back to the
-  manual procedure in §F.
-- **Pagination.** It must read every page of `pulls?state=closed`; a single `per_page=100` request
-  silently drops older PRs once the repo has more than 100 closed PRs, leaving their branches
-  "unmapped".
-- **Merged-ness** must come from `merged_at` (the list endpoint has no `merged` field) — fixed in #143.
-- **Scope.** It handles worktrees and the branches they hold, not standalone local branches; use the
-  lossless test in §F for those.
+Check these against the current script before relying on it (all but the last fixed in #143):
+- **Merged-ness** comes from `merged_at` (the list endpoint has no `merged` field).
+- **Pagination.** Reads every page, newest first; within a scope the newest PR for a head ref wins, and
+  open PRs override closed ones.
+- **Transport is `gh api` only.** If `gh` can't connect, it exits 2 with "Nothing was changed" and the
+  fix (set `HTTPS_PROXY`/`HTTP_PROXY`); otherwise prune by hand per §F.
+- **Branch deletion is by PR state only (still open).** It also deletes local branches that have no
+  worktree when a merged/closed PR has the same head ref, but it does **not** run §F's lossless
+  test. A local branch with commits never pushed to the PR would lose them. Before `--apply`, check
+  each listed `BRANCH` with the §F lossless test.
 
 ## F. Clean up once PRs are merged or closed
 
 - **"Merged" comes from the PR API, never from ancestry** — squash-merged tips are never ancestors of
   `main`. In list responses use `merged_at != null` (the list endpoint has no `merged` field); read
-  **every page** of results.
+  **every page** of results. Then confirm by **effect**: the change's content is on `main` (a merged
+  badge has been lost to a history rewrite before).
 - **Links first (data-loss rule, `AGENT.md` §4 "No Links Into Data/"):** `git status` cannot see a
   junction or symlink under gitignored `Data/`, and removing a worktree deletes *through* it — on
   2026-10-06 that wiped the main checkout's `Data/Symbol` + `Data/Symbol_full`. Before removing any
