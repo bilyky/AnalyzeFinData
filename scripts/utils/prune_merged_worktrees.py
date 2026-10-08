@@ -17,6 +17,8 @@ Safe by design:
     or any worktree whose path lives under ``.claude/`` (harness-managed;
     auto-cleaned by the harness).
   * Never deletes a local branch that still backs an OPEN PR.
+  * Never deletes a branch (or removes its worktree) unless it is lossless: every commit is on the
+    remote or already merged into main (``branch_is_lossless``). A finished PR alone is not proof.
   * A branch whose name matches no PR head ref is left alone (possible unpushed
     work) rather than guessed at.
 
@@ -229,6 +231,31 @@ def _finished(info, want_merged, want_closed):
     return False
 
 
+def branch_is_lossless(branch, pr_number, remote="origin"):
+    """True when deleting `branch` loses no commit: its tip is reachable from a remote ref (any
+    remote branch, or the PR's own head `refs/pull/<n>/head`, fetched into a private ref), or merging
+    it into <remote>/main changes nothing (a squash-merged branch whose content is all on main).
+
+    A finished PR does not prove its local branch is safe: commits made after the last push, or never
+    pushed, exist only here. PR state says "done"; this says "nothing unique left"."""
+    rc, sha, _ = _run(["git", "rev-parse", "--verify", "-q", branch + "^{commit}"], check=False)
+    if rc != 0:
+        return False
+    sha = sha.strip()
+    pr_ref = "refs/prune/pull/%d" % pr_number
+    _run(["git", "fetch", "-q", remote, "+refs/pull/%d/head:%s" % (pr_number, pr_ref)], check=False)
+    try:
+        _, hit, _ = _run(["git", "for-each-ref", "--count=1", "--contains", sha,
+                          "refs/remotes/" + remote, pr_ref], check=False)
+        if hit.strip():
+            return True
+        rc, tree, _ = _run(["git", "merge-tree", "--write-tree", "%s/main" % remote, sha], check=False)
+        _, main_tree, _ = _run(["git", "rev-parse", "%s/main^{tree}" % remote], check=False)
+        return rc == 0 and bool(tree.strip()) and tree.split()[0] == main_tree.strip()
+    finally:
+        _run(["git", "update-ref", "-d", pr_ref], check=False)
+
+
 def plan(gh, repo, want_merged, want_closed):
     states = pr_state_map(gh, repo)
     cur = current_branch()
@@ -266,6 +293,10 @@ def plan(gh, repo, want_merged, want_closed):
                          "(`cmd /c rmdir <link>`), re-run, and get the owner's OK for any link "
                          "into Data/" % (info["number"], len(links), links[0])))
             continue
+        if not branch_is_lossless(branch, info["number"]):
+            keep.append((path, "PR #%d finished but branch %s has commits not on the remote — "
+                         "NOT removed (push or check them by hand)" % (info["number"], branch)))
+            continue
         verb = "merged" if info["merged"] else "closed-unmerged"
         actions.append(("worktree", path, branch, "PR #%d %s" % (info["number"], verb)))
 
@@ -276,6 +307,10 @@ def plan(gh, repo, want_merged, want_closed):
             continue
         info = states.get(branch)
         if not _finished(info, want_merged, want_closed):
+            continue
+        if not branch_is_lossless(branch, info["number"]):
+            keep.append((branch, "PR #%d finished but the branch has commits not on the remote — "
+                         "NOT deleted (push or check them by hand)" % info["number"]))
             continue
         verb = "merged" if info["merged"] else "closed-unmerged"
         actions.append(("branch", None, branch, "PR #%d %s (branch-only)" % (info["number"], verb)))
@@ -334,7 +369,7 @@ def main(argv=None):
         sys.stderr.write(
             "ERROR: could not plan the prune: %s\n"
             "  Nothing was changed. If gh can't connect, set HTTPS_PROXY/HTTP_PROXY to your proxy "
-            "and retry, or prune by hand (review-prs skill, section 9).\n"
+            "and retry, or prune by hand (docs/skills/review-prs-reference.md, section F).\n"
             % (str(e).strip().splitlines() or ["unknown error"])[0]
         )
         return 2

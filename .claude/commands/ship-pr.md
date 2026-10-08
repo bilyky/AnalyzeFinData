@@ -99,6 +99,8 @@ When the REST API is unreachable but `git` works, verify over the git transport:
   Read each one for steps the pull does not perform: scheduler or service re-registration, new config
   keys whose **defaults change behavior**, migrations, env vars. Time the deploy by checking that no
   job is running (lock files, processes), not by a clock window — schedules change with the code.
+  Getting one PR ready for PROD (merge-in, real-data smoke, deploy notes in the body):
+  `review-prs.md` §8.
 - **CI logs** the agent can't reach: point the user at `https://github.com/<owner>/<repo>/actions`.
 
 "Can't fetch GitHub" is usually the tool's egress lacking the proxy, not an outage — verify with

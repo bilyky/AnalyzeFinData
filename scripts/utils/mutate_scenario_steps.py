@@ -14,6 +14,7 @@ mutant survived or an anchor no longer matches, so it can gate a cleanup PR.
 Usage (from the repo root):  python scripts/utils/mutate_scenario_steps.py
 Used for PR #150 (93 -> 86 stage tests, 60/61 mutants caught at the time).
 """
+import argparse
 import hashlib
 import json
 import os
@@ -215,11 +216,18 @@ def _is_main_checkout():
     return rev_parse("--git-dir") == rev_parse("--git-common-dir")
 
 
-def main():
+def main(argv=None):
+    # Parse first: --help or a mistyped flag must exit before anything is mutated (an ignored
+    # unknown argument used to start a full run that rewrites steps.py).
+    ap = argparse.ArgumentParser(description="Mutation check for aether/scenario/steps.py "
+                                 "(rewrites steps.py while it runs; restores it byte for byte).")
+    ap.add_argument("--allow-main-checkout", action="store_true",
+                    help="run in the main checkout (only if no live process imports steps.py)")
+    args = ap.parse_args(argv)
     # The script rewrites aether/scenario/steps.py with deliberate bugs while it runs.
     # Once the REPLACE phase wires steps.py into the live game, doing that in the main
     # checkout would put buggy code under live processes, so it only runs in a worktree.
-    if _is_main_checkout() and "--allow-main-checkout" not in sys.argv[1:]:
+    if _is_main_checkout() and not args.allow_main_checkout:
         sys.stderr.write("Refusing to run in the main checkout: this script temporarily rewrites "
                          "aether/scenario/steps.py. Run it in a git worktree "
                          "(or pass --allow-main-checkout if no live process imports it).\n")
