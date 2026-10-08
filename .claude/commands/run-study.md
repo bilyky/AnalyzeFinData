@@ -17,6 +17,8 @@ rule fixed in advance, and the result recorded where the project tracks R&D (her
 ## 2. Build it so it can't fool you
 
 - **No look-ahead:** inputs use only data available at decision time; outcomes start after it.
+  Reported figures (earnings, filings, restatements) count from their **filing date**, not the
+  period they describe.
 - **Count independent evidence, not rows.** Observations on the same date share one market move —
   compare groups *within* each date and test across dates. Overlapping horizons (10-day returns on
   consecutive days) are serially correlated: use a HAC / Newey-West t with lag = (horizon in sampling
@@ -26,6 +28,11 @@ rule fixed in advance, and the result recorded where the project tracks R&D (her
   not significance — say so.
 - **Reuse the project's data loaders and adjustments** (e.g. split-adjusted prices); ledger prices
   are nominal at trade time, so rescale before comparing.
+- **Check the outcome distribution first** (mean vs median, extremes): one bad datum, such as an
+  unadjusted split posing as a +1000% return, can flip every sign. Fix the data, or winsorize / use
+  ranks and report the bounds.
+- **External APIs:** cache history, pace requests, stop after repeated 403/429s, re-analyse from
+  cache. Smoke-test on a slice, but don't read results from it.
 - **Parallelize across independent entities** (symbols) when the replay is slow; confirm the parallel
   run reproduces the serial numbers on a small slice.
 
@@ -42,8 +49,10 @@ rule fixed in advance, and the result recorded where the project tracks R&D (her
   with the data range and run date.
 - **If you change the decision statistic after seeing a result, disclose it** — state the verdict
   under the original rule and why the new one is better — then fix the rule for every future run.
-- State what the study does **not** measure (e.g. stop-outs, drawdowns, costs) and what would
-  re-open it.
+- **Count passes against chance:** at |t| ≥ 1.96 about 1 test in 20 passes by luck, so a lone pass
+  among many is not a finding. If a composite passes, test its strongest component alone.
+- State what the study does **not** measure (stop-outs, drawdowns, costs), its biases (today's
+  universe, today's classifications), groups too small to test, and what would re-open it.
 - **Never wire on INCONCLUSIVE**, and treat a pass as a reason to propose a change, not to make it:
   the live change is its own PR, gated on the risk rules.
 
