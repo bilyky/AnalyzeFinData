@@ -29,6 +29,9 @@ thing. Anchor on intent, then judge the code against that intent.
 5. **Claims in commit messages and PR bodies are claims too** — an incident, a dataset ("rejected in
    both runs"), a "no behavior change". Check them against the logs/data/code they cite; say which you
    could not verify.
+6. **Statistical claims (studies, backtests):** check the unit of independence — observations sharing a
+   date, or overlapping horizons, inflate a plain t (see `run-study.md`). If the decision statistic
+   changed after the result was seen, the write-up must state the verdict under the original rule.
 
 (Worked examples: definition divergence PR #27, relocated vulnerability PR #54 → reference §A.)
 
@@ -174,7 +177,9 @@ a time so the §6 scrub runs on every body. If `gh` cannot reach the API, POST t
 
 `gh repo view <owner>/<repo> --json visibility`. If public, mask everything the review quotes as a
 leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posting script must abort on
-`PUBLIC` without a per-file scrub.
+`PUBLIC` without a per-file scrub. When printing any config or credential file
+(even to a console), mask by value shape as well as key name — a key-name list misses keys like `pass` —
+and test the mask on a fixture before running it on the real file.
 
 ## 7. Network & auth
 
@@ -199,44 +204,13 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
 - **Don't push to a branch checked out in another worktree** — another session may be mid-edit.
   Test-merge in a detached scratch worktree and report the exact command instead.
 
-## 9. Clean up once PRs are merged or closed
+## 9. After merges: clean up, then audit docs
 
-- **"Merged" comes from the PR API, never from ancestry** — squash-merged tips are never ancestors of
-  `main`. In list responses use `merged_at != null` (the list endpoint has no `merged` field); read
-  **every page** of results. Then confirm by **effect**: the change's content is on `main` (a merged
-  badge has been lost to a history rewrite before).
-- **Worktrees:** remove only clean ones, **without `--force`** (a refusal is the safety net —
-  `git -C <wt> status --porcelain` non-empty ⇒ leave it and report it). Keep open-PR, dirty, locked,
-  and other-session worktrees. **An open PR dominates a shared head ref:** a branch that backs any open
-  PR is kept even if another PR with the same head ref was merged or closed. `scripts/utils/prune_merged_worktrees.py` automates this (dry-run first,
-  then `--apply`); its known limits are in reference §E.
-- **Local branches (with or without a worktree):** delete only when **lossless** — every commit still
-  exists on the remote:
-  1. tip reachable from `origin/main` or any `refs/pull/*/head`
-     (`git for-each-ref --count=1 --contains <sha> refs/remotes/origin/main refs/review/pull` — one call
-     per branch; per-ref `merge-base` loops are far too slow);
-  2. else merging it into `main` changes nothing (`git merge-tree --write-tree origin/main <b>` equals
-     `main`'s tree);
-  3. else every file it touched is byte-identical to some commit in its **merged** PR's history.
-
-  Anything else holds unique work → keep and list it. `-D` is correct only for branches proven
-  lossless (squash-merged branches make `-d` refuse). Log `name sha` to a backup file first so any
-  deletion is one `git branch <name> <sha>` away from undo.
-- Batch removals are irreversible local changes: present the classified plan, get the go-ahead, and
-  delete your own scratch (temp refs, worktrees, files) when done.
-
-## 9b. Post-merge doc audit (after a batch of merges, or when asked)
-
-Docs drift between PRs even when each review was careful. After a batch lands:
-1. Bring the main checkout current (`git merge --ff-only origin/main`, only when the user asks, and only
-   if no local edit conflicts).
-2. List the merges since the last audit and, for each, the behavior it changed.
-3. Grep every doc surface (§3 *Documentation*) for each old behavior, plus status lines of tracked items
-   ("UNBUILT" for something built) and duplicate identifiers.
-4. Verify each replacement claim against code on `main` (callers, defaults, gates, thresholds) before
-   writing it. A behavior gap you find (code doing something unintended) is reported for a decision,
-   not silently "fixed" inside the docs PR.
-5. Land the fixes as one docs PR from a fresh branch off latest `main`.
+- **Clean up only losslessly**, and never with `--force`. Before removing any worktree, scan it for
+  links into `Data/` (`AGENT.md` §4); removing one with a link deletes through it. Full procedure
+  (merged-ness from the API, the worktree rules, the lossless-branch test, the backup log):
+  reference §F.
+- **After a batch of merges**, run the post-merge doc audit: reference §G.
 
 ## 10. Checklist
 
@@ -246,9 +220,9 @@ Docs drift between PRs even when each review was careful. After a batch lands:
 - §2 branch source in a detached, fail-stop scratch worktree; private `refs/review/*`; a red check's log
   read and the gate reproduced locally.
 - §3 docs re-verified for every changed behavior (old-behavior grep, status lines, safety invariants,
-  unique identifiers); §9b audit run after a batch of merges.
+  unique identifiers); reference §G audit run after a batch of merges.
 - §3 every perspective covered; tests red-green or mutation-checked and actually run; architecture-fit
   and extraction faithfulness checked; prod-readiness stated on both gates.
 - §4/§5/§6 house format, posted as a comment, PII masked.
 - §8 brought current by merge-in (never force-push); squash-parent retargets resolved with proof.
-- §9 merged-ness from the API (all pages); only lossless deletions, logged; no `--force`.
+- Cleanup per reference §F: merged-ness from the API (all pages); only lossless deletions, logged; no `--force`.

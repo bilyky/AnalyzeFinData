@@ -3,7 +3,7 @@ Covered-Call Winner-Cap Study — R&D #26 follow-up, Item 1 (flower over-capping
 
 execute_weekly_covered_call_pass writes a call on EVERY risk-locked winner
 (`is_winner and is_risk_locked and not has_active_call and is_optionable`), capping
-exactly the upside CLAUDE.md's Flower-Protection philosophy ("a win that dumps a flower
+exactly the upside the roadmap's Flower-Protection philosophy (plans/roadmap.md) ("a win that dumps a flower
 is still a mistake") exists to protect. This study tests, from history, whether that cap
 actually costs money and whether the cost concentrates in the strongest winners — the
 signal that justifies excluding high-conviction flowers from call-writing.

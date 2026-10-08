@@ -5,7 +5,7 @@ import os
 import pytz
 import re
 import requests
-from aether import etrade
+from aether import etrade, paths
 import rapidapi
 import sys
 import console_safe
@@ -29,8 +29,9 @@ BASE_DIR = Path(__file__).resolve().parent
 AI_GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
 GAME_BACKUP_DIR = BASE_DIR / "Data" / "Backup" / "Game"   # timestamped save_game backups (keeps last 15)
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
+
 AI_PERF_XLSX = BASE_DIR / "Data" / "ai_portfolio_performance.xlsx"
-SYMBOL_FULL_DIR = BASE_DIR / "Data" / "Symbol_full"   # OHLCV cache — one source of truth
+SYMBOL_FULL_DIR = Path(paths.ohlcv_dir())   # OHLCV cache — one source of truth ($AETHER_CACHE_DIR-aware)
 INITIAL_BALANCE = 10000.0
 
 # Import risk utils safely
@@ -44,6 +45,53 @@ from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
 
+# Full-day NYSE closures (one list: is_market_hours and the stale-workbook gate both use it).
+NYSE_HOLIDAYS = frozenset({
+    "2026-01-01",  # New Year's Day
+    "2026-01-19",  # Martin Luther King Jr. Day
+    "2026-02-16",  # Presidents' Day
+    "2026-04-03",  # Good Friday
+    "2026-05-25",  # Memorial Day
+    "2026-06-19",  # Juneteenth National Independence Day
+    "2026-07-03",  # Independence Day (Observed)
+    "2026-09-07",  # Labor Day
+    "2026-11-26",  # Thanksgiving Day
+    "2026-12-25",  # Christmas Day
+    
+    # Future Years Support (2027)
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24"
+})
+
+_SESSION_CLOSE_LA = (13, 0)  # 4:00 PM ET
+
+
+def _previous_session_close(now):
+    """13:00 America/Los_Angeles on the last weekday before `now`'s date that wasn't an NYSE holiday."""
+    tz_la = pytz.timezone("America/Los_Angeles")
+    day = now.astimezone(tz_la).date() - datetime.timedelta(days=1)
+    while day.weekday() >= 5 or day.isoformat() in NYSE_HOLIDAYS:
+        day -= datetime.timedelta(days=1)
+    return tz_la.localize(datetime.datetime(day.year, day.month, day.day, *_SESSION_CLOSE_LA))
+
+
+def workbook_staleness(path=None, now=None):
+    """Why the workbook is too old to trade on, or None when it is fresh enough.
+
+    Fresh = last written after the previous trading session's close: at the 07:00 run the
+    previous close is the newest data there can be, whether the evening or the morning
+    refresh wrote it."""
+    path = Path(path or XLSX_FILE)
+    now = now or datetime.datetime.now(pytz.timezone("America/Los_Angeles"))
+    cutoff = _previous_session_close(now)
+    if not path.exists():
+        return f"workbook {path.name} is missing"
+    written = datetime.datetime.fromtimestamp(path.stat().st_mtime, tz=cutoff.tzinfo)
+    if written < cutoff:
+        return (f"workbook {path.name} was last written {written:%Y-%m-%d %H:%M %Z}, before the "
+                f"previous session's close ({cutoff:%Y-%m-%d %H:%M %Z}); both refreshes since then failed")
+    return None
+
 
 _SYMBOL_DAY_CACHE = {}
 
@@ -54,7 +102,7 @@ def _load_symbol_today_cache(symbol: str, today_str: str) -> dict:
     if symbol in _SYMBOL_DAY_CACHE:
         return _SYMBOL_DAY_CACHE[symbol]
         
-    cache_path = BASE_DIR / "Data" / "Symbol" / symbol / f"{symbol}_{today_str}.json"
+    cache_path = Path(paths.symbol_dir()) / symbol / f"{symbol}_{today_str}.json"
     cache = {}
     if cache_path.exists():
         try:
@@ -540,13 +588,6 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                     continue
                 cost = qty * buy["price"]
 
-            state["balance"] -= cost
-            # Update cumulative bucket counts for sequence
-            if is_scarcity:
-                current_scarcity_usd += cost
-            else:
-                current_standard_usd += cost
-
             atr = risk_utils.calculate_atr(buy["sym"])
             if atr and atr > 0:
                 stop_loss = round(buy["price"] - (rules["atr_multiplier"] * atr), 2)
@@ -554,6 +595,27 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
             else:
                 stop_loss = round(buy["price"] * 0.92, 2)
                 stop_desc = f"8% Fallback{buy.get('bottom_desc', '')}"
+
+            # Per-trade loss cap (Rule of Loss Minimization): positions are sized by cash, so a
+            # wider (honest) ATR stop would otherwise raise the dollar loss of every stop-out.
+            # Trim so (entry - stop) * shares <= equity * CFG.system_max_trade_risk_pct.
+            max_risk_usd = state["equity"] * CFG.system_max_trade_risk_pct
+            risk_cap_usd = risk_utils.risk_capped_cash(buy["price"], stop_loss, max_risk_usd)
+            if risk_cap_usd is not None and cost > risk_cap_usd:
+                old_qty = qty
+                qty = calculate_share_qty(buy["sym"], risk_cap_usd, buy["price"])
+                _log.warning(f"⚠️ Risk-capping {buy['sym']} from {old_qty} to {qty} shares: a stop-out at ${stop_loss} may lose at most ${max_risk_usd:,.2f} ({CFG.system_max_trade_risk_pct:.1%} of equity).")
+                if qty <= 0:
+                    _log.warning(f"🛑 AI BUY REJECTED: Per-trade loss cap leaves less than 1 share of {buy['sym']}.")
+                    continue
+                cost = qty * buy["price"]
+
+            state["balance"] -= cost
+            # Update cumulative bucket counts for sequence
+            if is_scarcity:
+                current_scarcity_usd += cost
+            else:
+                current_standard_usd += cost
 
             state["positions"][buy["sym"]] = {
                 "qty": qty, 
@@ -882,7 +944,7 @@ def save_game(state):
 def backtrack_verify(symbol):
     """Verify the consistency of a price trend over the last 3 trading days using local daily history."""
     try:
-        path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+        path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
         if not path.exists():
             return False, "No local daily history found."
         
@@ -911,7 +973,7 @@ def backtrack_verify(symbol):
 def is_bottom_confirmed(symbol):
     """Verify if a stock is forming a technical bottom based on its 3-day price slope."""
     try:
-        path = BASE_DIR / "Data" / "Symbol_full" / f"{symbol}_daily.json"
+        path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
         if not path.exists():
             return False, "No local daily history found."
         
@@ -1004,25 +1066,9 @@ def is_market_hours():
             return False
             
         # 3. Static US Stock Market Holiday (NYSE)
-        holidays_2026 = {
-            "2026-01-01",  # New Year's Day
-            "2026-01-19",  # Martin Luther King Jr. Day
-            "2026-02-16",  # Presidents' Day
-            "2026-04-03",  # Good Friday
-            "2026-05-25",  # Memorial Day
-            "2026-06-19",  # Juneteenth National Independence Day
-            "2026-07-03",  # Independence Day (Observed)
-            "2026-09-07",  # Labor Day
-            "2026-11-26",  # Thanksgiving Day
-            "2026-12-25",  # Christmas Day
-            
-            # Future Years Support (2027)
-            "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
-            "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24"
-        }
         
         today_str = now_la.strftime("%Y-%m-%d")
-        if today_str in holidays_2026:
+        if today_str in NYSE_HOLIDAYS:
             return False
             
         # 4. Dynamic Live Verification (Clock API + SPY Ticker)
@@ -1456,6 +1502,19 @@ def run_daily_ai_management(force=False, manual_profile=None):
             _log.info("Workbook not found. AI Management deferred.")
             return
 
+        # Live-data-only mandate: never trade on a workbook neither refresh updated.
+        stale = workbook_staleness(XLSX_FILE)
+        if stale:
+            _log.error(f"🛑 Refusing to trade on a stale workbook: {stale}.")
+            try:
+                notify.send_email(f"ALERT: AI trades skipped - stale workbook ({today})",
+                                  f"The trade run did not act because the {stale}.\n\n"
+                                  "Check the evening daily_task and morning pipeline logs, refresh the "
+                                  "workbook (python main.py), then rerun: python ai_portfolio_game.py --run --force")
+            except Exception as e:
+                _log.error(f"Could not send the stale-workbook alert: {e}")
+            return
+
         wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
         ws = wb["Research"]
         
@@ -1672,7 +1731,7 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 # Pass the conviction bar into the pure planner: a high-conviction
                 # flower (L60 >= the covered-call ceiling) is never trimmed, mirroring
                 # the covered-call flower exclusion so the two winner-side mechanics
-                # share ONE conviction bar (CLAUDE.md dont-sell-winners). The planner
+                # share ONE conviction bar (plans/roadmap.md, Jul-25 dont-sell-winners). The planner
                 # returns frac 0.0 + a "held: high-conviction flower" reason when it
                 # suppresses a would-be bank; surface that so the hold is visible.
                 so_frac, so_reason = risk_utils.scale_out_plan(

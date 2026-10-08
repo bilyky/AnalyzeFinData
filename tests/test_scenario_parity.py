@@ -44,6 +44,8 @@ _CHECKED = (
     "price_and_settle",
     "execute_queued_orders",
     "decide_exits",
+    "execute_exits",
+    "screen_buys",
 )
 
 # Functions deliberately NOT checked, with the reason.

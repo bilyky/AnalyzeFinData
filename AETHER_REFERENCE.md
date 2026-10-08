@@ -181,7 +181,7 @@ AETHER's factor weights are fully customizable and backtest-driven:
     *   **Market Summarization Skill Development (`watchdog.py` & `server.py`):** Develop a custom, un-compromised Gemini CLI Agent Skill (and matching dashboard API) that headlessly ingests live intraday index ticks, parses daily newsletter text blocks, and generates a cohesive, data-grounded macro market summary (explaining exact indices catalysts and relative strength sector shifts) to completely eliminate generic RAG lists.
     *   **Model-Agnostic Token Optimizer (`prompt_optimizer.py`):** Research and build a dynamic token and prompt optimizer that dynamically prunes, compresses, or stashes verbose skill instructions and references based on the active LLM provider (Gemini, Claude, etc.) and available context-window limits. Employs lightweight truncation heuristics or semantic-similarity slicing to ensure extreme context token efficiency.
     *   **Unified Agent Skills Registry (`skills_registry.py`):** Design an extensible Skills Registry that automatically indexes, catalogs, and manages all active agent skills inside `.gemini/skills/` (and other directories). Provides a programmatic query interface allowing the Chat Agent and Daily Driver to selectively trigger and load *only the specific skills* relevant to the active user inquiry, completely eliminating massive prompt bloating.
-    *   **Option Trading & Volatility Patterns (R&D #26):** 🚀 **COVERED-CALL INCOME ENGINE IMPLEMENTED, TESTED, AND DEPLOYED!** Shipped the first income strategy of the R&D #26 layer: a weekly covered-call writer (`aether/options.py` — Black-Scholes-Merton pricing, `select_covered_call` strike ladder, `execute_weekly_covered_call_pass`) that sells calls against risk-locked winners and books the premium to the ledger. Two backtest-gated refinements landed on top (Jul-18 optimizer discipline): **(1) per-symbol ATR-implied volatility** — `atr_implied_vol()` replaces the flat IV=0.30 with `clamp((ATR/price)·√252·K, floor, ceiling)` (K=0.67, floor 0.18, ceiling 0.64, calibrated in `scripts/backtesting/covered_call_iv_study.py`), the stored `sigma` reused at buy-to-close so writes and unwinds price against the same model; **(2) high-conviction flower exclusion** — winners whose `L60 ≥ CFG.system_covered_call_l60_ceiling` (default 6.0, env `AETHER_CC_L60_CEILING`) are left uncapped, gated by `scripts/backtesting/covered_call_winner_study.py` (GATE PASS: >50%-momentum cohort covered-vs-held edge −0.49%, t≤−1.96), honoring the CLAUDE.md Flower-Protection rule. Remaining R&D #26 scope (cash-secured puts, iron condors, IV rank/percentile, Bollinger+Keltner squeeze patterns, delta-hedging backtests) is still open/design.
+    *   **Option Trading & Volatility Patterns (R&D #26):** 🚀 **COVERED-CALL INCOME ENGINE IMPLEMENTED, TESTED, AND DEPLOYED!** Shipped the first income strategy of the R&D #26 layer: a weekly covered-call writer (`aether/options.py` — Black-Scholes-Merton pricing, `select_covered_call` strike ladder, `execute_weekly_covered_call_pass`) that sells calls against risk-locked winners and books the premium to the ledger. Two backtest-gated refinements landed on top (Jul-18 optimizer discipline): **(1) per-symbol ATR-implied volatility** — `atr_implied_vol()` replaces the flat IV=0.30 with `clamp((ATR/price)·√252·K, floor, ceiling)` (K=0.67, floor 0.18, ceiling 0.64, calibrated in `scripts/backtesting/covered_call_iv_study.py`), the stored `sigma` reused at buy-to-close so writes and unwinds price against the same model; **(2) high-conviction flower exclusion** — winners whose `L60 ≥ CFG.system_covered_call_l60_ceiling` (default 6.0, env `AETHER_CC_L60_CEILING`) are left uncapped, gated by `scripts/backtesting/covered_call_winner_study.py` (GATE PASS: >50%-momentum cohort covered-vs-held edge −0.49%, t≤−1.96), honoring the Flower-Protection rule (Jul-11 session, `plans/roadmap.md`). Remaining R&D #26 scope (cash-secured puts, iron condors, IV rank/percentile, Bollinger+Keltner squeeze patterns, delta-hedging backtests) is still open/design.
     *   **Dynamic Momentum Rotation Engine (R&D #27):** 🚀 **FULLY IMPLEMENTED, TESTED, AND DEPLOYED!** Successfully built and shipped the regime-adaptive slot-swapping mechanism inside AGGRESSIVE mode. It automatically monitors slots, identifies elite breakouts (combined score >= 12.0), and swaps out the lowest-scoring, mature (profit-locked/breakeven) positions to maximize compounding velocity and capital efficiency.
 
 ---
@@ -240,6 +240,56 @@ Use this checklist whenever you want to **add, remove, or modify** any system as
 3.  [ ] Modify the target weight coefficient (e.g., `candlestick_score * -0.15`).
 4.  [ ] Execute the test suite `.\venv\Scripts\python.exe -m unittest discover tests` to verify no regressions were introduced.
 5.  [ ] Commit your changes to git and push to `main`.
+
+## 🧭 9. Runtime Behavior Rules (moved from AGENT.md, 2026-10-07)
+
+How the trading system itself behaves. These were in `AGENT.md` §6–§7; they are read when
+changing sizing, profile, market-hours, pricing or feedback-loop code.
+
+### 📈 E*TRADE Platform Capabilities & Sizing Heuristics
+
+#### Fractional Share Order Entry
+E*TRADE supports fractional share order entry, allowing precise capital allocation without rounding down to the nearest whole share.
+*   **Available Assets:** Most S&P 100® stocks, plus major ETFs: **DIA**, **SPY**, **QQQ**, and **IWM**.
+*   **Precision:** Up to **three decimal places** (e.g., `1.458` shares).
+*   **Expansion:** E*TRADE plans more fractional symbols and dollar-based fractional orders.
+*   **Sizing Precision:** For these optionable symbols, bypass the whole-share rounding integer constraint and allow up to three decimal places for share quantities in position-sizing modules (`risk_utils.py`, `ai_portfolio_game.py`). This allows exact target allocations (e.g., exactly 10.0% or 15.0% allocation) without holding unnecessary cash drag from whole-share rounding.
+
+#### State-Aware Persistent Profile Modes (MANUAL vs. ADAPTIVE)
+To guarantee predictability across automated daily executions:
+*   **One-Time Tactical Override:** Executing a manual run with an explicit `--profile <PROFILE>` CLI parameter sets the system state to `"profile_mode": "MANUAL"`. This overrides the autopilot for *that specific session only*.
+*   **Automatic Autopilot Restoration:** Subsequent automated daily tasks (which run with no CLI parameters) will **automatically detect the manual override state, print an auto-reset warning, and restore the `"profile_mode": "ADAPTIVE"` autopilot**, safely falling back to the dynamic regime selector with zero manual intervention required.
+*   **Manual Restoration:** To manually restore the autopilot immediately at any time, execute a run with `--profile ADAPTIVE`. This restores `"profile_mode": "ADAPTIVE"`, enabling the dynamic regime selectors for that session.
+
+#### ⚙️ Adaptive Cash-Deployment Upgrade Gate (Capital Efficiency Rule)
+To prevent the portfolio from holding excessive, non-productive cash buffer during high-conviction bottoming opportunities:
+*   **The Trigger:** When on autopilot (`ADAPTIVE` mode) and the market regime evaluates to `DEFENSIVE`, the system automatically audits your local state:
+    1.  **Cash Check:** Is your cash balance greater than **40.0%** of your total portfolio equity?
+    2.  **Setup Check:** Do we detect **2 or more strong, safe, and verified bottom setups** (`Setup == 1`, combined momentum score `>= 9.5`, and 500-day Z-Score `< 2.5` to avoid bubble-chasing)?
+*   **The Action:** If both conditions are met, the autopilot **automatically upgrades today's strategy profile from DEFENSIVE to BALANCED for this daily session**, opening up 2 additional slots to deploy idle cash safely.
+
+#### 🕒 Two-Factor Dynamic Market Hours Check (Stale-Price Prevention)
+To completely prevent executing orders on stale weekend or holiday prices:
+*   **The Check:** Before proceeding to execute any trades, the system performs a **two-factor live validation**:
+    1.  **Official Clock:** Pings E*TRADE's `/v1/market/clock.json` to verify `currentStatus == "REGULAR"`.
+    2.  **Empirical SPY Ticker:** Pings a live quote for the `SPY` ETF and converts its `dateTimeUTC` to NY Time. If the last trade did NOT occur today, the market is treated as closed (Holiday/Weekend).
+*   **Dynamic Fallback:** If the network or E*TRADE API is offline, the check seamlessly falls back to our local weekend and static NYSE holiday filters, ensuring the system remains indestructible and never blocks.
+
+#### 🌐 Price Fetching & Fallback Hierarchy (Zero-Trust Data Rule)
+To maximize data accuracy while eliminating API rate-limits, suspended sessions, and sequential network latency:
+*   **The Rule:** If local workbook data (`state_of_the_day.xlsx`) is available and we are outside of active market hours (after-hours and weekends), **always** read prices directly from this local file first (near-instant 0.1-second lookup).
+*   **Active Trading Hours:** During active market hours (weekdays 6:30 AM - 1:15 PM PST), bypass the static local workbook and execute the **regular live process**:
+    1.  **Primary:** Query the live E*TRADE Production API for real-time streaming quotes.
+    2.  **Agnostic Fallback:** If E*TRADE fails or is missing specific ticker quotes, immediately fallback to scrape Google Finance.
+
+### 📊 Antifragile Feedback Analyzer & Failure DNA Loop
+
+To maintain an adaptive, self-correcting quantitative trading desk, Project AETHER operates a closed-loop retrospective feedback system:
+*   **Phase 1: Real-Time Buy DNA Freezing:** When the autopilot executes any BUY action (live or queued), it must capture and freeze the candidate's exact buy-state metrics (PGR rating, S10/L60 trend score, combined score, Z-score, and buy date) inside the position's record in `ai_portfolio_game.json`.
+*   **Phase 2: Closed-Trade DNA Logging:** On position exits (sells), the system automatically calls `log_closed_trade_dna()` to calculate holding days, final realized P&L %, and append the completed trade details to `Data/trade_history_dna.json`.
+*   **Phase 3: The Weekly Retrospective Analyzer:** Every Saturday, `retrospective_analyzer.py` must be run (manually or via task scheduler) to scan the raw trade ledger, separate successes from failures, automatically filter out market-panic days (e.g. SPY down > 2%), and run statistical clustering on true failures to isolate bad habits (e.g., buying weak, sub-5.0 combined scores).
+*   **Phase 4: Dynamic Rejection Rules:** The retrospective analyzer automatically writes these toxic patterns to `Data/failure_dna_rules.json` and outputs a rich, human-readable summary in `Data/retrospective_report.txt`.
+*   **Phase 5: The Autopilot Rejection Guard:** During the daily buy cycle (`_execute_buys` in `ai_portfolio_game.py`), the buy-loop must run `check_failure_rules()` on all prospective candidates, immediately rejecting any stock matching our dynamically generated toxic rules on autopilot!
 
 ---
 

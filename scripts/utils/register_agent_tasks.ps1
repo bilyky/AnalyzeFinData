@@ -114,6 +114,10 @@ $Tasks = @(
             (New-ScheduledTaskTrigger -Daily -At "5:00 PM")
         )
         Script   = "venv_new\Scripts\python.exe daily_task.py"
+        # daily_task ends with the OHLCV recovery pass (~5 h worst case for its 400-fetch
+        # budget, see rapidapi.pass_timeout_seconds), after run_history + main.py (30 min cap each,
+        # see daily_task.worst_case_runtime_seconds) — the default 15-min limit would kill it.
+        TimeLimitMin = 420
         Log      = "aftermarket_report_agent.log"
         Desc     = "Generates and emails the final post-market closing equity and daily performance report at 5:00 PM PST."
     },
@@ -186,12 +190,15 @@ $Tasks = @(
 # runs would race writes and duplicate reports. (StopExisting is NOT a valid value for
 # New-ScheduledTaskSettingsSet — only Parallel/Queue/IgnoreNew — and IgnoreNew, unlike Queue, also
 # avoids interrupting or piling onto an in-flight state write.)
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+# Runtime cap: 15 min by default; a task may set TimeLimitMin (the daily_task report does).
+$DefaultTimeLimitMin = 15
 
 # Iterate and register each task
 foreach ($T in $Tasks) {
     $TaskName = $T.Name
     $PromptPayload = $T.Prompt
+    $TimeLimitMin = if ($T.TimeLimitMin) { $T.TimeLimitMin } else { $DefaultTimeLimitMin }
+    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes $TimeLimitMin)
     $LogFile = Join-Path $LogDir $T.Log
     
     $Launcher = Join-Path $RepoRoot "run_agent.cmd"

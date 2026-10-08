@@ -650,7 +650,7 @@ $("accounts-subtabs").addEventListener("click", (e) => {
     renderAccounts();
 });
 
-// Research sub-tabs (Screener / Predictions) — toggle panels; lazy-load reserves once.
+// Research sub-tabs (Screener / Predictions / AI Buildout) — toggle panels; lazy-load reserves once.
 let _reservesLoaded = false;
 document.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-research-sub]");
@@ -662,6 +662,9 @@ document.addEventListener("click", (e) => {
     const predictions = $("research-predictions");
     if (screener) screener.classList.toggle("hidden", sub !== "screener");
     if (predictions) predictions.classList.toggle("hidden", sub !== "predictions");
+    const aiBuildout = $("research-ai_buildout");
+    if (aiBuildout) aiBuildout.classList.toggle("hidden", sub !== "ai_buildout");
+    if (sub === "ai_buildout") loadAiBuildout();
     if (sub === "predictions" && !_reservesLoaded) {
         // Set the flag only after the fetch resolves, so a failed load retries
         // on the next click instead of leaving the table permanently empty.
@@ -757,6 +760,44 @@ async function loadReserves() {
             <td class="font-bold ${cls(r.Total)}">${Number(r.Total).toFixed(1)}</td>
         </tr>`).join("")
         : `<tr><td colspan="6" class="text-center text-slate-500 py-6">No reserves.</td></tr>`;
+}
+
+// Theme watchlists (watch-only, from scripts/monitoring/ai_buildout_watch.py --theme ...).
+$("theme-watch-select")?.addEventListener("change", () => loadAiBuildout());
+async function loadAiBuildout() {
+    const body = $("ai-buildout-body");
+    const meta = $("ai-buildout-meta");
+    const theme = $("theme-watch-select")?.value || "ai_buildout";
+    const num = (v, d = 1) => (v === null || v === undefined) ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(d);
+    try {
+        const d = await api(`/api/ai_buildout?theme=${encodeURIComponent(theme)}`);
+        const rows = d.rows || [];
+        const failed = d.fetch_failed || [];
+        meta.textContent = d.as_of
+            ? `As of ${d.as_of} · ${rows.length} names · ranking is unvalidated and adds no buy weight · RPO "?" = likely reporting change, not scored · "old" = quarter ended over 200 days ago, not scored`
+              + (failed.length ? ` · SEC fetch failed, not scanned: ${failed.join(", ")}` : "")
+              + ((d.sec_cache_stale || []).length ? ` · older cached SEC data: ${d.sec_cache_stale.join(", ")}` : "")
+            : `No scan yet — run scripts/monitoring/ai_buildout_watch.py --theme ${theme}`;
+        body.innerHTML = rows.length ? rows.map((r) => `
+            <tr>
+                <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${esc(r.symbol)}">${esc(r.symbol)}${r.sec_cache_stale ? ' <span class="mut text-xs" title="SEC refresh failed; older cached SEC data">old SEC</span>' : ""}</td>
+                <td class="text-xs">${esc(r.bucket)}</td>
+                <td class="font-bold ${cls(r.watch_score)}">${num(r.watch_score, 0)}</td>
+                <td class="text-xs">${esc(r.revenue_q_end || "—")}</td>
+                <td class="${cls(r.revenue_yoy)}">${num(r.revenue_yoy)}${(r.stale || []).includes("revenue_yoy") ? " <span class=\"mut\">old</span>" : ""}</td>
+                <td class="${cls(r.rpo_yoy)}">${num(r.rpo_yoy)}${r.rpo_suspect ? "?" : ""}${(r.stale || []).includes("rpo_yoy") ? " <span class=\"mut\">old</span>" : ""}</td>
+                <td>${esc(r.agreements_90d)}</td>
+                <td class="text-xs">${esc((r.agreement_dates || [])[0] || "—")}</td>
+                <td class="${cls(r.rs_60d)}">${num(r.rs_60d)}</td>
+                <td class="${cls(r.cmf_20)}">${num(r.cmf_20, 2)}</td>
+                <td>${r.close ?? "—"}</td>
+                <td class="text-xs mut">${esc(r.name || "")}</td>
+            </tr>`).join("")
+            : `<tr><td colspan="12" class="text-center text-slate-500 py-6">No rows.</td></tr>`;
+    } catch (e) {
+        meta.textContent = `Failed to load: ${e.message}`;
+        body.innerHTML = "";
+    }
 }
 
 // ── Options tab ────────────────────────────────────────────────────────────────

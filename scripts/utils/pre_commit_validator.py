@@ -12,6 +12,7 @@ Enforces:
   6. Documentation synchronicity: if a code block marked with @doc-sync <key> changes,
      stage the mapped documentation surfaces (see DOC_SYNC_SURFACES) in the same commit,
      else the commit is blocked. Scoped bypass: AETHER_DOCSYNC_ACK=<key> git commit ...
+  7. R&D item numbers in plans/roadmap.md are unique and match each item's own label.
 """
 import ast
 import os
@@ -363,7 +364,7 @@ def check_rd_roadmap_sync() -> bool:
         road_items = set(re.findall(r"^\s*(\d+)\.\s+\*\*", road_text, re.MULTILINE))
 
         # The Claude auto-memory MEMORY.md is an index of memory links, not the numbered
-        # R&D ledger (that lives in CLAUDE.md here); it structurally has 0 numbered items.
+        # R&D ledger (that lives in plans/roadmap.md); it structurally has 0 numbered items.
         # Also, if MEMORY.md is a "Session State Snapshot" or contains "Active Portfolio Standing",
         # it is a portfolio state tracker and not an R&D ledger, so we should skip this sync check.
         # Only enforce the sync when the memory file actually IS a numbered R&D ledger,
@@ -390,6 +391,55 @@ def check_rd_roadmap_sync() -> bool:
         # but say so rather than skipping silently.
         sys.stderr.write(f"[GIT PRE-COMMIT] R&D roadmap sync check skipped (non-fatal): {e}\n")
         return True
+
+
+ROADMAP_PATH = os.path.join(ROOT_DIR, "plans", "roadmap.md")
+# A numbered R&D item: "51. **Title (R&D #51):** ...". When an item carries its own label,
+# it sits inside the bold title, so a cross-reference later on the line is never read as it.
+_RD_ITEM = re.compile(r"^(\d+)\. \*\*(.*?)\*\*")
+_RD_LABEL = re.compile(r"\(R&D #(\d+)")
+# The roadmap has 42 items today. Far fewer means the item format changed, and the checks
+# below would pass on nothing, so that is reported too.
+_RD_MIN_ITEMS = 10
+
+
+def roadmap_numbering_issues(text: str) -> list[str]:
+    """Problems with the R&D item numbers in a roadmap text: duplicate numbers, an item whose
+    number disagrees with its own "(R&D #N)" label, or too few items to trust the parse."""
+    numbers, issues = [], []
+    for line in text.splitlines():
+        m = _RD_ITEM.match(line)
+        if not m:
+            continue
+        number = int(m.group(1))
+        numbers.append(number)
+        label = _RD_LABEL.search(m.group(2))
+        if label and int(label.group(1)) != number:
+            issues.append(f"item {number} is labeled R&D #{label.group(1)}: {line[:80]}")
+    dupes = sorted({n for n in numbers if numbers.count(n) > 1})
+    if dupes:
+        issues.append("duplicate R&D item number(s) " + ", ".join(f"#{n}" for n in dupes)
+                      + ": give the newer item the next free number")
+    if len(numbers) < _RD_MIN_ITEMS:
+        issues.append(f"only {len(numbers)} numbered R&D items found (expected at least "
+                      f"{_RD_MIN_ITEMS}); the item format may have changed")
+    return issues
+
+
+def check_rd_item_numbers() -> bool:
+    """Every R&D item in plans/roadmap.md has its own number. Code, docs and PRs cite items
+    as "R&D #N", so two items sharing a number make those citations ambiguous; four such
+    collisions (#35, #36, #37, #44) slipped in before this check existed."""
+    try:
+        with open(ROADMAP_PATH, "r", encoding="utf-8") as f:
+            text = f.read()
+    except OSError as e:
+        sys.stderr.write(f"🚨 [GIT PRE-COMMIT] BLOCK - cannot read plans/roadmap.md: {e}\n")
+        return False
+    issues = roadmap_numbering_issues(text)
+    for issue in issues:
+        sys.stderr.write(f"🚨 [GIT PRE-COMMIT] BLOCK - plans/roadmap.md: {issue}\n")
+    return not issues
 
 def check_new_features_tested() -> bool:
     """Verify that any newly introduced core trading features have corresponding automated unit tests in the tests/ directory."""
@@ -523,6 +573,10 @@ def main():
 
     # Check R&D Roadmap Synchronicity
     if not check_rd_roadmap_sync():
+        success = False
+
+    # Check every R&D item in plans/roadmap.md has its own number
+    if not check_rd_item_numbers():
         success = False
 
     # Check Feature <-> Documentation Synchronicity (@doc-sync anchors)

@@ -60,6 +60,9 @@ Read the real message from `$_.ErrorDetails.Message`. The PII scrub still applie
   and time out; set `HTTPS_PROXY` to the proxy `git` uses, or use a proxy-aware client (§C).
 - **Git Bash (MSYS) path conversion** rewrites arguments such as `refs/x:.claude/file` into Windows
   paths, producing `ambiguous argument` errors. Prefix commands with `MSYS_NO_PATHCONV=1`.
+- **`git merge-tree --write-tree X Y` takes commits.** Given a tree id it exits non-zero, which reads
+  like a conflict. To test several branches together, merge them in sequence in a detached scratch
+  worktree.
 - **Windows directory locks.** `git worktree remove` fails with *Permission denied* if any process —
   including your own shell — has its cwd inside the worktree. `cd` out first; if git already
   unregistered it, delete the now-empty directory.
@@ -73,8 +76,54 @@ Check these against the current script before relying on it (all but the last fi
 - **Pagination.** Reads every page, newest first; within a scope the newest PR for a head ref wins, and
   open PRs override closed ones.
 - **Transport is `gh api` only.** If `gh` can't connect, it exits 2 with "Nothing was changed" and the
-  fix (set `HTTPS_PROXY`/`HTTP_PROXY`); otherwise prune by hand per the skill's §9.
+  fix (set `HTTPS_PROXY`/`HTTP_PROXY`); otherwise prune by hand per §F.
 - **Branch deletion is by PR state only (still open).** It also deletes local branches that have no
-  worktree when a merged/closed PR has the same head ref, but it does **not** run the skill's §9
-  lossless test. A local branch with commits never pushed to the PR would lose them. Before
-  `--apply`, check each listed `BRANCH` with the §9 lossless test.
+  worktree when a merged/closed PR has the same head ref, but it does **not** run §F's lossless
+  test. A local branch with commits never pushed to the PR would lose them. Before `--apply`, check
+  each listed `BRANCH` with the §F lossless test.
+
+## F. Clean up once PRs are merged or closed
+
+- **"Merged" comes from the PR API, never from ancestry** — squash-merged tips are never ancestors of
+  `main`. In list responses use `merged_at != null` (the list endpoint has no `merged` field); read
+  **every page** of results. Then confirm by **effect**: the change's content is on `main` (a merged
+  badge has been lost to a history rewrite before).
+- **Links first (data-loss rule, `AGENT.md` §4 "No Links Into Data/"):** `git status` cannot see a
+  junction or symlink under gitignored `Data/`, and removing a worktree deletes *through* it — on
+  2026-10-06 that wiped the main checkout's `Data/Symbol` + `Data/Symbol_full`. Before removing any
+  worktree, scan it for links (`prune_merged_worktrees.links_inside(<wt>)`, or
+  `Get-ChildItem <wt> -Recurse -Force -Attributes ReparsePoint`). If any: remove the **link itself**
+  (`cmd /c rmdir <link>` — removes only the link), re-scan, and get the owner's OK for any link that
+  pointed into `Data/`. Never remove a worktree that still contains one.
+- **Worktrees:** remove only clean ones, **without `--force`** (a refusal is the safety net —
+  `git -C <wt> status --porcelain` non-empty ⇒ leave it and report it). Keep open-PR, dirty, locked,
+  and other-session worktrees. **An open PR dominates a shared head ref:** a branch that backs any open
+  PR is kept even if another PR with the same head ref was merged or closed. `scripts/utils/prune_merged_worktrees.py` automates this (dry-run first,
+  then `--apply`); its known limits are in §E.
+- **Local branches (with or without a worktree):** delete only when **lossless** — every commit still
+  exists on the remote:
+  1. tip reachable from `origin/main` or any `refs/pull/*/head`
+     (`git for-each-ref --count=1 --contains <sha> refs/remotes/origin/main refs/review/pull` — one call
+     per branch; per-ref `merge-base` loops are far too slow);
+  2. else merging it into `main` changes nothing (`git merge-tree --write-tree origin/main <b>` equals
+     `main`'s tree);
+  3. else every file it touched is byte-identical to some commit in its **merged** PR's history.
+
+  Anything else holds unique work → keep and list it. `-D` is correct only for branches proven
+  lossless (squash-merged branches make `-d` refuse). Log `name sha` to a backup file first so any
+  deletion is one `git branch <name> <sha>` away from undo.
+- Batch removals are irreversible local changes: present the classified plan, get the go-ahead, and
+  delete your own scratch (temp refs, worktrees, files) when done.
+
+## G. Post-merge doc audit (after a batch of merges, or when asked)
+
+Docs drift between PRs even when each review was careful. After a batch lands:
+1. Bring the main checkout current (`git merge --ff-only origin/main`, only when the user asks, and only
+   if no local edit conflicts).
+2. List the merges since the last audit and, for each, the behavior it changed.
+3. Grep every doc surface (the skill's §3 *Documentation*) for each old behavior, plus status lines of tracked items
+   ("UNBUILT" for something built) and duplicate identifiers.
+4. Verify each replacement claim against code on `main` (callers, defaults, gates, thresholds) before
+   writing it. A behavior gap you find (code doing something unintended) is reported for a decision,
+   not silently "fixed" inside the docs PR.
+5. Land the fixes as one docs PR from a fresh branch off latest `main`.

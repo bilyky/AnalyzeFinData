@@ -45,6 +45,8 @@ Named `runners.py` (not `scenarios.py`) to avoid an `aether.scenario.scenarios` 
 
 Each build step ships its own `tests/test_scenario_*.py` (hand-written fakes injected via constructor args, mirroring the E*TRADE per-door test style) and keeps `python -m unittest discover -s tests` fully green.
 
+While BUILD lasts, every B6 stage is a *copy* of a block that still runs in `run_daily_ai_management`. `tests/test_scenario_parity.py` fails the moment a stage drifts from its root block, so **register every new stage in its `_CHECKED` tuple** (its registry test fails otherwise). Delete that file together with the root copies once REPLACE lands.
+
 ## REPLACE order (one seam per PR — characterization harness built before R3)
 
 `tests/test_scenario_characterization.py` — snapshot `run_daily_ai_management` on a frozen fixture (final `state` dict, ordered `new_transactions`, ordered `_log` calls); behavior-identical = snapshot unchanged. Run every replace PR.
@@ -78,8 +80,9 @@ R1 `get_live_prices` → `make_price_source` (guarded by `test_game_pricing.py`)
 
 ## Verification (every PR)
 
-1. `python -m unittest discover -s tests -v` — full suite green (baseline ~824 OK).
+1. `python -m unittest discover -s tests -v` — full suite green.
 2. `python -m unittest tests.test_executables` — root-file compile guard.
 3. From R3 on: `tests/test_scenario_characterization.py` snapshot unchanged.
-4. New package tests (`tests/test_scenario_*.py`) green; `tests/test_game_pricing.py` green across the R1 boundary.
+4. New package tests (`tests/test_scenario_*.py`) green; `tests/test_game_pricing.py` green across the R1 boundary; `tests/test_scenario_parity.py` green (stage ↔ root).
+4a. When adding, removing or consolidating stage tests: `python scripts/utils/mutate_scenario_steps.py` — exits non-zero if any mutant survives (a coverage gap) or an anchor is stale; add mutants for new stages.
 5. Branch from latest `origin/main` in an isolated worktree; keep each PR small and self-contained.

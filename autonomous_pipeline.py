@@ -40,6 +40,7 @@ BASE_DIR = Path(__file__).resolve().parent
 SRC_XLSX  = BASE_DIR / "state_of_the_day.xlsx"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 LOG_FILE_PATH = BASE_DIR / "Data" / "autonomous_run.log"
+PIPELINE_LOCK_FILE = BASE_DIR / "Data" / "pipeline_run.lock"   # single-instance pipeline lock (PID)
 
 def log(msg):
     """Pipeline log — routes through the AETHER logger (txt + jsonl + stdout)
@@ -356,7 +357,7 @@ def main():
     cleanup_orphaned_processes()
     
     # ── Pillar 3: Single-Instance Pipeline Lock (Cross-Process Overlap Guard) ──
-    lock_path = BASE_DIR / "Data" / "pipeline_run.lock"
+    lock_path = PIPELINE_LOCK_FILE
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     
     if lock_path.exists():
@@ -509,7 +510,7 @@ def main():
                 )
                 log("History backfilled.")
             except subprocess.TimeoutExpired:
-                log("Warning: run_history.py timed out after 600s (Playwright hang likely). Bypassing backfill...")
+                log("Warning: run_history.py was still running after 600s; skipped. It only fills missing days, so the next run picks up where it stopped.")
             except subprocess.CalledProcessError as e:
                 log(f"Warning: run_history.py failed (will continue): {e.stderr}")
 

@@ -13,7 +13,7 @@ import os
 import numpy as np
 
 from aether import signals as sig
-from bar_provenance import is_provisional
+from bar_provenance import real_dates
 
 
 # ── OHLCV adapter ────────────────────────────────────────────────────────────
@@ -25,12 +25,10 @@ def ohlcv_to_array(ohlcv_ts: dict, date_str: str, lookback: int = 250):
     """
     if not ohlcv_ts:
         return None
-    dates = sorted(ohlcv_ts.keys())
-    past = [d for d in dates if d <= date_str]
-    # Drop trailing provisional bars (Chaikin close-only placeholders): their open/high/low
-    # and volume are unreliable, which would mis-fire volume (MFI) and candlestick logic.
-    while past and is_provisional(ohlcv_ts[past[-1]]):
-        past.pop()
+    # Drop every provisional bar (Chaikin close-only placeholder), not only trailing ones:
+    # a stranded interior placeholder is a flat zero-volume bar whose fake open/high/low
+    # would shrink ATR and mis-fire volume (MFI) and candlestick logic.
+    past = [d for d in real_dates(ohlcv_ts) if d <= date_str]
     if len(past) < 10:
         return None
     window = past[-lookback:]
@@ -109,8 +107,12 @@ def _find_peaks_troughs(closes: np.ndarray, n: int = 3):
 # same way (95th percentile of |raw|) and loaded alongside the weights.
 #
 # NOTE: these magnitudes are direction-AGNOSTIC — a pattern's bull and bear fire share
-# the same weight. The factor's directional sign lives in scoring.short_score/
-# long_score (candlestick_score * +0.30 / +0.15), NOT here.
+# the same weight, and candlestick_score() returns the RAW tally (positive = bullish),
+# the same convention as chart_score / momentum_score. The factor's directional sign
+# lives ONLY in scoring.short_score/long_score (candlestick_score * -0.30 / -0.15,
+# contrarian). The study's aggregate_sign is loaded as CANDLESTICK_STUDY_SIGN purely so
+# tests can assert the hard-coded coefficient still agrees with the latest study — it is
+# NOT applied here (applying it here AND negating in scoring would double-negate).
 _PATTERN_NAMES = (
     "engulfing", "harami", "harami_strict", "doji", "piercing", "star", "tasuki",
     "bottle", "neck", "h", "slingshot", "hikkake", "three_methods", "stick_sandwich",
@@ -126,13 +128,14 @@ def _load_candlestick_calibration(path: str = _STUDY_PATH) -> tuple[dict, float,
 
     Returns (weights, divisor, sign). `weights` always carries all 17 pattern keys; any
     pattern missing from the JSON — or the whole file missing/malformed — falls back to
-    unit weight 1.0, and the divisor falls back to _DEFAULT_SATURATION_DIVISOR, and the sign
-    falls back to 1. So an unsynced Data/ degrades gracefully to the pre-calibration
-    unweighted behavior rather than raising at import.
+    unit weight 1.0, and the divisor falls back to _DEFAULT_SATURATION_DIVISOR. So an
+    unsynced Data/ degrades gracefully to the pre-calibration unweighted behavior rather
+    than raising at import. `sign` is the study's aggregate_sign verdict (+1/-1), or None
+    when there is no study verdict; it is reported, never applied to the score.
     """
     weights = {name: 1.0 for name in _PATTERN_NAMES}
     divisor = _DEFAULT_SATURATION_DIVISOR
-    sign = 1
+    sign = None
     try:
         with open(path, "r", encoding="utf-8") as f:
             study = json.load(f)
@@ -150,7 +153,7 @@ def _load_candlestick_calibration(path: str = _STUDY_PATH) -> tuple[dict, float,
     return weights, divisor, sign
 
 
-CANDLESTICK_WEIGHTS, _SATURATION_DIVISOR, _CANDLESTICK_SIGN = _load_candlestick_calibration()
+CANDLESTICK_WEIGHTS, _SATURATION_DIVISOR, CANDLESTICK_STUDY_SIGN = _load_candlestick_calibration()
 
 def candlestick_fires(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> dict:
     """Return {pattern_name: (bull_fired, bear_fired)} over the last `lookback` bars.
@@ -204,7 +207,8 @@ def candlestick_fires(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> dict:
 def candlestick_score(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> float:
     """Weight the per-pattern fires from candlestick_fires() into a [-2, +2] factor.
 
-    Returns 0.0 if OHLCV unavailable or <10 bars.
+    RAW direction: positive = net-bullish tally. The contrarian sign is applied by
+    scoring.short_score/long_score, not here. Returns 0.0 if OHLCV unavailable or <10 bars.
     """
     fires = candlestick_fires(ohlcv_ts, date_str, lookback=lookback)
     if not fires:
@@ -220,8 +224,7 @@ def candlestick_score(ohlcv_ts: dict, date_str: str, lookback: int = 5) -> float
     # when the study is absent. It caps a burst of concurrent fires at the rail so no
     # single bar dominates.
     score = max(-2.0, min(2.0, raw / _SATURATION_DIVISOR * 2.0))
-    # Multiply by our calibrated aggregate_sign directionality factor (R&D #25)
-    return round(score * _CANDLESTICK_SIGN, 2)
+    return round(score, 2)
 
 
 # ── Chart pattern score ───────────────────────────────────────────────────────

@@ -7,7 +7,7 @@ N-day-forward close so provider choice is backed by data, not a single anecdote.
 
 Scores every close, gains included: a SELL of a position in profit that then rose is
 a winner-selling miss (the "cutting a flower" error) — outcome is not the same as
-decision quality (CLAUDE.md, Jul-25 principle 6).
+decision quality (plans/roadmap.md, Jul-25 principle 6).
 
 score_log takes an injectable forward-price function so it is unit-testable without
 real data.
@@ -16,14 +16,14 @@ real data.
 import json
 from pathlib import Path
 
-from aether import ai_client, sell_eval, sell_rules
+from aether import ai_client, paths, sell_eval, sell_rules
 from aether.logger import get_logger as _get_logger
 
 _log = _get_logger("decision_eval")
 
 _DIR = Path(__file__).resolve().parent.parent
 LOG = _DIR / "Data" / "decision_log.jsonl"
-OHLCV_DIR = _DIR / "Data" / "Symbol_full"
+OHLCV_DIR = Path(paths.ohlcv_dir())   # $AETHER_CACHE_DIR-aware (aether.paths)
 _MAX_LOG_LINES = 5000   # bound the append-only log; keep the most recent decisions
 
 

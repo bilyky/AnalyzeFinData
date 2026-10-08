@@ -44,13 +44,16 @@ from aether.scenario.schema import (
     Portfolio,
     Position,
     Quote,
+    ResearchRow,
 )
 from aether.scenario.steps import (
     assemble_symbol_universe,
     decide_exits,
     determine_profile,
+    execute_exits,
     execute_queued_orders,
     price_and_settle,
+    screen_buys,
 )
 
 __all__ = [
@@ -67,6 +70,7 @@ __all__ = [
     "Position",
     "Order",
     "Quote",
+    "ResearchRow",
     # helpers (B3)
     "is_market_hours",
     "get_market_regime",
@@ -87,4 +91,6 @@ __all__ = [
     "price_and_settle",
     "execute_queued_orders",
     "decide_exits",
+    "execute_exits",
+    "screen_buys",
 ]
