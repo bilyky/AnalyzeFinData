@@ -102,6 +102,9 @@
       { "user": "admin", "pass": "change_me" }
     ]
   },
+  "oceanview": {
+    "sleeves": { "1111": "overlay-anchor", "2222": "active-margin" }
+  },
   "oracle": {
     "account_id": "0053",
     "start_equity": 22978.72,
