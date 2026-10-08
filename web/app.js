@@ -776,10 +776,11 @@ async function loadAiBuildout() {
         meta.textContent = d.as_of
             ? `As of ${d.as_of} · ${rows.length} names · ranking is unvalidated and adds no buy weight · RPO "?" = likely reporting change, not scored · "old" = quarter ended over 200 days ago, not scored`
               + (failed.length ? ` · SEC fetch failed, not scanned: ${failed.join(", ")}` : "")
+              + ((d.sec_cache_stale || []).length ? ` · older cached SEC data: ${d.sec_cache_stale.join(", ")}` : "")
             : `No scan yet — run scripts/monitoring/ai_buildout_watch.py --theme ${theme}`;
         body.innerHTML = rows.length ? rows.map((r) => `
             <tr>
-                <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${esc(r.symbol)}">${esc(r.symbol)}</td>
+                <td class="font-semibold cursor-pointer hover:text-blue-400" data-open="${esc(r.symbol)}">${esc(r.symbol)}${r.sec_cache_stale ? ' <span class="mut text-xs" title="SEC refresh failed; older cached SEC data">old SEC</span>' : ""}</td>
                 <td class="text-xs">${esc(r.bucket)}</td>
                 <td class="font-bold ${cls(r.watch_score)}">${num(r.watch_score, 0)}</td>
                 <td class="text-xs">${esc(r.revenue_q_end || "—")}</td>

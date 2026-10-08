@@ -37,7 +37,7 @@ def _fmt(v, spec="+.1f"):
 
 
 _COLS = [
-    ("Symbol", lambda r: r["symbol"]),
+    ("Symbol", lambda r: r["symbol"] + (" (old SEC data)" if r.get("sec_cache_stale") else "")),
     ("Bucket", lambda r: r["bucket"]),
     ("Score", lambda r: f"{r['watch_score']:+d}"),
     ("Qtr end", lambda r: r["revenue_q_end"] or "-"),
@@ -54,7 +54,7 @@ _COLS = [
 ]
 
 
-def build_html(rows, as_of, failed=(), theme=ai_buildout.DEFAULT_THEME):
+def build_html(rows, as_of, failed=(), theme=ai_buildout.DEFAULT_THEME, stale=()):
     t = ai_buildout.THEMES[theme]
     head = "".join(f"<th style='text-align:left;padding:4px 10px'>{c}</th>" for c, _ in _COLS)
     body = "".join(
@@ -70,7 +70,9 @@ def build_html(rows, as_of, failed=(), theme=ai_buildout.DEFAULT_THEME):
         f"change or acquisition and is not scored. Figures marked 'old' (period ended more "
         f"than {ai_buildout.STALE_DAYS} days ago) are not scored.</p>"
         + (f"<p style='color:#b45309'>SEC fetch failed for {len(failed)} symbol(s), not "
-           f"scanned: {html.escape(', '.join(failed))}</p>" if failed else "") +
+           f"scanned: {html.escape(', '.join(failed))}</p>" if failed else "")
+        + (f"<p style='color:#b45309'>SEC refresh failed for {len(stale)} symbol(s); their rows "
+           f"use older cached SEC data: {html.escape(', '.join(stale))}</p>" if stale else "") +
         f"<table style='border-collapse:collapse;font-family:monospace'>"
         f"<tr style='border-bottom:1px solid #ccc'>{head}</tr>{body}</table>"
         f"<p style='color:#888;font-size:12px'>Sources: SEC EDGAR XBRL + 8-K filings, local "
@@ -92,10 +94,10 @@ def main():
     tag = f"[{args.theme}]"
     _log.console(f"{tag} system date {run_day}; scanning as of {as_of}...")
 
-    failed = []
-    rows = ai_buildout.scan(as_of, failed=failed, theme=args.theme)
-    report = build_html(rows, as_of, failed, theme=args.theme)
-    out_json = ai_buildout.save(rows, as_of, failed=failed, theme=args.theme)
+    failed, stale = [], []
+    rows = ai_buildout.scan(as_of, failed=failed, theme=args.theme, stale=stale)
+    report = build_html(rows, as_of, failed, theme=args.theme, stale=stale)
+    out_json = ai_buildout.save(rows, as_of, failed=failed, theme=args.theme, stale=stale)
     out_html = ai_buildout.output_path(args.theme, ".html")
     out_html.write_text(report, encoding="utf-8")
 
