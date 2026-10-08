@@ -167,8 +167,9 @@ class TestDataHealth(_Base):
         shutil.copy(os.path.join(self.dir, "Symbol_full", "AAPL_daily.json"),
                     os.path.join(cache, "Symbol_full", "AAPL_daily.json"))
         os.remove(os.path.join(self.dir, "Symbol_full", "AAPL_daily.json"))
-        env = {"AETHER_DATA_DIR": self.dir, "AETHER_CACHE_DIR": cache}
-        with mock.patch.dict(os.environ, env),              mock.patch.object(ovc.etrade, "keep_alive", return_value=None):
+        # No data_dir argument: the pack's default folder (here self.dir) holds the game JSON,
+        # while OHLCV comes from paths.ohlcv_dir() ($AETHER_CACHE_DIR).
+        with mock.patch.dict(os.environ, {"AETHER_CACHE_DIR": cache}),              mock.patch.object(ovc, "_default_data_dir", return_value=self.dir),              mock.patch.object(ovc.etrade, "keep_alive", return_value=None):
             pack = ovc.build_oceanview_context(now=NOW)
         self.assertEqual(pack["state"]["data_health"]["no_ohlcv"], [])   # found in the cache dir
         self.assertEqual(pack["state"]["portfolio"]["closed_sells"], 1)  # still read from data dir

@@ -29,12 +29,13 @@ class TestContextPackGate(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        env = mock.patch.dict(os.environ, {"AETHER_DATA_DIR": self._tmp.name})
-        env.start()
-        self.addCleanup(env.stop)
+        self.status_path = os.path.join(self._tmp.name, oceanview_context.STATUS_NAME)
+        p = mock.patch.object(watchdog, "PACK_STATUS_FILE", watchdog.Path(self.status_path))
+        p.start()
+        self.addCleanup(p.stop)
 
     def _status(self, health, hours_ago, warnings=()):
-        with open(os.path.join(self._tmp.name, oceanview_context.STATUS_NAME), "w", encoding="utf-8") as f:
+        with open(self.status_path, "w", encoding="utf-8") as f:
             json.dump({"generated_at": _iso(hours_ago), "health": health, "warnings": list(warnings),
                        "source": "cache", "broker_as_of": None, "staleness_hours": None}, f)
 
@@ -60,7 +61,7 @@ class TestContextPackGate(unittest.TestCase):
         self.assertIn("WARNING", alerts[0])
 
     def test_unreadable_timestamp_warns(self):
-        with open(os.path.join(self._tmp.name, oceanview_context.STATUS_NAME), "w", encoding="utf-8") as f:
+        with open(self.status_path, "w", encoding="utf-8") as f:
             json.dump({"generated_at": "not a date", "health": "ok"}, f)
         self.assertIn("unreadable", watchdog.check_context_pack_health()[0])
 
@@ -82,6 +83,17 @@ class TestContextPackGate(unittest.TestCase):
         body = send.call_args[0][1]
         self.assertIn("&lt;script&gt;", body)
         self.assertNotIn("<script>", body)
+
+
+class TestHermetic(unittest.TestCase):
+    """Under the test harness neither the pack's default folder nor the watchdog's status path
+    may point into the checkout's real Data/ (a test that runs daily_task.main() once wrote
+    Data/oceanview_context_status.json there)."""
+
+    def test_pack_and_status_paths_are_outside_the_real_data_dir(self):
+        real = os.path.normcase(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Data")))
+        for p in (oceanview_context._default_data_dir(), str(watchdog.PACK_STATUS_FILE)):
+            self.assertFalse(os.path.normcase(os.path.abspath(p)).startswith(real), p)
 
 
 if __name__ == "__main__":

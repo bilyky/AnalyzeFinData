@@ -75,6 +75,7 @@ class TestMainReportsStepFailures(unittest.TestCase):
                               side_effect=lambda subject, body, **k: self.emails.append((subject, body))),
             mock.patch.object(daily_task.CFG, "has_placeholders", False, create=True),
             mock.patch.object(sys, "argv", ["daily_task.py"]),
+            mock.patch.object(daily_task, "build_context_pack"),   # pack step pinned elsewhere
         ]
         for p in patches:
             p.start()

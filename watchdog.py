@@ -42,6 +42,8 @@ SENTINEL_DIRS = ("Symbol", "Symbol_full")
 SENTINEL_MAX_DROP = 0.20     # alert when a cache loses more than 20% of its entries between runs
 BACKUP_STALE_DAYS = 3        # alert when no backup has succeeded for this long
 PACK_STATUS_STALE_H = 30     # the evening pipeline rebuilds the OceanView pack daily; older = missed
+# Where the pack writes its verdict (same folder as the pack's own default, paths.data_dir()).
+PACK_STATUS_FILE = Path(paths.data_dir()) / oceanview_context.STATUS_NAME
 
 python_exe = sys.executable
 run_agent = BASE_DIR / "run_agent.cmd"
@@ -641,7 +643,7 @@ def check_context_pack_health():
     build (oceanview_context.STATUS_NAME). No status yet (never built, e.g. right after a deploy)
     is not an alert: the next evening pipeline creates it. "degraded" is logged by the pack
     itself, not emailed here."""
-    status = _read_json(Path(paths.data_dir()) / oceanview_context.STATUS_NAME)
+    status = _read_json(PACK_STATUS_FILE)
     if status is None:
         return []
     at = status.get("generated_at")
