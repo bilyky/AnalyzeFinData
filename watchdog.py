@@ -63,6 +63,13 @@ _TASK_DEFS = {
 # step timeouts, recovery pass included); register_agent_tasks.ps1 repeats it for the
 # AETHER_AftermarketReport task. tests/test_task_time_limits.py pins both.
 _DEFAULT_TASK_TIME_LIMIT_MIN = 15
+# schtasks / Set-ScheduledTask must never block a watchdog cycle. On PROD (09-22 .. 10-08) a
+# schtasks /create with no timeout and an inherited stdin never returned, and the hung run held
+# the singleton lock for days.
+_SCHTASKS_TIMEOUT_S = 60
+# A watchdog cycle that still holds the lock after this long is treated as hung: it is killed
+# and the lock is reclaimed. Preflight uses the same limit.
+WATCHDOG_LOCK_MAX_AGE_MIN = 120
 _TASK_TIME_LIMIT_MIN = {"AnalyzeFinData_Evening": 360}
 SYNC_TIMEOUT_S = 600  # robocopy timeout for sync_data_folder (PR #64 raised it for the cache volume)
 
@@ -693,7 +700,8 @@ def heal_tasks(missing_tasks, force=False):
         if st:
             args += ["/st", st]
         try:
-            result = subprocess.run(args, capture_output=True)
+            result = subprocess.run(args, capture_output=True, stdin=subprocess.DEVNULL,
+                                    timeout=_SCHTASKS_TIMEOUT_S)
             if result.returncode == 0:
                 _log.info(f"✅ Task {task} successfully registered with native UTF-8 environment.")
                 # Apply advanced reliability settings (WakeToRun, StartWhenAvailable, IgnoreNew, ExecutionTimeLimit) via PowerShell.
@@ -705,9 +713,12 @@ def heal_tasks(missing_tasks, force=False):
                     "powershell.exe", "-NoProfile", "-Command",
                     f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes {_TASK_TIME_LIMIT_MIN.get(task, _DEFAULT_TASK_TIME_LIMIT_MIN)})) -ErrorAction SilentlyContinue"
                 ]
-                subprocess.run(ps_cmd, capture_output=True)
+                subprocess.run(ps_cmd, capture_output=True, stdin=subprocess.DEVNULL,
+                               timeout=_SCHTASKS_TIMEOUT_S)
             else:
                 _log.error(f"❌ schtasks failed for {task} (rc={result.returncode}): {result.stderr.decode(errors='replace').strip()}")
+        except subprocess.TimeoutExpired as e:
+            _log.error(f"❌ Healing {task} timed out after {e.timeout}s ({e.cmd[0]}); skipped.")
         except Exception as e:
             _log.error(f"❌ Failed to heal {task}: {e}")
 
@@ -797,7 +808,8 @@ def is_pid_running(pid: int) -> bool:
     if pid <= 0:
         return False
     try:
-        res = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, errors="replace")
+        res = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, errors="replace",
+                             stdin=subprocess.DEVNULL, timeout=_SCHTASKS_TIMEOUT_S)
         return "No tasks" not in res.stdout and str(pid) in res.stdout and "python" in res.stdout.lower()
     except Exception:
         return False
@@ -824,16 +836,26 @@ def _recovery_next_steps_html(compilation_passed, ai_triggered) -> str:
     return "\n                    ".join(items)
 
 
-def run_watchdog():
-    # Enforce a strict cross-process execution singleton to prevent 2 watchdogs from running concurrently
+def _acquire_singleton_lock() -> bool:
+    """Take the cross-process watchdog lock. Returns False when a live, recent instance holds it.
+
+    A lock older than WATCHDOG_LOCK_MAX_AGE_MIN whose PID is still alive belongs to a hung cycle:
+    kill that process tree (it may be stuck in a child such as schtasks) and take over.
+    """
     lock_file = WATCHDOG_LOCK_FILE
     if lock_file.exists():
         try:
             with open(lock_file, "r") as f:
                 old_pid = int(f.read().strip())
             if is_pid_running(old_pid):
-                _log.warning(f"⚠️ Watchdog execution blocked: another instance is already running (PID={old_pid}). Exiting.")
-                return
+                age_min = (datetime.datetime.now().timestamp() - lock_file.stat().st_mtime) / 60
+                if age_min < WATCHDOG_LOCK_MAX_AGE_MIN:
+                    _log.warning(f"⚠️ Watchdog execution blocked: another instance is already running (PID={old_pid}). Exiting.")
+                    return False
+                _log.error(f"🛑 Watchdog PID={old_pid} has held the lock for {age_min:.0f} min "
+                           f"(limit {WATCHDOG_LOCK_MAX_AGE_MIN}); treating it as hung, killing it and taking over.")
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(old_pid)], capture_output=True,
+                               stdin=subprocess.DEVNULL, timeout=_SCHTASKS_TIMEOUT_S)
         except Exception as e:
             _log.warning(f"⚠️ Lock file unreadable or corrupt ({e}). Overriding...")
 
@@ -846,6 +868,13 @@ def run_watchdog():
         atexit.register(lambda: trash.soft_delete(lock_file, reason="watchdog-lock", force=True))
     except Exception as e:
         _log.error(f"❌ Failed to write watchdog lock file: {e}")
+        return False
+    return True
+
+
+def run_watchdog():
+    # Enforce a strict cross-process execution singleton to prevent 2 watchdogs from running concurrently
+    if not _acquire_singleton_lock():
         return
 
     _log.console(f"[{datetime.datetime.now()}] Project AETHER Healer starting...")
