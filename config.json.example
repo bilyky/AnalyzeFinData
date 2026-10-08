@@ -62,12 +62,22 @@
         "api_key_source": "env:GEMINI_API_KEY"
       },
       "openrouter": {
-        "_note": "OpenRouter (free route) — sign up at openrouter.ai (no credit card), create a key, set OPENROUTER_API_KEY. Free models rotate in/out and rate-limit (429), so check openrouter.ai/models for a current ':free' model. DeepSeek's :free variant is often OUT of rotation; for real DeepSeek top up credits and use model 'deepseek/deepseek-chat'.",
+        "_note": "OpenRouter (free route) — sign up at openrouter.ai (no credit card), create a key, set OPENROUTER_API_KEY. Free models rotate in/out and rate-limit (429), so check openrouter.ai/models for a current ':free' model. Free models reason by default and spend the small max_tokens on it (empty answer, finish_reason=length): keep extra_body.reasoning.enabled=false. Tested 2026-10-08: nemotron-3-super and apodex-1.1-mini 5/5 OK; poolside/laguna-s-2.1 and gemma-4 429 (shared upstream pool). The free tier is capped per day (the key showed 50/day).",
         "enabled": false,
         "type": "openai_compatible",
-        "model": "poolside/laguna-s-2.1:free",
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
         "endpoint": "https://openrouter.ai/api/v1/chat/completions",
-        "api_key_source": "env:OPENROUTER_API_KEY"
+        "api_key_source": "env:OPENROUTER_API_KEY",
+        "extra_body": {"reasoning": {"enabled": false}}
+      },
+      "openrouter_fb": {
+        "_note": "Second free OpenRouter model, used by the fallback chain when the first is rate-limited.",
+        "enabled": false,
+        "type": "openai_compatible",
+        "model": "apodex/apodex-1.1-mini:free",
+        "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+        "api_key_source": "env:OPENROUTER_API_KEY",
+        "extra_body": {"reasoning": {"enabled": false}}
       },
       "claude": {
         "_note": "Anthropic API — console.anthropic.com. Set ANTHROPIC_API_KEY env var.",

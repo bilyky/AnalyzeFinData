@@ -170,3 +170,63 @@ class TestAIClientParsers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _http_429(retry_after=None):
+    r = mock.MagicMock()
+    r.status_code = 429
+    r.headers = {"Retry-After": retry_after} if retry_after is not None else {}
+    r.raise_for_status.side_effect = ai_client.requests.HTTPError("429 Client Error: Too Many Requests", response=r)
+    return r
+
+
+class TestOpenAICompatibleFreeModels(unittest.TestCase):
+    """PROD 2026-10-06..08: every OpenRouter call failed. Free models reason by default, so the
+    small max_tokens budget was spent on reasoning and `content` came back None; the free pool
+    also answers 429. These pin the config passthrough, the clear error, and one 429 retry."""
+
+    def _providers(self, mapping):
+        return mock.patch.object(ai_client, "_providers", return_value=mapping)
+
+    @mock.patch.object(ai_client, "_resolve_key", return_value="KEY")
+    @mock.patch("aether.ai_client.requests.post")
+    def test_extra_body_is_merged_but_cannot_override_core_fields(self, m_post, _key):
+        m_post.return_value = _resp({"choices": [{"message": {"content": "ok"}}]})
+        cfg = dict(_GPT, extra_body={"reasoning": {"enabled": False}, "model": "evil", "max_tokens": 9999})
+        with self._providers({"gpt": cfg}):
+            ai_client.evaluate("SYS", "USR", provider="gpt", max_tokens=50)
+        body = m_post.call_args.kwargs["json"]
+        self.assertEqual(body["reasoning"], {"enabled": False})
+        self.assertEqual(body["model"], "gpt-x")
+        self.assertEqual(body["max_tokens"], 50)
+
+    @mock.patch.object(ai_client, "_resolve_key", return_value="KEY")
+    @mock.patch("aether.ai_client.requests.post")
+    def test_empty_content_cut_off_by_length_names_the_cause(self, m_post, _key):
+        m_post.return_value = _resp({"choices": [{"message": {"content": None, "reasoning": "hmm..."},
+                                                  "finish_reason": "length"}]})
+        with self._providers({"gpt": _GPT}), self.assertRaises(ValueError) as cm:
+            ai_client.evaluate("SYS", "USR", provider="gpt", max_tokens=50)
+        self.assertIn("finish_reason=length", str(cm.exception))
+        self.assertIn("reasoning", str(cm.exception))
+
+    @mock.patch("aether.ai_client.time.sleep")
+    @mock.patch.object(ai_client, "_resolve_key", return_value="KEY")
+    @mock.patch("aether.ai_client.requests.post")
+    def test_429_is_retried_once_honouring_retry_after(self, m_post, _key, m_sleep):
+        m_post.side_effect = [_http_429("2"), _resp({"choices": [{"message": {"content": "ok"}}]})]
+        with self._providers({"gpt": _GPT}):
+            out = ai_client.evaluate("SYS", "USR", provider="gpt")
+        self.assertEqual(out, "ok")
+        self.assertEqual(m_post.call_count, 2)
+        m_sleep.assert_called_once_with(2.0)
+
+    @mock.patch("aether.ai_client.time.sleep")
+    @mock.patch.object(ai_client, "_resolve_key", return_value="KEY")
+    @mock.patch("aether.ai_client.requests.post")
+    def test_second_429_raises_and_long_retry_after_is_capped(self, m_post, _key, m_sleep):
+        m_post.side_effect = [_http_429("600"), _http_429()]
+        with self._providers({"gpt": _GPT}), self.assertRaises(ai_client.requests.HTTPError):
+            ai_client.evaluate("SYS", "USR", provider="gpt")
+        self.assertEqual(m_post.call_count, 2)
+        m_sleep.assert_called_once_with(ai_client._RETRY_429_MAX_WAIT_S)

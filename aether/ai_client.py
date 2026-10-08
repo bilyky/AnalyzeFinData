@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 import requests
 from aether_logger import get_logger as _get_logger
@@ -25,6 +26,10 @@ from aether.config import CFG
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 _TIMEOUT = 180  # generous for chat; context build can take ~9s on cold Research cache
+# Free OpenRouter routes answer 429 when their shared pool is busy. Retry once, waiting for
+# Retry-After when it is sent, but never longer than this.
+_RETRY_429_DEFAULT_WAIT_S = 3.0
+_RETRY_429_MAX_WAIT_S = 10.0
 
 
 # ── Key resolution ─────────────────────────────────────────────────────────────
@@ -103,6 +108,10 @@ def _parse_openai_response(resp) -> str:
         raise ValueError(f"Unexpected JSON response: 'message' is not a dict: {data}")
 
     content = message.get("content")
+    if content is None and choice.get("finish_reason") == "length":
+        raise ValueError("Model ran out of tokens before answering (finish_reason=length, content empty). "
+                         "Reasoning models spend max_tokens on reasoning first; set the provider's "
+                         "extra_body to {\"reasoning\": {\"enabled\": false}} or pick a non-reasoning model.")
     if not isinstance(content, str):
         raise ValueError(f"Unexpected JSON response: 'content' is not a string: {data}")
 
@@ -147,19 +156,32 @@ def _require_key(pcfg, name) -> str:
 
 
 def _call_openai_compatible(pcfg, key, messages, max_tokens, temperature) -> str:
-    resp = requests.post(
-        pcfg.get("endpoint", ""),
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json={
-            "model": pcfg.get("model", ""),
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        },
-        timeout=_TIMEOUT,
-    )
-    resp.raise_for_status()
-    return _parse_openai_response(resp)
+    # extra_body: provider-specific request fields from config (e.g. OpenRouter's
+    # {"reasoning": {"enabled": false}}). The core fields below always win.
+    payload = dict(pcfg.get("extra_body") or {})
+    payload.update({
+        "model": pcfg.get("model", ""),
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    })
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    for attempt in (1, 2):
+        resp = requests.post(pcfg.get("endpoint", ""), headers=headers, json=payload, timeout=_TIMEOUT)
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError:
+            if attempt == 2 or getattr(resp, "status_code", None) != 429:
+                raise
+            try:
+                wait = float(resp.headers.get("Retry-After", _RETRY_429_DEFAULT_WAIT_S))
+            except (TypeError, ValueError):
+                wait = _RETRY_429_DEFAULT_WAIT_S
+            wait = min(max(wait, 0.0), _RETRY_429_MAX_WAIT_S)
+            _get_logger("ai_client").warning(f"AI provider returned 429; retrying once in {wait:.0f}s.")
+            time.sleep(wait)
+            continue
+        return _parse_openai_response(resp)
 
 
 def _call_anthropic(pcfg, key, system, messages, max_tokens) -> str:

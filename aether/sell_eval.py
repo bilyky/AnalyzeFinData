@@ -90,7 +90,8 @@ def evaluate_exit(ctx: dict, provider: str | None = None) -> dict:
         name = provider or ai_client.primary()
         if not name:
             return {}
-        text = ai_client.evaluate(rubric, build_user_prompt(ctx), provider=name, max_tokens=120)
+        # provider=None lets ai_client fall back to the other enabled providers.
+        text = ai_client.evaluate(rubric, build_user_prompt(ctx), provider=provider, max_tokens=120)
         parsed = _parse(text)
         if parsed:
             parsed["provider"] = name

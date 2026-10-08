@@ -70,6 +70,15 @@ class TestEvaluateExit(unittest.TestCase):
         self.assertEqual(out["provider"], "claude")
         self.assertEqual(ev.call_args.kwargs["provider"], "claude")
 
+    def test_default_provider_uses_the_fallback_chain(self):
+        """Without an explicit provider, ai_client.evaluate must get provider=None so it walks
+        primary -> other enabled providers. Passing the primary's name skipped the fallback."""
+        with mock.patch("sell_eval.ai_client.primary", return_value="openrouter"),              mock.patch("sell_eval.ai_client.evaluate",
+                        return_value='{"verdict":"AGREE","note":"ok"}') as ev:
+            out = sell_eval.evaluate_exit(_CTX)
+        self.assertIsNone(ev.call_args.kwargs["provider"])
+        self.assertEqual(out["provider"], "openrouter")
+
     def test_evaluate_exit_handles_exceptions_gracefully(self):
         with mock.patch("sell_eval.ai_client.primary", return_value="github_gpt"), \
              mock.patch("sell_eval.ai_client.evaluate", side_effect=RuntimeError("API Failure")):
