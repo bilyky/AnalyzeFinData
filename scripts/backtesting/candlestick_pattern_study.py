@@ -265,7 +265,9 @@ def run(min_year=2023, max_symbols=None):
     _log.info(f"\n  10d aggregate direction: {direction}")
     # The live sign is hard-coded in scoring (not read from this JSON), so a study whose
     # verdict flips must be acted on by a reviewed code change — surface it loudly.
-    live_sign = 1 if short_score({"candlestick_score": 2.0}) > 0 else -1
+    # Sign of the coefficient = direction of the score change vs the cs = 0 baseline (not vs 0,
+    # so a non-zero default contribution can never flip the reading).
+    live_sign = 1 if short_score({"candlestick_score": 2.0}) > short_score({"candlestick_score": 0.0}) else -1
     if live_sign == sign_agg:
         _log.info(f"  -> matches the live scoring coefficient sign ({live_sign:+d}).\n")
     else:
