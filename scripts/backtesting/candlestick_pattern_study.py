@@ -55,6 +55,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import instruments
 from patterns import CANDLESTICK_WEIGHTS, candlestick_fires
+from scoring import short_score
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Data/ is gitignored (local cache) and absent from a fresh worktree checkout, so allow
@@ -262,8 +263,18 @@ def run(min_year=2023, max_symbols=None):
             agg[w] = None
     direction = "MOMENTUM (+)" if sign_agg > 0 else "CONTRARIAN (-)"
     _log.info(f"\n  10d aggregate direction: {direction}")
-    _log.info(f"  -> scoring.short_score/long_score should consume candlestick_score with a "
-              f"{'+' if sign_agg > 0 else '-'}tive coefficient.\n")
+    # The live sign is hard-coded in scoring (not read from this JSON), so a study whose
+    # verdict flips must be acted on by a reviewed code change — surface it loudly.
+    # Sign of the coefficient = direction of the score change vs the cs = 0 baseline (not vs 0,
+    # so a non-zero default contribution can never flip the reading).
+    live_sign = 1 if short_score({"candlestick_score": 2.0}) > short_score({"candlestick_score": 0.0}) else -1
+    if live_sign == sign_agg:
+        _log.info(f"  -> matches the live scoring coefficient sign ({live_sign:+d}).\n")
+    else:
+        _log.warning(f"  -> SIGN MISMATCH: study says {sign_agg:+d} but scoring.short_score/"
+                     f"long_score use a {live_sign:+d} candlestick coefficient. Flip the "
+                     f"coefficients in aether/scoring.py (tests/test_scoring.py will fail "
+                     f"until you do).\n")
 
     # ── Per-pattern stats ───────────────────────────────────────────────────
     stats = {}
