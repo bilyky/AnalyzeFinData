@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 STEPS = ROOT / "aether" / "scenario" / "steps.py"
 MODULES = ["tests.test_scenario_steps", "tests.test_scenario_assemble", "tests.test_scenario_settle",
            "tests.test_scenario_queued", "tests.test_scenario_exits",
-           "tests.test_scenario_sell_exec"]
+           "tests.test_scenario_sell_exec", "tests.test_scenario_buy_screen"]
 
 # (label, exact text in steps.py, replacement). Each anchor must occur exactly once.
 MUTANTS = [
@@ -122,6 +122,48 @@ MUTANTS += [  # execute_exits (SELL execution loop)
     ("sell: no history", '        state["history"].append(tx)\n        new_transactions.append(tx)\n        game._log.info(f"🤖 AI LIVE SELL', '        new_transactions.append(tx)\n        game._log.info(f"🤖 AI LIVE SELL'),
     ("sell: no dna", '(Time: {now_time})")\n        game.log_closed_trade_dna(sym, pos, price, today)',
      '(Time: {now_time})")\n        pass'),
+]
+
+MUTANTS += [  # screen_buys (BUY screening)
+    ("buy: cash buffer off", 'min_cash_required = state["equity"] * rules["cash_buffer_pct"]', 'min_cash_required = 0.0'),
+    ("buy: slots ignore held", '    available_slots = max_positions - len(state["positions"])\n\n    # Enforce',
+     '    available_slots = max_positions\n\n    # Enforce'),
+    ("buy: expansion ratio 1.0->0", 'max_positions = game.determine_max_positions(cash_ratio',
+     'max_positions = game.determine_max_positions(1.0'),
+    ("buy: held score not kept", 'active_position_scores[sym] = total_score', 'pass'),
+    ("buy: exclusion off", '        if game.instruments.is_excluded(sym):\n            continue', '        if False:\n            continue'),
+    ("buy: floor cash_pct x10", '* 100.0 if state.get("equity", 0) > 0 else 0.0', '* 10.0 if state.get("equity", 0) > 0 else 0.0'),
+    ("buy: floor < -> <=", 'if short10 < required_floor:', 'if short10 <= required_floor:'),
+    ("buy: setup gate off", "confirmed bottom\n        if (setup in ('1', 'OK', 1)) and price > 0:",
+     "confirmed bottom\n        if price > 0:"),
+    ("buy: legacy setup dropped", "confirmed bottom\n        if (setup in ('1', 'OK', 1)) and price > 0:",
+     "confirmed bottom\n        if (setup in ('OK',)) and price > 0:"),
+    ("buy: no heal", '_healed = game._heal_symbol_cache(sym)', '_healed = False'),
+    ("buy: freshness reject off", 'levels from untrustworthy data.")\n                    continue',
+     'levels from untrustworthy data.")\n                    pass'),
+    ("buy: gap prev row[10]->row[8]", 'prev_close = row[10]', 'prev_close = row[8]'),
+    ("buy: gap 8%->10%", 'if gap_pct <= -0.08 and not bottom_ok:', 'if gap_pct <= -0.10 and not bottom_ok:'),
+    ("buy: gap 8%->5%", 'if gap_pct <= -0.08 and not bottom_ok:', 'if gap_pct <= -0.05 and not bottom_ok:'),
+    ("buy: gap zero prev not guarded", 'if prev_close and prev_close > 0:', 'if prev_close is not None:'),
+    ("buy: gap ignores bottom", 'if gap_pct <= -0.08 and not bottom_ok:', 'if gap_pct <= -0.08:'),
+    ("buy: elite waiver off", 'is_elite_breakout = game.risk_utils.is_elite_breakout_candidate(total_score, short10)',
+     'is_elite_breakout = False'),
+    ("buy: rr gate on partial S/R", 'if stop_val > 0 and target_val > 0:', 'if stop_val > 0 or target_val > 0:'),
+    ("buy: rr < -> <=", 'if rr_ratio < min_rr:', 'if rr_ratio <= min_rr:'),
+    ("buy: rr reject off", 'Downside: ${round(downside, 2)}).")\n                        continue',
+     'Downside: ${round(downside, 2)}).")\n                        pass'),
+    ("buy: target gain 5->4", 'if target_gain_pct < 5.0:', 'if target_gain_pct < 4.0:'),
+    ("buy: target reject off", '(Upside: ${round(upside, 2)}).")\n                        continue',
+     '(Upside: ${round(upside, 2)}).")\n                        pass'),
+    ("buy: threshold >= -> >", 'if total_score >= rules["min_score_threshold"] or bottom_ok:',
+     'if total_score > rules["min_score_threshold"] or bottom_ok:'),
+    ("buy: bottom ignored", 'if total_score >= rules["min_score_threshold"] or bottom_ok:',
+     'if total_score >= rules["min_score_threshold"]:'),
+    ("buy: pgr no default", '"pgr": row[6] or "Neutral",', '"pgr": row[6],'),
+    ("buy: penalty 1.5->1.0", 'buy_cand["total"] -= 1.5', 'buy_cand["total"] -= 1.0'),
+    ("buy: penalty and->or", '(strength_count < 1 and timing_count < 1)', '(strength_count < 1 or timing_count < 1)'),
+    ("buy: weak ignored", ' or industry_rating == "Weak":', ':'),
+    ("buy: no sort", 'top_buys.sort(key=lambda x: x["total"], reverse=True)', 'pass'),
 ]
 
 
