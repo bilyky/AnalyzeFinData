@@ -902,3 +902,61 @@ def screen_buys(state, prices, rules, ws, profile, today):
         "top_buys": top_buys,
         "active_position_scores": active_position_scores,
     }
+
+
+def rotate_positions(state, prices, profile, available_slots, max_positions, top_buys,
+                     active_position_scores, today, now_time, new_transactions):
+    """Sell mature positions to free slots for stronger candidates (B6, R&D #27).
+
+    Extracted verbatim from the ``# R&D #27: Dynamic Momentum Rotation Engine``
+    block in ``run_daily_ai_management`` — the stage after :func:`screen_buys`
+    and before BUY execution. Unchanged from the root:
+
+    * ``evaluate_momentum_rotation`` (given the profile, the market-hours flag
+      read now, the slots, the held positions, prices, the ranked ``top_buys``
+      and the held scores) decides which positions to rotate out, the new slot
+      count and the cash to add.
+    * Each rotated position: a written call is unwound at the market price
+      (cost when unquoted), the position is popped, a SELL tx with ``pnl`` and a
+      ``[MOMENTUM ROTATION]`` detail goes to ``state["history"]`` and
+      ``new_transactions``, and the closed-trade DNA is logged. The loop does
+      not credit cash itself; ``balance_addition`` is added once at the end.
+
+    Returns the updated ``available_slots`` for BUY execution. Every
+    collaborator is resolved off the live root module at call time via
+    :func:`_pkg`, so ``mock.patch.object(game, ...)`` still intercepts.
+    """
+    game = _pkg()
+
+    # ── R&D #27: Dynamic Momentum Rotation Engine ──
+    sells_to_rotate, available_slots, balance_addition = game.evaluate_momentum_rotation(
+        profile, game.is_market_hours(), available_slots, max_positions,
+        state["positions"], prices, top_buys, active_position_scores
+    )
+
+    for sym_to_sell in sells_to_rotate:
+        pos = state["positions"][sym_to_sell]
+        price = prices.get(sym_to_sell, pos["cost"])
+        game.options.unwind_option_liability_if_held(sym_to_sell, pos, state, price, today)
+        state["positions"].pop(sym_to_sell)
+
+        # Retrieve score for logging details if available
+        score_val = active_position_scores.get(sym_to_sell, 0.0)
+
+        tx = {
+            "date": today,
+            "time": now_time,
+            "type": "SELL",
+            "symbol": sym_to_sell,
+            "price": price,
+            "qty": pos["qty"],
+            "pnl": round((price - pos["cost"]) * pos["qty"], 2),
+            "details": f"🔄 [MOMENTUM ROTATION] Sold mature position {sym_to_sell} (Score: {score_val:.1f}) to free slot."
+        }
+        state["history"].append(tx)
+        new_transactions.append(tx)
+        game._log.info(f"🔄 [MOMENTUM ROTATION] Sold mature position {sym_to_sell} (Score: {score_val:.1f}) @ ${price} to open slot.")
+        game.log_closed_trade_dna(sym_to_sell, pos, price, today)
+
+    state["balance"] += balance_addition
+    return available_slots
