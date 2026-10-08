@@ -681,3 +681,224 @@ def execute_exits(state, symbols_to_sell, prices, today, now_time, new_transacti
         new_transactions.append(tx)
         game._log.info(f"🤖 AI LIVE SELL: {sym} at ${price} (Time: {now_time})")
         game.log_closed_trade_dna(sym, pos, price, today)
+
+
+def screen_buys(state, prices, rules, ws, profile, today):
+    """Size the BUY slots and rank today's buy candidates (B6).
+
+    Extracted verbatim from the ``# BUY logic`` block in
+    ``run_daily_ai_management`` — the stage after :func:`execute_exits` and
+    before momentum rotation. Nothing is bought here. Unchanged from the root:
+
+    * **Slots** — ``determine_max_positions`` may expand ``rules["max_positions"]``
+      when cash is plentiful; ``available_slots`` is what's left after the held
+      positions, and ``min_cash_required`` is ``equity * rules["cash_buffer_pct"]``.
+    * **Research-sheet scan** — a held symbol only records its score in
+      ``active_position_scores``. Every other row must pass, in order: not an
+      excluded instrument, the adaptive s10 floor, an active setup with a price,
+      the Zero-Trust OHLCV freshness gate (one self-heal, then reject), the
+      CNXC gap-down guard (``row[10]`` prev close; > 8% gap needs a confirmed
+      bottom), the R:R and 5% target-gain gates when the sheet has both stop
+      and target (an elite breakout waives them; incomplete S/R only logs a
+      synthesized thesis), and finally the profile score threshold or a
+      confirmed bottom.
+    * **Overbought guard** (R&D #32) — −1.5 to a candidate whose cached
+      checklist shows no strength and no timing, or a Weak industry.
+    * ``top_buys`` is sorted by total score, highest first.
+
+    Returns ``{"max_positions", "available_slots", "min_cash_required",
+    "top_buys", "active_position_scores"}`` — the values the rotation and BUY
+    execution stages read next. Every collaborator is resolved off the live
+    root module at call time via :func:`_pkg`, so ``mock.patch.object(game, ...)``
+    still intercepts.
+    """
+    game = _pkg()
+
+    # BUY logic (filtered by profile momentum threshold)
+    base_max = rules["max_positions"]
+
+    # Dynamic Position-Slot Expansion: If cash is plentiful (>15% of equity) and we are full, dynamically expand slots to deploy cash!
+    cash_ratio = state["balance"] / state["equity"] if state["equity"] > 1.0 else 0.0
+    max_positions = game.determine_max_positions(cash_ratio, len(state["positions"]), base_max)
+    if max_positions > base_max:
+        game._log.info(f"🛡️ [Slot Expansion] Plentiful cash ({cash_ratio*100:.1f}%) detected. Dynamically expanding slots from {base_max} to {max_positions} to prevent cash drag!")
+        game._log.info(f"🛡️ [Slot Expansion] Plentiful cash detected. Expanding max slots from {base_max} to {max_positions}.")
+
+    available_slots = max_positions - len(state["positions"])
+
+    # Enforce defensive cash buffer
+    min_cash_required = state["equity"] * rules["cash_buffer_pct"]
+
+    # Always build top_buys list and track active position scores
+    top_buys = []
+    active_position_scores = {}
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        sym = row[3]
+        if not sym:
+            continue
+        total_score = (row[24] or 0.0) + (row[25] or 0.0)
+
+        # If sym is currently in positions, record its current score
+        if sym in state["positions"]:
+            active_position_scores[sym] = total_score
+            continue
+
+        # TEMPORARY: skip leveraged/inverse/crypto ETFs as new long buys — the
+        # long swing-low framework doesn't fit them (see instruments.py + R&D).
+        # They still get ATR-based stops if already held; this only blocks entry.
+        if game.instruments.is_excluded(sym):
+            continue
+        setup = str(row[20] or '')
+        price = prices.get(sym, 0)
+        short10 = row[24] or 0.0
+
+        # Dynamic Adaptive s10 Floor (R&D #15) — thresholds single-sourced via helper.
+        cash_pct = (state["balance"] / state["equity"]) * 100.0 if state.get("equity", 0) > 0 else 0.0
+        required_floor = game.adaptive_s10_floor(cash_pct)
+
+        # Strict Short10 Momentum Floor: Reject buy entries if short-term momentum is below required floor
+        if short10 < required_floor:
+            if (setup in ('1', 'OK', 1)) and price > 0:
+                game._log.warning(f"🛑 AI BUY REJECTED (Momentum Floor): {sym} - Short10 score {short10} is below required {required_floor} floor (cash_pct={round(cash_pct, 1)}%).")
+            continue
+
+        # Filter by strategy profile threshold OR mathematically confirmed bottom
+        if (setup in ('1', 'OK', 1)) and price > 0:
+            # Zero-Trust Freshness Gate (CLAUDE.md Rule of Zero-Trust / Temporal Zero-Trust):
+            # Never OPEN a new position on stale or missing OHLCV. Every downstream risk level —
+            # the ATR stop assigned in _execute_buys, swing support, and is_bottom_confirmed just
+            # below — is derived from this cache, so acting on a stale bar is the real "buying
+            # blind" (empty workbook S/R is not — that still gets a live ATR stop). Attempt one
+            # self-heal, then reject if the cache is still not fresh. Held positions are pre-healed
+            # above (line ~1437); this extends the identical discipline to buy candidates, which
+            # were previously ungated. NOTE: this gate sits at the top of the qualifying-candidate
+            # block, so it applies to EVERY buy candidate — those with explicit workbook S/R just
+            # as much as the empty-S/R rows handled below — not only the empty-S/R case. Validated
+            # over the live cache: a meaningful fraction of symbols are stale on any given day, and
+            # their ATR stops would be computed off old bars.
+            if game._cache_stale(sym, max_stale_days=game._MAX_STALE_DAYS):
+                _healed = game._heal_symbol_cache(sym)  # bool: True only on a real refresh
+                if game._cache_stale(sym, max_stale_days=game._MAX_STALE_DAYS):
+                    # Distinguish missing vs N-days-stale in the reject line, reusing the cheap
+                    # raw-JSON age (_cache_age_days) that _cache_stale already read — not the
+                    # heavier split-adjusting ohlcv_age_days. The precise heal outcome (healed /
+                    # lock-deferred / failed / 0-updates) is on the preceding [Self-Healer] line,
+                    # so lock-deferral is separable from genuine failure.
+                    _age = game._cache_age_days(sym)
+                    _age_desc = "missing" if _age is None else f"{_age}d stale"
+                    game._log.warning(f"🛑 AI BUY REJECTED (Zero-Trust Freshness): {sym} - OHLCV cache {_age_desc}, self-heal did not refresh it (healed={_healed}; see preceding [Self-Healer] line for lock-deferral vs failure); refusing to derive risk levels from untrustworthy data.")
+                    continue
+
+            bottom_ok, bottom_msg = game.is_bottom_confirmed(sym)
+
+            # Catastrophic Gap Guard (The CNXC Trap):
+            # Reject gap-downs > 8% unless bottom is independently confirmed — a volume-confirmed
+            # capitulation gap is exactly the entry signal bottom detection targets.
+            prev_close = row[10]
+            if prev_close and prev_close > 0:
+                gap_pct = (price - prev_close) / prev_close
+                if gap_pct <= -0.08 and not bottom_ok:
+                    game._log.warning(f"🛑 AI BUY REJECTED (CNXC Trap): {sym} - Gap-Down {round(gap_pct*100, 1)}% with no confirmed bottom.")
+                    continue
+
+            # Reward-to-Risk & Target Upside Filter (Risk-Reward Gate):
+            # Reject if the projected Reward-to-Risk ratio is below CFG.system_default_min_rr,
+            # OR if the projected target gain percentage is below 5.0% of the current price.
+            # EXEMPTION (Breakout Risk-Reward Waiver - R&D #13 & #32):
+            # An elite momentum leader (see is_elite_breakout_candidate: combined + s10 both
+            # above the CFG.system_bypass_* floors) waives the conservative R:R and target-gain
+            # fallback restrictions below, to capture breakout alpha on names with no real
+            # overhead resistance. Gate is delegated so the thresholds live in one place.
+            stop_val = game._to_float(row[9], 0.0)
+            target_val = game._to_float(row[11], 0.0)
+            pgr_val = str(row[6] or "Neutral")
+
+            is_elite_breakout = game.risk_utils.is_elite_breakout_candidate(total_score, short10)
+
+            # The R:R and target-gain gates apply ONLY when the workbook carries explicit
+            # Support/Resistance levels (row[9]/row[11]). A row with empty workbook S/R is NOT
+            # "buying blind": the execution path assigns a downstream ATR-based stop, so such a
+            # setup is intentionally allowed to fall through to the ATR fallback rather than be
+            # rejected here. Do NOT re-add a hard reject on missing workbook S/R — it preempts
+            # that ATR stop and rejects entries the system was designed to make.
+            if stop_val > 0 and target_val > 0:
+                upside = target_val - price
+                downside = price - stop_val
+                rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
+                target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
+
+                min_rr = game.CFG.system_default_min_rr
+                if rr_ratio < min_rr:
+                    if is_elite_breakout:
+                        game._log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived {min_rr}:1 R:R limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, R:R: {rr_ratio}:1).")
+                    else:
+                        game._log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required {min_rr}:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
+                        continue
+
+                if target_gain_pct < 5.0:
+                    if is_elite_breakout:
+                        game._log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 5.0% target upside limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, Target Gain: {target_gain_pct}%).")
+                    else:
+                        game._log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
+                        continue
+            else:
+                # Incomplete workbook S/R (missing stop AND/OR target — this branch is the negation
+                # of `stop_val > 0 and target_val > 0`) — synthesize the risk thesis for TRANSPARENCY,
+                # not as a gate.
+                # The freshness gate above already proved the cache is trustworthy, and _execute_buys
+                # assigns a live ATR stop, so this row is not "buying blind". Derive stop/target from
+                # the SAME split-adjusted, provenance-reporting resolvers the UI and backtests use and
+                # log the thesis. We deliberately DO NOT hard-gate on this synthesized R:R: the nearest
+                # confirmed resistance is structurally the smallest possible upside while support can be
+                # far below, so a uniform R:R>=2 reject would gut the fresh pipeline (validated live —
+                # most fresh names score R:R<2 on synthesized levels). The R:R / target-gain quality
+                # screen stays scoped to explicit workbook levels; freshness is the real safety gate.
+                excl = game.instruments.is_excluded(sym)
+                # Load the (freshness-gated) split-adjusted series ONCE and feed both resolvers,
+                # instead of letting each reload + re-adjust the same cache is_bottom_confirmed
+                # already read above. Freshness is guaranteed by the gate, so the resolvers'
+                # internal staleness check is redundant here and passing the series skips it.
+                _hi, _lo, _cl, _ = game.risk_utils._load_ohlcv_series(sym)
+                _sd = game.risk_utils.resolve_stop_detailed(price, highs=_hi, lows=_lo, closes=_cl, exclude_swing=excl)
+                _td = game.risk_utils.resolve_target_detailed(price, highs=_hi, lows=_lo, closes=_cl, exclude_swing=excl)
+                _wb_sr = f"workbook stop={row[9]!r}/target={row[11]!r} incomplete"
+                game._log.info(f"[Synthesized Risk Thesis] {sym} @ ${price}: stop ${_sd.get('stop')} ({_sd.get('source')}) / target ${_td.get('target')} ({_td.get('source')}) — {_wb_sr}; live ATR stop applied at execution.")
+
+            if total_score >= rules["min_score_threshold"] or bottom_ok:
+                bottom_desc = f" (Bottom Confirmed: {bottom_msg})" if bottom_ok else ""
+                top_buys.append({
+                    "sym": sym,
+                    "price": price,
+                    "total": total_score,
+                    "pgr": row[6] or "Neutral",
+                    "s10": row[24] or 0.0,
+                    "l60": row[25] or 0.0,
+                    "bottom_desc": bottom_desc,
+                    "industry": row[4]
+                })
+            else:
+                game._log.warning(f"🛑 AI BUY REJECTED (Profile Threshold): {sym} - Combined score {round(total_score, 2)} is below the {profile} minimum of {rules['min_score_threshold']} and no confirmed bottom.")
+
+    # ── R&D #32 Overbought Breakout Guard score penalty ──
+    for buy_cand in top_buys:
+        sym_upper = buy_cand["sym"].upper()
+        cache = game._load_symbol_today_cache(sym_upper, today)
+        if cache:
+            checklist = cache.get("checklist_stocks", {})
+            strength_count = checklist.get("strengthCount", 1)
+            timing_count = checklist.get("timingCount", 1)
+            industry_rating = checklist.get("industry", "Neutral")
+
+            if (strength_count < 1 and timing_count < 1) or industry_rating == "Weak":
+                buy_cand["total"] -= 1.5
+                game._log.info(f"🛡️ [R&D #32 Guard] Applied -1.5 score penalty to {sym_upper} (overbought/weak-sector: strength={strength_count}, timing={timing_count}, industry={industry_rating})")
+
+    top_buys.sort(key=lambda x: x["total"], reverse=True)
+    return {
+        "max_positions": max_positions,
+        "available_slots": available_slots,
+        "min_cash_required": min_cash_required,
+        "top_buys": top_buys,
+        "active_position_scores": active_position_scores,
+    }
