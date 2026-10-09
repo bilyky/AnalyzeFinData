@@ -6,8 +6,13 @@ full Covered Call lifecycle (write -> worthless expiry / strike assignment / buy
 including the ledger invariant that a written premium is booked exactly once.
 """
 
+import datetime
+import json
 import math
+import os
+import tempfile
 import unittest
+from unittest import mock
 from aether import options
 
 
@@ -122,8 +127,10 @@ class TestCoveredCallOptions(unittest.TestCase):
             "history": [],
         }
 
-        # Current price ($112) below strike ($115) -> option expires worthless.
-        options.resolve_expiring_options(mock_state, today_str="2026-08-14", prices={"AAPL": 112.0})
+        # Expiry-day close ($112) below strike ($115) -> option expires worthless. Settled on the
+        # next session (Mon 08-17) at Friday 08-14's close.
+        with mock.patch.object(options, "_expiry_close", return_value=112.0):
+            options.resolve_expiring_options(mock_state, today_str="2026-08-17", prices={"AAPL": 999.0})
 
         self.assertIn("AAPL", mock_state["positions"])
         self.assertNotIn("written_call", mock_state["positions"]["AAPL"])
@@ -147,8 +154,9 @@ class TestCoveredCallOptions(unittest.TestCase):
             "history": [],
         }
 
-        # Current price ($118) above strike ($115) -> stock is called away at the strike.
-        options.resolve_expiring_options(mock_state, today_str="2026-08-14", prices={"AAPL": 118.0})
+        # Expiry-day close ($118) above strike ($115) -> stock is called away at the strike.
+        with mock.patch.object(options, "_expiry_close", return_value=118.0):
+            options.resolve_expiring_options(mock_state, today_str="2026-08-17", prices={"AAPL": 1.0})
 
         self.assertNotIn("AAPL", mock_state["positions"])
         # Cash credited with strike revenue (115 * 10 = $1,150) -> $2,150.
@@ -177,7 +185,8 @@ class TestCoveredCallOptions(unittest.TestCase):
             "history": [],
         }
 
-        options.resolve_expiring_options(mock_state, today_str="2026-08-14", prices={"AAPL": 118.0})
+        with mock.patch.object(options, "_expiry_close", return_value=118.0):
+            options.resolve_expiring_options(mock_state, today_str="2026-08-17", prices={"AAPL": 118.0})
 
         # Only the 10 covered shares are called away at $115 -> $1,150 credited (not silently lost).
         self.assertEqual(mock_state["balance"], 1150.0)
@@ -208,11 +217,40 @@ class TestCoveredCallOptions(unittest.TestCase):
             "history": [],
         }
 
-        options.resolve_expiring_options(mock_state, today_str="2026-08-14", prices={})  # no quote
+        with mock.patch.object(options, "_expiry_close", return_value=None):  # no expiry-day close cached
+            options.resolve_expiring_options(mock_state, today_str="2026-08-17", prices={"AAPL": 118.0})
 
         self.assertIn("written_call", mock_state["positions"]["AAPL"])  # deferred, not settled
         self.assertEqual(mock_state["history"], [])
         self.assertEqual(mock_state["balance"], 1000.0)
+
+    def test_nothing_settles_on_the_expiry_date_itself(self):
+        """PROD 2026-09-25: KE was 'called away' at 07:00 on its expiry day, before the session
+        traded. The option settles at the expiry close, so the expiry-day run must leave it open."""
+        mock_state = {
+            "balance": 1000.0,
+            "positions": {"KE": {"qty": 43, "cost": 25.0, "stop_loss": 26.0,
+                                 "written_call": {"strike": 28.0, "premium": 0.01,
+                                                  "expiration_date": "2026-09-25", "qty": 43}}},
+            "history": [],
+        }
+        options.resolve_expiring_options(mock_state, today_str="2026-09-25", prices={"KE": 28.4})
+        self.assertIn("written_call", mock_state["positions"]["KE"])
+        self.assertEqual(mock_state["history"], [])
+
+    def test_expiry_close_reads_the_cache_including_a_provisional_bar(self):
+        """The settlement price is the expiry date's close from Symbol_full. A provisional
+        (close-only) bar counts: its close is the real close."""
+        with tempfile.TemporaryDirectory() as d:
+            ts = {"2026-09-24": {"1. open": "27", "2. high": "27.5", "3. low": "26.8", "4. close": "27.1", "5. volume": "1"},
+                  "2026-09-25": {"1. open": "27.27", "2. high": "28.415", "3. low": "27.27", "4. close": "27.27",
+                                 "5. volume": "0", "provisional": True}}
+            with open(os.path.join(d, "KE_daily.json"), "w") as f:
+                json.dump({"Time Series (Daily)": ts}, f)
+            with mock.patch.object(options.paths, "ohlcv_dir", return_value=d):
+                self.assertEqual(options._expiry_close("KE", "2026-09-25"), 27.27)
+                self.assertIsNone(options._expiry_close("KE", "2026-09-26"))
+                self.assertIsNone(options._expiry_close("ZZZ", "2026-09-25"))
 
     def test_execute_weekly_pass_writes_on_winner_and_books_premium_once(self):
         """A risk-locked winner gets a call written with the premium booked exactly once; a
@@ -240,7 +278,9 @@ class TestCoveredCallOptions(unittest.TestCase):
 
         # Expire worthless next week: pnl must be 0 so the ledger stays consistent with the balance.
         call = state["positions"]["AAPL"]["written_call"]
-        options.resolve_expiring_options(state, today_str=call["expiration_date"], prices={"AAPL": call["strike"] - 5.0})
+        day_after = str(datetime.date.fromisoformat(call["expiration_date"]) + datetime.timedelta(days=1))
+        with mock.patch.object(options, "_expiry_close", return_value=call["strike"] - 5.0):
+            options.resolve_expiring_options(state, today_str=day_after, prices={})
         self.assertEqual(state["history"][-1]["type"], "OPTION_EXPIRY")
         self.assertEqual(state["history"][-1]["pnl"], 0.0)
         # Ledger invariant: total booked pnl equals the net cash the premium put on the balance.

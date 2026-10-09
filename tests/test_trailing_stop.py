@@ -315,10 +315,14 @@ class TestAntiFragileFlexibility(unittest.TestCase):
             [1, None, None, "ULTA", "Retail", None, "Bu", None, None, None, 410.0, None, None, None, None, None, None, None, None, None, "OK", None, None, 0.65, 5.0, 5.1])  # Short10 = 5.0
         mock_load_wb.return_value = wb
 
-        with mock.patch("aether.risk_utils.calculate_atr", return_value=4.00):
+        # ATR 10 keeps the +$10 gain at +1 ATR, below the first Bank-As-You-Go tier. With ATR 4
+        # (+2.5 ATR) the run scaled 1 share out and then pyramided back in, which a run no longer
+        # does (test_scale_out_in_same_run).
+        with mock.patch("aether.risk_utils.calculate_atr", return_value=10.00):
             game.run_daily_ai_management(force=True, manual_profile="BALANCED")
 
         # ULTA qty must be increased and blended cost recalculated!
+        self.assertFalse(any(t["type"] == "SELL" for t in state["history"]), state["history"])
         pos = state["positions"]["ULTA"]
         self.assertGreater(pos["qty"], 2)
         self.assertGreater(pos["cost"], 400.0)
@@ -353,16 +357,20 @@ class TestDetermineMaxPositions(unittest.TestCase):
 
 class TestStpLmtSlippageProtection(unittest.TestCase):
     def test_stp_lmt_slippage_protection(self):
-        """Operational: Assert that Stop-Loss sales are executed at the exact Stop Price (STP LMT) if market price falls below it."""
-        pos = {"qty": 10, "cost": 50.0, "stop_loss": 46.0}
-        market_close = 44.0
-        
-        stop_loss = pos.get("stop_loss", 0.0)
-        execution_price = market_close
-        if stop_loss > 0.0 and market_close <= stop_loss:
-            execution_price = stop_loss
-            
-        self.assertEqual(execution_price, 46.0)
+        """R&D #8: a breached stop is a stop-limit with its limit at the market price, so it fills
+        at the market price. The old model filled at the stop even after a gap below it, which
+        overstated P&L (PROD audit 2026-10-08: SAM stop 171.24 'sold' at 171.24)."""
+        from aether.scenario.steps import execute_exits
+        state = {"balance": 0.0, "history": [],
+                 "positions": {"AAA": {"qty": 10, "cost": 50.0, "stop_loss": 46.0}}}
+        txs = []
+        with mock.patch.object(game.options, "unwind_option_liability_if_held"), \
+             mock.patch.object(game, "log_closed_trade_dna"), \
+             mock.patch.object(game, "_log"):
+            execute_exits(state, {"AAA": "stop breached"}, {"AAA": 44.0}, "2026-10-09", "07:00:00", txs)
+        self.assertEqual(txs[0]["price"], 44.0)
+        self.assertEqual(state["balance"], 440.0)
+        self.assertIn("[STP LMT @ market, stop 46.00]", txs[0]["details"])
 
 
 class TestBreakoutRrWaiver(unittest.TestCase):

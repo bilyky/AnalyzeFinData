@@ -643,9 +643,10 @@ def execute_exits(state, symbols_to_sell, prices, today, now_time, new_transacti
     * ``options.unwind_option_liability_if_held`` buys back a written covered
       call first, so no naked call is left behind;
     * the position is popped from ``state["positions"]``;
-    * **STP LMT fill** (R&D #8) — if the price is at or below a positive
-      ``stop_loss``, the fill is the stop price, not the gapped market price, and
-      the tx details get ``[STP LMT fill]``;
+    * **STP LMT @ market** (R&D #8) — if the price is at or below a positive
+      ``stop_loss``, the order is a stop-limit with its limit at the market price,
+      so the fill is the market price (never the stop), and the tx details get
+      ``[STP LMT @ market, stop <stop>]``;
     * the proceeds are credited to ``state["balance"]``; the SELL tx (with
       ``pnl``, ``Exit: <reason>`` and the position's ``stop_loss``, #136) is
       appended to ``state["history"]`` and ``new_transactions``;
@@ -664,18 +665,18 @@ def execute_exits(state, symbols_to_sell, prices, today, now_time, new_transacti
         game.options.unwind_option_liability_if_held(sym, pos, state, price, today)
         state["positions"].pop(sym)
 
-        # Slippage-Protected Limit Stop (STP LMT - R&D #8): Execute at exactly the stop price
-        # if the market close price dropped below our stop-loss floor, preventing slippage leaks.
+        # Slippage-Protected Limit Stop (STP LMT - R&D #8): once the price is at or below the
+        # stop, the order is a stop-limit whose limit is the market price, so it fills at the
+        # market price. A gap below the stop is a real loss; filling at the stop overstated P&L.
         stop_loss = pos.get("stop_loss", 0.0)
         stop_fill = stop_loss > 0.0 and price <= stop_loss
         if stop_fill:
-            game._log.info(f"🛡️ [STP LMT] Executed {sym} stop-loss at Limit price ${stop_loss:.2f} (protected against market gap ${price:.2f}).")
-            price = stop_loss
+            game._log.info(f"🛡️ [STP LMT] {sym} stop ${stop_loss:.2f} triggered; limit at market ${price:.2f}, filled at ${price:.2f}.")
 
         proceeds = pos["qty"] * price
         state["balance"] += proceeds
         tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2),
-              "details": f"Exit: {exit_reason}" + (" [STP LMT fill]" if stop_fill else ""),
+              "details": f"Exit: {exit_reason}" + (f" [STP LMT @ market, stop {stop_loss:.2f}]" if stop_fill else ""),
               "stop_loss": pos.get("stop_loss")}
         state["history"].append(tx)
         new_transactions.append(tx)
