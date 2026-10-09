@@ -123,6 +123,13 @@ def _max_intel_emails() -> int:
         return 20
 
 
+def _max_parallel_extractions() -> int:
+    try:
+        return max(1, int(CFG.ai_max_parallel_extractions))
+    except Exception:
+        return 1
+
+
 def dedup_rd_topics(raw_topics) -> list:
     """Flatten + case-insensitively deduplicate R&D topic strings.
 
@@ -325,8 +332,8 @@ def fetch_idea_emails():
                 _log.error(f"Extraction failed for {cand['subject'][:40]}: {e}")
                 return None
 
-        # Execute concurrently with up to 5 parallel threads
-        with ThreadPoolExecutor(max_workers=5) as pool:
+        # ai.max_parallel_extractions workers (default 1: free AI tiers answer 429 to bursts)
+        with ThreadPoolExecutor(max_workers=_max_parallel_extractions()) as pool:
             futures = [pool.submit(run_extractions, c) for c in candidates]
             for fut in as_completed(futures):
                 res = fut.result()

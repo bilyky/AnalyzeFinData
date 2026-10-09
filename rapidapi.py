@@ -384,6 +384,17 @@ def get_quotes(time_frame, year=2022, month=1, day=1, symbol='MSFT'):
     return np.array(result)
 
 
+def log_run_summary(result: dict) -> None:
+    """One 'Done' line, plus ONE error line naming the failed symbols. Each failure was
+    already logged with its error when it happened, so this does not repeat them."""
+    _log.info("[RapidAPI] Done: %d fetched, %d already current, %d errors, %d deferred%s",
+              result["updated"], result["skipped"], len(result["errors"]), result["deferred"],
+              " (stopped: quota spent)" if result["quota_stopped"] else "")
+    if result["errors"]:
+        _log.error("  [RapidAPI] %d symbol(s) failed this run (errors logged above): %s",
+                   len(result["errors"]), ", ".join(sym for sym, _ in result["errors"]))
+
+
 # ── CLI entry point ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -407,8 +418,4 @@ if __name__ == "__main__":
     _log.console("[RapidAPI] Recovery pass — %d symbols, today=%s, force=%s",
                  len(syms), today_str, force)
     result = repair_missing(syms, today_str, force=force, max_fetches=max_fetches)
-    _log.info("[RapidAPI] Done: %d fetched, %d already current, %d errors, %d deferred%s",
-                 result["updated"], result["skipped"], len(result["errors"]), result["deferred"],
-                 " (stopped: quota spent)" if result["quota_stopped"] else "")
-    for sym, err in result["errors"]:
-        _log.error("  ERROR %s: %s", sym, err)
+    log_run_summary(result)
