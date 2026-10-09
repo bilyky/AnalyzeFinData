@@ -34,8 +34,10 @@ from bar_provenance import is_provisional
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_NAME = "oceanview_context.json"
-# Verdict of the LAST build (ok / degraded / failed), written on every build — the cache above
-# is only written on a live success, so a failed build would otherwise leave no trace. Read by
+# Verdict of the last SCHEDULED build (ok / degraded / failed). Written only when the caller
+# passes record_status=True (daily_task does), so an interactive read (e.g. the adviser skill,
+# live=False) can never overwrite the pipeline's verdict. The cache above is only written on a
+# live success, so without this a failed build would leave no trace. Read by
 # watchdog.check_context_pack_health. Holds only meta (no accounts, positions or sleeves).
 STATUS_NAME = "oceanview_context_status.json"
 RECENT_BARS = 30
@@ -241,7 +243,8 @@ def _write_cache(path: str, payload: dict) -> None:
 
 def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
                             env: str = "production", data_dir: str | None = None,
-                            now: datetime.datetime | None = None) -> dict:
+                            now: datetime.datetime | None = None,
+                            record_status: bool = False) -> dict:
     """Assemble the Context Pack. Always returns a health verdict (ok / degraded / failed).
 
     data_dir relocates the pack's own files (cache, game JSON, studies, OHLCV) to one folder.
@@ -305,10 +308,11 @@ def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
     meta = {"generated_at": now.isoformat(timespec="seconds"), "source": source,
             "broker_as_of": broker_as_of, "staleness_hours": staleness,
             "health": health, "warnings": warnings}
-    try:
-        _write_cache(os.path.join(ddir, STATUS_NAME), meta)
-    except OSError as e:
-        warnings.append(f"could not write {STATUS_NAME}: {e}")
+    if record_status:
+        try:
+            _write_cache(os.path.join(ddir, STATUS_NAME), meta)
+        except OSError as e:
+            warnings.append(f"could not write {STATUS_NAME}: {e}")
     return {
         "meta": meta,
         "knowledge": _knowledge(),

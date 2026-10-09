@@ -106,7 +106,7 @@ class TestContextPackStep(unittest.TestCase):
         with mock.patch.object(daily_task.oceanview_context, "build_oceanview_context",
                                return_value={"meta": meta}) as b,              mock.patch.object(daily_task, "pack_max_stale_hours", return_value=24):
             daily_task.build_context_pack()
-        b.assert_called_once_with(live=True, max_stale_hours=24)
+        b.assert_called_once_with(live=True, max_stale_hours=24, record_status=True)
 
     def test_weekend_allows_fridays_snapshot(self):
         self.assertEqual(daily_task.pack_max_stale_hours(datetime.date(2026, 10, 10)), 72)  # Saturday

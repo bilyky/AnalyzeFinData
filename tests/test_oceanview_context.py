@@ -224,7 +224,7 @@ class TestStatusFile(_Base):
 
     def test_failed_build_still_writes_its_verdict(self):
         with mock.patch.object(ovc.etrade, "keep_alive", return_value=None):
-            self.build()
+            self.build(record_status=True)
         st = self._status()
         self.assertEqual(st["health"], "failed")
         self.assertFalse(os.path.exists(os.path.join(self.dir, ovc.CACHE_NAME)))   # no cache written
@@ -236,10 +236,20 @@ class TestStatusFile(_Base):
             m["keep_alive"].return_value = {"oauth_token": "t"}
             m["get_accounts"].return_value = _FakeAccounts()
             m["fetch_positions"].return_value = []
-            self.build()
+            self.build(record_status=True)
         st = self._status()
         self.assertEqual((st["health"], st["source"]), ("ok", "live"))
         self.assertNotIn("accounts", json.dumps(st))
+
+
+class TestStatusOnlyWhenRecorded(_Base):
+    def test_interactive_read_never_writes_the_status(self):
+        # The adviser skill reads the pack with live=False; it must not overwrite the
+        # evening pipeline's verdict that the watchdog gate reads.
+        self.build(live=False)
+        with mock.patch.object(ovc.etrade, "keep_alive", return_value=None):
+            self.build()
+        self.assertFalse(os.path.exists(os.path.join(self.dir, ovc.STATUS_NAME)))
 
 
 class TestStudyGates(_Base):
