@@ -1866,18 +1866,18 @@ def run_daily_ai_management(force=False, manual_profile=None):
             options.unwind_option_liability_if_held(sym, pos, state, price, today)
             state["positions"].pop(sym)
             
-            # Slippage-Protected Limit Stop (STP LMT - R&D #8): Execute at exactly the stop price
-            # if the market close price dropped below our stop-loss floor, preventing slippage leaks.
+            # Slippage-Protected Limit Stop (STP LMT - R&D #8): once the price is at or below the
+            # stop, the order is a stop-limit whose limit is the market price, so it fills at the
+            # market price. A gap below the stop is a real loss; filling at the stop overstated P&L.
             stop_loss = pos.get("stop_loss", 0.0)
             stop_fill = stop_loss > 0.0 and price <= stop_loss
             if stop_fill:
-                _log.info(f"🛡️ [STP LMT] Executed {sym} stop-loss at Limit price ${stop_loss:.2f} (protected against market gap ${price:.2f}).")
-                price = stop_loss
+                _log.info(f"🛡️ [STP LMT] {sym} stop ${stop_loss:.2f} triggered; limit at market ${price:.2f}, filled at ${price:.2f}.")
                 
             proceeds = pos["qty"] * price
             state["balance"] += proceeds
             tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2),
-                  "details": f"Exit: {exit_reason}" + (" [STP LMT fill]" if stop_fill else ""),
+                  "details": f"Exit: {exit_reason}" + (f" [STP LMT @ market, stop {stop_loss:.2f}]" if stop_fill else ""),
                   "stop_loss": pos.get("stop_loss")}
             state["history"].append(tx)
             new_transactions.append(tx)
@@ -2115,6 +2115,13 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 if cash_ratio > CFG.system_pyramiding_cash_ratio:  # idle-cash trigger for scaling in
                     _log.info(f"🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash ({cash_ratio*100:.1f}%)...")
                     for sym, pos in list(state["positions"].items()):
+                        # Never buy back what this run (or an earlier run today) just sold, e.g.
+                        # a Bank-As-You-Go scale-out: that books profit and restores the
+                        # exposure at the same price (PROD GNE 2026-10-02).
+                        if any(t.get("symbol") == sym and t.get("type") == "SELL" and t.get("date") == today
+                               for t in state["history"]):
+                            _log.info(f"🛡️ [Pyramiding Pass] {sym}: sold earlier today; no scale-in.")
+                            continue
                         current_px = prices.get(sym, pos["cost"])
                         # A winner is in profit and trading at or near its peak close
                         is_winner = (current_px > pos["cost"])

@@ -7,9 +7,11 @@ lifecycles.
 """
 
 import datetime
+import json
 import math
+import os
 
-from aether import instruments
+from aether import instruments, paths
 from aether.config import CFG
 from aether.option_pricing import bs_price
 from aether.option_pricing import norm_cdf as norm_cdf  # re-export: single BS-math home
@@ -115,9 +117,29 @@ def select_covered_call(symbol: str, current_price: float, atr: float, volatilit
     }
 
 
+def _expiry_close(symbol: str, date_str: str):
+    """Close of `date_str` from the local OHLCV cache, or None when that bar is missing.
+
+    A provisional close-only bar (written by powergauge from Chaikin's close) counts: its close
+    is the real close, only its high/low/volume are fake."""
+    path = os.path.join(paths.ohlcv_dir(), f"{symbol}_daily.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            bar = json.load(f).get("Time Series (Daily)", {}).get(date_str)
+        return float(bar["4. close"]) if bar else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def resolve_expiring_options(state: dict, today_str: str, prices: dict):
-    """Scan and settle all active, expiring written Covered Call options.
-    
+    """Scan and settle written Covered Calls whose expiry session is over.
+
+    A weekly call settles at its expiry date's CLOSE, so it is settled on the first run after
+    that date (the trade run is at 07:00, before the session). Settling on the expiry morning
+    used the pre-open price (PROD KE 2026-09-25: 'called away' at the $28 strike at 07:00; it
+    closed at 27.27). The price is the expiry close from the OHLCV cache; with no cached close
+    the settlement is deferred. `prices` is kept for the callers' signature and is not used.
+
     - Case A (Below Strike): Option expires worthless. We keep 100% of the cash premium as profit.
     - Case B (At/Above Strike): Stock is called away. We sell the underlying stock at the strike price,
       realizing the locked-in capital gains, and release the option liability.
@@ -128,15 +150,15 @@ def resolve_expiring_options(state: dict, today_str: str, prices: dict):
             continue
             
         exp_date = written_call.get("expiration_date", "")
-        # If the option has reached or passed its expiration date
-        if exp_date and exp_date <= today_str:
-            # Do NOT default a missing quote to cost basis: cost is always below the OTM strike,
-            # which would silently force the "expires worthless" (favorable) branch. Defer
-            # settlement to a later pass when a live quote is available.
-            if sym not in prices:
-                _log.warning(f"[Option Expiry] No live quote for {sym} on its settlement day; deferring Covered Call settlement (no cost-basis fallback).")
+        # Only once the expiry session is over (see the docstring).
+        if exp_date and exp_date < today_str:
+            # Do NOT default a missing close to cost basis or to today's quote: cost is always
+            # below the OTM strike (forces the favorable "worthless" branch) and today's quote is
+            # not the expiry close. Defer until the expiry-day bar is in the cache.
+            current_px = _expiry_close(sym, exp_date)
+            if current_px is None:
+                _log.warning(f"[Option Expiry] No cached close for {sym} on its expiry date {exp_date}; deferring Covered Call settlement.")
                 continue
-            current_px = prices[sym]
             strike = written_call.get("strike")
             qty = written_call.get("qty")
             premium = written_call.get("premium")
