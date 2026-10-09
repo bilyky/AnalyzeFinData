@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[2]
 STEPS = ROOT / "aether" / "scenario" / "steps.py"
 MODULES = ["tests.test_scenario_steps", "tests.test_scenario_assemble", "tests.test_scenario_settle",
            "tests.test_scenario_queued", "tests.test_scenario_exits",
-           "tests.test_scenario_sell_exec", "tests.test_scenario_buy_screen"]
+           "tests.test_scenario_sell_exec", "tests.test_scenario_buy_screen", "tests.test_scenario_rotation"]
 
 # (label, exact text in steps.py, replacement). Each anchor must occur exactly once.
 MUTANTS = [
@@ -165,6 +165,23 @@ MUTANTS += [  # screen_buys (BUY screening)
     ("buy: penalty and->or", '(strength_count < 1 and timing_count < 1)', '(strength_count < 1 or timing_count < 1)'),
     ("buy: weak ignored", ' or industry_rating == "Weak":', ':'),
     ("buy: no sort", 'top_buys.sort(key=lambda x: x["total"], reverse=True)', 'pass'),
+]
+
+MUTANTS += [  # rotate_positions (R&D #27 momentum rotation)
+    ("rot: market flag fixed", 'profile, game.is_market_hours(), available_slots', 'profile, True, available_slots'),
+    ("rot: slots arg wrong", 'game.is_market_hours(), available_slots, max_positions,',
+     'game.is_market_hours(), max_positions, max_positions,'),
+    ("rot: slots not returned", '    return available_slots\n', '    return 0\n'),
+    ("rot: price fallback 0", 'price = prices.get(sym_to_sell, pos["cost"])', 'price = prices.get(sym_to_sell, 0.0)'),
+    ("rot: no call unwind", 'game.options.unwind_option_liability_if_held(sym_to_sell, pos, state, price, today)', 'pass'),
+    ("rot: position kept", 'state["positions"].pop(sym_to_sell)', 'pass'),
+    ("rot: score default 1", 'active_position_scores.get(sym_to_sell, 0.0)', 'active_position_scores.get(sym_to_sell, 1.0)'),
+    ("rot: pnl sign", '"pnl": round((price - pos["cost"]) * pos["qty"], 2),\n            "details": f"🔄',
+     '"pnl": round((pos["cost"] - price) * pos["qty"], 2),\n            "details": f"🔄'),
+    ("rot: no history", '        state["history"].append(tx)\n        new_transactions.append(tx)\n        game._log.info(f"🔄',
+     '        new_transactions.append(tx)\n        game._log.info(f"🔄'),
+    ("rot: no dna", 'game.log_closed_trade_dna(sym_to_sell, pos, price, today)', 'pass'),
+    ("rot: no cash added", 'state["balance"] += balance_addition', 'state["balance"] += 0'),
 ]
 
 

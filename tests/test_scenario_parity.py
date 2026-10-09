@@ -46,6 +46,7 @@ _CHECKED = (
     "decide_exits",
     "execute_exits",
     "screen_buys",
+    "rotate_positions",
 )
 
 # Functions deliberately NOT checked, with the reason.
