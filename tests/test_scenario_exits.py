@@ -359,6 +359,18 @@ class TestAiOverride(unittest.TestCase):
             _run(state)
         self.assertEqual(self._entry(h)["rules_action"], "WATCH")
 
+    def test_stop_breach_is_never_overridden(self):
+        """R&D #14 overrides MOMENTUM sells only. A stop breach must sell even when every AI
+        verdict path says HOLD / FLAG-FOR-REVIEW (PROD 2026-10-09: the free model's verdict
+        reached this gate; a stop exit must not depend on it)."""
+        reason = "stop breached (price 85.0 <= stop 90.0)"
+        state = _state(shadow_verdict="HOLD", verdicts={"p": "FLAG-FOR-REVIEW"})
+        with _Harness(action="SELL", reason=reason, verdicts={"ai": {"verdict": "HOLD", "note": "winner"}}) as h:
+            out, _ = _run(state, prices={"AAA": 85.0})
+        self.assertEqual(out, {"AAA": reason})
+        self.assertEqual(self._entry(h)["rules_action"], "SELL")
+        self.assertIn("stop exits are never overridden", h.logged())
+
     def test_non_override_verdict_still_sells(self):
         with _Harness(action="SELL", verdicts={"ai": "SELL"}):
             out, _ = _run(_state())

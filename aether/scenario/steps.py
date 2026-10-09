@@ -550,8 +550,12 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             s10=s10, l60=l60, sma50=sma50,
             date=today, run_shadow=None)
 
-        # AI Second-Opinion Exit Override Gate (R&D Item 14)
-        if entry["rules_action"] == "SELL":
+        # AI Second-Opinion Exit Override Gate (R&D Item 14): momentum sells only. A stop breach
+        # always executes, whatever the AI says.
+        if entry["rules_action"] == "SELL" and game.sell_rules.is_stop_exit(entry["rules_reason"]):
+            if entry.get("verdicts") or any(k in pos for k in ("shadow_verdict", "ai_verdict", "verdict", "verdicts")):
+                game._log.info(f"🛑 [AI Override] {sym}: AI verdict ignored, stop exits are never overridden ({entry['rules_reason']}).")
+        elif entry["rules_action"] == "SELL":
             ai_override = False
             override_reason = ""
             override_verdict = ""
