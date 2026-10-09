@@ -85,6 +85,16 @@ def _num(x):
         return None
 
 
+# Reason prefix of a hard stop exit. is_stop_exit() reads it, so the AI override gate (R&D #14,
+# momentum sells only) can never cancel a stop.
+STOP_BREACH_REASON = "stop breached"
+
+
+def is_stop_exit(reason) -> bool:
+    """True when an exit_decision reason is a hard stop breach (never overridable)."""
+    return str(reason or "").startswith(STOP_BREACH_REASON)
+
+
 def exit_decision(price, cost, stop_loss, s10, l60, sma50=None, in_profit=None):
     """Return (action, reason) where action is 'SELL' | 'REVIEW' | 'HOLD'.
 
@@ -109,7 +119,7 @@ def exit_decision(price, cost, stop_loss, s10, l60, sma50=None, in_profit=None):
 
     # 1. HARD FLOOR — capital preservation, always wins.
     if stop and price is not None and price > 0 and price <= stop:
-        return "SELL", f"stop breached (price {price} <= stop {stop})"
+        return "SELL", f"{STOP_BREACH_REASON} (price {price} <= stop {stop})"
 
     # 2. SOFT SIGNAL — momentum decay, with winner-protection.
     if soft_exit(s10, l60):

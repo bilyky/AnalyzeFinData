@@ -21,7 +21,7 @@ The active experimental backlog, scoring studies, and structural risk-mitigation
     *   *HighScorePGRBypass:* Bypasses Neutral PGR on extremely high combined scores (>=15.0) backed by Money Flow.
     *   *SectorMomentumConfirmation:* Waives energy/oil industry penalties during active, volume-confirmed sector breakouts.
     *   *Overbought Breakout Guard:* Apply a soft -1.5 penalty on breakout chasing inside weak sectors.
-14. **AI Second-Opinion Exit Override:** Integrates an exit-routing gate to override momentum sells if the active AI Shadow Heuristic returns FLAG-FOR-REVIEW or HOLD.
+14. **AI Second-Opinion Exit Override:** Integrates an exit-routing gate to override momentum sells if the active AI Shadow Heuristic returns FLAG-FOR-REVIEW or HOLD. **Never a stop breach** (2026-10-09): the gate used to apply to every SELL, so once the AI answered again (PR #175) it could cancel a stop-loss; stop exits (`sell_rules.is_stop_exit`) now always execute and the ignored verdict is logged.
 15. **Short10 Momentum Floor Qualification Tuning:** Additional qualification parameters (such as Long60 trend strength &ge; 5.0, high Money Flow, or stable PGR) to dynamically bypass the strict s10 momentum floor.
 16. **Market Summarization Skill Development:** Custom Gemini CLI Agent Skill headlessly ingests live index ticks and daily newsletters to generate cohesive, data-grounded macro market summaries.
 17. **Model-Agnostic Token Optimizer (`prompt_optimizer.py`):** Dynamic token and prompt optimizer that prunes, compresses, or stashes verbose instructions based on the active LLM provider limits.

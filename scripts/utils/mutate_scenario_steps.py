@@ -57,6 +57,8 @@ MUTANTS = [
     ("queued: dna s10<->l60", 'q_s10 = float(r_row[24] or 0.0)', 'q_s10 = float(r_row[25] or 0.0)'),
     # exits
     ("exits: row[8]->row[10]", 'prev_close = float(row[8]', 'prev_close = float(row[10]'),
+    ("exits: ai may override stops", '== "SELL" and game.sell_rules.is_stop_exit(entry["rules_reason"]):',
+     '== "SELL" and False:'),
     ("exits: ratchet 1.0x->0.5x", '> (1.0 * atr):', '> (0.5 * atr):'),
     ("exits: breakeven 1.5x->2.0x", '> (1.5 * atr):', '> (2.0 * atr):'),
     ("exits: keep-1-share off", 'sell_qty = max(0, min(sell_qty, pos["qty"] - 1))', 'sell_qty = max(0, min(sell_qty, pos["qty"]))'),
