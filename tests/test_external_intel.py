@@ -234,6 +234,38 @@ class TestIntelCacheKeying(unittest.TestCase):
         self.assertNotIn("LEGACY", [i.get("symbol") for i in ideas])
 
 
+class TestExtractionParallelism(unittest.TestCase):
+    """PROD 2026-10-06 .. 10-09: the 05:30 batch ran 5 extraction threads, each making 2+ AI
+    calls, against a free AI tier, and got bursts of HTTP 429. The worker count now comes
+    from config (ai.max_parallel_extractions, default 1)."""
+
+    def _fetch(self, parallel):
+        real_pool = external_intel.ThreadPoolExecutor
+        with mock.patch("external_intel.CFG") as mock_cfg,              mock.patch("external_intel._log"),              mock.patch("imaplib.IMAP4_SSL") as mock_imap_cls,              mock.patch("external_intel.ThreadPoolExecutor", wraps=real_pool) as pool,              mock.patch("external_intel.email.message_from_bytes") as parse,              mock.patch("external_intel.analyze_email_content", return_value=[]),              mock.patch("extract_email_intel.extract", return_value={}):
+            mock_cfg.mailboxes = [{"email": "test@example.org", "password_env": "TEST_ENV_PASS",
+                                   "imap_server": "imap.example.org"}]
+            mock_cfg.smtp_password = "dummy_password"
+            mock_cfg.ai_max_intel_emails = 20
+            mock_cfg.ai_max_parallel_extractions = parallel
+            mail = mock.MagicMock()
+            mock_imap_cls.return_value = mail
+            mail.select.return_value = ("OK", b"1")
+            mail.search.return_value = ("OK", [b"1"])
+            mail.fetch.return_value = ("OK", [(None, b"Subject: S\n\nbuy $AAPL")])
+            msg = mock.MagicMock()
+            msg.get.return_value = f"msg-{parallel}"
+            msg.__getitem__.return_value = "sender"
+            msg.is_multipart.return_value = False
+            msg.get_payload.return_value = b"Stock alert: buy $AAPL now!"
+            parse.return_value = msg
+            external_intel.fetch_idea_emails()
+        return pool.call_args.kwargs.get("max_workers")
+
+    def test_worker_count_follows_config(self):
+        self.assertEqual(self._fetch(1), 1)
+        self.assertEqual(self._fetch(3), 3)
+
+
 class TestDedupRdTopics(unittest.TestCase):
     """The single-source R&D dedup shared by /api/intel-ideas and the email report."""
 

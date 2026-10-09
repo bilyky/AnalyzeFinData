@@ -51,6 +51,7 @@
     "_note": "GitHub Models (the old free 'github_gpt' provider on models.inference.ai.azure.com) was RETIRED on 2026-07-30 and removed here. Pick any provider below as `primary`.",
     "primary": "gemini_oai",
     "max_intel_emails": 20,
+    "max_parallel_extractions": 1,
     "providers": {
 
       "gemini_oai": {

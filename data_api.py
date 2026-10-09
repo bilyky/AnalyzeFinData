@@ -276,6 +276,25 @@ def verify_price_integrity(symbol: str, price: float, source: str) -> None:
 
 # ── Portfolio ─────────────────────────────────────────────────────────────────
 
+# (symbol, first line of the warning) -> date last logged. read_portfolio() runs on every
+# dashboard refresh; without this the same warning repeated up to 398x per symbol per day.
+_warned_today: dict = {}
+
+
+def _today() -> date:
+    return date.today()
+
+
+def _warn_once_per_day(sym: str, msg: str) -> None:
+    key = (sym, msg.splitlines()[0] if msg else "")
+    today = _today()
+    if _warned_today.get(key) == today:
+        _log.debug(msg)
+        return
+    _warned_today[key] = today
+    _log.warning(msg)
+
+
 def read_portfolio() -> dict:
     """Read ai_portfolio_game.json and compute position-level P&L."""
     try:
@@ -314,7 +333,7 @@ def read_portfolio() -> dict:
         try:
             verify_price_integrity(sym, current, "Game Portfolio")
         except PricingDiscrepancyError as e:
-            _log.warning(f"[PRICING] Game position {sym} has discrepancy: {e}")
+            _warn_once_per_day(sym, f"[PRICING] Game position {sym} has discrepancy: {e}")
         pnl = round((current - cost) * qty, 2)
         pnl_pct = round((current - cost) / cost * 100, 2) if cost > 0 else 0.0
         total_value += qty * current
