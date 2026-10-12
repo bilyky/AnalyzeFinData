@@ -1,9 +1,12 @@
 """Rubber-band stop study: event detection (no look-ahead), the fill rule, date clustering,
 and the verdict function."""
 import datetime
+import json
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "backtesting"))
@@ -89,6 +92,50 @@ class TestFindEvents(unittest.TestCase):
         late = datetime.date.fromisoformat(dates[t - 1]) + datetime.timedelta(days=20)
         dates = dates[:t] + [(late + datetime.timedelta(days=i)).isoformat() for i in range(len(dates) - t)]
         self.assertEqual(st.find_events("AAA", dates, o, h, lo, c, min_date="2025-01-01"), [])
+
+
+class TestSplitAdjustedOpens(unittest.TestCase):
+    """Review of #182: load_bars passes the opens through split_adjust_ohlcv in the highs slot.
+    With unadjusted opens a 2:1 split looks like a 50% gap below every stop: the study then found
+    5,135 events and a fake STOP/ALL mean of +122.9%."""
+
+    def _write_split_file(self, d):
+        dates, o, h, lo, c = _series(n=80, start=100.0)
+        split = 70
+        for i in range(split, len(dates)):          # 2:1 split from bar 70 on
+            o[i], h[i], lo[i], c[i] = o[i] / 2, h[i] / 2, lo[i] / 2, c[i] / 2
+        ts = {d_: {"1. open": str(o[i]), "2. high": str(h[i]), "3. low": str(lo[i]),
+                   "4. close": str(c[i]), "5. volume": "1000"} for i, d_ in enumerate(dates)}
+        with open(os.path.join(d, "AAA_daily.json"), "w", encoding="utf-8") as f:
+            json.dump({"Time Series (Daily)": ts}, f)
+        return dates, split
+
+    def test_opens_come_back_on_the_post_split_scale_and_the_split_is_no_event(self):
+        with tempfile.TemporaryDirectory() as d:
+            dates, split = self._write_split_file(d)
+            with mock.patch.object(st.paths, "ohlcv_dir", return_value=d):
+                got_dates, o, h, lo, c = st.load_bars("AAA")
+        self.assertEqual(got_dates, dates)
+        # Before the split the adjusted open is about half the raw price (the production factor is
+        # the actual close ratio, ~0.502 here): one continuous scale, not 2x above the next bar.
+        raw = 100.0 + (split - 1) * 0.5
+        self.assertLess(abs(o[split - 1] / (raw / 2) - 1), 0.02)
+        self.assertLess(abs(o[split] / c[split - 1] - 1), 0.05)
+        self.assertEqual(st.find_events("AAA", got_dates, o, h, lo, c, min_date="2025-01-01"), [])
+
+
+class TestCooldown(unittest.TestCase):
+    def test_no_second_event_within_the_cooldown(self):
+        """After an event the position is closed, so the symbol is skipped for COOLDOWN_BARS."""
+        dates, o, h, lo, c = _series(n=120)
+        stops = {}
+        for t in (70, 70 + st.COOLDOWN_BARS - 2, 70 + st.COOLDOWN_BARS + 5):
+            stops[t] = risk_utils.resolve_stop_detailed(c[t - 1], highs=h[:t], lows=lo[:t], closes=c[:t])["stop"]
+            o[t] = stops[t] - 5
+        evs = st.find_events("AAA", dates, o, h, lo, c, min_date="2025-01-01")
+        got = [e["date"] for e in evs]
+        self.assertIn(dates[70], got)
+        self.assertNotIn(dates[70 + st.COOLDOWN_BARS - 2], got)
 
 
 class TestClusteringAndVerdict(unittest.TestCase):
