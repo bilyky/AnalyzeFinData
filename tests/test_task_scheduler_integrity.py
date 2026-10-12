@@ -62,6 +62,21 @@ class TestWatchdogAuditsTheRegisteredTasks(unittest.TestCase):
         self.assertIn("Project_AETHER_Watchdog", said)
         self.assertNotIn("AETHER_ExecuteTrades", said)
 
+    def test_same_name_in_another_folder_is_a_stray(self):
+        """Review of #186: a copy of an AETHER task at the root or in another folder is exactly
+        the kind of duplicate behind the 10-12 double 05:30 / 07:00 runs; only the full
+        \\AETHER_Agents\\ path is whitelisted."""
+        listing = ("TaskName: \\AETHER_Agents\\AETHER_ExecuteTrades\nStatus: Ready\n\n"
+                   "TaskName: \\AETHER_ExecuteTrades\nStatus: Ready\n\n"
+                   "TaskName: \\Other\\AETHER_Morning\nStatus: Ready\n\n")
+        res = subprocess.CompletedProcess([], 0, stdout=listing, stderr="")
+        with mock.patch("subprocess.run", return_value=res), mock.patch("watchdog._log") as log:
+            watchdog.purge_stray_tasks()
+        stray_line = " ".join(str(c.args[0]) for c in log.warning.call_args_list if "Stray-Task" in str(c.args[0]))
+        self.assertIn("'\\\\AETHER_ExecuteTrades'", stray_line)
+        self.assertIn("Other", stray_line)
+        self.assertNotIn("AETHER_Agents", stray_line)
+
 
 class TestFailedTaskAlertOncePerRun(unittest.TestCase):
     """A task that keeps failing (e.g. the Gemini-CLI agents, 403 on every run) must be reported

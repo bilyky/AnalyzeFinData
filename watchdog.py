@@ -255,7 +255,8 @@ def trigger_ai_self_healing(traceback):
 
 def _first_report_of_failed_run(task: str, last_run: str) -> bool:
     """True the first time a failed run (task + its LastRunTime) is seen. With no LastRunTime
-    the failure is always reported (nothing to tell runs apart)."""
+    the failure is always reported (nothing to tell runs apart). A task that fails and then
+    never runs again (e.g. its trigger is disabled) is reported once and then stays quiet."""
     if not last_run:
         return True
     try:
@@ -518,18 +519,12 @@ def purge_stray_tasks():
             # Filter for AETHER / AnalyzeFinData namespace
             aether_tasks = [t["taskname"] for t in tasks if "aether" in t["taskname"].lower() or "analyzefindata" in t["taskname"].lower()]
 
-            # Whitelisted production tasks
-            # Whitelist = the manifest. Old root tasks (AnalyzeFinData_*, Project_AETHER_Watchdog)
-            # are not in it: they duplicate AETHER_Agents tasks and should be reported.
-            whitelist = set(TASKS) | {t.rsplit("\\", 1)[-1] for t in TASKS}
+            # Whitelist = the full \AETHER_Agents\ paths of the audited tasks, nothing else. A task
+            # with the same name at the root or in another folder is a duplicate (the 10-12 double
+            # 05:30 / 07:00 runs), as are the old root tasks (AnalyzeFinData_*, Project_AETHER_Watchdog).
+            whitelist = {t.lower() for t in TASKS}
+            stray_tasks = [name for name in aether_tasks if name.lower() not in whitelist]
 
-            stray_tasks = []
-            for name in aether_tasks:
-                # Get the bare name (without folder)
-                bare_name = name.split("\\")[-1]
-                if name not in whitelist and bare_name not in whitelist:
-                    stray_tasks.append(name)
-            
             if stray_tasks:
                 if not do_delete:
                     _log.warning(f"[Stray-Task] Detected {len(stray_tasks)} task(s) outside the production white-list "
@@ -637,7 +632,7 @@ def check_backup_health():
 def check_context_pack_health():
     """Alert when the OceanView context pack's last build was "failed", or it stopped being
     rebuilt (status older than PACK_STATUS_STALE_H). Reads the verdict the pack writes on every
-    build (oceanview_context.STATUS_NAME). No status yet (never built, e.g. right after a deploy)
+    scheduled (daily_task) build (oceanview_context.STATUS_NAME; interactive reads don't write it). No status yet (never built, e.g. right after a deploy)
     is not an alert: the next evening pipeline creates it. "degraded" is logged by the pack
     itself, not emailed here."""
     status = _read_json(PACK_STATUS_FILE)

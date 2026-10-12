@@ -41,8 +41,6 @@ RUN_HISTORY_TIMEOUT_S = 1800
 MAIN_TIMEOUT_S = 1800
 UNBOUNDED_STEPS_SLACK_S = 600  # lint, data load, report build + email: no timeout of their own
 CONTEXT_PACK_SLACK_S = 300     # OceanView pack build: a few broker reads + local files
-PACK_MAX_STALE_H = 24          # weekday: a broker snapshot older than this -> health "failed"
-PACK_MAX_STALE_WEEKEND_H = 72  # Sat/Sun: no fresh token, Friday's snapshot is expected
 
 
 def worst_case_runtime_seconds():
@@ -53,21 +51,13 @@ def worst_case_runtime_seconds():
             + UNBOUNDED_STEPS_SLACK_S + CONTEXT_PACK_SLACK_S)
 
 
-def pack_max_stale_hours(today=None):
-    """How old the cached broker snapshot may be before the pack calls itself "failed".
-
-    No E*TRADE token is minted on weekends, so Saturday/Sunday builds fall back to Friday's
-    snapshot (~24-48 h old): allowing 72 h there keeps a normal weekend from alerting."""
-    today = today or datetime.date.today()
-    return PACK_MAX_STALE_WEEKEND_H if today.weekday() >= 5 else PACK_MAX_STALE_H
-
-
 def build_context_pack():
     """OceanView Context Pack — rebuild it and record its health for the watchdog gate.
 
     Ban-safe: the broker read inside goes through etrade.keep_alive (renew-only, never a
     browser). The pack writes its cache (Data/oceanview_context.json) on a live success and
-    its verdict (Data/oceanview_context_status.json) on every build; watchdog alerts when the
+    its verdict (Data/oceanview_context_status.json) on every scheduled build (this one: it
+    passes record_status=True); watchdog alerts when the
     verdict is "failed" or goes stale. Non-fatal by design: the report has already gone out.
 
     Runs BEFORE the RapidAPI recovery pass: the broker read needs a same-day ET token, and
@@ -77,8 +67,8 @@ def build_context_pack():
     tonight's repair."""
     _log.info("Building the OceanView context pack...")
     try:
-        meta = oceanview_context.build_oceanview_context(
-            live=True, max_stale_hours=pack_max_stale_hours())["meta"]
+        # max_stale_hours: the pack's own default (72 h on weekends, 24 h otherwise).
+        meta = oceanview_context.build_oceanview_context(live=True, record_status=True)["meta"]
         _log.info(f"OceanView context pack: health={meta['health']} source={meta['source']} "
                   f"warnings={len(meta['warnings'])}")
     except Exception as e:
