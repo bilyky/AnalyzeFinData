@@ -40,6 +40,17 @@ CACHE_NAME = "oceanview_context.json"
 # live success, so without this a failed build would leave no trace. Read by
 # watchdog.check_context_pack_health. Holds only meta (no accounts, positions or sleeves).
 STATUS_NAME = "oceanview_context_status.json"
+# How old a cached broker snapshot may be before the pack calls itself "failed". No E*TRADE token
+# is minted on weekends (scheduled reauth), so Sat/Sun builds fall back to Friday's snapshot
+# (~24-48 h old); allowing 72 h then keeps a normal weekend "degraded", not "failed". One home for
+# the rule: the evening pipeline and interactive reads (the adviser skill) get the same verdict.
+MAX_STALE_H = 24
+MAX_STALE_WEEKEND_H = 72
+
+
+def max_stale_hours_for(day: datetime.date) -> float:
+    """Staleness limit for a build on `day`: 72 h on Saturday/Sunday, else 24 h."""
+    return MAX_STALE_WEEKEND_H if day.weekday() >= 5 else MAX_STALE_H
 RECENT_BARS = 30
 PLACEHOLDER_SHARE_LIMIT = 0.20   # above this, a symbol's ATR stop is not trustworthy
 _HEALTH_RANK = {"ok": 0, "degraded": 1, "failed": 2}
@@ -241,7 +252,7 @@ def _write_cache(path: str, payload: dict) -> None:
 
 # ── Entry point ─────────────────────────────────────────────────────────────────
 
-def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
+def build_oceanview_context(live: bool = True, *, max_stale_hours: float | None = None,
                             env: str = "production", data_dir: str | None = None,
                             now: datetime.datetime | None = None,
                             record_status: bool = False) -> dict:
@@ -255,6 +266,8 @@ def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
     """
     ddir = data_dir or _default_data_dir()
     now = now or _now()
+    if max_stale_hours is None:              # the weekend rule, by the build's local calendar day
+        max_stale_hours = max_stale_hours_for(now.astimezone().date())
     cache_path = os.path.join(ddir, CACHE_NAME)
     warnings, health = [], "ok"
     broker, broker_as_of, source = None, None, "live"

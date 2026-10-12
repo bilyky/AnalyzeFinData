@@ -10,7 +10,6 @@ email back by the length of the pass. Pins:
   - it is invoked with the budgeted timeout, not run_command's 600 s default.
 Everything external (subprocesses, email, sync, data load) is mocked.
 """
-import datetime
 import os
 import sys
 import unittest
@@ -101,17 +100,13 @@ class TestRecoveryRunsLast(unittest.TestCase):
 class TestContextPackStep(unittest.TestCase):
     """daily_task.build_context_pack: ban-safe live build, weekend staleness, non-fatal."""
 
-    def test_builds_live_with_the_day_appropriate_staleness(self):
+    def test_builds_live_and_records_its_verdict(self):
+        # Staleness comes from the pack's own default (one home for the weekend rule).
         meta = {"health": "ok", "source": "live", "warnings": []}
         with mock.patch.object(daily_task.oceanview_context, "build_oceanview_context",
-                               return_value={"meta": meta}) as b,              mock.patch.object(daily_task, "pack_max_stale_hours", return_value=24):
+                               return_value={"meta": meta}) as b:
             daily_task.build_context_pack()
-        b.assert_called_once_with(live=True, max_stale_hours=24, record_status=True)
-
-    def test_weekend_allows_fridays_snapshot(self):
-        self.assertEqual(daily_task.pack_max_stale_hours(datetime.date(2026, 10, 10)), 72)  # Saturday
-        self.assertEqual(daily_task.pack_max_stale_hours(datetime.date(2026, 10, 11)), 72)  # Sunday
-        self.assertEqual(daily_task.pack_max_stale_hours(datetime.date(2026, 10, 12)), 24)  # Monday
+        b.assert_called_once_with(live=True, record_status=True)
 
     def test_a_pack_failure_never_raises(self):
         with mock.patch.object(daily_task.oceanview_context, "build_oceanview_context",
