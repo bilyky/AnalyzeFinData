@@ -68,19 +68,34 @@ Read the real message from `$_.ErrorDetails.Message`. The PII scrub still applie
   unregistered it, delete the now-empty directory.
 - **`git rev-parse --short A B`** fails (`--short` implies `--verify`, one revision only); call it per
   revision.
+- **Never pipe a long-running or file-mutating command into `head`.** `head` closes the pipe after N
+  lines and the writer is killed mid-run (a mutation run stopped after 10 of 101 mutants this way).
+  Redirect to a file and read the summary from it.
+- **API unreachable while `git` works:** some HTTP clients ignore the environment proxy. Pass it
+  explicitly (PowerShell: `Invoke-RestMethod -Proxy $env:HTTPS_PROXY -TimeoutSec 60 …`).
+- **`gh` not on PATH:** resolve it portably (`command -v gh` / `Get-Command gh`), never a hardcoded path.
+- **The default git credential can't push** (a 403 for a different account): push once with gh's
+  stored token, never saving it — `git -c credential.helper= push
+  "https://x-access-token:$(gh auth token)@github.com/<owner>/<repo>.git" HEAD:<branch>`, piping the
+  output through a filter that masks the token. **Never add `-u`** to that push: it saves the
+  token-bearing URL as the branch's upstream in `.git/config`. Set the upstream separately
+  (`git branch --set-upstream-to=origin/<branch>`) and confirm no `x-access-token` remains in
+  `git config --get-regexp .`.
 
 ## E. `scripts/utils/prune_merged_worktrees.py` — known limits
 
-Check these against the current script before relying on it (all but the last fixed in #143):
+Check these against the current script before relying on it:
 - **Merged-ness** comes from `merged_at` (the list endpoint has no `merged` field).
 - **Pagination.** Reads every page, newest first; within a scope the newest PR for a head ref wins, and
   open PRs override closed ones.
 - **Transport is `gh api` only.** If `gh` can't connect, it exits 2 with "Nothing was changed" and the
   fix (set `HTTPS_PROXY`/`HTTP_PROXY`); otherwise prune by hand per §F.
-- **Branch deletion is by PR state only (still open).** It also deletes local branches that have no
-  worktree when a merged/closed PR has the same head ref, but it does **not** run §F's lossless
-  test. A local branch with commits never pushed to the PR would lose them. Before `--apply`, check
-  each listed `BRANCH` with the §F lossless test.
+- **Lossless before delete.** A worktree or branch is pruned only when `branch_is_lossless` passes:
+  the tip is reachable from a remote ref (including the PR's own `refs/pull/<n>/head`), or merging it
+  into `main` changes nothing. Otherwise it is listed under KEEP. This is §F's test 1–2; test 3
+  (byte-identical to some commit in the merged PR's history) is still a manual check.
+- **Links and caches.** A worktree containing a junction/symlink is kept, and `--apply` stops if the
+  main checkout's `Data/` caches shrink after a removal.
 
 ## F. Clean up once PRs are merged or closed
 
@@ -127,3 +142,21 @@ Docs drift between PRs even when each review was careful. After a batch lands:
    writing it. A behavior gap you find (code doing something unintended) is reported for a decision,
    not silently "fixed" inside the docs PR.
 5. Land the fixes as one docs PR from a fresh branch off latest `main`.
+
+## H. This repo's architecture seams (for the skill's "Architecture fit")
+
+AETHER is a modular monolith. Its seams: ports & adapters around external dependencies (the E\*TRADE
+`store` and `make_etrade_store()`); a strangler-fig extraction `ai_portfolio_game.py →
+aether/scenario/` whose stages resolve collaborators at call time through `_pkg()`, guarded by a
+stage↔root parity test (`tests/test_scenario_parity.py`); path helpers in `aether/paths.py`
+(`data_dir()` for state and tokens, `cache_dir()`/`ohlcv_dir()` for market-data caches); and one home
+per rule (R&D items in `plans/roadmap.md`, their code anchors in
+`pre_commit_validator.FEATURE_CHECKS`).
+
+## I. Retargeting a stacked PR after its parent was squash-merged
+
+Every line both PRs touched conflicts, because the merge base predates the squash. First prove `main`'s
+copy of each file the child touches equals the parent branch's final tip (`git diff <parent-tip>
+origin/main -- <files>` is empty). Only then resolve **from the child branch** with
+`git merge -X ours origin/main` (ours = the checked-out branch; `-X theirs` here would silently put the
+parent's old lines back). Confirm the result's PR files equal the child's head.

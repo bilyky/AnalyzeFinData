@@ -14,6 +14,7 @@ mutant survived or an anchor no longer matches, so it can gate a cleanup PR.
 Usage (from the repo root):  python scripts/utils/mutate_scenario_steps.py
 Used for PR #150 (93 -> 86 stage tests, 60/61 mutants caught at the time).
 """
+import argparse
 import hashlib
 import json
 import os
@@ -26,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[2]
 STEPS = ROOT / "aether" / "scenario" / "steps.py"
 MODULES = ["tests.test_scenario_steps", "tests.test_scenario_assemble", "tests.test_scenario_settle",
            "tests.test_scenario_queued", "tests.test_scenario_exits",
-           "tests.test_scenario_sell_exec", "tests.test_scenario_buy_screen"]
+           "tests.test_scenario_sell_exec", "tests.test_scenario_buy_screen", "tests.test_scenario_rotation"]
 
 # (label, exact text in steps.py, replacement). Each anchor must occur exactly once.
 MUTANTS = [
@@ -114,10 +115,11 @@ MUTANTS += [  # execute_exits (SELL execution loop)
     ("sell: position kept", '        state["positions"].pop(sym)\n\n        # Slippage', '        pass\n\n        # Slippage'),
     ("sell: stp <= -> <", 'stop_fill = stop_loss > 0.0 and price <= stop_loss', 'stop_fill = stop_loss > 0.0 and price < stop_loss'),
     ("sell: stp ignores zero stop", 'stop_fill = stop_loss > 0.0 and price', 'stop_fill = stop_loss >= 0.0 and price'),
-    ("sell: stp fills at market", '            price = stop_loss\n\n        proceeds', '            pass\n\n        proceeds'),
+    ("sell: stp fills at stop (old model)", 'filled at ${price:.2f}.")\n\n        proceeds',
+     'filled at ${price:.2f}.")\n            price = stop_loss\n\n        proceeds'),
     ("sell: no credit", '        proceeds = pos["qty"] * price\n        state["balance"] += proceeds',
      '        proceeds = pos["qty"] * price\n        state["balance"] += 0'),
-    ("sell: no stp tag", '(" [STP LMT fill]" if stop_fill else "")', '""'),
+    ("sell: no stp tag", '(f" [STP LMT @ market, stop {stop_loss:.2f}]" if stop_fill else "")', '""'),
     ("sell: tx drops stop_loss", '"stop_loss": pos.get("stop_loss")}', '"stop_loss": None}'),
     ("sell: no history", '        state["history"].append(tx)\n        new_transactions.append(tx)\n        game._log.info(f"🤖 AI LIVE SELL', '        new_transactions.append(tx)\n        game._log.info(f"🤖 AI LIVE SELL'),
     ("sell: no dna", '(Time: {now_time})")\n        game.log_closed_trade_dna(sym, pos, price, today)',
@@ -164,6 +166,23 @@ MUTANTS += [  # screen_buys (BUY screening)
     ("buy: penalty and->or", '(strength_count < 1 and timing_count < 1)', '(strength_count < 1 or timing_count < 1)'),
     ("buy: weak ignored", ' or industry_rating == "Weak":', ':'),
     ("buy: no sort", 'top_buys.sort(key=lambda x: x["total"], reverse=True)', 'pass'),
+]
+
+MUTANTS += [  # rotate_positions (R&D #27 momentum rotation)
+    ("rot: market flag fixed", 'profile, game.is_market_hours(), available_slots', 'profile, True, available_slots'),
+    ("rot: slots arg wrong", 'game.is_market_hours(), available_slots, max_positions,',
+     'game.is_market_hours(), max_positions, max_positions,'),
+    ("rot: slots not returned", '    return available_slots\n', '    return 0\n'),
+    ("rot: price fallback 0", 'price = prices.get(sym_to_sell, pos["cost"])', 'price = prices.get(sym_to_sell, 0.0)'),
+    ("rot: no call unwind", 'game.options.unwind_option_liability_if_held(sym_to_sell, pos, state, price, today)', 'pass'),
+    ("rot: position kept", 'state["positions"].pop(sym_to_sell)', 'pass'),
+    ("rot: score default 1", 'active_position_scores.get(sym_to_sell, 0.0)', 'active_position_scores.get(sym_to_sell, 1.0)'),
+    ("rot: pnl sign", '"pnl": round((price - pos["cost"]) * pos["qty"], 2),\n            "details": f"🔄',
+     '"pnl": round((pos["cost"] - price) * pos["qty"], 2),\n            "details": f"🔄'),
+    ("rot: no history", '        state["history"].append(tx)\n        new_transactions.append(tx)\n        game._log.info(f"🔄',
+     '        new_transactions.append(tx)\n        game._log.info(f"🔄'),
+    ("rot: no dna", 'game.log_closed_trade_dna(sym_to_sell, pos, price, today)', 'pass'),
+    ("rot: no cash added", 'state["balance"] += balance_addition', 'state["balance"] += 0'),
 ]
 
 
@@ -215,11 +234,18 @@ def _is_main_checkout():
     return rev_parse("--git-dir") == rev_parse("--git-common-dir")
 
 
-def main():
+def main(argv=None):
+    # Parse first: --help or a mistyped flag must exit before anything is mutated (an ignored
+    # unknown argument used to start a full run that rewrites steps.py).
+    ap = argparse.ArgumentParser(description="Mutation check for aether/scenario/steps.py "
+                                 "(rewrites steps.py while it runs; restores it byte for byte).")
+    ap.add_argument("--allow-main-checkout", action="store_true",
+                    help="run in the main checkout (only if no live process imports steps.py)")
+    args = ap.parse_args(argv)
     # The script rewrites aether/scenario/steps.py with deliberate bugs while it runs.
     # Once the REPLACE phase wires steps.py into the live game, doing that in the main
     # checkout would put buggy code under live processes, so it only runs in a worktree.
-    if _is_main_checkout() and "--allow-main-checkout" not in sys.argv[1:]:
+    if _is_main_checkout() and not args.allow_main_checkout:
         sys.stderr.write("Refusing to run in the main checkout: this script temporarily rewrites "
                          "aether/scenario/steps.py. Run it in a git worktree "
                          "(or pass --allow-main-checkout if no live process imports it).\n")
