@@ -660,7 +660,7 @@ def check_backup_health():
 def check_context_pack_health():
     """Alert when the OceanView context pack's last build was "failed", or it stopped being
     rebuilt (status older than PACK_STATUS_STALE_H). Reads the verdict the pack writes on every
-    build (oceanview_context.STATUS_NAME). No status yet (never built, e.g. right after a deploy)
+    scheduled (daily_task) build (oceanview_context.STATUS_NAME; interactive reads don't write it). No status yet (never built, e.g. right after a deploy)
     is not an alert: the next evening pipeline creates it. "degraded" is logged by the pack
     itself, not emailed here."""
     status = _read_json(PACK_STATUS_FILE)

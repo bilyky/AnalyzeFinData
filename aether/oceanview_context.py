@@ -34,10 +34,23 @@ from bar_provenance import is_provisional
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_NAME = "oceanview_context.json"
-# Verdict of the LAST build (ok / degraded / failed), written on every build — the cache above
-# is only written on a live success, so a failed build would otherwise leave no trace. Read by
+# Verdict of the last SCHEDULED build (ok / degraded / failed). Written only when the caller
+# passes record_status=True (daily_task does), so an interactive read (e.g. the adviser skill,
+# live=False) can never overwrite the pipeline's verdict. The cache above is only written on a
+# live success, so without this a failed build would leave no trace. Read by
 # watchdog.check_context_pack_health. Holds only meta (no accounts, positions or sleeves).
 STATUS_NAME = "oceanview_context_status.json"
+# How old a cached broker snapshot may be before the pack calls itself "failed". No E*TRADE token
+# is minted on weekends (scheduled reauth), so Sat/Sun builds fall back to Friday's snapshot
+# (~24-48 h old); allowing 72 h then keeps a normal weekend "degraded", not "failed". One home for
+# the rule: the evening pipeline and interactive reads (the adviser skill) get the same verdict.
+MAX_STALE_H = 24
+MAX_STALE_WEEKEND_H = 72
+
+
+def max_stale_hours_for(day: datetime.date) -> float:
+    """Staleness limit for a build on `day`: 72 h on Saturday/Sunday, else 24 h."""
+    return MAX_STALE_WEEKEND_H if day.weekday() >= 5 else MAX_STALE_H
 RECENT_BARS = 30
 PLACEHOLDER_SHARE_LIMIT = 0.20   # above this, a symbol's ATR stop is not trustworthy
 _HEALTH_RANK = {"ok": 0, "degraded": 1, "failed": 2}
@@ -239,9 +252,10 @@ def _write_cache(path: str, payload: dict) -> None:
 
 # ── Entry point ─────────────────────────────────────────────────────────────────
 
-def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
+def build_oceanview_context(live: bool = True, *, max_stale_hours: float | None = None,
                             env: str = "production", data_dir: str | None = None,
-                            now: datetime.datetime | None = None) -> dict:
+                            now: datetime.datetime | None = None,
+                            record_status: bool = False) -> dict:
     """Assemble the Context Pack. Always returns a health verdict (ok / degraded / failed).
 
     data_dir relocates the pack's own files (cache, game JSON, studies, OHLCV) to one folder.
@@ -252,6 +266,8 @@ def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
     """
     ddir = data_dir or _default_data_dir()
     now = now or _now()
+    if max_stale_hours is None:              # the weekend rule, by the build's local calendar day
+        max_stale_hours = max_stale_hours_for(now.astimezone().date())
     cache_path = os.path.join(ddir, CACHE_NAME)
     warnings, health = [], "ok"
     broker, broker_as_of, source = None, None, "live"
@@ -305,10 +321,11 @@ def build_oceanview_context(live: bool = True, *, max_stale_hours: float = 24,
     meta = {"generated_at": now.isoformat(timespec="seconds"), "source": source,
             "broker_as_of": broker_as_of, "staleness_hours": staleness,
             "health": health, "warnings": warnings}
-    try:
-        _write_cache(os.path.join(ddir, STATUS_NAME), meta)
-    except OSError as e:
-        warnings.append(f"could not write {STATUS_NAME}: {e}")
+    if record_status:
+        try:
+            _write_cache(os.path.join(ddir, STATUS_NAME), meta)
+        except OSError as e:
+            warnings.append(f"could not write {STATUS_NAME}: {e}")
     return {
         "meta": meta,
         "knowledge": _knowledge(),
