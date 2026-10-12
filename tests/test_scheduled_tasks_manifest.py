@@ -16,8 +16,10 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "diagnostics"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "utils"))
 import daily_task
 import data_api
+import pre_commit_validator
 import preflight_validator
 import rapidapi
 import watchdog
@@ -71,7 +73,7 @@ class TestManifest(unittest.TestCase):
 
 class TestEveryConsumerReadsTheManifest(unittest.TestCase):
     def test_watchdog_audits_the_manifest(self):
-        self.assertEqual(watchdog.TASKS, st.full_names())
+        self.assertEqual(watchdog._tasks(), st.full_names())
         self.assertFalse(hasattr(watchdog, "_TASK_DEFS"), "the watchdog must not keep its own registry")
 
     def test_registrar_has_no_task_list_of_its_own(self):
@@ -116,6 +118,42 @@ class TestPreflightDuplicateKey(unittest.TestCase):
         for cmd, want in cases.items():
             with self.subTest(want=want):
                 self.assertEqual(preflight_validator._run_key(cmd.lower()), want)
+
+
+class TestBrokenManifestIsLoudNotFatal(unittest.TestCase):
+    """Review of #187: the manifest was loaded at import time, so one bad edit (a missing
+    'summary') raised ValueError on `import ai_portfolio_game` and stopped the trade run, the
+    watchdog and the preflight. Now it fails loudly where it is used, and CI checks it."""
+
+    def _broken(self, d):
+        data = json.loads(st.MANIFEST.read_text(encoding="utf-8"))
+        del data["tasks"][0]["summary"]
+        path = Path(d) / "scheduled_tasks.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return path
+
+    def test_watchdog_reports_a_broken_manifest_and_audits_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            bad = self._broken(d)
+            with mock.patch.object(st, "MANIFEST", bad), mock.patch.object(watchdog, "TASKS", None),                  mock.patch("watchdog._log") as log:
+                self.assertEqual(watchdog._tasks(), [])
+        self.assertIn("missing summary", str(log.error.call_args.args[0]))
+
+    def test_trade_run_still_imports_with_a_broken_manifest(self):
+        with tempfile.TemporaryDirectory() as d:
+            bad = self._broken(d)
+            env = dict(os.environ, AETHER_TASK_MANIFEST=str(bad))
+            res = subprocess.run([sys.executable, "-c", "import ai_portfolio_game; print('IMPORT_OK')"],
+                                 cwd=str(_REPO), env=env, capture_output=True, text=True, timeout=180,
+                                 stdin=subprocess.DEVNULL)
+        self.assertIn("IMPORT_OK", res.stdout, res.stderr[-1500:])
+
+    def test_ci_validator_blocks_a_broken_manifest(self):
+        with tempfile.TemporaryDirectory() as d:
+            bad = self._broken(d)
+            with mock.patch.object(pre_commit_validator, "TASK_MANIFEST_PATH", str(bad)):
+                self.assertFalse(pre_commit_validator.check_task_manifest())
+        self.assertTrue(pre_commit_validator.check_task_manifest())
 
 
 @unittest.skipUnless(sys.platform == "win32", "the registrar dry run needs Windows PowerShell")

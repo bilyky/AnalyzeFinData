@@ -14,7 +14,7 @@ class TestOperationalIntegrity(unittest.TestCase):
                      r"\AETHER_Agents\AETHER_ExecuteTrades", r"\AETHER_Agents\AETHER_AI_Summary"]:
             self.assertIn(
                 task,
-                watchdog.TASKS,
+                watchdog._tasks(),
                 f"🚨 CRITICAL: Scheduled task '{task}' is defined in templates but missing from the Watchdog's TASKS auto-healing checklist!"
             )
 

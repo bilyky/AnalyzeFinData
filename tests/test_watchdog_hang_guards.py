@@ -33,7 +33,7 @@ class TestHealTasksNeverBlocks(unittest.TestCase):
 
     def test_heal_runs_no_subprocess_and_says_how_to_register(self):
         with mock.patch("subprocess.run") as run, mock.patch("watchdog._log") as log:
-            watchdog.heal_tasks(list(watchdog.TASKS[:2]))
+            watchdog.heal_tasks(watchdog._tasks()[:2])
         run.assert_not_called()
         self.assertIn("register_agent_tasks.ps1", str(log.warning.call_args.args[0]))
 

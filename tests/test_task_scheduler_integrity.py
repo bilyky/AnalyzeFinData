@@ -33,7 +33,7 @@ _DRIVER = r"\AETHER_Agents\AETHER_DailyDriver"
 
 class TestWatchdogAuditsTheRegisteredTasks(unittest.TestCase):
     def test_audit_list_is_the_manifest_under_aether_agents(self):
-        audited = set(watchdog.TASKS)
+        audited = set(watchdog._tasks())
         self.assertEqual(audited, set(scheduled_tasks.full_names()))
         self.assertFalse([t for t in audited if "AnalyzeFinData_" in t], audited)
         for must in ("AETHER_Morning", "AETHER_ExecuteTrades", "AETHER_AftermarketReport", "AETHER_Watchdog"):
@@ -44,7 +44,7 @@ class TestWatchdogAuditsTheRegisteredTasks(unittest.TestCase):
              mock.patch.object(watchdog.ctypes, "windll", create=True) as windll, \
              mock.patch("watchdog._log") as log:
             windll.shell32.IsUserAnAdmin.return_value = 1
-            watchdog.heal_tasks(list(watchdog.TASKS))
+            watchdog.heal_tasks(watchdog._tasks())
         creates = [c.args[0] for c in run.call_args_list if c.args and c.args[0][:2] == ["schtasks", "/create"]]
         self.assertEqual(creates, [])
         said = " ".join(str(c.args[0]) for c in log.warning.call_args_list)

@@ -4,16 +4,21 @@ register_agent_tasks.ps1 registers exactly these, the watchdog audits them, and 
 shows them with their description and parameters. Nothing else should keep its own task list.
 """
 import json
+import os
 from pathlib import Path
 
-MANIFEST = Path(__file__).resolve().parent.parent / "scripts" / "utils" / "scheduled_tasks.json"
+# AETHER_TASK_MANIFEST points at another file (tests use it to prove a broken manifest is
+# reported, not fatal); unset means the repo's manifest.
+MANIFEST = Path(os.environ.get("AETHER_TASK_MANIFEST")
+                or Path(__file__).resolve().parent.parent / "scripts" / "utils" / "scheduled_tasks.json")
 PYTHON = r"venv_new\Scripts\python.exe"
 AGENT_LAUNCHER = "run_agent.cmd"
 _SCHEDULE_TYPES = {"hourly", "daily", "weekly"}
 _DAYS = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
 
 
-def load(path: Path = MANIFEST) -> dict:
+def load(path: Path | None = None) -> dict:
+    path = path or MANIFEST
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     problems = validate(data)
@@ -45,11 +50,11 @@ def validate(data: dict) -> list[str]:
     return out
 
 
-def tasks(path: Path = MANIFEST) -> list[dict]:
+def tasks(path: Path | None = None) -> list[dict]:
     return load(path)["tasks"]
 
 
-def full_names(path: Path = MANIFEST) -> list[str]:
+def full_names(path: Path | None = None) -> list[str]:
     """Task Scheduler paths, e.g. \\AETHER_Agents\\AETHER_Watchdog."""
     data = load(path)
     return [f"{data['folder']}{t['name']}" for t in data["tasks"]]

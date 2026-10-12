@@ -34,7 +34,21 @@ XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 # The scheduled tasks the watchdog audits: the manifest (scripts/utils/scheduled_tasks.json),
 # which register_agent_tasks.ps1 registers under \AETHER_Agents\. Old root tasks
 # (AnalyzeFinData_*, Project_AETHER_Watchdog) duplicated several of them and show up as strays.
-TASKS = scheduled_tasks.full_names()
+# Read at call time, never at import: the trade run imports this module, and a bad manifest
+# edit must not stop it (review of #187). Tests may set TASKS to a list.
+TASKS = None
+
+
+def _tasks() -> list[str]:
+    """The audited task paths. A broken manifest is logged as an error (it reaches the hourly
+    report) and audits nothing, instead of raising in every importer."""
+    if TASKS is not None:
+        return list(TASKS)
+    try:
+        return scheduled_tasks.full_names()
+    except (OSError, ValueError) as e:
+        _log.error(f"🛑 [Scheduler Audit] Task manifest is unreadable or invalid: {e}")
+        return []
 # LastRunTime of each failed task already reported, so a task that keeps failing is reported
 # once per failed run instead of in every hourly cycle (PROD 10-09..10-11: hourly emails).
 SCHEDULER_AUDIT_STATE = BASE_DIR / "Data" / "scheduler_audit_state.json"
@@ -286,7 +300,7 @@ def check_task_scheduler():
     """
     missing = []
     failed = []
-    for task in TASKS:
+    for task in _tasks():
         # Use absolute task path starting with backslash to prevent folder-relative lookup failures
         abs_task = f"\\{task}" if not task.startswith("\\") else task
         # Split abs_task into (name, folder) so the PowerShell audit below queries the SAME
@@ -522,7 +536,7 @@ def purge_stray_tasks():
             # Whitelist = the full \AETHER_Agents\ paths of the audited tasks, nothing else. A task
             # with the same name at the root or in another folder is a duplicate (the 10-12 double
             # 05:30 / 07:00 runs), as are the old root tasks (AnalyzeFinData_*, Project_AETHER_Watchdog).
-            whitelist = {t.lower() for t in TASKS}
+            whitelist = {t.lower() for t in _tasks()}
             stray_tasks = [name for name in aether_tasks if name.lower() not in whitelist]
 
             if stray_tasks:
@@ -694,7 +708,7 @@ def heal_tasks(missing_tasks, force=False):
     """Report missing scheduled tasks. The watchdog never creates tasks itself: every task is
     registered by scripts/utils/register_agent_tasks.ps1 from the manifest (one source). The old
     in-watchdog registrar re-created legacy root tasks that duplicated AETHER_Agents ones."""
-    tasks = list(TASKS if force else missing_tasks)
+    tasks = list(_tasks() if force else missing_tasks)
     if tasks:
         _log.warning(f"⚠️ Missing scheduled task(s): {', '.join(tasks)}. Re-register them with "
                      "scripts/utils/register_agent_tasks.ps1 in an elevated PowerShell; the watchdog does not create them.")
