@@ -31,7 +31,26 @@ LOG_FILES = [
 ]
 AETHER_JSONL = BASE_DIR / "Data" / "logs" / "aether.jsonl"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
-TASKS = ["AnalyzeFinData_Morning", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_Summary", "AnalyzeFinData_Evening", "AnalyzeFinData_ETrade_Reauth"]
+# The scheduled tasks the watchdog audits: exactly what scripts/utils/register_agent_tasks.ps1
+# (the one registrar) creates under \AETHER_Agents\. The old root tasks (AnalyzeFinData_*)
+# duplicated several of them (two 07:00 trade runs, two 17:00 daily_tasks) and are reported as
+# strays now, never audited or re-created.
+_REGISTRAR_PS1 = BASE_DIR / "scripts" / "utils" / "register_agent_tasks.ps1"
+_AGENT_TASK_FOLDER = "\\AETHER_Agents\\"
+
+
+def _registered_task_names() -> list[str]:
+    try:
+        text = _REGISTRAR_PS1.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    return sorted(set(re.findall(r'Name\s*=\s*"([^"]+)"', text)))
+
+
+TASKS = [f"{_AGENT_TASK_FOLDER}{name}" for name in _registered_task_names()]
+# LastRunTime of each failed task already reported, so a task that keeps failing is reported
+# once per failed run instead of in every hourly cycle (PROD 10-09..10-11: hourly emails).
+SCHEDULER_AUDIT_STATE = BASE_DIR / "Data" / "scheduler_audit_state.json"
 SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
 WATCHDOG_LOCK_FILE = BASE_DIR / "Data" / "watchdog_run.lock"   # cross-process singleton (PID)
 # Data-loss / backup detection (see check_data_sentinel / check_backup_health).
@@ -269,6 +288,26 @@ def trigger_ai_self_healing(traceback):
         trash.soft_delete(SELF_HEAL_PROMPT_FILE, reason="self-heal-prompt", force=True)
         return False, f"Execution failure: {e}", str(e)
 
+def _first_report_of_failed_run(task: str, last_run: str) -> bool:
+    """True the first time a failed run (task + its LastRunTime) is seen. With no LastRunTime
+    the failure is always reported (nothing to tell runs apart)."""
+    if not last_run:
+        return True
+    try:
+        seen = json.loads(SCHEDULER_AUDIT_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        seen = {}
+    if seen.get(task) == last_run:
+        return False
+    seen[task] = last_run
+    try:
+        SCHEDULER_AUDIT_STATE.parent.mkdir(parents=True, exist_ok=True)
+        SCHEDULER_AUDIT_STATE.write_text(json.dumps(seen, indent=1), encoding="utf-8")
+    except OSError as e:
+        _log.warning(f"Could not save the scheduler audit state: {e}")
+    return True
+
+
 def check_task_scheduler():
     """Verify all AETHER tasks are present, and audit each for a failed last execution.
 
@@ -302,18 +341,20 @@ def check_task_scheduler():
                 # Query LastTaskResult via PowerShell to catch silent crashes/terminations.
                 ps_cmd = [
                     "powershell.exe", "-NoProfile", "-Command",
-                    f"(Get-ScheduledTask -TaskName '{task_name}' -TaskPath '{task_path}' -ErrorAction SilentlyContinue | Get-ScheduledTaskInfo).LastTaskResult"
+                    f"$i = Get-ScheduledTask -TaskName '{task_name}' -TaskPath '{task_path}' -ErrorAction SilentlyContinue | Get-ScheduledTaskInfo; "
+                    "if ($i) { \"$($i.LastTaskResult)|$(if ($i.LastRunTime) { $i.LastRunTime.ToString('o') })\" }"
                 ]
                 ps_res = subprocess.run(ps_cmd, capture_output=True, text=True, errors="replace")
                 if ps_res.returncode == 0:
                     try:
-                        res_code = int(ps_res.stdout.strip())
+                        code_str, _, last_run = ps_res.stdout.strip().partition("|")
+                        res_code = int(code_str)
                         # Benign LastTaskResult codes (WinError.h SCHED_S_*): 0=Success,
                         # 267008=READY, 267009=RUNNING, 267011=HAS_NOT_RUN, 267012=NO_MORE_RUNS,
                         # 267035=SOME_TRIGGERS_FAILED, 267045=QUEUED. Anything else (a real app exit code,
                         # or 267014=TERMINATED) is a genuine execution failure.
                         benign = (0, 267008, 267009, 267011, 267012, 267035, 267045)
-                        if res_code not in benign:
+                        if res_code not in benign and _first_report_of_failed_run(task, last_run):
                             _log.error(f"🛑 [Scheduler Audit] Task '{task}' failed on its last execution (Exit Code: {res_code}).")
                             failed.append(task)
                     except ValueError:
@@ -507,7 +548,9 @@ def purge_stray_tasks():
             aether_tasks = [t["taskname"] for t in tasks if "aether" in t["taskname"].lower() or "analyzefindata" in t["taskname"].lower()]
 
             # Whitelisted production tasks
-            whitelist = set(TASKS + ["Project_AETHER_Watchdog"])
+            # Old root tasks (AnalyzeFinData_*, Project_AETHER_Watchdog) are NOT whitelisted: they
+            # duplicate AETHER_Agents tasks and should be reported.
+            whitelist = set(TASKS)
 
             # Attempt to parse sub_tasks dynamically from scripts/utils/register_agent_tasks.ps1 (R&D #4)
             sub_tasks = ["AETHER_DailyDriver", "AETHER_PostMarketReporter", "AETHER_PostMarketSync", "AETHER_PreFlight_Audit", "AETHER_RD_Scientist", "AETHER_StopMonitor", "AETHER_Watchdog"]
@@ -699,7 +742,19 @@ def send_data_alerts(alerts, subject="🛑 Project AETHER: data-loss / backup al
         _log.error(f"❌ Failed to send data alert email: {e}")
 
 def heal_tasks(missing_tasks, force=False):
-    """Attempt to re-register tasks that have disappeared, failed, or need environment upgrades."""
+    """Attempt to re-register tasks that have disappeared, failed, or need environment upgrades.
+
+    Only tasks with a _TASK_DEFS template are re-created here. The audited AETHER_Agents
+    tasks are created by scripts/utils/register_agent_tasks.ps1 only, so a missing one gets a
+    warning with that instruction instead of a second, divergent registration."""
+    tasks = list(TASKS if force else missing_tasks)
+    unregistered = [t for t in tasks if t not in _TASK_DEFS]
+    if unregistered:
+        _log.warning(f"⚠️ Missing scheduled task(s): {', '.join(unregistered)}. Re-register them with "
+                     "scripts/utils/register_agent_tasks.ps1 in an elevated PowerShell; the watchdog does not create them.")
+    missing_tasks = [t for t in tasks if t in _TASK_DEFS]
+    if not missing_tasks:
+        return
     # Check for administrative privileges first to avoid UAC and privilege failures in background runs
     is_admin = False
     try:
@@ -718,7 +773,7 @@ def heal_tasks(missing_tasks, force=False):
     except Exception:
         run_as = os.environ.get("USERNAME") or os.environ.get("USER") or "SYSTEM"
 
-    for task in (TASKS if force else missing_tasks):
+    for task in missing_tasks:
         _log.console(f"🔧 Healing/Upgrading scheduled task: {task}")
         if task not in _TASK_DEFS:
             _log.warning(f"⚠️  No registration template for task: {task}")

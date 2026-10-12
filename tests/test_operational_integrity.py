@@ -32,9 +32,11 @@ class TestOperationalIntegrity(unittest.TestCase):
                     f"🚨 CRITICAL: Scheduled task '{task}' targets a non-existent script file on disk: {py_path_str}"
                 )
 
-    def test_watchdog_heals_all_defined_tasks(self):
-        """Operational: Assert that all core microservice tasks are actively registered in the Watchdog's TASKS healing list."""
-        for task in ["AnalyzeFinData_Morning", "AnalyzeFinData_Evening", "AnalyzeFinData_AI_Game", "AnalyzeFinData_AI_Summary"]:
+    def test_watchdog_audits_all_core_tasks(self):
+        """Operational: the core jobs are in the watchdog's audit list, under the names
+        register_agent_tasks.ps1 registers (the old AnalyzeFinData_* root tasks were duplicates)."""
+        for task in [r"\AETHER_Agents\AETHER_Morning", r"\AETHER_Agents\AETHER_AftermarketReport",
+                     r"\AETHER_Agents\AETHER_ExecuteTrades", r"\AETHER_Agents\AETHER_AI_Summary"]:
             self.assertIn(
                 task,
                 watchdog.TASKS,
