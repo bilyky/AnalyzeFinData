@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "diagnostics"))
 import preflight_validator
 import watchdog
+from aether import scheduled_tasks
 
 _REPO = Path(__file__).resolve().parent.parent
 _PS1 = _REPO / "scripts" / "utils" / "register_agent_tasks.ps1"
@@ -30,17 +31,13 @@ _OK = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
 _DRIVER = r"\AETHER_Agents\AETHER_DailyDriver"
 
 
-def _ps1_names():
-    return set(re.findall(r'Name\s*=\s*"([^"]+)"', _PS1.read_text(encoding="utf-8")))
-
-
 class TestWatchdogAuditsTheRegisteredTasks(unittest.TestCase):
-    def test_audit_list_is_the_registrar_list_under_aether_agents(self):
+    def test_audit_list_is_the_manifest_under_aether_agents(self):
         audited = set(watchdog.TASKS)
-        self.assertEqual(audited, {f"\\AETHER_Agents\\{n}" for n in _ps1_names()})
+        self.assertEqual(audited, set(scheduled_tasks.full_names()))
         self.assertFalse([t for t in audited if "AnalyzeFinData_" in t], audited)
         for must in ("AETHER_Morning", "AETHER_ExecuteTrades", "AETHER_AftermarketReport", "AETHER_Watchdog"):
-            self.assertIn(f"\\AETHER_Agents\\{must}", audited)
+            self.assertIn(rf"\AETHER_Agents\{must}", audited)
 
     def test_missing_agent_task_is_never_recreated_as_a_legacy_root_task(self):
         with mock.patch("subprocess.run", return_value=_OK) as run, \
@@ -97,40 +94,19 @@ class TestFailedTaskAlertOncePerRun(unittest.TestCase):
 
 
 class TestRegistrar(unittest.TestCase):
-    def test_morning_pipeline_is_registered_with_room_to_finish(self):
-        ps1 = _PS1.read_text(encoding="utf-8")
-        entry = ps1[ps1.index('Name     = "AETHER_Morning"'):]
-        entry = entry[:entry.index("}")]
-        self.assertIn("autonomous_pipeline.py", entry)
-        self.assertGreaterEqual(int(re.search(r"TimeLimitMin\s*=\s*(\d+)", entry).group(1)), 60)
+    """The registrar builds tasks from the manifest; the real launch (exit code, plain log) is
+    exercised by test_scheduled_tasks_manifest.TestRegistrarDryRun."""
+
+    def test_morning_pipeline_is_in_the_manifest_with_room_to_finish(self):
+        morning = {t["name"]: t for t in scheduled_tasks.tasks()}["AETHER_Morning"]
+        self.assertEqual(morning["script"], "autonomous_pipeline.py")
+        self.assertGreaterEqual(morning["time_limit_min"], 60)
 
     def test_python_tasks_launch_through_cmd_not_powershell(self):
         ps1 = _PS1.read_text(encoding="utf-8")
-        branch = ps1[ps1.index("if ($T.Script) {"):ps1.index("} else {", ps1.index("if ($T.Script) {"))]
-        self.assertIn('-Execute "cmd.exe"', branch)
+        branch = ps1[ps1.index("if ($T.script) {"):ps1.index("} else {", ps1.index("if ($T.script) {"))]
         self.assertNotIn("powershell.exe", branch)
-
-    @unittest.skipUnless(sys.platform == "win32", "cmd.exe launch check runs on Windows only")
-    def test_cmd_launch_keeps_python_exit_code_and_plain_text_log(self):
-        """Run the registrar's own -Argument template, with its PowerShell escapes resolved."""
-        ps1 = _PS1.read_text(encoding="utf-8")
-        branch = ps1[ps1.index("if ($T.Script) {"):]
-        template = re.search(r'-Argument "(.*?)"\s*$', branch, re.M).group(1).replace('`"', '"')
-        with tempfile.TemporaryDirectory() as d:
-            Path(d, "warn_then.py").write_text(
-                "import sys\nsys.stderr.write('a warning' + chr(10))\nprint('out')\n"
-                "sys.exit(int(sys.argv[1]))\n", encoding="utf-8")
-            log = Path(d, "agent.log")
-            for code in (0, 3):
-                script = f'"{sys.executable}" warn_then.py {code}'
-                args = (template.replace("$RepoRoot", d).replace("$($T.Script)", script)
-                        .replace("$LogFile", str(log)))
-                res = subprocess.run(f"cmd.exe {args}", capture_output=True, timeout=60,
-                                     stdin=subprocess.DEVNULL)
-                self.assertEqual(res.returncode, code, res.stderr)
-            raw = log.read_bytes()
-            self.assertFalse(raw.startswith(b"\xff\xfe"), "log written as UTF-16")
-            self.assertIn(b"a warning", raw)
+        self.assertIn('New-ScheduledTaskAction -Execute "cmd.exe"', ps1)
 
 
 class TestPreflightWatchdogResult(unittest.TestCase):

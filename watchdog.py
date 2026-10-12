@@ -13,7 +13,7 @@ import notify
 from aether import etrade
 import powergauge
 from pathlib import Path
-from aether import oceanview_context, paths, trash
+from aether import oceanview_context, paths, scheduled_tasks, trash
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("watchdog")
@@ -31,23 +31,10 @@ LOG_FILES = [
 ]
 AETHER_JSONL = BASE_DIR / "Data" / "logs" / "aether.jsonl"
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
-# The scheduled tasks the watchdog audits: exactly what scripts/utils/register_agent_tasks.ps1
-# (the one registrar) creates under \AETHER_Agents\. The old root tasks (AnalyzeFinData_*)
-# duplicated several of them (two 07:00 trade runs, two 17:00 daily_tasks) and are reported as
-# strays now, never audited or re-created.
-_REGISTRAR_PS1 = BASE_DIR / "scripts" / "utils" / "register_agent_tasks.ps1"
-_AGENT_TASK_FOLDER = "\\AETHER_Agents\\"
-
-
-def _registered_task_names() -> list[str]:
-    try:
-        text = _REGISTRAR_PS1.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return []
-    return sorted(set(re.findall(r'Name\s*=\s*"([^"]+)"', text)))
-
-
-TASKS = [f"{_AGENT_TASK_FOLDER}{name}" for name in _registered_task_names()]
+# The scheduled tasks the watchdog audits: the manifest (scripts/utils/scheduled_tasks.json),
+# which register_agent_tasks.ps1 registers under \AETHER_Agents\. Old root tasks
+# (AnalyzeFinData_*, Project_AETHER_Watchdog) duplicated several of them and show up as strays.
+TASKS = scheduled_tasks.full_names()
 # LastRunTime of each failed task already reported, so a task that keeps failing is reported
 # once per failed run instead of in every hourly cycle (PROD 10-09..10-11: hourly emails).
 SCHEDULER_AUDIT_STATE = BASE_DIR / "Data" / "scheduler_audit_state.json"
@@ -64,28 +51,7 @@ PACK_STATUS_STALE_H = 30     # the evening pipeline rebuilds the OceanView pack 
 # Where the pack writes its verdict (same folder as the pack's own default, paths.data_dir()).
 PACK_STATUS_FILE = Path(paths.data_dir()) / oceanview_context.STATUS_NAME
 
-python_exe = sys.executable
-run_agent = BASE_DIR / "run_agent.cmd"
-_TASK_DEFS = {
-    "AnalyzeFinData_Morning":  (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'autonomous_pipeline.py'}'", "daily", "05:30"),
-    "AnalyzeFinData_Evening":  (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'daily_task.py'}'",           "daily", "17:00"),
-    "AnalyzeFinData_AI_Game":  (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --run", "daily", "07:00"),
-    "AnalyzeFinData_AI_Summary": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'ai_portfolio_game.py'}' --summary", "daily", "18:00"),
-    # Unattended daily E*TRADE re-auth at 05:15 — just before the 05:30 Morning pipeline so the
-    # token is fresh for it. Renew-first + trusted-profile-only + once/day: ≤1 browser/day, and
-    # none at all once trust lapses (it latches sms_required and emails/pushes for a human).
-    "AnalyzeFinData_ETrade_Reauth": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'server.py'}' etrade-reauth --scheduled", "daily", "05:15"),
-    "Project_AETHER_Watchdog": (f"'{run_agent}' '{python_exe}' '{BASE_DIR / 'watchdog.py'}'",              "hourly", None),
-}
 
-# Task Scheduler ExecutionTimeLimit per task (minutes); everything else gets the default.
-# The Evening task (daily_task.py) ends with the OHLCV recovery pass, whose own timeout is
-# rapidapi.pass_timeout_seconds() (~5 h worst case for the 400-fetch budget) — a 15-min
-# scheduler limit would kill the whole task long before that.
-# The Evening value must cover daily_task.worst_case_runtime_seconds() (all of that task's
-# step timeouts, recovery pass included); register_agent_tasks.ps1 repeats it for the
-# AETHER_AftermarketReport task. tests/test_task_time_limits.py pins both.
-_DEFAULT_TASK_TIME_LIMIT_MIN = 15
 # schtasks / Set-ScheduledTask must never block a watchdog cycle. On PROD (09-22 .. 10-08) a
 # schtasks /create with no timeout and an inherited stdin never returned, and the hung run held
 # the singleton lock for days.
@@ -93,7 +59,6 @@ _SCHTASKS_TIMEOUT_S = 60
 # A watchdog cycle that still holds the lock after this long is treated as hung: it is killed
 # and the lock is reclaimed. Preflight uses the same limit.
 WATCHDOG_LOCK_MAX_AGE_MIN = 120
-_TASK_TIME_LIMIT_MIN = {"AnalyzeFinData_Evening": 420}
 SYNC_TIMEOUT_S = 600  # robocopy timeout for sync_data_folder (PR #64 raised it for the cache volume)
 
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
@@ -330,7 +295,8 @@ def check_task_scheduler():
         task_name = abs_task.rsplit("\\", 1)[-1]
         task_path = abs_task[: len(abs_task) - len(task_name)] or "\\"
         try:
-            result = subprocess.run(["schtasks", "/query", "/tn", abs_task], capture_output=True, text=True, errors="replace")
+            result = subprocess.run(["schtasks", "/query", "/tn", abs_task], capture_output=True, text=True, errors="replace",
+                                    stdin=subprocess.DEVNULL, timeout=_SCHTASKS_TIMEOUT_S)
             if result.returncode != 0:
                 # Avoid assuming a task is missing on environment failures, access issues,
                 # or DLL initialization crashes (e.g. exit code 3221225794 / 0xC0000142).
@@ -344,7 +310,8 @@ def check_task_scheduler():
                     f"$i = Get-ScheduledTask -TaskName '{task_name}' -TaskPath '{task_path}' -ErrorAction SilentlyContinue | Get-ScheduledTaskInfo; "
                     "if ($i) { \"$($i.LastTaskResult)|$(if ($i.LastRunTime) { $i.LastRunTime.ToString('o') })\" }"
                 ]
-                ps_res = subprocess.run(ps_cmd, capture_output=True, text=True, errors="replace")
+                ps_res = subprocess.run(ps_cmd, capture_output=True, text=True, errors="replace",
+                                        stdin=subprocess.DEVNULL, timeout=_SCHTASKS_TIMEOUT_S)
                 if ps_res.returncode == 0:
                     try:
                         code_str, _, last_run = ps_res.stdout.strip().partition("|")
@@ -359,6 +326,9 @@ def check_task_scheduler():
                             failed.append(task)
                     except ValueError:
                         pass
+        except subprocess.TimeoutExpired:
+            # A hung query is not evidence the task is missing; skip it this cycle.
+            _log.warning(f"[Scheduler Audit] Query for '{task}' timed out after {_SCHTASKS_TIMEOUT_S}s; skipped.")
         except OSError:
             missing.append(task)
     return missing, failed
@@ -526,7 +496,8 @@ def purge_stray_tasks():
     do_delete = os.environ.get("AETHER_PURGE_STRAY_TASKS", "").strip() == "1"
     try:
         # Query all scheduled tasks recursively in LIST format with verbose details
-        result = subprocess.run(["schtasks", "/query", "/fo", "LIST", "/v"], capture_output=True, text=True, errors="replace")
+        result = subprocess.run(["schtasks", "/query", "/fo", "LIST", "/v"], capture_output=True, text=True, errors="replace",
+                                stdin=subprocess.DEVNULL, timeout=_SCHTASKS_TIMEOUT_S)
         if result.returncode == 0:
             tasks = []
             current = {}
@@ -548,27 +519,9 @@ def purge_stray_tasks():
             aether_tasks = [t["taskname"] for t in tasks if "aether" in t["taskname"].lower() or "analyzefindata" in t["taskname"].lower()]
 
             # Whitelisted production tasks
-            # Old root tasks (AnalyzeFinData_*, Project_AETHER_Watchdog) are NOT whitelisted: they
-            # duplicate AETHER_Agents tasks and should be reported.
-            whitelist = set(TASKS)
-
-            # Attempt to parse sub_tasks dynamically from scripts/utils/register_agent_tasks.ps1 (R&D #4)
-            sub_tasks = ["AETHER_DailyDriver", "AETHER_PostMarketReporter", "AETHER_PostMarketSync", "AETHER_PreFlight_Audit", "AETHER_RD_Scientist", "AETHER_StopMonitor", "AETHER_Watchdog"]
-            ps1_path = BASE_DIR / "scripts" / "utils" / "register_agent_tasks.ps1"
-            if ps1_path.exists():
-                try:
-                    with open(ps1_path, "r", encoding="utf-8", errors="ignore") as f:
-                        ps1_content = f.read()
-                    discovered = re.findall(r'Name\s*=\s*\"([^\"]+)\"', ps1_content)
-                    if discovered:
-                        # Unify discovered subtasks with our standard fallback list
-                        sub_tasks = list(set(sub_tasks + discovered))
-                except Exception as pe:
-                    _log.warning(f"Failed to dynamically parse register_agent_tasks.ps1 (using fallback): {pe}")
-
-            for st in sub_tasks:
-                whitelist.add(f"\\AETHER_Agents\\{st}")
-                whitelist.add(st) # also direct name
+            # Whitelist = the manifest. Old root tasks (AnalyzeFinData_*, Project_AETHER_Watchdog)
+            # are not in it: they duplicate AETHER_Agents tasks and should be reported.
+            whitelist = set(TASKS) | {t.rsplit("\\", 1)[-1] for t in TASKS}
 
             stray_tasks = []
             for name in aether_tasks:
@@ -584,7 +537,8 @@ def purge_stray_tasks():
                 else:
                     _log.warning(f"[Stray-Task] Purging {len(stray_tasks)} stray task(s) (AETHER_PURGE_STRAY_TASKS=1): {stray_tasks}")
                     for t in stray_tasks:
-                        del_res = subprocess.run(["schtasks", "/delete", "/tn", t, "/f"], capture_output=True, text=True, errors="replace")
+                        del_res = subprocess.run(["schtasks", "/delete", "/tn", t, "/f"], capture_output=True, text=True, errors="replace",
+                                                 stdin=subprocess.DEVNULL, timeout=_SCHTASKS_TIMEOUT_S)
                         if del_res.returncode == 0:
                             _log.info(f"[Stray-Task] Deleted stray task '{t}'.")
                         else:
@@ -742,74 +696,14 @@ def send_data_alerts(alerts, subject="🛑 Project AETHER: data-loss / backup al
         _log.error(f"❌ Failed to send data alert email: {e}")
 
 def heal_tasks(missing_tasks, force=False):
-    """Attempt to re-register tasks that have disappeared, failed, or need environment upgrades.
-
-    Only tasks with a _TASK_DEFS template are re-created here. The audited AETHER_Agents
-    tasks are created by scripts/utils/register_agent_tasks.ps1 only, so a missing one gets a
-    warning with that instruction instead of a second, divergent registration."""
+    """Report missing scheduled tasks. The watchdog never creates tasks itself: every task is
+    registered by scripts/utils/register_agent_tasks.ps1 from the manifest (one source). The old
+    in-watchdog registrar re-created legacy root tasks that duplicated AETHER_Agents ones."""
     tasks = list(TASKS if force else missing_tasks)
-    unregistered = [t for t in tasks if t not in _TASK_DEFS]
-    if unregistered:
-        _log.warning(f"⚠️ Missing scheduled task(s): {', '.join(unregistered)}. Re-register them with "
+    if tasks:
+        _log.warning(f"⚠️ Missing scheduled task(s): {', '.join(tasks)}. Re-register them with "
                      "scripts/utils/register_agent_tasks.ps1 in an elevated PowerShell; the watchdog does not create them.")
-    missing_tasks = [t for t in tasks if t in _TASK_DEFS]
-    if not missing_tasks:
-        return
-    # Check for administrative privileges first to avoid UAC and privilege failures in background runs
-    is_admin = False
-    try:
-        is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
-    except Exception:
-        pass
 
-    if not is_admin:
-        _log.warning("⚠️ Non-elevated context: skipping auto-healing of missing tasks to prevent privilege/UAC errors. "
-                     f"Detected missing tasks: {', '.join(missing_tasks)}. "
-                     "Please run an elevated command prompt as Administrator or run migrate_tasks_headless.py manually to register.")
-        return
-
-    try:
-        run_as = os.getlogin()
-    except Exception:
-        run_as = os.environ.get("USERNAME") or os.environ.get("USER") or "SYSTEM"
-
-    for task in missing_tasks:
-        _log.console(f"🔧 Healing/Upgrading scheduled task: {task}")
-        if task not in _TASK_DEFS:
-            _log.warning(f"⚠️  No registration template for task: {task}")
-            continue
-        tr, sc, st = _TASK_DEFS[task]
-        # Use absolute task path starting with backslash to prevent folder-relative registration failures
-        abs_task = f"\\{task}" if not task.startswith("\\") else task
-        # E*TRADE re-auth MUST run headed in an interactive desktop session (no /np, use /it)
-        if "etrade_reauth" in task.lower():
-            args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/it", "/ru", run_as]
-        else:
-            args = ["schtasks", "/create", "/tn", abs_task, "/tr", tr, "/sc", sc, "/f", "/np", "/ru", run_as]
-        if st:
-            args += ["/st", st]
-        try:
-            result = subprocess.run(args, capture_output=True, stdin=subprocess.DEVNULL,
-                                    timeout=_SCHTASKS_TIMEOUT_S)
-            if result.returncode == 0:
-                _log.info(f"✅ Task {task} successfully registered with native UTF-8 environment.")
-                # Apply advanced reliability settings (WakeToRun, StartWhenAvailable, IgnoreNew, ExecutionTimeLimit) via PowerShell.
-                # IgnoreNew: if an instance is already running, skip the new trigger — never run two
-                # instances of a state-mutating pipeline concurrently (racing writes to the portfolio
-                # JSON / xlsx, duplicate emails). ('StopExisting' is invalid for New-ScheduledTaskSettingsSet;
-                # 'IgnoreNew' also avoids interrupting an in-flight state write, unlike 'Queue'.)
-                ps_cmd = [
-                    "powershell.exe", "-NoProfile", "-Command",
-                    f"Set-ScheduledTask -TaskName '{task}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes {_TASK_TIME_LIMIT_MIN.get(task, _DEFAULT_TASK_TIME_LIMIT_MIN)})) -ErrorAction SilentlyContinue"
-                ]
-                subprocess.run(ps_cmd, capture_output=True, stdin=subprocess.DEVNULL,
-                               timeout=_SCHTASKS_TIMEOUT_S)
-            else:
-                _log.error(f"❌ schtasks failed for {task} (rc={result.returncode}): {result.stderr.decode(errors='replace').strip()}")
-        except subprocess.TimeoutExpired as e:
-            _log.error(f"❌ Healing {task} timed out after {e.timeout}s ({e.cmd[0]}); skipped.")
-        except Exception as e:
-            _log.error(f"❌ Failed to heal {task}: {e}")
 
 def kill_ghost_processes():
     """Kill hung background python processes that might be locking resources."""

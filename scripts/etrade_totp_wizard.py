@@ -6,17 +6,15 @@ Walks a human, once, through the four things the automated door cannot do for it
     2. REGISTER that token's Credential ID under E*TRADE -> Security -> Manage 2FA
     3. store the base32 secret in config.json (backed up first) and prove one LIVE headless
        mint works end-to-end (headed the first time so you can watch it)
-    4. only AFTER that passes, INSTALL the daily scheduled task
+    4. (no task to install: the hourly AETHER_Watchdog runs the daily refresh)
 
 Nothing here is destructive without a confirm, config.json is backed up before it is touched,
-and the daily task is never installed until a real mint has succeeded (a hang loop must never
-be scheduled). Re-runnable: every step detects what is already done and offers to skip it.
+and no scheduled task is created here. Re-runnable: every step detects what is already done and offers to skip it.
 
     python scripts/etrade_totp_wizard.py
 
 This is a wizard, not an automated job — it is meant to be run by a person at a terminal.
 """
-import ctypes
 import json
 import os
 import shutil
@@ -41,7 +39,6 @@ DATA_DIR = BASE_DIR / "Data"
 BACKUP_DIR = DATA_DIR / "Backup"
 VIP_TOKEN_FILE = DATA_DIR / "etrade_vip_token.txt"
 SERVER_PY = BASE_DIR / "server.py"
-TASK_NAME = "AnalyzeFinData_ETrade_Reauth"
 
 
 # ── small console helpers ──────────────────────────────────────────────────────
@@ -222,60 +219,28 @@ def step3_live_mint(secret):
     issued = token_issued_date()
     sys.stdout.write(f"\n   mint exit code: {rc}   |   Data/etrade_tokens.json issued_date_et: {issued}\n")
     if rc != 0:
-        sys.stdout.write("   ❌ The mint did not report success. Do NOT install the daily task yet.\n")
+        sys.stdout.write("   ❌ The mint did not report success. Fix this before relying on the daily refresh.\n")
         sys.stdout.write("      Check the Firefox window / logs above; re-run once it reaches Accept cleanly.\n")
         return False
 
     sys.stdout.write("\n   Confirming broker-side auth state (probe)…\n\n")
     status_rc = run_server(["etrade-status"])
     if status_rc != 0:
-        sys.stdout.write("   ⚠️  etrade-status says a human still needs to act — not safe to schedule yet.\n")
+        sys.stdout.write("   ⚠️  etrade-status says a human still needs to act — the daily refresh will not work yet.\n")
         return False
     sys.stdout.write("   ✅ Live mint succeeded and the broker accepted the token.\n")
     return True
 
 
-# ── step 4 — install the daily task ─────────────────────────────────────────────
-def is_admin():
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0
-    except Exception:
-        return False
-
-
-def task_command():
-    return f"'{sys.executable}' '{SERVER_PY}' etrade-reauth --scheduled"
-
-
+# ── step 4 — daily refresh schedule ─────────────────────────────────────────────
 def step4_install_task():
-    banner(4, "Install the daily scheduled task (05:15)")
-    sys.stdout.write(f"This registers Windows task  \\{TASK_NAME}  to run the daily refresh at 05:15.\n")
-    if not ask_yn("Install the daily task now?", default=True):
-        sys.stdout.write("   Skipped. You can install it later by re-running the wizard.\n")
-        return
-
-    tr = task_command()
-    schtasks = [
-        "schtasks", "/create", "/tn", f"\\{TASK_NAME}", "/tr", tr,
-        "/sc", "DAILY", "/st", "05:15", "/f", "/np",
-    ]
-    try:
-        run_as = os.getlogin()
-    except OSError:
-        run_as = os.environ.get("USERNAME") or "SYSTEM"
-    schtasks += ["/ru", run_as]
-
-    if not is_admin():
-        sys.stdout.write("\n   ⚠️  Task creation needs an elevated (Administrator) shell.\n")
-        sys.stdout.write("   Open an Administrator terminal and run this exact command:\n\n")
-        sys.stdout.write("      " + " ".join(f'"{a}"' if " " in a else a for a in schtasks) + "\n")
-        return
-
-    rc = subprocess.run(schtasks).returncode
-    if rc == 0:
-        sys.stdout.write(f"   ✅ Task \\{TASK_NAME} registered (daily 05:15).\n")
-    else:
-        sys.stdout.write(f"   ❌ schtasks failed (rc={rc}). Register it manually from an elevated shell.\n")
+    """Step 4 used to register a separate root task (AnalyzeFinData_ETrade_Reauth, daily 05:15).
+    That task is gone: the hourly AETHER_Watchdog already runs etrade.scheduled_reauth (renew
+    first, once a day), and every task now comes from scripts/utils/scheduled_tasks.json."""
+    banner(4, "Daily refresh schedule")
+    sys.stdout.write("No extra task is needed: the hourly AETHER_Watchdog runs the daily E*TRADE refresh.\n")
+    sys.stdout.write("Scheduled tasks are registered from scripts/utils/scheduled_tasks.json with\n")
+    sys.stdout.write("scripts/utils/register_agent_tasks.ps1 (elevated PowerShell).\n")
 
 
 # ── driver ──────────────────────────────────────────────────────────────────────
@@ -284,8 +249,8 @@ def main():
     hr()
     sys.stdout.write("  E*TRADE headless daily-refresh setup wizard  (software TOTP)\n")
     hr()
-    sys.stdout.write("Four steps: provision → register → live mint → schedule. Config.json is backed up\n")
-    sys.stdout.write("before it is written, and the daily task is only installed after a real mint works.\n")
+    sys.stdout.write("Four steps: provision → register → live mint → schedule check. Config.json is backed up\n")
+    sys.stdout.write("before it is written; the hourly watchdog runs the daily refresh (no task is created here).\n")
 
     if not ask_yn("\nBegin?", default=True):
         die("Aborted by user.", code=0)
