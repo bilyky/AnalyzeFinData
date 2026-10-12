@@ -12,7 +12,10 @@ it with buy-and-hold:
                  max_allocation_pct / min_score_threshold / cash_buffer_pct /
                  atr_multiplier (get_strategy_rules) + slot expansion
                  (determine_max_positions); exits via sell_rules.exit_decision (hard ATR
-                 stop, S10+L60<0 soft exit, winner protection).
+                 stop, S10+L60<0 soft exit, winner protection); each buy trimmed so a
+                 stop-out loses at most CFG.system_max_trade_risk_pct of equity (the
+                 live per-trade loss cap in _execute_buys).
+  aether_no_cap  aether_rules without the per-trade loss cap: what the cap costs or buys.
   signal_only    the same entry ranking with a fixed BALANCED threshold, full equal-weight
                  deployment, no stop and no cash buffer; exits on the soft rule only.
                  aether_rules minus signal_only = what the risk overlay costs or buys.
@@ -56,7 +59,8 @@ import numpy as np
 
 import backtest_ratings as _br
 import instruments
-from aether.risk_utils import split_adjust_ohlcv
+from aether.config import CFG
+from aether.risk_utils import risk_capped_cash, split_adjust_ohlcv
 from patterns import _wilder_atr
 from sell_rules import exit_decision, soft_exit, winner_protected
 
@@ -183,14 +187,18 @@ def _bar(bars, sym, day):
 
 
 def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
-             initial=INITIAL_EQUITY, excluded=frozenset()) -> dict:
-    """Replay `panel` ({sym: {date: [s10, l60]}}) over `calendar` (sorted trading days)."""
+             initial=INITIAL_EQUITY, excluded=frozenset(), max_trade_risk_pct=None) -> dict:
+    """Replay `panel` ({sym: {date: [s10, l60]}}) over `calendar` (sorted trading days).
+
+    max_trade_risk_pct: when set (and risk_rules is on), each buy is trimmed so
+    (open - stop) * qty <= last close's equity * pct, as the live _execute_buys does."""
     c = cost_bps / 10_000.0
     cash = initial
     pos = {}                                  # sym -> {qty, entry, stop, entry_date, last}
     pending_buys, pending_sells = [], {}      # [(sym, usd, atr_mult)], {sym: reason}
     trades, curve = [], []
     traded_usd = 0.0
+    cap_trims = 0
     spy = panel.get("SPY", {})
 
     def close_position(sym, px, day, reason):
@@ -213,14 +221,19 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
             if b is None or b["o"][i] <= 0:
                 continue
             o = b["o"][i]
+            atr_prev = b["atr"][i - 1] if i > 0 else 0.0
+            stop = o - mult * atr_prev if (risk_rules and atr_prev > 0) else None
             usd = min(usd, cash)
+            if risk_rules and max_trade_risk_pct and stop is not None and curve:
+                cap = risk_capped_cash(o, stop, curve[-1][1] * max_trade_risk_pct)
+                if cap is not None and usd > cap:
+                    usd = cap
+                    cap_trims += 1
             qty = usd / (o * (1 + c))
             if qty <= 0:
                 continue
             cash -= usd
             traded_usd += qty * o
-            atr_prev = b["atr"][i - 1] if i > 0 else 0.0
-            stop = o - mult * atr_prev if (risk_rules and atr_prev > 0) else None
             pos[sym] = {"qty": qty, "entry": o, "stop": stop, "entry_date": day, "last": o}
         pending_buys = []
 
@@ -280,7 +293,7 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
             remaining += 1
 
     return {"curve": curve, "trades": trades, "traded_usd": traded_usd,
-            "open_positions": sorted(pos)}
+            "open_positions": sorted(pos), "cap_trims": cap_trims}
 
 
 def buy_and_hold(bars, calendar, symbols, cost_bps=10.0, initial=INITIAL_EQUITY) -> dict:
@@ -335,6 +348,7 @@ def metrics(result: dict) -> dict:
         "win_rate": round(len(wins) / len(trades), 3) if trades else None,
         "avg_trade_ret_pct": round(float(np.mean([t["ret_pct"] for t in trades])), 3) if trades else None,
         "stop_exits": sum(t["reason"] == "stop" for t in trades),
+        "cap_trims": result.get("cap_trims", 0),
         "turnover_x_per_yr": round(result["traded_usd"] / avg_eq / years, 2) if avg_eq else None,
     }
 
@@ -361,7 +375,9 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
     eligible = [s for s in symbols if s not in excluded]
 
     results = {
-        "aether_rules": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded),
+        "aether_rules": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded,
+                                 max_trade_risk_pct=CFG.system_max_trade_risk_pct),
+        "aether_no_cap": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded),
         "signal_only": simulate(panel, bars, calendar, risk_rules=False, cost_bps=cost_bps, excluded=excluded),
         "spy_buy_hold": buy_and_hold(bars, calendar, ["SPY"], cost_bps),
         "ew_buy_hold": buy_and_hold(bars, calendar, eligible, cost_bps),
@@ -370,7 +386,8 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
 
     cols = [("cagr_pct", "CAGR%"), ("total_return_pct", "Total%"), ("max_drawdown_pct", "MaxDD%"),
             ("sharpe", "Sharpe"), ("ann_vol_pct", "Vol%"), ("avg_exposure_pct", "Expo%"),
-            ("n_trades", "Trades"), ("win_rate", "Win"), ("turnover_x_per_yr", "Turn/yr")]
+            ("n_trades", "Trades"), ("win_rate", "Win"), ("turnover_x_per_yr", "Turn/yr"),
+            ("cap_trims", "Trims")]
     _out(f"\n  {calendar[0]} -> {calendar[-1]}  ({table['spy_buy_hold'].get('years')} yr)")
     _out("  " + f"{'variant':<14}" + "".join(f"{h:>9}" for _k, h in cols))
     for name, m in table.items():
@@ -378,6 +395,7 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
 
     payload = {
         "as_of": calendar[-1], "min_year": min_year, "cost_bps": cost_bps,
+        "max_trade_risk_pct": CFG.system_max_trade_risk_pct,
         "n_symbols": len(symbols), "n_excluded": len(excluded),
         "caveats": [
             "survivorship bias: universe is today's symbol list",
