@@ -88,7 +88,7 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 *   **Strict Pricing Verification Gate (`data_api.py`):** Reconciles every loaded position price (E*TRADE live, Excel fallback, and AI Game) against the local `Symbol_full` settled close cache. Raises `PricingDiscrepancyError` on deviation exceeding the configured tolerance, protecting the portfolio from silent price corruption.
 *   **Autonomic Cache Self-Healer (`ai_portfolio_game.py`):** Checks `Symbol_full` OHLCV caches for missing or stale files before each evaluation loop. If a cache is stale, triggers an on-demand RapidAPI backfill (`_heal_symbol_cache`), un-blinding critical safety rules like Winner Protection and MA crossovers.
 *   **Consolidated Intraday Stop Breach Alerts (`intraday_monitor.py`):** Batches all stop breaches detected in a single monitor pass into one summary email instead of one email per breach.
-*   **Daily-Repeating Task Triggers (`register_agent_tasks.ps1`):** Registers Windows Task Scheduler triggers with `-Daily` repetition so the Watchdog and Stop Monitor continue through weekends without manual re-registration. All active scheduled tasks run headlessly as **S4U background services (No-Password `/np` mode)** under your Windows user account, permanently preventing Event ID 332 "user not logged on" scheduling failures.
+*   **Daily-Repeating Task Triggers (`register_agent_tasks.ps1`, from `scripts/utils/scheduled_tasks.json`):** Registers Windows Task Scheduler triggers with `-Daily` repetition so the Watchdog and Stop Monitor continue through weekends without manual re-registration. All active scheduled tasks run headlessly as **S4U background services (No-Password `/np` mode)** under your Windows user account, permanently preventing Event ID 332 "user not logged on" scheduling failures.
 *   **Systemic Crash Circuit Breaker (`circuit_breaker.py`):** Audits SPY single-day return (< −2%), rolling 10-day drawdown (< −5%), and VXX surge (> +15%) every run. When triggered: freezes queued BUY orders, tightens non-scarcity stop-losses to 1×ATR, and backfeeds the event to `Data/trade_history_dna.json`. AETHER Elastic Memory caches original stops and restores them automatically once the market stabilizes.
 *   **Trade DNA Bootstrapper (`bootstrap_dna.py`):** One-time setup script. Parses `Data/ai_portfolio_game.json` history, pairs BUY/SELL transactions via FIFO, backfills buy-state DNA (PGR, scores) from Excel backups, and seeds `Data/trade_history_dna.json` with past closed trades.
 *   **Feedback Retrospective Analyzer (`retrospective_analyzer.py`):** Run weekly (manually or scheduled). Separates winners from losers across `trade_history_dna.json`, statistically clusters recurring failure patterns (requires ≥3-trade samples), writes rejection rules to `Data/failure_dna_rules.json`, audits circuit breaker "near-miss" threshold boundaries, and outputs `Data/retrospective_report.txt`.
@@ -190,41 +190,19 @@ AETHER's factor weights are fully customizable and backtest-driven:
 
 To achieve complete off-market stability and prevent system timeouts, AETHER separates **Lightweight Session Refreshers** (always run first with Priority 1) from **Heavy, Slow Diagnostics** (CIM process sweeps, code compilation checks, and workbook refreshes). Heavy diagnostic tasks are strictly time-locked and run only during active market/preparation hours.
 
-The master execution timeline is structured as follows:
+**The task list lives in one file: `scripts/utils/scheduled_tasks.json`.** Each task there has its
+schedule, command (Python script and arguments, or AI-agent prompt), time limit, log file, run-as
+mode, a short summary and a full description. Everything reads it:
 
-```text
-  [05:15 AM PST] AETHER_Chaikin_Reauth ────────► Proactive token refreshes (Priority 1)
-  [05:30 AM PST] AETHER_Morning ───────────────► Pre-market data-fetching pipeline
-  [06:45 AM PST] AETHER_StopMonitor ───────────► Active session trailing stop watchdog
-  [07:00 AM PST] AETHER_ExecuteTrades ─────────► Market-open rebalancing & trade manager
-  [07:05 AM PST] AETHER_DailyDriver ───────────► AI qualitative scoring & re-qualification
-  [01:30 PM PST] AETHER_PostMarketSync ────────► Finalized daily close backfiller (No-pollution)
-  [02:00 PM PST] AETHER_PostMarketReporter ────► Closing portfolio valuation audit
-  [03:00 PM PST] AETHER_Data_Backup ───────────► Off-market Robocopy UNC sync (Pristine)
-  [05:00 PM PST] AETHER_AftermarketReport ─────► daily_task: closing report + OHLCV recovery pass
-  [06:00 PM PST] AETHER_AI_Summary ────────────► Evening AI-portfolio summary email
-  [09:30 PM PST] AETHER_PreFlight_Audit ───────► Nightly API and email gateway diagnostic
-  [Hourly 24/7]  AETHER_Watchdog ──────────────► Proactive keep-alive & session keeper (2h limit)
-```
+*   `scripts/utils/register_agent_tasks.ps1` registers exactly those tasks under `\AETHER_Agents\`
+    (`-DryRun` prints what it would register without touching Task Scheduler).
+*   The watchdog audits them (`watchdog.TASKS`); any other AETHER/AnalyzeFinData task is reported
+    as a stray. The watchdog never creates tasks.
+*   The dashboard's **System** page lists every task with its live status, schedule, description
+    and parameters (`/api/tasks`, built by `data_api.read_scheduled_tasks`).
 
-### 📋 Schedulers Execution & Timeout Registry
-
-> ℹ️ **Single Source of Truth Note:** To prevent documentation drift, the authoritative parameters (triggers, schedules, and active execution timeouts) for all tasks are defined programmatically inside the system source code (specifically `watchdog.py`'s `_TASK_DEFS` dictionary and the task-registration PowerShell scripts). The table below serves as a high-level operational map for developer reference.
-
-| Task Name | Active Time | Priority / Role | Key Dependencies | Expected Duration | Task Timeout |
-| :--- | :---: | :--- | :--- | :---: | :---: |
-| **`AETHER_Watchdog`** | Hourly (24/7) | **CRITICAL (P1)** / Keeps OAuth cookies and Chaikin logins warm; executes self-healing. | Active network gateway; E*TRADE production tokens. | < 3 seconds (Overnight); < 10 seconds (Market Hours) | **2 Hours** (`New-TimeSpan -Hours 2`) |
-| **`AETHER_Morning`** | 05:30 AM PST | **HIGH (P2)** / Scrapes Chaikin ratings, parses email newsletters, and backfills history. | Validated E*TRADE/Chaikin cookies; fresh email ideas. | 4 – 6 minutes (Throttled API) | **2 Hours** (`New-TimeSpan -Hours 2`) |
-| **`AETHER_StopMonitor`** | 06:45 AM PST | **CRITICAL (P1)** / Interday real-time stop-loss monitoring; repeats every 30 mins for 7 hours. | E*TRADE real-time streaming quotes. | 15 – 30 seconds | **30 Minutes** |
-| **`AETHER_ExecuteTrades`**| 07:00 AM PST | **CRITICAL (P1)** / Opens opening rebalancing; executes trailing stop ratchets & buy entries. | Completed 5:30 AM workbook; fresh E*TRADE tokens. | 10 – 20 seconds | **30 Minutes** |
-| **`AETHER_DailyDriver`** | 07:05 AM PST | **MEDIUM** / AI qualitative reasoning and position re-qualification. | Live market quotes; Claude/Gemini API key. | 2 – 3 minutes | **30 Minutes** |
-| **`AETHER_PostMarketSync`**| 01:30 PM PST | **MEDIUM** / Backfills finalized daily closes (15 mins post-close; no intraday pollution). | Alpha Vantage / RapidAPI daily close bars. | 2 – 3 minutes | **1 Hour** |
-| **`AETHER_PostMarketReporter`**| 02:00 PM PST | **LOW** / Computes closing portfolio equity and sends daily performance reports. | Finalized portfolio prices on disk. | 15 – 30 seconds | **30 Minutes** |
-| **`AETHER_Data_Backup`** | 03:00 PM PST | **LOW** / Robocopy syncs local Data/ folder to backup network drive. | Network storage online. | 30 – 90 seconds | **1 Hour** |
-| **`AETHER_PreFlight_Audit`**| 09:30 PM PST | **MEDIUM** / Nightly connection diagnostics and gateway check. | Centralized API, email, and directory gateways. | 10 – 15 seconds | **30 Minutes** |
-| **`AETHER_Chaikin_Reauth`**| Sunday 08:00 AM | **LOW** / Proactive headed Playwright Chrome login cookie refresh. | Logged-on user session (No-S4U). | 2 – 3 minutes (Supervised) | **30 Minutes** |
-
----
+To add or change a task, edit the manifest, then run the registrar in an elevated PowerShell.
+Do not copy the schedule into this document or anywhere else.
 
 ## 🏁 8. Developer Modification Checklist
 
