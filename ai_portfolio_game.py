@@ -41,27 +41,13 @@ import decision_eval
 import watchdog
 import instruments
 from aether import options
+from aether.market_calendar import NYSE_HOLIDAYS, last_session_on_or_before
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
 
-# Full-day NYSE closures (one list: is_market_hours and the stale-workbook gate both use it).
-NYSE_HOLIDAYS = frozenset({
-    "2026-01-01",  # New Year's Day
-    "2026-01-19",  # Martin Luther King Jr. Day
-    "2026-02-16",  # Presidents' Day
-    "2026-04-03",  # Good Friday
-    "2026-05-25",  # Memorial Day
-    "2026-06-19",  # Juneteenth National Independence Day
-    "2026-07-03",  # Independence Day (Observed)
-    "2026-09-07",  # Labor Day
-    "2026-11-26",  # Thanksgiving Day
-    "2026-12-25",  # Christmas Day
-    
-    # Future Years Support (2027)
-    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
-    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24"
-})
+# Full-day NYSE closures live in aether.market_calendar (one list: is_market_hours, the
+# stale-workbook gate and covered-call expiry all use it); re-exported here.
 
 _SESSION_CLOSE_LA = (13, 0)  # 4:00 PM ET
 
@@ -69,9 +55,7 @@ _SESSION_CLOSE_LA = (13, 0)  # 4:00 PM ET
 def _previous_session_close(now):
     """13:00 America/Los_Angeles on the last weekday before `now`'s date that wasn't an NYSE holiday."""
     tz_la = pytz.timezone("America/Los_Angeles")
-    day = now.astimezone(tz_la).date() - datetime.timedelta(days=1)
-    while day.weekday() >= 5 or day.isoformat() in NYSE_HOLIDAYS:
-        day -= datetime.timedelta(days=1)
+    day = last_session_on_or_before(now.astimezone(tz_la).date() - datetime.timedelta(days=1))
     return tz_la.localize(datetime.datetime(day.year, day.month, day.day, *_SESSION_CLOSE_LA))
 
 

@@ -217,8 +217,9 @@ class TestCoveredCallOptions(unittest.TestCase):
             "history": [],
         }
 
-        with mock.patch.object(options, "_expiry_close", return_value=None):  # no expiry-day close cached
+        with mock.patch.object(options, "_expiry_close", return_value=None) as close:  # no expiry-day close cached
             options.resolve_expiring_options(mock_state, today_str="2026-08-17", prices={"AAPL": 118.0})
+        close.assert_called_once_with("AAPL", "2026-08-14")  # the expiry date's bar, not today's
 
         self.assertIn("written_call", mock_state["positions"]["AAPL"])  # deferred, not settled
         self.assertEqual(mock_state["history"], [])
@@ -226,7 +227,8 @@ class TestCoveredCallOptions(unittest.TestCase):
 
     def test_nothing_settles_on_the_expiry_date_itself(self):
         """PROD 2026-09-25: KE was 'called away' at 07:00 on its expiry day, before the session
-        traded. The option settles at the expiry close, so the expiry-day run must leave it open."""
+        traded. The option settles at the expiry close, so the expiry-day run must leave it open
+        even when a close (above the strike) is available."""
         mock_state = {
             "balance": 1000.0,
             "positions": {"KE": {"qty": 43, "cost": 25.0, "stop_loss": 26.0,
@@ -234,9 +236,45 @@ class TestCoveredCallOptions(unittest.TestCase):
                                                   "expiration_date": "2026-09-25", "qty": 43}}},
             "history": [],
         }
-        options.resolve_expiring_options(mock_state, today_str="2026-09-25", prices={"KE": 28.4})
-        self.assertIn("written_call", mock_state["positions"]["KE"])
+        with mock.patch.object(options, "_expiry_close", return_value=28.4):
+            options.resolve_expiring_options(mock_state, today_str="2026-09-25", prices={"KE": 28.4})
+        self.assertIn("written_call", mock_state["positions"].get("KE", {}))
         self.assertEqual(mock_state["history"], [])
+
+    def test_call_stored_with_a_friday_holiday_settles_at_thursdays_close(self):
+        """No bar ever exists for an NYSE holiday, so a call stored with Friday 2026-12-25 must
+        settle on the next run at Thursday 2026-12-24's close, not defer forever. Real cache file,
+        no mock of the lookup."""
+        state = {"balance": 0.0, "history": [],
+                 "positions": {"KE": {"qty": 43, "cost": 25.0, "stop_loss": 26.0,
+                                      "written_call": {"strike": 28.0, "premium": 0.5,
+                                                       "expiration_date": "2026-12-25", "qty": 43}}}}
+        bar = {"1. open": "29", "2. high": "29.5", "3. low": "28.8", "5. volume": "1"}
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "KE_daily.json"), "w") as f:
+                json.dump({"Time Series (Daily)": {"2026-12-23": {**bar, "4. close": "26.0"},
+                                                   "2026-12-24": {**bar, "4. close": "29.1"}}}, f)
+            with mock.patch.object(options.paths, "ohlcv_dir", return_value=d):
+                options.resolve_expiring_options(state, today_str="2026-12-24", prices={})
+                self.assertIn("written_call", state["positions"].get("KE", {}))   # its session isn't over yet
+                options.resolve_expiring_options(state, today_str="2026-12-28", prices={})
+        self.assertEqual([t["type"] for t in state["history"]], ["OPTION_ASSIGNMENT"])  # 29.10 >= 28 strike
+        self.assertNotIn("KE", state["positions"])
+
+    def test_writer_never_dates_a_call_on_a_holiday(self):
+        """The weekly expires on the last NYSE session on or before Friday; on the Thursday
+        before a Friday holiday that session is today, so the next week's is written."""
+        for today, expiry in (("2026-12-14", "2026-12-18"),   # ordinary week: Friday
+                              ("2026-12-18", "2026-12-24"),   # Friday -> next week, Christmas Friday
+                              ("2026-12-21", "2026-12-24"),
+                              ("2026-12-24", "2026-12-31"),   # Thursday; next Friday 2027-01-01 is closed too
+                              ("2027-03-22", "2027-03-25")):  # Good Friday 2027-03-26
+            with self.subTest(today=today):
+                state = {"balance": 0.0, "history": [],
+                         "positions": {"AAPL": {"qty": 10, "cost": 100.0, "stop_loss": 100.0}}}
+                options.execute_weekly_covered_call_pass(state, today, {"AAPL": 110.0},
+                                                         _FakeWS(_HEADER, [_research_row("AAPL", 4.0)]))
+                self.assertEqual(state["positions"]["AAPL"]["written_call"]["expiration_date"], expiry)
 
     def test_expiry_close_reads_the_cache_including_a_provisional_bar(self):
         """The settlement price is the expiry date's close from Symbol_full. A provisional
