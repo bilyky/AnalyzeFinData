@@ -172,3 +172,25 @@ class TestPreflightWatchdogResult(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRecoveryReportWording(unittest.TestCase):
+    """The watchdog no longer heals missing tasks (it only warns), so the recovery report must
+    not say "Healed missing tasks" (AGENT.md: no greenwashing)."""
+
+    @mock.patch("watchdog.subprocess.run", new=mock.MagicMock(return_value=subprocess.CompletedProcess([], 0, "", "")))
+    @mock.patch("watchdog.notify.send_email")
+    @mock.patch("watchdog.is_pid_running", return_value=False)
+    @mock.patch("watchdog.check_data_freshness", return_value=None)
+    @mock.patch("watchdog.check_logs", return_value=[])
+    @mock.patch("watchdog.powergauge.ensure_valid_session", return_value={"jsessionid": "x"})
+    @mock.patch("watchdog.etrade.scheduled_reauth", return_value={"ok": True, "reason": "renewed"})
+    @mock.patch("watchdog.check_task_scheduler", return_value=([r"\AETHER_Agents\AETHER_AI_Summary"], []))
+    @mock.patch("watchdog._log")
+    def test_missing_task_is_reported_as_missing_not_healed(self, _log, _cts, _re, _ses, _logs, _fresh, _pid, email):
+        watchdog.run_watchdog()
+        self.assertTrue(email.called)
+        html = email.call_args.args[1]
+        self.assertNotIn("Healed missing tasks", html)
+        self.assertIn("AETHER_AI_Summary", html)
+        self.assertIn("register_agent_tasks.ps1", html)

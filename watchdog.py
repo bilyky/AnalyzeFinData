@@ -1067,8 +1067,9 @@ def run_watchdog():
     
     # 2. Heal task scheduler missing tasks
     if missing_tasks:
-        heal_tasks(missing_tasks)
-        recovery_actions.append(f"Healed missing tasks: {', '.join(missing_tasks)}")
+        heal_tasks(missing_tasks)   # warns only; it does not create tasks
+        recovery_actions.append(f"Missing scheduled tasks (not re-created; register them with "
+                                f"scripts/utils/register_agent_tasks.ps1, elevated): {', '.join(missing_tasks)}")
 
     # 2b. Tasks that exist but failed their last run: alert (the email fires on a non-empty
     #     recovery_actions) but do NOT re-register — a crash isn't cured by re-registration,
@@ -1160,6 +1161,14 @@ def run_watchdog():
                 <pre style="background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; font-size: 12px; overflow-x: auto; font-family: monospace;">{original_traceback}</pre>
             </div>
             ''' if original_traceback else ''}
+
+            <!-- SECTION 1b: WHAT THIS CYCLE FOUND / DID (the reasons this email was sent) -->
+            {f'''
+            <div style="background: #fff4e6; border-left: 5px solid #e67700; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
+                <h3 style="margin-top: 0; color: #d9480f; font-size: 15px;">📋 FINDINGS AND ACTIONS THIS CYCLE:</h3>
+                <ul style="font-size: 13px; padding-left: 20px; color: #333;">{"".join(f"<li>{html.escape(a)}</li>" for a in recovery_actions)}</ul>
+            </div>
+            ''' if recovery_actions else ''}
 
             <!-- SECTION 2: AI DEBUGGING & HEALING ACTIONS -->
             {f'''
