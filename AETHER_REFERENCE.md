@@ -201,6 +201,8 @@ The master execution timeline is structured as follows:
   [01:30 PM PST] AETHER_PostMarketSync ────────► Finalized daily close backfiller (No-pollution)
   [02:00 PM PST] AETHER_PostMarketReporter ────► Closing portfolio valuation audit
   [03:00 PM PST] AETHER_Data_Backup ───────────► Off-market Robocopy UNC sync (Pristine)
+  [05:00 PM PST] AETHER_AftermarketReport ─────► daily_task: closing report + OHLCV recovery pass
+  [06:00 PM PST] AETHER_AI_Summary ────────────► Evening AI-portfolio summary email
   [09:30 PM PST] AETHER_PreFlight_Audit ───────► Nightly API and email gateway diagnostic
   [Hourly 24/7]  AETHER_Watchdog ──────────────► Proactive keep-alive & session keeper (2h limit)
 ```

@@ -59,6 +59,30 @@ $Tasks = @(
         Desc     = "Hourly diagnostics and self-healing loop running 24/7."
     },
     @{
+        Name     = "AETHER_Morning"
+        # Pre-market pipeline: E*TRADE/Chaikin session checks, Chaikin refresh (main.py), 5-day
+        # backfill, workbook rebuild. It ran ~20 min on PROD; run_history/main.py are capped
+        # inside it, so 90 min leaves room without letting a hang run into the 07:00 trades.
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Daily -At "5:30 AM")
+        )
+        Script   = "venv_new\Scripts\python.exe autonomous_pipeline.py"
+        TimeLimitMin = 90
+        Log      = "morning_pipeline.log"
+        Desc     = "Pre-market data pipeline: refreshes ratings, history and the workbook before the 07:00 trade run."
+    },
+    @{
+        Name     = "AETHER_AI_Summary"
+        # Evening AI-portfolio summary email. It used to come only from the old root task
+        # AnalyzeFinData_AI_Summary, which was deleted on PROD on 2026-10-11.
+        Triggers  = @(
+            (New-ScheduledTaskTrigger -Daily -At "6:00 PM")
+        )
+        Script   = "venv_new\Scripts\python.exe ai_portfolio_game.py --summary"
+        Log      = "ai_summary_agent.log"
+        Desc     = "Emails the evening AI portfolio summary at 6:00 PM."
+    },
+    @{
         Name     = "AETHER_StopMonitor"
         # Daily at 6:45 AM, repeat every 30 minutes for 7 hours (covers the entire market session)
         Triggers  = @(
@@ -202,10 +226,13 @@ foreach ($T in $Tasks) {
     $LogFile = Join-Path $LogDir $T.Log
     
     $Launcher = Join-Path $RepoRoot "run_agent.cmd"
-    # Build the scheduled task action: raw scripts execute via PowerShell; AI agent tasks run via the robust run_agent.cmd launcher
+    # Build the scheduled task action: raw scripts run via cmd.exe; AI agent tasks run via the robust run_agent.cmd launcher
     if ($T.Script) {
-        $ExecCmd = "cd '$RepoRoot'; $($T.Script) >> '$LogFile' 2>&1"
-        $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$ExecCmd`""
+        # cmd.exe, not PowerShell: Windows PowerShell 5.1 turns every stderr line of a native
+        # program into an error record under 2>&1, so LastTaskResult was 1 whenever Python logged
+        # a warning (PROD 10-12: the preflight then aborted the morning pipeline), and its >>
+        # wrote the log as UTF-16. cmd passes Python's exit code through and appends plain text.
+        $Action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"cd /d `"$RepoRoot`" && $($T.Script) >> `"$LogFile`" 2>&1`""
     } else {
         # Using cmd.exe /c to launch our central environment-healing batch file
         $Action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"`"$Launcher`" $Engine $Args -p `"$PromptPayload`" >> `"$LogFile`" 2>&1`""
