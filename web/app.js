@@ -1187,52 +1187,49 @@ async function loadSystem() {
         <div>Server time: <span class="mut">${health.server_time || "—"}</span></div>
         ${etRow}`;
 
-    // Scheduled tasks — with a "Run Now" button that triggers the matching manual task
+    // Scheduled tasks — everything (description, schedule, command, limits) comes from the
+    // manifest scripts/utils/scheduled_tasks.json via /api/tasks; nothing is listed here.
     const manualById = Object.fromEntries((manual.tasks || []).map((t) => [t.id, t]));
-    const SCHED_TO_MANUAL = {
-        "AETHER_Watchdog":           "watchdog",
-        "AETHER_StopMonitor":        "intraday_monitor",
-        "AETHER_DailyDriver":        "pipeline",
-        "AETHER_PostMarketReporter": "ai_game_summary",
-        "AETHER_PostMarketSync":     "pipeline",
-        "AETHER_RD_Scientist":       "pattern_discovery",
-    };
-    const SCHED_DESCRIPTIONS = {
-        "AETHER_Watchdog": "WHAT: Hourly pre-market/market diagnostics and 2-hourly off-market self-healing. WHY: Validates login cookie freshness, clears workbook locks, and renews E*TRADE sessions. OUTCOME: Generates watchdog_agent.log; auto-triggers headless Playwright browser re-auth.",
-        "AETHER_StopMonitor": "WHAT: Intraday risk guard checking open positions against stops and targets every 30 mins (6:45 AM - 1:45 PM). WHY: Secures profits and shields capital during sudden dumps. OUTCOME: Generates intraday_monitor_agent.log; sends urgent breach emails and auto-exits virtual games.",
-        "AETHER_DailyDriver": "WHAT: Core trading screener and portfolio rebalancer at 7:00 AM PST. WHY: Scrapes Chaikin, updates State, enforces Circuit Breakers, and executes virtual moves. OUTCOME: Generates daily_driver_agent.log and autonomous_pipeline logs; sends picks summary report.",
-        "AETHER_PostMarketReporter": "WHAT: Portfolio closing audit and scheduler diagnostic run at 2:00 PM PST. WHY: Captures settled returns, checks for scheduler missed runs, and scans logs. OUTCOME: Generates post_market_reporter_agent.log and logs closing status report.",
-        "AETHER_PostMarketSync": "WHAT: Nightly post-market data synchronization and workbook refresh at 1:30 PM PST. WHY: Finalizes daily PowerGauge scrapes, and refreshes price history caches via RapidAPI. OUTCOME: Generates post_market_sync_agent.log and autonomous_pipeline logs; updates State sheet.",
-        "AETHER_RD_Scientist": "WHAT: Missed winner retro and statistical validation on Saturdays at 10:00 AM PST. WHY: Replays historical caches to isolate missed momentum setups and feeds rules to the exclusion guard. OUTCOME: Generates pattern_discovery_agent.log; writes failure-DNA rules to database.",
-    };
     const tb = $("tasks-body");
     const ts = tasks.tasks || [];
-    tb.innerHTML = ts.length ? ts.map((t) => {
-        const manualId = SCHED_TO_MANUAL[t.name];
-        const mt = manualId ? manualById[manualId] : null;
+    tb.innerHTML = ts.length ? ts.map((t, i) => {
+        const mt = t.manual_run ? manualById[t.manual_run] : null;
         const btn = mt
-            ? `<button onclick="runManualTask('${mt.id}','${mt.label.replace(/'/g,"\\'")}',${mt.confirm ? `'${mt.confirm.replace(/'/g,"\\'")}'` : "null"},${mt.admin_only},null)"
+            ? `<button onclick="runManualTask('${mt.id}','${mt.label.replace(/'/g,"\'")}',${mt.confirm ? `'${mt.confirm.replace(/'/g,"\'")}'` : "null"},${mt.admin_only},null)"
                        class="btn text-xs ${mt.admin_only ? "admin-action" : ""}"
                        ${mt.admin_only && !isAdmin() ? "title='Admin required'" : ""}>
                  ▶ Run
                </button>`
             : "";
-        const descEscaped = (SCHED_DESCRIPTIONS[t.name] || "").replace(/'/g, "\\'");
-        return `<tr>
+        const notReg = t.status === "Not registered";
+        const result = t.last_result && t.last_result !== "0" && t.last_result !== "267011"
+            ? ` <span class="neg">(result ${esc(t.last_result)})</span>` : "";
+        const details = `
+            <div class="text-sm">${esc(t.description)}</div>
+            ${t.notes ? `<div class="text-xs mut mt-1">${esc(t.notes)}</div>` : ""}
+            <table class="text-xs mt-2"><tbody>
+                <tr><td class="mut pr-3">Runs</td><td><code>${esc(t.command)}</code></td></tr>
+                <tr><td class="mut pr-3">Kind</td><td>${t.kind === "agent" ? "AI agent (run_agent.cmd)" : "Python (cmd.exe)"}</td></tr>
+                <tr><td class="mut pr-3">Schedule</td><td>${esc(t.schedule)}</td></tr>
+                <tr><td class="mut pr-3">Time limit</td><td>${esc(t.time_limit_min)} min</td></tr>
+                <tr><td class="mut pr-3">Log</td><td>Data/logs/agent_runs/${esc(t.log)}</td></tr>
+                <tr><td class="mut pr-3">Run as</td><td>${esc(t.run_as)}</td></tr>
+                <tr><td class="mut pr-3">Last result</td><td>${esc(t.last_result || "—")}</td></tr>
+            </tbody></table>`;
+        return `<tr class="cursor-pointer" onclick="document.getElementById('task-detail-${i}').classList.toggle('hidden')">
             <td>
-                <span class="font-semibold text-sm cursor-help border-b border-dashed border-slate-500 hover:text-blue-400"
-                      onmouseover="showTooltip(event, '${descEscaped}')"
-                      onmouseout="hideTooltip()">
-                    ${t.name}
-                </span>
+                <div class="font-semibold text-sm">▸ ${esc(t.name)}</div>
+                <div class="text-xs mut">${esc(t.summary)}</div>
             </td>
-            <td>${t.status || "—"}</td>
-            <td class="text-xs mut">${t.last_run || "—"}</td>
-            <td class="text-xs mut">${t.next_run || "—"}</td>
-            <td class="text-right">${btn}</td>
-        </tr>`;
+            <td class="text-xs">${esc(t.schedule)}</td>
+            <td class="${notReg ? "neg" : ""}">${esc(t.status || "—")}</td>
+            <td class="text-xs mut">${esc(t.last_run || "—")}${result}</td>
+            <td class="text-xs mut">${esc(t.next_run || "—")}</td>
+            <td class="text-right" onclick="event.stopPropagation()">${btn}</td>
+        </tr>
+        <tr id="task-detail-${i}" class="hidden"><td colspan="6" class="bg-slate-800/40">${details}</td></tr>`;
     }).join("")
-        : `<tr><td colspan="5" class="text-center text-slate-500 py-6">No tasks found.</td></tr>`;
+        : `<tr><td colspan="6" class="text-center text-slate-500 py-6">No tasks found.</td></tr>`;
 
     // Manual tasks grid — grouped by category
     const allTasks = manual.tasks || [];

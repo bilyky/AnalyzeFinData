@@ -7,9 +7,12 @@ lifecycles.
 """
 
 import datetime
+import json
 import math
+import os
 
-from aether import instruments
+from aether import instruments, paths
+from aether.market_calendar import last_session_on_or_before
 from aether.config import CFG
 from aether.option_pricing import bs_price
 from aether.option_pricing import norm_cdf as norm_cdf  # re-export: single BS-math home
@@ -115,9 +118,31 @@ def select_covered_call(symbol: str, current_price: float, atr: float, volatilit
     }
 
 
+def _expiry_close(symbol: str, date_str: str):
+    """Close of `date_str` from the local OHLCV cache, or None when that bar is missing.
+
+    A provisional close-only bar (written by powergauge from Chaikin's close) counts: its close
+    is the real close, only its high/low/volume are fake."""
+    path = os.path.join(paths.ohlcv_dir(), f"{symbol}_daily.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            bar = json.load(f).get("Time Series (Daily)", {}).get(date_str)
+        return float(bar["4. close"]) if bar else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def resolve_expiring_options(state: dict, today_str: str, prices: dict):
-    """Scan and settle all active, expiring written Covered Call options.
-    
+    """Scan and settle written Covered Calls whose expiry session is over.
+
+    A weekly call settles at its expiry date's CLOSE, so it is settled on the first run after
+    that date (the trade run is at 07:00, before the session). Settling on the expiry morning
+    used the pre-open price (PROD KE 2026-09-25: 'called away' at the $28 strike at 07:00; it
+    closed at 27.27). The price is the expiry close from the OHLCV cache; with no cached close
+    the settlement is deferred. `prices` is kept for the callers' signature and is not used.
+    The expiry session is the last NYSE session on or before `expiration_date`, so a call stored
+    with a Friday holiday (no bar will ever exist for it) settles at Thursday's close.
+
     - Case A (Below Strike): Option expires worthless. We keep 100% of the cash premium as profit.
     - Case B (At/Above Strike): Stock is called away. We sell the underlying stock at the strike price,
       realizing the locked-in capital gains, and release the option liability.
@@ -128,15 +153,22 @@ def resolve_expiring_options(state: dict, today_str: str, prices: dict):
             continue
             
         exp_date = written_call.get("expiration_date", "")
-        # If the option has reached or passed its expiration date
-        if exp_date and exp_date <= today_str:
-            # Do NOT default a missing quote to cost basis: cost is always below the OTM strike,
-            # which would silently force the "expires worthless" (favorable) branch. Defer
-            # settlement to a later pass when a live quote is available.
-            if sym not in prices:
-                _log.warning(f"[Option Expiry] No live quote for {sym} on its settlement day; deferring Covered Call settlement (no cost-basis fallback).")
+        if not exp_date:
+            continue
+        try:
+            session = last_session_on_or_before(datetime.date.fromisoformat(exp_date)).isoformat()
+        except ValueError:
+            _log.warning(f"[Option Expiry] Unreadable expiration_date {exp_date!r} on {sym}; skipping settlement.")
+            continue
+        # Only once the expiry session is over (see the docstring).
+        if session < today_str:
+            # Do NOT default a missing close to cost basis or to today's quote: cost is always
+            # below the OTM strike (forces the favorable "worthless" branch) and today's quote is
+            # not the expiry close. Defer until the expiry-session bar is in the cache.
+            current_px = _expiry_close(sym, session)
+            if current_px is None:
+                _log.warning(f"[Option Expiry] No cached close for {sym} on its expiry session {session}; deferring Covered Call settlement.")
                 continue
-            current_px = prices[sym]
             strike = written_call.get("strike")
             qty = written_call.get("qty")
             premium = written_call.get("premium")
@@ -229,7 +261,12 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
     # If today is Friday, expire next Friday (7 days)
     if (next_friday - today_date).days == 0:
         next_friday = today_date + datetime.timedelta(days=7)
-    next_friday_str = next_friday.strftime("%Y-%m-%d")
+    # A weekly whose Friday is an NYSE holiday expires on the session before it. If that session
+    # is today (the Thursday before a Friday holiday), write the following week's instead.
+    expiry = last_session_on_or_before(next_friday.date())
+    if expiry <= today_date.date():
+        expiry = last_session_on_or_before(next_friday.date() + datetime.timedelta(days=7))
+    expiry_str = expiry.strftime("%Y-%m-%d")
 
     # Map ATRs from the Research sheet. Resolve the ATR/Symbol columns by header name so a
     # column re-order upstream can't silently point us at the wrong field.
@@ -302,7 +339,7 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
             pos["written_call"] = {
                 "strike": strike,
                 "premium": premium_price,
-                "expiration_date": next_friday_str,
+                "expiration_date": expiry_str,
                 "qty": pos["qty"],
                 "sigma": sigma
             }
@@ -316,7 +353,7 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
                 "price": premium_price,
                 "qty": pos["qty"],
                 "pnl": premium_usd,
-                "details": f"Wrote Weekly Covered Call (Strike: ${strike:.2f}, Exp: {next_friday_str}, collected ${premium_usd:.2f})"
+                "details": f"Wrote Weekly Covered Call (Strike: ${strike:.2f}, Exp: {expiry_str}, collected ${premium_usd:.2f})"
             }
             state.setdefault("history", []).append(tx)
             new_options.append(tx)

@@ -1,250 +1,140 @@
 <#
 .SYNOPSIS
-    Registers and configures Project AETHER's cognitive agent skills in Windows Task Scheduler.
+    Registers Project AETHER's scheduled tasks in Windows Task Scheduler.
 .DESCRIPTION
-    This script is CLI-agnostic. It sets up the 5 core automated workflows
-    under a unified "AETHER_Agents" task folder. It dynamically builds commands,
-    handles E*TRADE token alignment, and configures stdout/stderr redirection.
+    The task list lives in scripts/utils/scheduled_tasks.json (the one source: the watchdog
+    audits it and the System page shows it). This script reads it and registers every task
+    under the "\AETHER_Agents\" folder, with its schedule, command, time limit, log redirect
+    and principal.
 .PARAMETER Engine
-    The CLI engine executable to run (e.g., "gemini", "claude", "antigravity"). Default is "gemini".
+    The CLI engine for agent (prompt) tasks, e.g. "gemini", "claude". Default "gemini".
 .PARAMETER Args
-    Headless/automation arguments to pass to the engine. Default is "--approval-mode yolo --skip-trust".
+    Headless arguments passed to the engine. Default "--approval-mode yolo --skip-trust".
 .PARAMETER Force
-    Overwrites existing scheduled tasks if they exist.
+    Replace tasks that already exist (default on).
+.PARAMETER DryRun
+    Build every task and print it as JSON (one line per task) without registering anything.
 .EXAMPLE
-    .\register_agent_tasks.ps1 -Engine "gemini" -Args "--approval-mode yolo --skip-trust"
+    .\register_agent_tasks.ps1 -Force
+    .\register_agent_tasks.ps1 -DryRun
 #>
 [CmdletBinding()]
 param (
     [string]$Engine = "gemini",
     [string]$Args = "--approval-mode yolo --skip-trust",
-    [switch]$Force = $true
+    [switch]$Force = $true,
+    [switch]$DryRun
 )
 
-# 1. Dynamically discover Repo Root (Script sits in scripts/utils)
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Get-Item $ScriptDir).Parent.Parent.FullName
 $LogDir = Join-Path $RepoRoot "Data\logs\agent_runs"
+$Manifest = Get-Content (Join-Path $ScriptDir "scheduled_tasks.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+$Folder = $Manifest.folder
+$Python = "venv_new\Scripts\python.exe"
+$Launcher = Join-Path $RepoRoot "run_agent.cmd"
 
-# Ensure log directory exists
-if (-not (Test-Path $LogDir)) {
-    New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-    Write-Host "Created log directory at $LogDir" -ForegroundColor Green
+if (-not $DryRun) {
+    if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
+    Write-Host "==========================================================" -ForegroundColor Cyan
+    Write-Host "   AETHER scheduled-task registration ($($Manifest.tasks.Count) tasks)" -ForegroundColor Cyan
+    Write-Host "==========================================================" -ForegroundColor Cyan
+    Write-Host "Repo Root:  $RepoRoot"
+    Write-Host "CLI Engine: $Engine"
+    Write-Host "Log Dir:    $LogDir"
+    Write-Host "----------------------------------------------------------"
 }
 
-Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "   AETHER Headless Agent Scheduling Registration script"   -ForegroundColor Cyan
-Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "Repo Root:  $RepoRoot"
-Write-Host "CLI Engine: $Engine"
-Write-Host "CLI Args:   $Args"
-Write-Host "Log Dir:    $LogDir"
-Write-Host "----------------------------------------------------------"
-
-# Task Mapping array holding times, prompts, names, and logs
-$Tasks = @(
-    @{
-        Name     = "AETHER_Watchdog"
-        # 24/7 Hourly Trigger Design:
-        # Starts in the past (1/1/2000) to ensure Task Scheduler activates the repetition
-        # loop IMMEDIATELY upon registration, repeating every 1 hour indefinitely (9999 days).
-        Triggers  = @(
-            $(
-                $T = New-ScheduledTaskTrigger -Once -At "1/1/2000 12:00 AM" -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 9999)
-                $T
-            )
-        )
-        Script   = "venv_new\Scripts\python.exe watchdog.py"
-        Log      = "watchdog_agent.log"
-        Desc     = "Hourly diagnostics and self-healing loop running 24/7."
-    },
-    @{
-        Name     = "AETHER_StopMonitor"
-        # Daily at 6:45 AM, repeat every 30 minutes for 7 hours (covers the entire market session)
-        Triggers  = @(
-            $(
-                $T = New-ScheduledTaskTrigger -Daily -At "6:45 AM"
-                $T.Repetition = (New-ScheduledTaskTrigger -Once -At "6:45 AM" -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Hours 7)).Repetition
-                $T
-            )
-        )
-        Script   = "venv_new\Scripts\python.exe scripts/utils/intraday_monitor.py"
-        Log      = "intraday_monitor_agent.log"
-        Desc     = "Real-time risk monitor checking open positions against stop levels every 30 mins."
-    },
-    @{
-        Name     = "AETHER_ExecuteTrades"
-        Triggers  = @(
-            (New-ScheduledTaskTrigger -Daily -At "7:00 AM")
-        )
-        Script   = "venv_new\Scripts\python.exe ai_portfolio_game.py --run"
-        Log      = "execute_trades_agent.log"
-        Desc     = "Fast, 100% deterministic Python task to execute buy/sell trades and check stop-losses at market open."
-    },
-    @{
-        Name     = "AETHER_DailyDriver"
-        Triggers  = @(
-            (New-ScheduledTaskTrigger -Daily -At "7:05 AM")
-        )
-        Prompt   = "Execute the automated skill defined in .claude/commands/daily-run.md"
-        Log      = "daily_driver_agent.log"
-        Desc     = "Slow, qualitative AI-decision and re-qualification pipeline running at 7:05 AM PST."
-    },
-    @{
-        Name     = "AETHER_PostMarketReporter"
-        Triggers  = @(
-            (New-ScheduledTaskTrigger -Daily -At "2:00 PM")
-        )
-        Prompt   = "Execute the automated skill defined in .claude/commands/status.md"
-        Log      = "post_market_reporter_agent.log"
-        Desc     = "Generates post-market closing equity, scheduler checks, and error scanning at 2:00 PM PST."
-    },
-    @{
-        Name     = "AETHER_PostMarketSync"
-        Triggers  = @(
-            (New-ScheduledTaskTrigger -Daily -At "1:30 PM")
-        )
-        Prompt   = "Execute the automated skill defined in .claude/commands/post-market-sync.md"
-        Log      = "post_market_sync_agent.log"
-        Desc     = "Nightly post-market data sync to refresh Chaikin ratings and backfill price caches at 1:30 PM PST."
-    },
-    @{
-        Name     = "AETHER_AftermarketReport"
-        Triggers  = @(
-            (New-ScheduledTaskTrigger -Daily -At "5:00 PM")
-        )
-        Script   = "venv_new\Scripts\python.exe daily_task.py"
-        # daily_task ends with the OHLCV recovery pass (~5 h worst case for its 400-fetch
-        # budget, see rapidapi.pass_timeout_seconds), after run_history + main.py (30 min cap each,
-        # see daily_task.worst_case_runtime_seconds) — the default 15-min limit would kill it.
-        TimeLimitMin = 420
-        Log      = "aftermarket_report_agent.log"
-        Desc     = "Generates and emails the final post-market closing equity and daily performance report at 5:00 PM PST."
-    },
-    @{
-        Name     = "AETHER_Data_Backup"
-        Triggers  = @(
-            (New-ScheduledTaskTrigger -Daily -At "3:00 PM")
-        )
-        Script   = "venv_new\Scripts\python.exe scripts/utils/run_data_backup.py"
-        Log      = "data_backup_agent.log"
-        Desc     = "Robocopy synchronization of the local Data folder to the network Storage drive at 3:00 PM PST."
-    },
-    @{
-        Name     = "AETHER_RD_Scientist"
-        # Saturdays at 10:00 AM
-        Triggers  = @(
-            (New-ScheduledTaskTrigger -Weekly -At "10:00 AM" -DaysOfWeek Saturday)
-        )
-        Prompt   = "Execute the automated R&D skills defined in .claude/commands/pattern-discover.md and .claude/commands/failure-dna.md"
-        Log      = "pattern_discovery_agent.log"
-        Desc     = "Weekly self-improving R&D loop on Saturdays at 10:00 AM PST."
-    },
-    @{
-        Name     = "AETHER_PreFlight_Audit"
-        Triggers  = @(
-            (New-ScheduledTaskTrigger -Daily -At "9:30 PM")
-        )
-        Script   = "venv_new\Scripts\python.exe scripts/diagnostics/preflight_validator.py --email"
-        Log      = "preflight_audit.log"
-        Desc     = "Nightly pre-flight system diagnostics and connection check at 9:30 PM PST."
-    },
-    @{
-        Name     = "AETHER_Chaikin_Reauth"
-        # Weekly, Sunday 8:00 AM. Proactively re-mints the Chaikin PGR session token
-        # (~7-day JWT) BEFORE it lapses, so the daily pipeline never wakes to a dead token.
-        # It launches a HEADED Chrome (the persistent profile's cf_clearance auto-passes
-        # Turnstile with no human) — so unlike every other task here it MUST run in the
-        # interactive desktop session. That is what the Interactive Principal below enforces
-        # ("run only when the user is logged on"); a hidden/S4U/Session-0 context has no
-        # display and Turnstile would fail. See plans/chaikin_api.md "Credential model".
-        Triggers  = @(
-            (New-ScheduledTaskTrigger -Weekly -At "8:00 AM" -DaysOfWeek Sunday)
-        )
-        Script    = "venv_new\Scripts\python.exe scripts/monitoring/chaikin_reauth.py"
-        Log       = "chaikin_reauth_agent.log"
-        Desc      = "Weekly proactive Chaikin PGR token re-auth (headed, no interaction). Runs only when logged on."
-        Principal = (New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited)
-    },
-    @{
-        Name     = "AETHER_Chaikin_Runway_Watch"
-        # Daily 7:00 AM. Runway-watch ONLY: decodes the sessionToken exp and, if fewer than
-        # 2.5 days of runway remain, emails a reminder to click the System "Chaikin - Login &
-        # Refresh Token" button. It NEVER launches a browser, so unlike AETHER_Chaikin_Reauth
-        # it needs no interactive desktop / Principal — a normal non-interactive task is fine.
-        # The script self-throttles to at most one reminder per 20h, so the daily trigger can
-        # never spam (idempotent: >= threshold or already-sent => no email).
-        Triggers  = @(
-            (New-ScheduledTaskTrigger -Daily -At "7:00 AM")
-        )
-        Script    = "venv_new\Scripts\python.exe scripts/monitoring/chaikin_reauth.py --notify-days 2.5"
-        Log       = "chaikin_runway_watch.log"
-        Desc      = "Daily Chaikin token runway-watch; emails a reminder under 2.5 days runway. No browser."
+function New-AetherTrigger($s) {
+    switch ($s.type) {
+        "hourly" {
+            # Starts in the past so the hourly repetition is active immediately, for 9999 days.
+            return New-ScheduledTaskTrigger -Once -At "1/1/2000 12:00 AM" -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 9999)
+        }
+        "daily" {
+            $t = New-ScheduledTaskTrigger -Daily -At $s.at
+            if ($s.repeat_every_min) {
+                $t.Repetition = (New-ScheduledTaskTrigger -Once -At $s.at -RepetitionInterval (New-TimeSpan -Minutes $s.repeat_every_min) -RepetitionDuration (New-TimeSpan -Hours $s.repeat_for_hours)).Repetition
+            }
+            return $t
+        }
+        "weekly" { return New-ScheduledTaskTrigger -Weekly -At $s.at -DaysOfWeek $s.day }
+        default  { throw "Unknown schedule type '$($s.type)'" }
     }
-)
+}
 
+# MultipleInstances IgnoreNew: if an instance is still running, skip the new trigger. These tasks
+# mutate shared state (ai_portfolio_game.json, state_of_the_day.xlsx) and send email, so two
+# concurrent runs would race writes and duplicate reports.
+foreach ($T in $Manifest.tasks) {
+    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes $T.time_limit_min)
+    $Trigger = New-AetherTrigger $T.schedule
+    $LogFile = Join-Path $LogDir $T.log
 
-# Settings: standard reliable settings (wake machine, allow demand run, run missed, cap runtime).
-# MultipleInstances IgnoreNew: if an instance is already running, skip the new trigger — these tasks
-# mutate shared state (ai_portfolio_game.json, state_of_the_day.xlsx) and send email, so two concurrent
-# runs would race writes and duplicate reports. (StopExisting is NOT a valid value for
-# New-ScheduledTaskSettingsSet — only Parallel/Queue/IgnoreNew — and IgnoreNew, unlike Queue, also
-# avoids interrupting or piling onto an in-flight state write.)
-# Runtime cap: 15 min by default; a task may set TimeLimitMin (the daily_task report does).
-$DefaultTimeLimitMin = 15
-
-# Iterate and register each task
-foreach ($T in $Tasks) {
-    $TaskName = $T.Name
-    $PromptPayload = $T.Prompt
-    $TimeLimitMin = if ($T.TimeLimitMin) { $T.TimeLimitMin } else { $DefaultTimeLimitMin }
-    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes $TimeLimitMin)
-    $LogFile = Join-Path $LogDir $T.Log
-    
-    $Launcher = Join-Path $RepoRoot "run_agent.cmd"
-    # Build the scheduled task action: raw scripts execute via PowerShell; AI agent tasks run via the robust run_agent.cmd launcher
-    if ($T.Script) {
-        $ExecCmd = "cd '$RepoRoot'; $($T.Script) >> '$LogFile' 2>&1"
-        $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$ExecCmd`""
+    if ($T.script) {
+        # cmd.exe, not PowerShell: Windows PowerShell 5.1 turns every stderr line of a native
+        # program into an error record under 2>&1, so LastTaskResult was 1 whenever Python logged
+        # a warning (PROD 10-12: the preflight then aborted the morning pipeline), and its >>
+        # wrote the log as UTF-16. cmd passes Python's exit code through and appends plain text.
+        $Command = "$Python $($T.script) $($T.args)".TrimEnd()
+        $Argument = "/c `"cd /d `"$RepoRoot`" && $Command >> `"$LogFile`" 2>&1`""
     } else {
-        # Using cmd.exe /c to launch our central environment-healing batch file
-        $Action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"`"$Launcher`" $Engine $Args -p `"$PromptPayload`" >> `"$LogFile`" 2>&1`""
+        # Agent tasks: the CLI engine runs the prompt through the environment-healing launcher.
+        $Argument = "/c `"`"$Launcher`" $Engine $Args -p `"$($T.prompt)`" >> `"$LogFile`" 2>&1`""
     }
-    
-    Write-Host "Registering task: $TaskName..." -ForegroundColor Yellow
-    Write-Host "  Trigger:     $($T.Desc)"
+    $Action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $Argument
+    $Principal = $null
+    if ($T.interactive) {
+        # Headed Chrome needs the interactive desktop: run only when the user is logged on.
+        $Principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+    }
+
+    if ($DryRun) {
+        [pscustomobject]@{
+            name           = $T.name
+            execute        = "cmd.exe"
+            argument       = $Argument
+            start          = $Trigger.StartBoundary
+            days_interval  = $Trigger.DaysInterval
+            days_of_week   = $Trigger.DaysOfWeek
+            repeat         = $Trigger.Repetition.Interval
+            repeat_for     = $Trigger.Repetition.Duration
+            time_limit     = $Settings.ExecutionTimeLimit
+            interactive    = [bool]$Principal
+        } | ConvertTo-Json -Compress
+        continue
+    }
+
+    Write-Host "Registering task: $($T.name)..." -ForegroundColor Yellow
+    Write-Host "  Summary:     $($T.summary)"
     Write-Host "  Destination: $LogFile"
-    
     try {
-        # Check if already exists to support clean Force override
         if ($Force) {
-            $Existing = Get-ScheduledTask -TaskName $TaskName -TaskPath "\AETHER_Agents\" -ErrorAction SilentlyContinue
+            $Existing = Get-ScheduledTask -TaskName $T.name -TaskPath $Folder -ErrorAction SilentlyContinue
             if ($Existing) {
-                Unregister-ScheduledTask -TaskName $TaskName -TaskPath "\AETHER_Agents\" -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-                Write-Host "  Removed existing $TaskName task." -ForegroundColor DarkGray
+                Unregister-ScheduledTask -TaskName $T.name -TaskPath $Folder -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+                Write-Host "  Removed existing $($T.name) task." -ForegroundColor DarkGray
             }
         }
-        
-        # Register the task cleanly under the path \AETHER_Agents\.
-        # Most tasks take the default principal; a task may supply its own (e.g. the
-        # Chaikin re-auth needs an Interactive principal so headed Chrome has a desktop).
         $RegParams = @{
-            TaskName    = $TaskName
-            TaskPath    = "\AETHER_Agents\"
+            TaskName    = $T.name
+            TaskPath    = $Folder
             Action      = $Action
-            Trigger     = $T.Triggers
+            Trigger     = $Trigger
             Settings    = $Settings
-            Description = $T.Desc
+            Description = $T.summary
         }
-        if ($T.Principal) { $RegParams.Principal = $T.Principal }
+        if ($Principal) { $RegParams.Principal = $Principal }
         Register-ScheduledTask @RegParams | Out-Null
-        Write-Host "  [SUCCESS] registered $TaskName successfully." -ForegroundColor Green
+        Write-Host "  [SUCCESS] registered $($T.name)." -ForegroundColor Green
     }
     catch {
-        Write-Error "  [FAILED] to register task $TaskName. Reason: $_"
+        Write-Error "  [FAILED] to register task $($T.name). Reason: $_"
     }
 }
 
-Write-Host "----------------------------------------------------------"
-Write-Host "All agent tasks have been scheduled under folder '\AETHER_Agents\'." -ForegroundColor Green
-Write-Host "==========================================================" -ForegroundColor Cyan
+if (-not $DryRun) {
+    Write-Host "----------------------------------------------------------"
+    Write-Host "All agent tasks have been scheduled under folder '$Folder'." -ForegroundColor Green
+    Write-Host "==========================================================" -ForegroundColor Cyan
+}
