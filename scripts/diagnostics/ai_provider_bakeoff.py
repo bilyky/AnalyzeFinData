@@ -8,7 +8,7 @@ so a provider switch is chosen on the answers, not on price alone.
    temperature). The prompts hold position data: keep the file local, never commit it.
 2. Enable the providers to compare in config.json (each needs its key), then run:
        python scripts/diagnostics/ai_provider_bakeoff.py --prompts ai_prompts.jsonl ^
-           --providers openrouter,groq,together_deepseek --limit 20 --out bakeoff.md
+           --providers groq,gemini_lite,together_deepseek --limit 20 --out bakeoff.md
 
 Each prompt goes to each named provider exactly once (provider= pins it, no fallback).
 Every call is a real request and may cost money on paid providers. Failures are recorded,

@@ -8,7 +8,7 @@ Config (`config.json` -> `ai`):
                  Optional `extra_body` adds provider-specific request fields; the core
                  fields (model, messages, max_tokens, ...) always win.
     tiers      — named, ordered lists of provider names, e.g.
-                 {"cheap": ["groq", "openrouter"], "strong": ["claude"]}.
+                 {"cheap": ["groq", "gemini_lite"], "strong": ["groq", "gemini_oai"]}.
     primary    — the default chain head when a call names no tier (legacy).
 
 Transports (TRANSPORTS):

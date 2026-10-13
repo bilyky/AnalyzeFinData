@@ -49,26 +49,42 @@
   },
   "ai": {
     "_note": "Advisory AI only, never gates a trade. Call sites ask for a tier ('cheap' or 'strong'), never a provider. A call tries its tier's providers in order, then the 'strong' tier's, then `primary`, then any other enabled provider. To change providers, edit the tier lists and enable the blocks below; no code change. Start free; the paid blocks are ready but disabled. See AETHER_REFERENCE.md 'AI provider layer'.",
-    "primary": "openrouter",
+    "primary": "groq",
     "max_intel_emails": 20,
     "tiers": {
-      "_note": "Ordered provider names. 'cheap' = short, frequent calls (intraday stop note, intel extraction, sell eval, classification). 'strong' = rare, longer calls (stock compare, web chat, research Q&A, intel verification). Unknown or disabled names are skipped.",
-      "cheap": ["openrouter", "openrouter_fb", "groq", "gemini_oai"],
-      "strong": ["openrouter", "groq", "openrouter_fb", "gemini_oai"]
+      "_note": "Ordered provider names. 'cheap' = short, frequent calls (intraday stop note, intel extraction, sell eval, classification); about 35 calls/day, 56 at most (PROD, Sept-Oct 2026). 'strong' = rare, longer calls (stock compare, web chat, research Q&A, intel verification). Unknown or disabled names are skipped. Free providers only for now (owner decision 2026-10-13): Groq first, Gemini last.",
+      "cheap": ["groq", "gemini_lite"],
+      "strong": ["groq", "gemini_oai"]
     },
     "providers": {
 
-      "gemini_oai": {
-        "_note": "FREE. Google AI Studio (aistudio.google.com), GEMINI_API_KEY, no credit card. The free tier is small (reported ~20 requests/day on Flash, Sept 2026) and Google may train on free-tier prompts. One source says the 2.5 models shut down around 2026-10-16: pick a current Flash model.",
-        "enabled": false,
+      "groq": {
+        "_note": "FREE (default primary). Free tier reported at ~1,000 requests/day (Oct 2026), paid ~$0.15/$0.60 per 1M tokens after. console.groq.com, GROQ_API_KEY. Check the model id on Groq's model list, and check Groq's data policy for the free tier, before enabling.",
+        "enabled": true,
         "type": "openai_compatible",
-        "model": "gemini-2.5-flash",
+        "model": "openai/gpt-oss-120b",
+        "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+        "api_key_source": "env:GROQ_API_KEY"
+      },
+      "gemini_lite": {
+        "_note": "FREE, cheap-tier fallback. Gemini Flash-Lite via Google AI Studio (aistudio.google.com), GEMINI_API_KEY, no credit card. Flash-Lite had the larger free quota (reported ~500 requests/day, Sept 2026); see your live limits at aistudio.google.com/rate-limit. Google may use free-tier prompts for training. Check the model id in AI Studio.",
+        "enabled": true,
+        "type": "openai_compatible",
+        "model": "gemini-3.1-flash-lite",
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "api_key_source": "env:GEMINI_API_KEY"
+      },
+      "gemini_oai": {
+        "_note": "FREE, strong-tier fallback. Gemini Flash via Google AI Studio, same GEMINI_API_KEY. The free quota is small (reported ~20 requests/day on Flash, Sept 2026), which is fine for the rare strong calls. Google may use free-tier prompts for training. One source says the 2.5 models shut down around 2026-10-16.",
+        "enabled": true,
+        "type": "openai_compatible",
+        "model": "gemini-3.8-flash",
         "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "api_key_source": "env:GEMINI_API_KEY"
       },
       "openrouter": {
-        "_note": "FREE (default primary). OpenRouter — sign up at openrouter.ai (no credit card), create a key, set OPENROUTER_API_KEY. A one-time $10 credit purchase raises the free cap from 50 to 1,000 requests/day. Free models rotate in/out and rate-limit (429), so check openrouter.ai/models for a current ':free' model. Free models reason by default and spend the small max_tokens on it (empty answer, finish_reason=length): keep extra_body.reasoning.enabled=false. Tested 2026-10-08: nemotron-3-super and apodex-1.1-mini 5/5 OK; poolside/laguna-s-2.1 and gemma-4 429 (shared upstream pool). The free tier is capped per day (the key showed 50/day).",
-        "enabled": true,
+        "_note": "NOT USED (owner decision 2026-10-13): about half of OpenRouter's free-model hosts may train on prompts, and these prompts hold positions. Kept for a paid OpenRouter model later (pick a host that keeps no data). Notes from the free route: free models rotate and answer 429; they reason by default and spend the small max_tokens on it, so keep extra_body.reasoning.enabled=false; the free cap is 50/day (1,000/day after a $10 credit purchase).",
+        "enabled": false,
         "type": "openai_compatible",
         "model": "nvidia/nemotron-3-super-120b-a12b:free",
         "endpoint": "https://openrouter.ai/api/v1/chat/completions",
@@ -76,21 +92,13 @@
         "extra_body": {"reasoning": {"enabled": false}}
       },
       "openrouter_fb": {
-        "_note": "Second free OpenRouter model, used by the fallback chain when the first is rate-limited.",
+        "_note": "NOT USED (see openrouter). Was the second free OpenRouter model.",
         "enabled": false,
         "type": "openai_compatible",
         "model": "apodex/apodex-1.1-mini:free",
         "endpoint": "https://openrouter.ai/api/v1/chat/completions",
         "api_key_source": "env:OPENROUTER_API_KEY",
         "extra_body": {"reasoning": {"enabled": false}}
-      },
-      "groq": {
-        "_note": "FREE tier (reported ~1,000 requests/day, Oct 2026), paid ~$0.15/$0.60 per 1M tokens after. console.groq.com, GROQ_API_KEY. Check the model id on Groq's model list before enabling.",
-        "enabled": false,
-        "type": "openai_compatible",
-        "model": "openai/gpt-oss-120b",
-        "endpoint": "https://api.groq.com/openai/v1/chat/completions",
-        "api_key_source": "env:GROQ_API_KEY"
       },
       "gemini_cli": {
         "_note": "FREE. Gemini via the gemini CLI binary, signed in with a personal Google account (an organization account can be blocked by its policy: PROD got 403 'prohibited by organization's policy', 2026-09-15..23). No API key, but needs the CLI installed.",
