@@ -1765,70 +1765,20 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 s10=s10, l60=l60, sma50=sma50,
                 date=today, run_shadow=None)
             
-            # AI Second-Opinion Exit Override Gate (R&D Item 14): momentum sells only. A stop breach
-            # always executes, whatever the AI says.
-            if entry["rules_action"] == "SELL" and sell_rules.is_stop_exit(entry["rules_reason"]):
-                if entry.get("verdicts") or any(k in pos for k in ("shadow_verdict", "ai_verdict", "verdict", "verdicts")):
-                    _log.info(f"🛑 [AI Override] {sym}: AI verdict ignored, stop exits are never overridden ({entry['rules_reason']}).")
-            elif entry["rules_action"] == "SELL":
-                ai_override = False
-                override_reason = ""
-                override_verdict = ""
-
-                # 1. Check real-time shadow verdicts generated in entry
-                realtime_verdicts = entry.get("verdicts", {})
-                for prov, v_info in realtime_verdicts.items():
-                    v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
-                    if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                        ai_override = True
-                        override_verdict = v
-                        override_reason = f"Real-time AI Shadow Heuristic ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
-                        break
-
-                # 2. Check stored position shadow verdicts if any
-                if not ai_override:
-                    for key in ["shadow_verdict", "ai_verdict", "verdict"]:
-                        if key in pos:
-                            val = pos[key]
-                            if isinstance(val, dict):
-                                v = val.get("verdict", "").upper()
-                                note = val.get("note", "")
-                            else:
-                                v = str(val).upper()
-                                note = ""
-                            if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                                ai_override = True
-                                override_verdict = v
-                                override_reason = f"Stored position {key} returned {v}" + (f": {note}" if note else "")
-                                break
-
-                # 3. Check verdicts dictionary inside the stored position
-                if not ai_override:
-                    pos_verdicts = pos.get("verdicts", {})
-                    if isinstance(pos_verdicts, dict):
-                        for prov, v_info in pos_verdicts.items():
-                            v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
-                            if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                                ai_override = True
-                                override_verdict = v
-                                override_reason = f"Stored position verdicts ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
-                                break
-
-                if ai_override:
-                    old_action = entry["rules_action"]
-                    if override_verdict == "HOLD":
-                        new_action = "HOLD"
-                    else:
-                        new_action = "WATCH"
-                    
-                    entry["rules_action"] = new_action
-                    entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
-                    
-                    _log.info(
-                        f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
-                        f"Decision downgraded from {old_action} to {new_action}. Reason: {override_reason}"
-                    )
-                    _log.info(f"🛡️ [AI Override] Overriding sell of {sym} -> Downgrading to {new_action} due to: {override_reason}")
+            # AI Second-Opinion Exit Override Gate (R&D Item 14), one rule in sell_rules.ai_exit_override:
+            # an AI HOLD / FLAG-FOR-REVIEW downgrades a momentum SELL; a stop breach always executes.
+            old_action = entry["rules_action"]
+            entry["rules_action"], override_reason = sell_rules.ai_exit_override(
+                old_action, entry["rules_reason"], live_verdicts=entry.get("verdicts"), holding=pos)
+            if override_reason:
+                entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
+                _log.info(
+                    f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
+                    f"Decision downgraded from {old_action} to {entry['rules_action']}. Reason: {override_reason}"
+                )
+            elif (old_action == "SELL" and sell_rules.is_stop_exit(entry["rules_reason"])
+                    and sell_rules.override_verdict(entry.get("verdicts"), pos)[0]):
+                _log.info(f"🛑 [AI Override] {sym}: AI verdict ignored, stop exits are never overridden ({entry['rules_reason']}).")
 
             decision_entries.append(entry)
             if entry["rules_action"] == "SELL":
