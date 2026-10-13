@@ -38,7 +38,6 @@ INITIAL_BALANCE = 10000.0
 import risk_utils
 import sell_rules
 import decision_eval
-import watchdog
 import instruments
 from aether import options
 from aether.market_calendar import NYSE_HOLIDAYS, last_session_on_or_before
@@ -2265,18 +2264,10 @@ if __name__ == "__main__":
             ):
                 run_daily_ai_management(force=args.force, manual_profile=args.profile)
                 send_consolidated_morning_report()
-                try:
-                    watchdog.sync_data_folder()
-                except Exception as e:
-                    _log.warning(f"Post-run sync failed: {e}")
         except RunSkipped as e:
             _log.info(f"Trade execution skipped — {e}. Another scheduler already ran "
                       "it today, or the state is busy (single-executor guard).")
     elif args.summary:
         send_daily_summary()
-        try:
-            watchdog.sync_data_folder()
-        except Exception as e:
-            _log.warning(f"Post-run sync failed: {e}")
     else:
         show_report()

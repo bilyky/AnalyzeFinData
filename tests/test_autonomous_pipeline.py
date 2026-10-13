@@ -74,7 +74,6 @@ class TestMarketHoursPipelineDowngrade(unittest.TestCase):
         with mock.patch("sys.exit") as mock_exit, \
              mock.patch("autonomous_pipeline.DailyRunGuard") as mock_guard, \
              mock.patch("autonomous_pipeline.notify.send_email") as mock_email, \
-             mock.patch("autonomous_pipeline.watchdog.sync_data_folder") as mock_sync, \
              mock.patch("sys.argv", ["autonomous_pipeline.py"]):
             
             ap.main()

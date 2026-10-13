@@ -72,12 +72,13 @@
     },
     {
       "name": "AETHER_Data_Backup",
-      "schedule": {"type": "daily", "at": "15:00"},
+      "schedule": {"type": "daily", "at": "22:00"},
       "script": "scripts/utils/run_data_backup.py", "args": "",
-      "time_limit_min": 15,
+      "time_limit_min": 150,
       "log": "data_backup_agent.log",
-      "summary": "Robocopy of Data/ to the network share.",
-      "description": "Syncs the local Data folder to the backup share and records the result in Data/backup_status.json. Exits 1 when the sync fails."
+      "summary": "The one daily backup of Data/ to the network share.",
+      "description": "Robocopy of the local Data folder to the backup share, once a day after the day's data collection. If a collecting script is still running (daily_task and its children, a late pipeline) it waits up to 2 hours, then backs up anyway. Records the result in Data/backup_status.json; exits 1 when the share is offline or the copy fails. No other script syncs Data.",
+      "notes": "The evening daily_task usually ends by 19:30 but may run to midnight; the wait covers that. Limit = 120 min wait + 10 min robocopy + headroom."
     },
     {
       "name": "AETHER_AftermarketReport",

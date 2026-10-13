@@ -13,7 +13,6 @@ import pyetrade
 import rapidapi
 import signals
 import database
-import watchdog
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("main")
@@ -101,10 +100,7 @@ if __name__ == '__main__':
     # rapidapi.save_quotas()
     # pd.read_excel('')
 
-    try:
-        watchdog.sync_data_folder()
-    except Exception as e:
-        _log.warning(f"Post-run sync failed: {e}")
+    # The Data backup runs once a day, from the AETHER_Data_Backup task (22:00), not here.
 
 
 
