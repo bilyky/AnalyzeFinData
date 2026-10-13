@@ -81,6 +81,16 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 *   **Optional AI "WHY" Narrative (`summarize_comparison`, `prompts/compare_stocks.md`):** On demand, layers a ranked WHY read over the quantitative factors only (no web access). Degrades gracefully — when the rubric, a provider, or the provider call is unavailable it returns a plain-language reason (shown to the user) instead of a bare failure.
 *   **Four Surfaces, One Engine:** The **Research page** (row-selection checkboxes + inline compare panel + on-demand Summarize), the **web chat** ("compare/vs" intent → ranked side-by-side), the **console** (`scripts/analysis/compare_stocks.py … --summarize --send`), and the **`/compare-stocks` agent skill** all call the same engine. The agent surface additionally layers live news/events web search on top of the shared rubric.
 
+### F. AI Provider Layer (`aether/ai_client.py`, R&D #53)
+The AI only advises; it never gates a trade. Every caller catches a failure and falls back to its rule-based answer.
+
+*   **Call sites name a tier, not a provider.** `cheap` is for short, frequent calls: the intraday stop note, intel extraction, sell eval, scarcity classification. `strong` is for rare, longer calls: stock compare, web chat, research Q&A, intel verification. A test (`tests/test_ai_tiers.py`) fails if a production call site leaves the tier out.
+*   **Providers are config, not code.** `config.json` → `ai.providers` holds one block per provider: `type`, `model`, `endpoint`, `api_key_source` (`env:VAR` or a literal key), and optional `extra_body`. `ai.tiers` holds ordered lists of provider names. Switching from a free to a paid provider means editing a tier list and enabling a block. `config.json.example` has ready blocks for OpenRouter, Groq, Gemini (API and CLI), Together, Fireworks, Mistral, Azure OpenAI (v1), Bedrock and Anthropic; the paid ones are disabled.
+*   **Transports.** `TRANSPORTS` maps each `type` to one function with the same signature: `openai_compatible` (any `/chat/completions` endpoint with a Bearer key), `anthropic` (Messages API), `gemini_cli`. A new wire format is one new entry.
+*   **Routing.** An explicit `provider=` uses only that provider. Otherwise a call tries its tier's providers, then the `strong` tier's, then `primary`, then any other enabled provider. Providers that are disabled or have no key are skipped. An empty answer counts as a failure, so the next provider gets the call. `evaluate_with_provider()` / `chat_with_provider()` return the name of the provider that answered.
+*   **Visibility.** Every success logs `AI call ok` with tier, provider, model, ms and input/output size; every failure logs a warning. Preflight's `AI Providers (advisory)` check (WARN, never blocks the run) needs at least one usable provider per tier and checks that each endpoint host resolves. That check would have caught the misspelled `openrpouter.ai` host that stopped every AI call on PROD from 2026-09-24 to 2026-10-05.
+*   **Choosing providers.** With `AETHER_AI_CAPTURE=<file>` set, each request is appended to a JSONL file (it holds position data: keep it local). `scripts/diagnostics/ai_provider_bakeoff.py` runs those prompts through several providers and writes the answers side by side.
+
 ---
 
 ## 🧱 3. System Resilience & Headless Safety Gates

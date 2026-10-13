@@ -61,7 +61,8 @@ class TestExtract(unittest.TestCase):
             {"claim": "Russian uranium ban waivers all expire", "status": "VERIFIED", "note": "Confirmed by legislation"}
         ], "supply_chain_facts": []})
         with mock.patch("ai_client.primary", return_value="gpt"), \
-             mock.patch("ai_client.evaluate", side_effect=[_FAKE_RESPONSE, verify_resp]), \
+             mock.patch("ai_client.evaluate_with_provider", return_value=(_FAKE_RESPONSE, "gpt")), \
+             mock.patch("ai_client.evaluate", return_value=verify_resp), \
              mock.patch("data_api.read_research", return_value={"rows": []}):
             result = ex.extract("Test Subject", "Test body about uranium.")
         self.assertEqual(result["confidence"], "HIGH")
@@ -78,7 +79,7 @@ class TestExtract(unittest.TestCase):
 
     def test_ai_failure_returns_empty(self):
         with mock.patch("ai_client.primary", return_value="gpt"), \
-             mock.patch("ai_client.evaluate", return_value=""):
+             mock.patch("ai_client.evaluate_with_provider", return_value=("", "gpt")):
             self.assertEqual(ex.extract("s", "b"), {})
 
     def test_malformed_nested_structures_does_not_crash(self):
@@ -95,7 +96,8 @@ class TestExtract(unittest.TestCase):
             "supply_chain_facts": "fact-string"
         })
         with mock.patch("ai_client.primary", return_value="gpt"), \
-             mock.patch("ai_client.evaluate", side_effect=[malformed_response, verify_resp]), \
+             mock.patch("ai_client.evaluate_with_provider", return_value=(malformed_response, "gpt")), \
+             mock.patch("ai_client.evaluate", return_value=verify_resp), \
              mock.patch("data_api.read_research", return_value={"rows": []}):
             result = ex.extract("Test Subject", "Test body.")
             
@@ -122,7 +124,7 @@ class TestExtract(unittest.TestCase):
         huge_body = "C" * 10000
         verify_resp = "{}"
         with mock.patch("ai_client.primary", return_value="gpt"), \
-             mock.patch("ai_client.evaluate", side_effect=[_FAKE_RESPONSE, verify_resp]) as mock_evaluate, \
+             mock.patch("ai_client.evaluate_with_provider", return_value=(_FAKE_RESPONSE, "gpt")) as mock_evaluate, \
              mock.patch("data_api.read_research", return_value={"rows": []}):
             ex.extract("Test Subject", huge_body, verify=False)
             

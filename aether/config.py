@@ -153,6 +153,7 @@ class _Config:
         ai = raw.get("ai") or {}
         self.ai_primary       = os.environ.get("AI_PRIMARY") or ai.get("primary", "")
         self.ai_providers     = ai.get("providers") or {}
+        self.ai_tiers         = ai.get("tiers") or {}
         self.ai_max_intel_emails = int(
             os.environ.get("AI_MAX_INTEL_EMAILS", "") or ai.get("max_intel_emails", 20)
         )
