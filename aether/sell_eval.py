@@ -92,7 +92,7 @@ def evaluate_exit(ctx: dict, provider: str | None = None) -> dict:
         # provider=None lets ai_client fall back to the other enabled providers; label the verdict
         # with the provider that actually answered.
         text, name = ai_client.evaluate_with_provider(rubric, build_user_prompt(ctx),
-                                                      provider=provider, max_tokens=120)
+                                                      provider=provider, max_tokens=120, tier="cheap")
         parsed = _parse(text)
         if parsed:
             parsed["provider"] = name
