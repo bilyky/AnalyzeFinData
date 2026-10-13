@@ -1,6 +1,6 @@
 """Entry point for the AETHER_Data_Backup scheduled task: the ONE place Data/ is backed up.
 
-Runs once a day (22:00, see scripts/utils/scheduled_tasks.json), after the day's data
+Runs once a day (the time is in scripts/utils/scheduled_tasks.json), after the day's data
 collection. If a data-collecting script is still running (the evening daily_task and its
 children, or a late morning pipeline), it waits for it to finish, polling every
 WAIT_STEP_S seconds for up to MAX_WAIT_MIN minutes. Past that it backs up anyway and says so:

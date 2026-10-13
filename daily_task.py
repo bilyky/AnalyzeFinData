@@ -215,14 +215,14 @@ def get_description(r):
     return "; ".join(desc) if desc else "Solid technicals"
 
 
-BACKUP_MAX_AGE_H = 30   # the backup runs nightly at 22:00; older than this means a night was missed
+BACKUP_MAX_AGE_H = 30   # the backup runs nightly (scheduled_tasks.json); older than this means a night was missed
 
 
 def _backup_note(status: dict, now, today):
     """(warning_html, subject_line) for the evening email from the last recorded backup.
 
     daily_task no longer syncs Data itself: the AETHER_Data_Backup task does, once a day at
-    22:00, after collection is done. The email reports that task's last result."""
+    nightly, after collection is done (scripts/utils/scheduled_tasks.json). The email reports that task's last result."""
     ok_subject = f"AETHER Daily Rotation & Momentum Report: {today}"
     stale_subject = f"⚠️ AETHER Daily Rotation & Momentum Report: {today} (Backup Stale)"
     last_ok = status.get("last_success")
@@ -422,7 +422,7 @@ def main():
         </html>
         """
 
-        # Data is backed up by the nightly AETHER_Data_Backup task (22:00), not here; report its result.
+        # Data is backed up by the nightly AETHER_Data_Backup task, not here; report its result.
         sync_warning_html, subject_line = _backup_note(watchdog.backup_status(), datetime.datetime.now(), today)
 
         if sync_warning_html:

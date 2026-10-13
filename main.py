@@ -100,7 +100,7 @@ if __name__ == '__main__':
     # rapidapi.save_quotas()
     # pd.read_excel('')
 
-    # The Data backup runs once a day, from the AETHER_Data_Backup task (22:00), not here.
+    # The Data backup runs once a day, from the nightly AETHER_Data_Backup task (scripts/utils/scheduled_tasks.json), not here.
 
 
 

@@ -4,7 +4,7 @@ PROD 2026-10-06..10-12: sync_data_folder() was called at the end of seven script
 autonomous_pipeline.py, ai_portfolio_game.py --run and --summary, external_intel.py,
 daily_task.py, the backup task): two robocopies every morning around 05:50 (before the 06:30
 market-hours guard), up to four in the evening, one at 18:00. Now only the AETHER_Data_Backup
-task (22:00) syncs, and it first waits for any data-collecting script to finish.
+task (nightly) syncs, and it first waits for any data-collecting script to finish.
 """
 import ast
 import datetime
@@ -50,7 +50,8 @@ class TestOnlyTheBackupTaskSyncs(unittest.TestCase):
 
     def test_backup_runs_at_22_with_room_to_wait(self):
         t = {x["name"]: x for x in scheduled_tasks.tasks()}["AETHER_Data_Backup"]
-        self.assertEqual(t["schedule"], {"type": "daily", "at": "22:00"})
+        # 22:10, not 22:00: the hourly watchdog starts on the hour and writes under Data/ (review of #193).
+        self.assertEqual(t["schedule"], {"type": "daily", "at": "22:10"})
         self.assertGreaterEqual(t["time_limit_min"] * 60,
                                 run_data_backup.MAX_WAIT_MIN * 60 + watchdog.SYNC_TIMEOUT_S)
 
