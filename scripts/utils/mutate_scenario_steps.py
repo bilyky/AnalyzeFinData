@@ -59,8 +59,9 @@ MUTANTS = [
     ("exits: row[8]->row[10]", 'prev_close = float(row[8]', 'prev_close = float(row[10]'),
     # The override rule itself lives in sell_rules.ai_exit_override (tests/test_ai_exit_override.py);
     # these check the stage hands it the right inputs and applies its result.
-    ("exits: ai override not applied", 'entry["rules_action"], override_reason = game.sell_rules.ai_exit_override(',
-     '_unused, override_reason = game.sell_rules.ai_exit_override('),
+    ("exits: ai override not applied", 'entry["rules_action"], override_reason, ignored_reason = game.sell_rules.ai_exit_override(',
+     '_unused, override_reason, ignored_reason = game.sell_rules.ai_exit_override('),
+    ("exits: ignored verdict not logged", 'elif ignored_reason:', 'elif False:'),
     ("exits: live verdicts not passed", 'live_verdicts=entry.get("verdicts"), holding=pos)',
      'live_verdicts=None, holding=pos)'),
     ("exits: stored verdicts not passed", 'live_verdicts=entry.get("verdicts"), holding=pos)',
