@@ -224,7 +224,7 @@ class TestStatusFile(_Base):
 
     def test_failed_build_still_writes_its_verdict(self):
         with mock.patch.object(ovc.etrade, "keep_alive", return_value=None):
-            self.build()
+            self.build(record_status=True)
         st = self._status()
         self.assertEqual(st["health"], "failed")
         self.assertFalse(os.path.exists(os.path.join(self.dir, ovc.CACHE_NAME)))   # no cache written
@@ -236,10 +236,47 @@ class TestStatusFile(_Base):
             m["keep_alive"].return_value = {"oauth_token": "t"}
             m["get_accounts"].return_value = _FakeAccounts()
             m["fetch_positions"].return_value = []
-            self.build()
+            self.build(record_status=True)
         st = self._status()
         self.assertEqual((st["health"], st["source"]), ("ok", "live"))
         self.assertNotIn("accounts", json.dumps(st))
+
+
+class TestWeekendStaleness(_Base):
+    """The weekend rule lives in the pack, so the skill's read and the pipeline agree."""
+
+    def test_limits_by_day(self):
+        self.assertEqual(ovc.max_stale_hours_for(datetime.date(2026, 10, 10)), 72)   # Saturday
+        self.assertEqual(ovc.max_stale_hours_for(datetime.date(2026, 10, 11)), 72)   # Sunday
+        self.assertEqual(ovc.max_stale_hours_for(datetime.date(2026, 10, 12)), 24)   # Monday
+
+    def _friday_cache(self):
+        friday = datetime.datetime(2026, 10, 9, 17, 31).astimezone()
+        with open(os.path.join(self.dir, ovc.CACHE_NAME), "w", encoding="utf-8") as f:
+            json.dump({"broker_as_of": friday.isoformat(timespec="seconds"),
+                       "broker": {"accounts": [], "positions": []}}, f)
+
+    def test_saturday_read_of_fridays_snapshot_is_degraded(self):
+        self._friday_cache()
+        sunday = datetime.datetime(2026, 10, 11, 10, 0).astimezone()      # ~40 h after Friday
+        pack = ovc.build_oceanview_context(live=False, data_dir=self.dir, now=sunday)
+        self.assertEqual(pack["meta"]["health"], "degraded")
+
+    def test_same_age_on_a_weekday_is_failed(self):
+        self._friday_cache()
+        tuesday = datetime.datetime(2026, 10, 13, 10, 0).astimezone()     # > 24 h, weekday
+        pack = ovc.build_oceanview_context(live=False, data_dir=self.dir, now=tuesday)
+        self.assertEqual(pack["meta"]["health"], "failed")
+
+
+class TestStatusOnlyWhenRecorded(_Base):
+    def test_interactive_read_never_writes_the_status(self):
+        # The adviser skill reads the pack with live=False; it must not overwrite the
+        # evening pipeline's verdict that the watchdog gate reads.
+        self.build(live=False)
+        with mock.patch.object(ovc.etrade, "keep_alive", return_value=None):
+            self.build()
+        self.assertFalse(os.path.exists(os.path.join(self.dir, ovc.STATUS_NAME)))
 
 
 class TestStudyGates(_Base):

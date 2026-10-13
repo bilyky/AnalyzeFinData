@@ -9,9 +9,11 @@ the behaviours it carries over from the root, unchanged:
    and one SELL tx (``pnl``, ``Exit: <reason>``, ``stop_loss``) lands in both
    ``state["history"]`` and ``new_transactions``; the price falls back to cost
    when unquoted.
-2. **STP LMT fill** (R&D #8) — at or below a positive stop the fill is the stop
-   price and the details get ``[STP LMT fill]``; no stop (0 or missing) means a
-   plain market fill.
+2. **STP LMT @ market** (R&D #8) — at or below a positive stop the order is a
+   stop-limit whose limit is the market price, so the fill is the market price
+   (never the stop: a gap below the stop is a real loss) and the details get
+   ``[STP LMT @ market, stop <stop>]``; no stop (0 or missing) means a plain
+   market fill.
 3. **Order of side effects** — a written call is unwound at the market price
    while the position is still held; the closed-trade DNA gets the final fill.
 
@@ -99,21 +101,22 @@ class TestFill(unittest.TestCase):
 
 
 class TestStopLimitFill(unittest.TestCase):
-    def test_gap_below_stop_fills_at_stop(self):
+    def test_gap_below_stop_fills_at_market_price(self):
         state = _state(AAA={"qty": 10, "cost": 100.0, "stop_loss": 90.0})
         with _Harness() as h:
             txs = _run(state, {"AAA": "Hard stop"}, {"AAA": 80.0})
-        self.assertEqual(txs[0]["price"], 90.0)
-        self.assertEqual(txs[0]["pnl"], -100.0)
-        self.assertEqual(txs[0]["details"], "Exit: Hard stop [STP LMT fill]")
-        self.assertEqual(state["balance"], 1900.0)
+        self.assertEqual(txs[0]["price"], 80.0)
+        self.assertEqual(txs[0]["pnl"], -200.0)
+        self.assertEqual(txs[0]["details"], "Exit: Hard stop [STP LMT @ market, stop 90.00]")
+        self.assertEqual(state["balance"], 1800.0)
         self.assertIn("[STP LMT]", h.log.info.call_args_list[0].args[0])
 
     def test_price_exactly_at_stop_is_a_stop_fill(self):
         state = _state(AAA={"qty": 1, "cost": 100.0, "stop_loss": 90.0})
         with _Harness():
             txs = _run(state, {"AAA": "r"}, {"AAA": 90.0})
-        self.assertTrue(txs[0]["details"].endswith("[STP LMT fill]"))
+        self.assertEqual(txs[0]["price"], 90.0)
+        self.assertTrue(txs[0]["details"].endswith("[STP LMT @ market, stop 90.00]"))
 
     def test_no_stop_means_plain_market_fill(self):
         # A zero quote with no stop is still a market fill, not a stop fill at 0.
@@ -142,7 +145,7 @@ class TestSideEffectOrder(unittest.TestCase):
         with _Harness(unwind=unwind) as h:
             _run(state, {"AAA": "r"}, {"AAA": 80.0})
         self.assertEqual(seen, {"held": True, "price": 80.0, "today": _TODAY})
-        self.assertEqual(h.dna.call_args.args[2], 90.0)  # DNA gets the STP LMT fill
+        self.assertEqual(h.dna.call_args.args[2], 80.0)  # DNA gets the real fill, not the stop
 
 
 if __name__ == "__main__":

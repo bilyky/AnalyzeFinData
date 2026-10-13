@@ -10,6 +10,7 @@ import datetime
 import io
 import imaplib
 import json
+import re
 import os
 import smtplib
 import subprocess
@@ -391,8 +392,10 @@ def check_watchdog_health(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
                         except ValueError:
                             last_result = 0
                             
-                        # Allow 0 (success), 267009 (SCHED_S_TASK_RUNNING), and 267011 (SCHED_S_TASK_HAS_NOT_RUN) as valid
-                        if last_result not in (0, 267009, 267011):
+                        # Allow 0 (success), 267009 (SCHED_S_TASK_RUNNING), 267011 (SCHED_S_TASK_HAS_NOT_RUN),
+                        # and 0x800710E0 ("request refused": a trigger fired while the previous hourly
+                        # run was still going, IgnoreNew). A hung run is caught by the lock-age check below.
+                        if last_result & 0xFFFFFFFF not in (0, 267009, 267011, 0x800710E0):
                             issues.append(f"Task Scheduler: 'AETHER_Watchdog' last run failed (Exit Code: {last_result_str} / {hex(last_result)}).")
             else:
                 issues.append("Task Scheduler: 'AETHER_Watchdog' task is not found or schtasks query failed.")
@@ -437,6 +440,17 @@ def check_watchdog_health(base_dir: Path = BASE_DIR) -> tuple[bool, list[str]]:
     return True, []
 
 
+def _run_key(to_run: str):
+    """What a task runs, for duplicate detection: "<script>.py <args>" or "skill:<name>"."""
+    m = re.search(r"([\w./\\-]+\.py)\b([^>&]*)", to_run)
+    if m:
+        script = m.group(1).replace("\\", "/").rsplit("/", 1)[-1]
+        args = " ".join(m.group(2).replace('"', " ").replace("'", " ").split())
+        return f"{script} {args}".strip()
+    m = re.search(r"commands/([\w-]+)\.md", to_run)
+    return f"skill:{m.group(1)}" if m else None
+
+
 def check_scheduled_tasks_integrity() -> tuple[bool, list[str]]:
     """Scan root (\\) and subdirectory (\\AETHER_Agents\\) recursively to audit
     AETHER / AnalyzeFinData tasks and flag duplicate/overlapping execution engines.
@@ -478,19 +492,10 @@ def check_scheduled_tasks_integrity() -> tuple[bool, list[str]]:
                 if not to_run:
                     continue
 
-                # Identify target scripts
-                script_key = None
-                if "autonomous_pipeline.py" in to_run:
-                    script_key = "autonomous_pipeline.py"
-                elif "daily-run.md" in to_run:
-                    script_key = "AETHER_DailyDriver (AI-Qualitative)"
-                elif "ai_portfolio_game.py" in to_run:
-                    script_key = "ai_portfolio_game.py (Trading Desk)"
-                elif "watchdog.py" in to_run or "watchdog.md" in to_run:
-                    script_key = "watchdog.py (Watchdog)"
-                elif "preflight_validator.py" in to_run:
-                    script_key = "preflight_validator.py"
-
+                # Key = what the task actually runs: the Python script plus its arguments, or the
+                # skill file of an agent task. "ai_portfolio_game.py --run" and "--summary" are
+                # different jobs; the same command under two task names is a duplicate.
+                script_key = _run_key(to_run)
                 if script_key:
                     by_script.setdefault(script_key, []).append((name, to_run))
 
