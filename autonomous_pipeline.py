@@ -7,7 +7,6 @@ import datetime
 import subprocess
 import openpyxl
 import notify
-import watchdog
 from watchdog import is_market_hours
 import html
 from aether import trash
@@ -598,11 +597,7 @@ def main():
         log("Drafting HTML report (email disabled via --no-email)...")
 
     log("Pipeline completed successfully.")
-
-    try:
-        watchdog.sync_data_folder()
-    except Exception as e:
-        log(f"Post-pipeline sync failed: {e}")
+    # The Data backup runs once a day, from the nightly AETHER_Data_Backup task (scripts/utils/scheduled_tasks.json), not here.
 
 
 if __name__ == "__main__":

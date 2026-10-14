@@ -627,6 +627,12 @@ def _record_backup_status(result):
         _log.warning(f"⚠️ Could not record backup status: {e}")
 
 
+def backup_status() -> dict:
+    """The recorded backup outcome: {"last_attempt", "last_result", "last_success"} (any may be
+    missing). Written by sync_data_folder(), which only the AETHER_Data_Backup task calls."""
+    return _read_json(BACKUP_STATUS_FILE) or {}
+
+
 def check_backup_health():
     """Alert when no backup has succeeded for BACKUP_STALE_DAYS (or ever)."""
     status = _read_json(BACKUP_STATUS_FILE) or {}
