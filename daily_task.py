@@ -215,38 +215,31 @@ def get_description(r):
     return "; ".join(desc) if desc else "Solid technicals"
 
 
-def _sync_warning(sync_ok, today, error=None):
-    """Build the post-run data-sync (warning_html, subject_line) for the daily email.
+BACKUP_MAX_AGE_H = 30   # the backup runs nightly (scheduled_tasks.json); older than this means a night was missed
 
-    watchdog.sync_data_folder() returns a bool: it is False only on a genuine sync
-    failure (robocopy rc>=8, missing source, or an exception it caught internally).
-    True covers both success and the intentional "offline but not a failure" bypass,
-    so only False (or a raised `error`) raises the warning banner. `error` is set when
-    the sync call itself raised out to the caller.
-    """
+
+def _backup_note(status: dict, now, today):
+    """(warning_html, subject_line) for the evening email from the last recorded backup.
+
+    daily_task no longer syncs Data itself: the AETHER_Data_Backup task does, once a day at
+    nightly, after collection is done (scripts/utils/scheduled_tasks.json). The email reports that task's last result."""
     ok_subject = f"AETHER Daily Rotation & Momentum Report: {today}"
-    fail_subject = f"⚠️ AETHER Daily Rotation & Momentum Report: {today} (Sync Failed)"
-
-    if error is not None:
-        html = (
-            "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
-            "<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Post-Run Data Synchronization Error!</h4>"
-            f"<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The data synchronization engine threw an exception: {error}</p>"
-        )
-        return html, fail_subject
-
-    if sync_ok is False:
-        html = (
-            "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
-            "<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Post-Run Data Synchronization Failed!</h4>"
-            "<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The backup drive or UNC storage path \\\\10.0.0.156\\Storage\\ was unreachable or disconnected during this run. "
-            "All local trade entries completed nominal, but Data caches were not mirrored to the network storage drive. "
-            "Please check your backup drive connectivity.</p>"
-        )
-        return html, fail_subject
-
-    return "", ok_subject
-
+    stale_subject = f"⚠️ AETHER Daily Rotation & Momentum Report: {today} (Backup Stale)"
+    last_ok = status.get("last_success")
+    try:
+        age_h = (now - datetime.datetime.fromisoformat(last_ok)).total_seconds() / 3600 if last_ok else None
+    except (TypeError, ValueError):
+        age_h = None
+    if age_h is not None and age_h <= BACKUP_MAX_AGE_H:
+        return "", ok_subject
+    when = f"last success {last_ok} ({age_h:.0f} h ago)" if age_h is not None else "no successful backup recorded"
+    html = (
+        "<hr style='border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0;'>"
+        "<h4 style='color: #e74c3c; margin: 0 0 10px 0;'>⚠️ WARNING: Data backup is stale</h4>"
+        f"<p style='color: #7f8c8d; font-size: 13px; margin: 0;'>The nightly AETHER_Data_Backup task: {when}; "
+        f"last result: {status.get('last_result', 'unknown')}. Check the backup share.</p>"
+    )
+    return html, stale_subject
 
 def main():
     # Ensure we are in the script's directory
@@ -429,17 +422,8 @@ def main():
         </html>
         """
 
-        _log.info("Running post-run Data synchronization...")
-        sync_warning_html = ""
-        subject_line = f"AETHER Daily Rotation & Momentum Report: {today}"
-        
-        try:
-            # We execute the data sync BEFORE the email is sent so we can append any failures transparently!
-            sync_ok = watchdog.sync_data_folder()
-            sync_warning_html, subject_line = _sync_warning(sync_ok, today)
-        except Exception as sync_err:
-            _log.warning(f"Post-run sync failed: {sync_err}")
-            sync_warning_html, subject_line = _sync_warning(None, today, error=sync_err)
+        # Data is backed up by the nightly AETHER_Data_Backup task, not here; report its result.
+        sync_warning_html, subject_line = _backup_note(watchdog.backup_status(), datetime.datetime.now(), today)
 
         if sync_warning_html:
             html = html.replace("</body>", f"{sync_warning_html}</body>")
