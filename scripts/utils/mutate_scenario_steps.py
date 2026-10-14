@@ -57,12 +57,20 @@ MUTANTS = [
     ("queued: dna s10<->l60", 'q_s10 = float(r_row[24] or 0.0)', 'q_s10 = float(r_row[25] or 0.0)'),
     # exits
     ("exits: row[8]->row[10]", 'prev_close = float(row[8]', 'prev_close = float(row[10]'),
+    # The override rule itself lives in sell_rules.ai_exit_override (tests/test_ai_exit_override.py);
+    # these check the stage hands it the right inputs and applies its result.
+    ("exits: ai override not applied", 'entry["rules_action"], override_reason = game.sell_rules.ai_exit_override(',
+     '_unused, override_reason = game.sell_rules.ai_exit_override('),
+    ("exits: live verdicts not passed", 'live_verdicts=entry.get("verdicts"), holding=pos)',
+     'live_verdicts=None, holding=pos)'),
+    ("exits: stored verdicts not passed", 'live_verdicts=entry.get("verdicts"), holding=pos)',
+     'live_verdicts=entry.get("verdicts"), holding={})'),
+    ("exits: override reason dropped", 'entry["rules_reason"] = f"AI Override: {override_reason} (was',
+     'entry["rules_reason"] = entry["rules_reason"] or f"AI Override: {override_reason} (was'),
     ("exits: ratchet 1.0x->0.5x", '> (1.0 * atr):', '> (0.5 * atr):'),
     ("exits: breakeven 1.5x->2.0x", '> (1.5 * atr):', '> (2.0 * atr):'),
     ("exits: keep-1-share off", 'sell_qty = max(0, min(sell_qty, pos["qty"] - 1))', 'sell_qty = max(0, min(sell_qty, pos["qty"]))'),
     ("exits: gap frozen keeps stop", 'stop_loss=None if is_gap_frozen else pos.get("stop_loss")', 'stop_loss=pos.get("stop_loss")'),
-    ("exits: HOLD verdict ignored", 'if v in ("FLAG-FOR-REVIEW", "HOLD"):\n                    ai_override = True\n                    override_verdict = v\n                    override_reason = f"Real-time',
-     'if v in ("FLAG-FOR-REVIEW",):\n                    ai_override = True\n                    override_verdict = v\n                    override_reason = f"Real-time'),
     ("exits: no dedup of queued sell", 'if not any(q["symbol"] == sym and q["type"] == "SELL" for q in state.get("queued_orders", [])):', 'if True:'),
 ]
 
@@ -87,10 +95,6 @@ MUTANTS += [  # round 2: targets behaviours round 1 never touched
     ("queued: no heal before skip", 'game._heal_symbol_cache(sym)\n                if game._cache_stale', 'if game._cache_stale'),
     ("queued: dna default Neutral->None", 'q_pgr = "Neutral"', 'q_pgr = None'),
     ("queued: price<=0 not skipped", 'if price <= 0:\n            continue', 'if price < 0:\n            continue'),
-    ("exits: FLAG->HOLD", 'new_action = "WATCH"', 'new_action = "HOLD"'),
-    ("exits: stored key ignored", 'for key in ["shadow_verdict", "ai_verdict", "verdict"]:', 'for key in []:'),
-    ("exits: stored verdicts ignored", 'pos_verdicts = pos.get("verdicts", {})', 'pos_verdicts = {}'),
-    ("exits: stored before realtime", '# 1. Check real-time shadow verdicts generated in entry\n            realtime_verdicts = entry.get("verdicts", {})', '# 1. Check real-time shadow verdicts generated in entry\n            realtime_verdicts = {}'),
     ("exits: scarcity 1.5->1.6", 'multiplier = 1.5 if is_scarcity', 'multiplier = 1.6 if is_scarcity'),
     ("exits: default mult 2.5->3", 'rules.get("atr_multiplier", 2.5)', 'rules.get("atr_multiplier", 3.0)'),
     ("exits: ratchet can lower", 'if recalculated_stop > old_stop:', 'if True:'),
