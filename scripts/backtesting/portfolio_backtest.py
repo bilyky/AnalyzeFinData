@@ -34,6 +34,9 @@ breadth downgrade, scarcity-core sizing, scale-outs/covered calls, rotation. The
 reconstruction also omits the live digit_sum, setup_ok and vrecovery_score fields.
 The universe is TODAY's symbol list, so results carry survivorship bias (optimistic).
 Synthetic placeholder bars (provisional / O=H=L=C on zero volume) never price a fill.
+Loss-cap differences from live: a buy with no prior ATR gets no stop here, so no cap
+(live falls back to an 8% stop and caps against it); a trimmed buy may land under
+MIN_TICKET_USD (live rejects it only below 1 share); quantities are fractional.
 
 The score panel (~6s/symbol) is cached in Data/portfolio_backtest_panel.json, keyed by a
 fingerprint of the scoring code + calibration studies; --rebuild forces a recompute.
