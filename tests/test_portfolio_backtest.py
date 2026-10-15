@@ -7,6 +7,7 @@ stop at min(open, stop), the regime cash buffer, and the metric arithmetic.
 """
 import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -139,6 +140,17 @@ class TestSimulate(unittest.TestCase):
         self.assertAlmostEqual(r["curve"][1][2], 10_000.0 / 5)
         self.assertEqual(r["cap_trims"], 0)
 
+    def test_loss_cap_sized_on_current_equity(self):
+        # A is bought at 10 (cap: 1% of 10k / 2.5 stop gap = 40 shares) and closes at 60, so
+        # equity is 9,600 + 40 x 60 = 12,000 when B's buy is sized: cap 120 / 2.5 x 10 = $480.
+        bars = {"A": _bars([10, 10, 60, 60], closes=[10, 60, 60, 60]),
+                "B": _bars([10] * 4), "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}, "B": {DAYS[1]: [6.0, 0.0]}}
+        r = pb.simulate(panel, bars, DAYS[:4], risk_rules=True, cost_bps=0.0, initial=10_000.0,
+                        max_trade_risk_pct=0.01)
+        self.assertAlmostEqual(r["curve"][2][2], 40 * 60 + 480.0)
+        self.assertEqual(r["cap_trims"], 2)
+
     def test_disable_rejects_unknown_rule(self):
         with self.assertRaises(ValueError):
             pb.simulate({}, {"SPY": _bars([100] * 2)}, DAYS[:2], disable={"nope"})
@@ -149,6 +161,23 @@ class TestSimulate(unittest.TestCase):
         self.assertEqual(len(pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0)["trades"]), 1)
         r = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, disable={"stop"})
         self.assertEqual((r["trades"], r["open_positions"]), ([], ["A"]))
+        # A day-2 score makes the exit step run on a close (6) below both the stop (7.5)
+        # and exit_decision's 8% fallback (9.2): with the stop off it must not sell there
+        # either. The 1% cap still sizes against the stop: 100 / 2.5 = 40 shares = $400.
+        panel["A"][DAYS[2]] = [6.0, 0.0]
+        r = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, initial=10_000.0,
+                        max_trade_risk_pct=0.01, disable={"stop"})
+        self.assertEqual((r["trades"], r["open_positions"]), ([], ["A"]))
+        self.assertAlmostEqual(r["curve"][1][2], 400.0)
+
+    def test_disable_stop_drops_the_fallback_floor(self):
+        # No ATR, so no stop: exit_decision's 8%-of-cost fallback (9.2) is the only floor.
+        bars = {"A": _bars([10, 10, 9, 9], atr=0.0), "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0], DAYS[2]: [6.0, 0.0]}}
+        on = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0)
+        self.assertEqual((on["trades"][0]["exit_date"], on["open_positions"]), (DAYS[3], []))
+        off = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, disable={"stop"})
+        self.assertEqual((off["trades"], off["open_positions"]), ([], ["A"]))
 
     def test_disable_soft_exit_keeps_position(self):
         bars = {"A": _bars([10, 10, 9, 8]), "SPY": _bars([100] * 4)}
@@ -216,6 +245,45 @@ class TestSimulate(unittest.TestCase):
         free = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0)["curve"][-1][1]
         paid = pb.simulate(panel, bars, DAYS[:4], cost_bps=10.0)["curve"][-1][1]
         self.assertLess(paid, free)
+
+
+class TestRunWiring(unittest.TestCase):
+    """run() end to end on a tiny fake cache: which variants get the loss cap."""
+
+    def _run(self, **kw):
+        days = [f"2026-02-{d:02d}" for d in range(1, 26)]
+        ts = {d: {"1. open": "10", "2. high": "11", "3. low": "9", "4. close": "10",
+                  "5. volume": "1000"} for d in days}
+        # A scores only after ATR(14) has warmed up; with no ATR there is no stop to cap against.
+        panel = {"SPY": {d: [0.0, 0.0] for d in days}, "A": {d: [6.0, 0.0] for d in days[20:]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            ohlcv_dir, sym_dir = os.path.join(tmp, "ohlcv"), os.path.join(tmp, "sym")
+            os.makedirs(ohlcv_dir)
+            for s in panel:
+                open(os.path.join(ohlcv_dir, f"{s}_daily.json"), "w").close()
+                os.makedirs(os.path.join(sym_dir, s))
+            with (mock.patch.object(pb._br, "OHLCV_DIR", ohlcv_dir),
+                  mock.patch.object(pb._br, "SYM_DIR", sym_dir),
+                  mock.patch.object(pb._br, "load_ohlcv", return_value=ts),
+                  mock.patch.object(pb, "build_panel", return_value=panel),
+                  mock.patch.object(pb, "OUT_PATH", os.path.join(tmp, "out.json")),
+                  mock.patch.object(pb, "_out")):
+                return pb.run(min_year=2026, **kw)["metrics"]
+
+    def test_cap_reaches_aether_rules_only(self):
+        # Stop gap 2.5 x ATR 2 = 5 on a 10 stock: a 15% buy risks 7.5% of equity, so the
+        # 1% cap must trim aether_rules' buy, and nothing else.
+        m = self._run()
+        self.assertGreaterEqual(m["aether_rules"]["cap_trims"], 1)
+        self.assertEqual(m["aether_no_cap"]["cap_trims"], 0)
+        self.assertEqual(m["signal_only"]["cap_trims"], 0)
+
+    def test_cap_reaches_every_attribution_row(self):
+        m = self._run(attribution=True)
+        rows = [f"no_{r}" for r in pb.RULES if r != "loss_cap"]
+        self.assertTrue(set(rows) <= set(m))
+        for row in rows:
+            self.assertGreaterEqual(m[row]["cap_trims"], 1, row)
 
 
 class TestMetricsAndBenchmarks(unittest.TestCase):
