@@ -295,7 +295,7 @@ class TestAntiFragileFlexibility(unittest.TestCase):
     @mock.patch("ai_portfolio_game._cache_stale", return_value=False)
     def test_dynamic_pyramiding_scale_in(self, mock_stale, mock_verify, mock_breaker, mock_load_wb, mock_hours, mock_get_prices, mock_save_game, mock_load_game, mock_regime):
         # 1. Setup a portfolio with active green winning positions and plentiful cash (Balance = 10000, Equity = 10000)
-        # Active position ULTA cost = 400.0, current price = 410.0 (in profit!), highest_close_since_acq = 412.0 (near peak!)
+        # Active position ULTA cost = 400.0, current price = 410.0 (in profit!), highest_close_since_acq = 412.0 (near peak!) Stop at cost (risk-locked).
         # s10 momentum for ULTA is 5.0 (>= 3.0!)
         # The system must dynamically scale-in by purchasing more shares of ULTA and recalculating its blended cost!
         mock_regime.return_value = "NEUTRAL"
@@ -303,7 +303,7 @@ class TestAntiFragileFlexibility(unittest.TestCase):
             "balance": 10000.0,
             "equity": 10000.0,
             "positions": {
-                "ULTA": {"qty": 2, "cost": 400.0, "stop_loss": 380.0, "highest_close_since_acq": 412.0, "is_scarcity": False}
+                "ULTA": {"qty": 2, "cost": 400.0, "stop_loss": 400.0, "highest_close_since_acq": 412.0, "is_scarcity": False}
             },
             "queued_orders": [],
             "history": []
