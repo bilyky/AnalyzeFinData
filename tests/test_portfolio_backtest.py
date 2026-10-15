@@ -223,6 +223,22 @@ class TestSimulate(unittest.TestCase):
                         max_trade_risk_pct=0.01, disable={"loss_cap"})
         self.assertAlmostEqual(r["curve"][1][2], 1_500.0)
 
+    def test_rank_by_sharpe_rule_variants_only(self):
+        table = {"aether_rules": {"sharpe": 0.7}, "no_regime": {"sharpe": 1.2},
+                 "no_stop": {"sharpe": None}, "aether_no_cap": {"sharpe": 0.9},
+                 "signal_only": {"sharpe": 5.0}, "spy_buy_hold": {"sharpe": 9.0}}
+        self.assertEqual(pb.rank_by_sharpe(table), ["no_regime", "aether_no_cap", "aether_rules", "no_stop"])
+        self.assertEqual(pb.pick_by_sharpe(table), "no_regime")
+
+    def test_run_variants_names(self):
+        bars = {"A": _bars([10] * 3), "SPY": _bars([100] * 3)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        base = pb.run_variants(panel, bars, DAYS[:3], 0.0, frozenset(), ["A"], False)
+        full = pb.run_variants(panel, bars, DAYS[:3], 0.0, frozenset(), ["A"], True)
+        self.assertNotIn("no_regime", base)
+        self.assertEqual(set(full) - set(base),
+                         {f"no_{r}" for r in pb.RULES if r != "loss_cap"})
+
     def test_costs_reduce_equity(self):
         bars = {"A": _bars([10] * 4), "SPY": _bars([100] * 4)}
         panel = {"A": {DAYS[0]: [6.0, 0.0]}}
