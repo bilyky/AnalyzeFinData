@@ -161,6 +161,23 @@ class TestSimulate(unittest.TestCase):
         self.assertEqual(len(pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0)["trades"]), 1)
         r = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, disable={"stop"})
         self.assertEqual((r["trades"], r["open_positions"]), ([], ["A"]))
+        # A day-2 score makes the exit step run on a close (6) below both the stop (7.5)
+        # and exit_decision's 8% fallback (9.2): with the stop off it must not sell there
+        # either. The 1% cap still sizes against the stop: 100 / 2.5 = 40 shares = $400.
+        panel["A"][DAYS[2]] = [6.0, 0.0]
+        r = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, initial=10_000.0,
+                        max_trade_risk_pct=0.01, disable={"stop"})
+        self.assertEqual((r["trades"], r["open_positions"]), ([], ["A"]))
+        self.assertAlmostEqual(r["curve"][1][2], 400.0)
+
+    def test_disable_stop_drops_the_fallback_floor(self):
+        # No ATR, so no stop: exit_decision's 8%-of-cost fallback (9.2) is the only floor.
+        bars = {"A": _bars([10, 10, 9, 9], atr=0.0), "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0], DAYS[2]: [6.0, 0.0]}}
+        on = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0)
+        self.assertEqual((on["trades"][0]["exit_date"], on["open_positions"]), (DAYS[3], []))
+        off = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, disable={"stop"})
+        self.assertEqual((off["trades"], off["open_positions"]), ([], ["A"]))
 
     def test_disable_soft_exit_keeps_position(self):
         bars = {"A": _bars([10, 10, 9, 8]), "SPY": _bars([100] * 4)}
@@ -244,6 +261,13 @@ class TestRunWiring(unittest.TestCase):
         self.assertGreaterEqual(m["aether_rules"]["cap_trims"], 1)
         self.assertEqual(m["aether_no_cap"]["cap_trims"], 0)
         self.assertEqual(m["signal_only"]["cap_trims"], 0)
+
+    def test_cap_reaches_every_attribution_row(self):
+        m = self._run(attribution=True)
+        rows = [f"no_{r}" for r in pb.RULES if r != "loss_cap"]
+        self.assertTrue(set(rows) <= set(m))
+        for row in rows:
+            self.assertGreaterEqual(m[row]["cap_trims"], 1, row)
 
 
 class TestMetricsAndBenchmarks(unittest.TestCase):

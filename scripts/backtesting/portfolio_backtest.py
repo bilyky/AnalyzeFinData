@@ -16,14 +16,14 @@ it with buy-and-hold:
                  stop-out loses at most CFG.system_max_trade_risk_pct of equity (the
                  live per-trade loss cap in _execute_buys).
   aether_no_cap  aether_rules without the per-trade loss cap: what the cap costs or buys.
-
---attribution adds one variant per rule in RULES: aether_rules with only that rule
-switched off (simulate(disable={rule})), so each row shows what that one rule adds.
   signal_only    the same entry ranking with a fixed BALANCED threshold, full equal-weight
                  deployment, no stop and no cash buffer; exits on the soft rule only.
                  aether_rules minus signal_only = what the risk overlay costs or buys.
   spy_buy_hold   SPY bought on the first day and held.
   ew_buy_hold    equal dollars in every eligible universe symbol on the first day, held.
+
+--attribution adds one variant per rule in RULES: aether_rules with only that rule
+switched off (simulate(disable={rule})), so each row shows what that one rule adds.
 
 Execution: scores dated day t (close data) trigger orders filled at day t+1's OPEN —
 no look-ahead. Hard stops fill intraday at min(open, stop). Prices are split-adjusted.
@@ -202,8 +202,9 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
 
     max_trade_risk_pct: when set (and risk_rules is on), each buy is trimmed so
     (open - stop) * qty <= last close's equity * pct, as the live _execute_buys does.
-    disable: rules from RULES to switch off (risk_rules only). "stop" removes the stop
-    exit but the loss cap still sizes against the stop; "regime" runs BALANCED always."""
+    disable: rules from RULES to switch off (risk_rules only). "stop" removes every stop
+    exit (intraday ATR stop and exit_decision's close floor, including its 8% fallback)
+    but the loss cap still sizes against the stop; "regime" runs BALANCED always."""
     unknown = set(disable) - set(RULES)
     if unknown:
         raise ValueError(f"unknown rules: {sorted(unknown)}")
@@ -278,17 +279,21 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
             s10, l60 = sc
             b, i = _bar(bars, sym, day)
             sma50 = b["sma50"][i] if b else None
-            if risk_rules and "soft_exit" in disable:
-                continue
-            if risk_rules and "winner_protection" in disable:
-                if soft_exit(s10, l60):
+            if not risk_rules:
+                if soft_exit(s10, l60) and not winner_protected(p["last"] > p["entry"], p["last"], sma50):
                     pending_sells[sym] = "momentum decay"
-            elif risk_rules:
-                stop = 0 if "stop" in disable else (p["stop"] or 0)
-                action, _ = exit_decision(p["last"], p["entry"], stop, s10, l60, sma50)
+                continue
+            # exit_decision split in two so each rule can be switched off on its own. The
+            # floor goes through exit_decision (scores None = no soft signal) to keep its
+            # 8%-of-cost fallback for a missing stop; passing stop 0 would not remove it.
+            if "stop" not in disable:
+                action, _ = exit_decision(p["last"], p["entry"], p["stop"] or 0, None, None, sma50)
                 if action == "SELL":
                     pending_sells[sym] = "momentum decay"
-            elif soft_exit(s10, l60) and not winner_protected(p["last"] > p["entry"], p["last"], sma50):
+                    continue
+            if "soft_exit" not in disable and soft_exit(s10, l60) and (
+                    "winner_protection" in disable
+                    or not winner_protected(p["last"] > p["entry"], p["last"], sma50)):
                 pending_sells[sym] = "momentum decay"
 
         # 5. Entry signals on today's scores, sized against today's equity.
@@ -296,7 +301,9 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
         rules = PROFILE_RULES[profile_for(spy.get(day, [None, None])[1]) if regime else "BALANCED"]
         remaining = len(pos) - len(pending_sells)
         if risk_rules:
-            max_pos = rules["max_positions"] if "slot_expansion" in disable else                 expanded_max_positions(cash / equity if equity else 0.0, remaining, rules["max_positions"])
+            max_pos = (rules["max_positions"] if "slot_expansion" in disable else
+                       expanded_max_positions(cash / equity if equity else 0.0, remaining,
+                                              rules["max_positions"]))
             per_cap = rules["max_allocation_pct"] * equity
             buffer = 0.0 if "cash_buffer" in disable else rules["cash_buffer_pct"]
         else:
