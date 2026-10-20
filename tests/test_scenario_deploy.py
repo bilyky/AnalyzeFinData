@@ -150,6 +150,23 @@ class TestPyramiding(unittest.TestCase):
         self.assertIs(state["history"][0], txs[0])
         self.assertIn("Added 8 shares to WIN @ $110.00 (Blended Cost: $104.44)", h.logged())
 
+    def test_no_scale_in_after_a_same_day_sell(self):
+        # #181 (PROD GNE 2026-10-02): never buy back what was sold earlier today.
+        cases = [
+            ({"symbol": "WIN", "type": "SELL", "date": _TODAY}, False),
+            ({"symbol": "WIN", "type": "SELL", "date": "2026-10-11"}, True),
+            ({"symbol": "OTHER", "type": "SELL", "date": _TODAY}, True),
+            ({"symbol": "WIN", "type": "BUY", "date": _TODAY}, True),
+        ]
+        for prior, scaled in cases:
+            with self.subTest(prior=prior), _Harness() as h:
+                state = _state()
+                state["history"].append(prior)
+                txs = _run(state)
+                self.assertEqual(bool(txs), scaled)
+                self.assertEqual(h.pyramid.called, scaled)
+                self.assertEqual("WIN: sold earlier today; no scale-in." in h.logged(), not scaled)
+
     def test_spare_cash_caps_the_deploy_amount(self):
         state = _state(balance=2300.0, equity=10000.0)  # ratio 0.23 > 0.2; spare = 300
         with _Harness(ratio=0.2) as h:

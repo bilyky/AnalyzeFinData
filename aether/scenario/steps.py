@@ -933,8 +933,10 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
     * **Market hours** — ``_execute_buys`` buys them, then:
 
       * **Pyramiding** (R&D #31) — only when cash is above
-        ``CFG.system_pyramiding_cash_ratio`` of equity. A held position in
-        profit and within 2% of its peak close, passing
+        ``CFG.system_pyramiding_cash_ratio`` of equity. A symbol with a SELL
+        dated today in ``state["history"]`` is skipped (no buying back what was
+        just sold, #181). Otherwise a held position in profit and within 2% of
+        its peak close, passing
         ``should_pyramid_into_winner`` on its Research-sheet s10/l60, gets more
         shares if it has more than $500 of room under
         ``rules["max_allocation_pct"]`` of equity. The cost comes out of cash, the
@@ -967,6 +969,13 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
             if cash_ratio > game.CFG.system_pyramiding_cash_ratio:  # idle-cash trigger for scaling in
                 game._log.info(f"🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash ({cash_ratio*100:.1f}%)...")
                 for sym, pos in list(state["positions"].items()):
+                    # Never buy back what this run (or an earlier run today) just sold, e.g.
+                    # a Bank-As-You-Go scale-out: that books profit and restores the
+                    # exposure at the same price (PROD GNE 2026-10-02).
+                    if any(t.get("symbol") == sym and t.get("type") == "SELL" and t.get("date") == today
+                           for t in state["history"]):
+                        game._log.info(f"🛡️ [Pyramiding Pass] {sym}: sold earlier today; no scale-in.")
+                        continue
                     current_px = prices.get(sym, pos["cost"])
                     # A winner is in profit and trading at or near its peak close
                     is_winner = (current_px > pos["cost"])
