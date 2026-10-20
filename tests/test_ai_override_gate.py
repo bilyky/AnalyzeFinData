@@ -127,5 +127,31 @@ class TestAIOverrideGate(unittest.TestCase):
         )
         self.assertTrue(sold, "SELL without AI override should execute — position was not removed.")
 
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=True)
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
+    def test_stop_breach_sells_despite_ai_hold(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
+        """A price at/below the stop is a hard exit: an AI HOLD / FLAG-FOR-REVIEW (stored or
+        real-time) must not cancel it. R&D #14 is defined for momentum sells only."""
+        state = {
+            "balance": 5000.0, "equity": 10000.0, "queued_orders": [], "history": [],
+            "positions": {"ULTA": {"qty": 3, "cost": 469.56, "stop_loss": 400.0,
+                                   "shadow_verdict": {"verdict": "HOLD", "note": "winner above 50-DMA"}}},
+        }
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"ULTA": 390.0}
+        mock_load_wb.return_value = research_workbook(
+            [1, None, None, "ULTA", "Retail", None, "Bu", None, None, None, 390.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.65, 3.0, 3.0]
+        )
+
+        game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+
+        self.assertNotIn("ULTA", state["positions"])
+        sells = [t for t in state["history"] if t.get("type") == "SELL" and t.get("symbol") == "ULTA"]
+        self.assertEqual(len(sells), 1)
+        self.assertIn("stop breached", sells[0]["details"])
+
 if __name__ == "__main__":
     unittest.main()

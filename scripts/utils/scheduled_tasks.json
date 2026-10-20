@@ -1,0 +1,145 @@
+{
+  "_about": "The one list of AETHER scheduled tasks. register_agent_tasks.ps1 registers exactly these under \\AETHER_Agents\\; the watchdog audits them; the System page shows them. Edit here only. Times are the PROD machine's local time (Pacific). Python tasks run 'venv_new\\Scripts\\python.exe <script> <args>' through cmd.exe; agent tasks run run_agent.cmd with the prompt. time_limit_min is the Task Scheduler ExecutionTimeLimit.",
+  "folder": "\\AETHER_Agents\\",
+  "tasks": [
+    {
+      "name": "AETHER_Watchdog",
+      "schedule": {"type": "hourly"},
+      "script": "watchdog.py", "args": "",
+      "time_limit_min": 15,
+      "log": "watchdog_agent.log",
+      "summary": "Hourly diagnostics and self-healing, 24/7.",
+      "description": "Keeps the E*TRADE and Chaikin sessions alive, audits these scheduled tasks and the logs, checks data freshness and backups, and emails a recovery report when something is wrong. At night it skips the heavy process checks.",
+      "manual_run": "watchdog"
+    },
+    {
+      "name": "AETHER_Morning",
+      "schedule": {"type": "daily", "at": "05:30"},
+      "script": "autonomous_pipeline.py", "args": "",
+      "time_limit_min": 90,
+      "log": "morning_pipeline.log",
+      "summary": "Pre-market pipeline before the 07:00 trade run.",
+      "description": "Runs the preflight checks, refreshes Chaikin ratings (main.py), backfills 5 days of history and rebuilds the workbook. It aborts when a preflight check fails.",
+      "notes": "Took about 20 min on PROD; run_history and main.py are capped inside it, so 90 min leaves room without letting a hang reach the 07:00 trades.",
+      "manual_run": "pipeline"
+    },
+    {
+      "name": "AETHER_StopMonitor",
+      "schedule": {"type": "daily", "at": "06:45", "repeat_every_min": 30, "repeat_for_hours": 7},
+      "script": "scripts/utils/intraday_monitor.py", "args": "",
+      "time_limit_min": 15,
+      "log": "intraday_monitor_agent.log",
+      "summary": "Stop-loss monitor every 30 min during the session.",
+      "description": "Checks open positions against their stops and targets every 30 minutes from 06:45 to 13:45 and emails when the set of breaches changes.",
+      "manual_run": "intraday_monitor"
+    },
+    {
+      "name": "AETHER_ExecuteTrades",
+      "schedule": {"type": "daily", "at": "07:00"},
+      "script": "ai_portfolio_game.py", "args": "--run",
+      "time_limit_min": 15,
+      "log": "execute_trades_agent.log",
+      "summary": "The trade run at market open.",
+      "description": "Deterministic buy/sell run for the AI game: exits (stops, momentum), buys, pyramiding and covered calls. Refuses to trade on a stale workbook. Runs once a day (state lock).",
+      "manual_run": "ai_game_run"
+    },
+    {
+      "name": "AETHER_DailyDriver",
+      "schedule": {"type": "daily", "at": "07:05"},
+      "prompt": "Execute the automated skill defined in .claude/commands/daily-run.md",
+      "time_limit_min": 15,
+      "log": "daily_driver_agent.log",
+      "summary": "AI agent: qualitative daily review after the trade run.",
+      "description": "Runs the daily-run skill through the CLI agent (run_agent.cmd) for a qualitative review and re-qualification of positions. It does not place trades."
+    },
+    {
+      "name": "AETHER_PostMarketSync",
+      "schedule": {"type": "daily", "at": "13:30"},
+      "prompt": "Execute the automated skill defined in .claude/commands/post-market-sync.md",
+      "time_limit_min": 15,
+      "log": "post_market_sync_agent.log",
+      "summary": "AI agent: post-close data sync.",
+      "description": "Runs the post-market-sync skill through the CLI agent to refresh ratings and price caches after the close."
+    },
+    {
+      "name": "AETHER_PostMarketReporter",
+      "schedule": {"type": "daily", "at": "14:00"},
+      "prompt": "Execute the automated skill defined in .claude/commands/status.md",
+      "time_limit_min": 15,
+      "log": "post_market_reporter_agent.log",
+      "summary": "AI agent: post-close status report.",
+      "description": "Runs the status skill through the CLI agent: closing equity, scheduler checks and an error scan."
+    },
+    {
+      "name": "AETHER_Data_Backup",
+      "schedule": {"type": "daily", "at": "22:10"},
+      "script": "scripts/utils/run_data_backup.py", "args": "",
+      "time_limit_min": 150,
+      "log": "data_backup_agent.log",
+      "summary": "The one daily backup of Data/ to the network share.",
+      "description": "Robocopy of the local Data folder to the backup share, once a day after the day's data collection. If a collecting script is still running (daily_task and its children, a late pipeline) it waits up to 2 hours, then backs up anyway. Records the result in Data/backup_status.json; exits 1 when the share is offline or the copy fails. No other script syncs Data.",
+      "notes": "22:10, not 22:00: the hourly watchdog starts on the hour and writes under Data/. The evening daily_task usually ends by 19:30 but may run to midnight; the wait covers that. Limit = 120 min wait + 10 min robocopy + headroom."
+    },
+    {
+      "name": "AETHER_AftermarketReport",
+      "schedule": {"type": "daily", "at": "17:00"},
+      "script": "daily_task.py", "args": "",
+      "time_limit_min": 420,
+      "log": "aftermarket_report_agent.log",
+      "summary": "Evening report, then the OHLCV recovery pass.",
+      "description": "daily_task: 5-day history backfill, workbook refresh, the evening report email, the Data sync, then the RapidAPI OHLCV recovery pass. Exits 1 and marks the report STEP FAILURE when a step fails.",
+      "notes": "The limit must cover daily_task.worst_case_runtime_seconds() (a test checks it)."
+    },
+    {
+      "name": "AETHER_AI_Summary",
+      "schedule": {"type": "daily", "at": "18:00"},
+      "script": "ai_portfolio_game.py", "args": "--summary",
+      "time_limit_min": 15,
+      "log": "ai_summary_agent.log",
+      "summary": "Evening AI-portfolio summary email.",
+      "description": "Emails the AI game's evening summary: equity, positions and the day's trades.",
+      "manual_run": "ai_game_summary"
+    },
+    {
+      "name": "AETHER_PreFlight_Audit",
+      "schedule": {"type": "daily", "at": "21:30"},
+      "script": "scripts/diagnostics/preflight_validator.py", "args": "--email",
+      "time_limit_min": 15,
+      "log": "preflight_audit.log",
+      "summary": "Nightly preflight diagnostics.",
+      "description": "Checks Gmail IMAP/SMTP, Chaikin, E*TRADE, files, locks, the watchdog and these tasks, and emails the result.",
+      "manual_run": "preflight"
+    },
+    {
+      "name": "AETHER_RD_Scientist",
+      "schedule": {"type": "weekly", "at": "10:00", "day": "Saturday"},
+      "prompt": "Execute the automated R&D skills defined in .claude/commands/pattern-discover.md and .claude/commands/failure-dna.md",
+      "time_limit_min": 15,
+      "log": "pattern_discovery_agent.log",
+      "summary": "AI agent: weekly R&D loop.",
+      "description": "Runs the pattern-discover and failure-DNA skills through the CLI agent: missed-winner retro and failure-pattern rules.",
+      "manual_run": "pattern_discovery"
+    },
+    {
+      "name": "AETHER_Chaikin_Reauth",
+      "schedule": {"type": "weekly", "at": "08:00", "day": "Sunday"},
+      "script": "scripts/monitoring/chaikin_reauth.py", "args": "",
+      "time_limit_min": 15,
+      "log": "chaikin_reauth_agent.log",
+      "interactive": true,
+      "summary": "Weekly Chaikin token re-mint (headed browser).",
+      "description": "Re-mints the Chaikin PGR session token (about a 7-day JWT) before it lapses, using the persistent Chrome profile, with no human input.",
+      "notes": "Runs only when the user is logged on (Interactive principal): headed Chrome needs a desktop; a hidden/S4U session has no display and Turnstile would fail. See plans/chaikin_api.md."
+    },
+    {
+      "name": "AETHER_Chaikin_Runway_Watch",
+      "schedule": {"type": "daily", "at": "07:00"},
+      "script": "scripts/monitoring/chaikin_reauth.py", "args": "--notify-days 2.5",
+      "time_limit_min": 15,
+      "log": "chaikin_runway_watch.log",
+      "summary": "Daily Chaikin token runway check.",
+      "description": "Checks how long the Chaikin token has left and emails a reminder under 2.5 days. Opens no browser.",
+      "manual_run": "chaikin_reauth_check"
+    }
+  ]
+}

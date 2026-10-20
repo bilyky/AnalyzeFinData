@@ -25,6 +25,7 @@ import risk_utils
 import sell_rules
 import openpyxl
 from aether import etrade, paths
+from aether import scheduled_tasks as _scheduled_tasks
 from workbook_read import (
     get_top_5_picks as _ap_picks,
     get_market_regime as _ap_regime,
@@ -1195,14 +1196,8 @@ def get_system_health() -> dict:
 
 # ── Scheduled tasks ───────────────────────────────────────────────────────────
 
-_KNOWN_TASKS = [
-    "AETHER_Watchdog",
-    "AETHER_StopMonitor",
-    "AETHER_DailyDriver",
-    "AETHER_PostMarketReporter",
-    "AETHER_PostMarketSync",
-    "AETHER_RD_Scientist",
-]
+# The task list, descriptions and parameters come from the manifest
+# (scripts/utils/scheduled_tasks.json via aether.scheduled_tasks); nothing is listed here.
 
 # Registry of manually-runnable scripts exposed in the dashboard.
 # Each entry: id (unique slug), label, description, script, args list,
@@ -1693,46 +1688,60 @@ def build_requalify_prompt(sym: str, factors: dict, cost: float | None,
     return "\n".join(lines)
 
 
-def read_scheduled_tasks() -> list[dict]:
-    """Query Windows Task Scheduler for known AETHER tasks."""
-    results = []
+def _live_task_states(folder: str):
+    """{task name: live Task Scheduler fields} for tasks in `folder`, or None off Windows /
+    when schtasks fails. Root tasks with the same name (old duplicates) are ignored."""
     try:
         out = subprocess.check_output(
             ["schtasks", "/query", "/fo", "CSV", "/v"],
             encoding="utf-8", errors="replace",
-            timeout=10, stderr=subprocess.DEVNULL,
+            timeout=10, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
-        lines = out.splitlines()
-        if not lines:
-            return []
-        header = [h.strip('"') for h in lines[0].split('","')]
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError, subprocess.CalledProcessError):
+        return None
+    lines = out.splitlines()
+    if not lines:
+        return {}
+    header = [h.strip('"') for h in lines[0].split('","')]
 
-        def col(row_parts, name):
-            try:
-                return row_parts[header.index(name)].strip('"')
-            except (ValueError, IndexError):
-                return ""
+    def col(row_parts, name):
+        try:
+            return row_parts[header.index(name)].strip('"')
+        except (ValueError, IndexError):
+            return ""
 
-        seen = set()
-        for line in lines[1:]:
-            parts = line.split('","')
-            task_name = col(parts, "TaskName").lstrip("\\")
-            # Handle tasks scheduled in folders (e.g., AETHER_Agents\AETHER_Watchdog)
-            base_name = task_name.split("\\")[-1] if "\\" in task_name else task_name
-            if base_name not in _KNOWN_TASKS:
-                continue
-            if base_name in seen:
-                continue
-            seen.add(base_name)
-            results.append({
-                "name":     base_name,
-                "status":   col(parts, "Status"),
-                "last_run": col(parts, "Last Run Time"),
-                "next_run": col(parts, "Next Run Time"),
-                "last_result": col(parts, "Last Result"),
-            })
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
-        # Not on Windows or schtasks unavailable — return stubs
-        results = [{"name": t, "status": "N/A", "last_run": "", "next_run": "", "last_result": ""}
-                   for t in _KNOWN_TASKS]
+    prefix = folder.strip("\\") + "\\"
+    states = {}
+    for line in lines[1:]:
+        parts = line.split('","')
+        task_name = col(parts, "TaskName").lstrip("\\")
+        if not task_name.startswith(prefix):
+            continue
+        states.setdefault(task_name[len(prefix):], {
+            "status":      col(parts, "Status"),
+            "last_run":    col(parts, "Last Run Time"),
+            "next_run":    col(parts, "Next Run Time"),
+            "last_result": col(parts, "Last Result"),
+        })
+    return states
+
+
+def read_scheduled_tasks() -> list[dict]:
+    """Every task in the manifest with its description and parameters, plus its live Task
+    Scheduler state. A manifest task Task Scheduler doesn't have shows as "Not registered"."""
+    try:
+        manifest = _scheduled_tasks.load()
+    except (OSError, ValueError) as e:
+        _log.error(f"Scheduled-task manifest unreadable: {e}")
+        return []
+    live = _live_task_states(manifest["folder"])
+    results = []
+    for task in manifest["tasks"]:
+        row = _scheduled_tasks.describe(task)
+        if live is None:
+            row.update(status="N/A", last_run="", next_run="", last_result="")
+        else:
+            row.update(live.get(task["name"]) or
+                       {"status": "Not registered", "last_run": "", "next_run": "", "last_result": ""})
+        results.append(row)
     return results
