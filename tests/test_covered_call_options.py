@@ -468,6 +468,20 @@ class TestCoveredCallOptions(unittest.TestCase):
                 self.assertNotIn("written_call", state["positions"]["AAPL"])
                 self.assertEqual(state["balance"], 0.0)
 
+    def test_contract_skip_log_names_only_positions_that_would_otherwise_be_written(self):
+        """An excluded instrument under 100 shares is skipped as excluded, so the
+        'less than one contract' line must not name it (#196 review)."""
+        state = {"balance": 0.0, "history": [],
+                 "positions": {"SQQQ": {"qty": 10, "cost": 100.0, "stop_loss": 100.0},
+                               "AAPL": {"qty": 10, "cost": 100.0, "stop_loss": 100.0}}}
+        with mock.patch.object(options._log, "info") as info:
+            options.execute_weekly_covered_call_pass(
+                state, "2026-08-17", {"SQQQ": 110.0, "AAPL": 110.0},
+                _FakeWS(_HEADER, [_research_row("SQQQ", 4.0), _research_row("AAPL", 4.0)]))
+        skipped = [c.args[0] for c in info.call_args_list if "less than one" in c.args[0]]
+        self.assertEqual(len(skipped), 1, skipped)
+        self.assertIn("AAPL", skipped[0])
+
     def test_call_covers_whole_contracts_and_assignment_keeps_the_rest(self):
         """250 shares -> 2 contracts: premium on 200 shares, and an assignment calls away 200 and
         leaves 50 held."""

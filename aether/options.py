@@ -323,7 +323,7 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
         # A call covers whole 100-share contracts only; shares past the last full lot stay uncovered.
         contracts = int(pos.get("qty", 0) // SHARES_PER_CONTRACT)
         covered_qty = contracts * SHARES_PER_CONTRACT
-        if contracts < 1 and is_winner and is_risk_locked and not has_active_call:
+        if contracts < 1 and is_winner and is_risk_locked and not has_active_call and is_optionable and not is_high_conviction:
             _log.info(f"[Option Write] Skipping {sym}: {pos.get('qty', 0)} share(s) is less than one {SHARES_PER_CONTRACT}-share contract.")
             continue
 
