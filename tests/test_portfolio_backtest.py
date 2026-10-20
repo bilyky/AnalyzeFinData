@@ -223,6 +223,53 @@ class TestSimulate(unittest.TestCase):
                         max_trade_risk_pct=0.01, disable={"loss_cap"})
         self.assertAlmostEqual(r["curve"][1][2], 1_500.0)
 
+    def test_rank_by_sharpe_rule_variants_only(self):
+        table = {"aether_rules": {"sharpe": 0.7}, "no_regime": {"sharpe": 1.2},
+                 "no_stop": {"sharpe": None}, "aether_no_cap": {"sharpe": 0.9},
+                 "signal_only": {"sharpe": 5.0}, "spy_buy_hold": {"sharpe": 9.0}}
+        self.assertEqual(pb.rank_by_sharpe(table), ["no_regime", "aether_no_cap", "aether_rules", "no_stop"])
+        self.assertEqual(pb.pick_by_sharpe(table), "no_regime")
+
+    def test_rank_by_sharpe_zero_is_not_missing(self):
+        table = {"aether_rules": {"sharpe": 0.0}, "no_regime": {"sharpe": -0.5},
+                 "no_stop": {"sharpe": None}}
+        self.assertEqual(pb.rank_by_sharpe(table), ["aether_rules", "no_regime", "no_stop"])
+
+    def test_oos_split_picks_on_train_and_ranks_on_test(self):
+        cal = ["2024-12-30", "2024-12-31", "2025-01-02", "2025-01-03"]
+        seen = []
+
+        def run_table(days):
+            seen.append(days)
+            if days[0] < "2025-01-02":       # train: no_regime best
+                return {"aether_rules": {"sharpe": 0.3}, "no_regime": {"sharpe": 1.0},
+                        "no_stop": {"sharpe": 0.5}, "spy_buy_hold": {"sharpe": 9.0}}
+            return {"aether_rules": {"sharpe": 1.4}, "no_regime": {"sharpe": 1.1},   # test
+                    "no_stop": {"sharpe": 0.2}, "spy_buy_hold": {"sharpe": 9.0}}
+
+        out = pb.oos_split(cal, "2025-01-02", run_table)
+        # The split day itself is test, never train.
+        self.assertEqual(seen, [cal[:2], cal[2:]])
+        # Picked on train (a pick on test would be aether_rules), ranked 2nd of 3 on test.
+        self.assertEqual((out["picked"], out["test_rank"]), ("no_regime", 2))
+        self.assertEqual(out["date"], "2025-01-02")
+
+    def test_oos_split_rejects_bad_dates(self):
+        cal = ["2024-12-30", "2024-12-31", "2025-01-02", "2025-01-03"]
+        with self.assertRaises(ValueError):                  # not ISO: string order would lie
+            pb.oos_split(cal, "2025-1-1", lambda days: {})
+        with self.assertRaises(SystemExit):                  # nothing left to test on
+            pb.oos_split(cal, "2026-01-01", lambda days: {})
+
+    def test_run_variants_names(self):
+        bars = {"A": _bars([10] * 3), "SPY": _bars([100] * 3)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        base = pb.run_variants(panel, bars, DAYS[:3], 0.0, frozenset(), ["A"], False)
+        full = pb.run_variants(panel, bars, DAYS[:3], 0.0, frozenset(), ["A"], True)
+        self.assertNotIn("no_regime", base)
+        self.assertEqual(set(full) - set(base),
+                         {f"no_{r}" for r in pb.RULES if r != "loss_cap"})
+
     def test_costs_reduce_equity(self):
         bars = {"A": _bars([10] * 4), "SPY": _bars([100] * 4)}
         panel = {"A": {DAYS[0]: [6.0, 0.0]}}
@@ -252,22 +299,32 @@ class TestRunWiring(unittest.TestCase):
                   mock.patch.object(pb, "build_panel", return_value=panel),
                   mock.patch.object(pb, "OUT_PATH", os.path.join(tmp, "out.json")),
                   mock.patch.object(pb, "_out")):
-                return pb.run(min_year=2026, **kw)["metrics"]
+                return pb.run(min_year=2026, **kw)
 
     def test_cap_reaches_aether_rules_only(self):
         # Stop gap 2.5 x ATR 2 = 5 on a 10 stock: a 15% buy risks 7.5% of equity, so the
         # 1% cap must trim aether_rules' buy, and nothing else.
-        m = self._run()
+        m = self._run()["metrics"]
         self.assertGreaterEqual(m["aether_rules"]["cap_trims"], 1)
         self.assertEqual(m["aether_no_cap"]["cap_trims"], 0)
         self.assertEqual(m["signal_only"]["cap_trims"], 0)
 
     def test_cap_reaches_every_attribution_row(self):
-        m = self._run(attribution=True)
+        m = self._run(attribution=True)["metrics"]
         rows = [f"no_{r}" for r in pb.RULES if r != "loss_cap"]
         self.assertTrue(set(rows) <= set(m))
         for row in rows:
             self.assertGreaterEqual(m[row]["cap_trims"], 1, row)
+
+    def test_split_runs_attribution_on_both_halves(self):
+        # --split implies --attribution, and train and test both carry every no_* row.
+        out = self._run(split="2026-02-10")
+        rows = {f"no_{r}" for r in pb.RULES if r != "loss_cap"}
+        self.assertTrue(rows <= set(out["metrics"]))
+        self.assertTrue(rows <= set(out["split"]["train"]))
+        self.assertTrue(rows <= set(out["split"]["test"]))
+        self.assertEqual(out["split"]["train"]["spy_buy_hold"]["end"], "2026-02-09")
+        self.assertEqual(out["split"]["test"]["spy_buy_hold"]["start"], "2026-02-10")
 
 
 class TestMetricsAndBenchmarks(unittest.TestCase):

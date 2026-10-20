@@ -25,6 +25,11 @@ it with buy-and-hold:
 --attribution adds one variant per rule in RULES: aether_rules with only that rule
 switched off (simulate(disable={rule})), so each row shows what that one rule adds.
 
+--split DATE (implies --attribution) is an out-of-sample check: every variant runs again
+from fresh cash on the days before DATE (train) and on DATE onward (test). The rule
+variant with the best train Sharpe is the one "picked"; its test result and rank among
+the rule variants show whether the pick holds up on days it never saw.
+
 Execution: scores dated day t (close data) trigger orders filled at day t+1's OPEN —
 no look-ahead. Hard stops fill intraday at min(open, stop). Prices are split-adjusted.
 Costs: --cost-bps per side (default 10).
@@ -46,6 +51,7 @@ Usage:
     python scripts/backtesting/portfolio_backtest.py [--min-year 2023] [--workers 8]
                                                      [--cost-bps 10] [--max-symbols N]
                                                      [--rebuild] [--attribution]
+                                                     [--split 2025-01-01]
 """
 import argparse
 import datetime
@@ -386,8 +392,68 @@ def metrics(result: dict) -> dict:
 
 # ── Driver ────────────────────────────────────────────────────────────────────
 
+def run_variants(panel, bars, calendar, cost_bps, excluded, eligible, attribution) -> dict:
+    cap = CFG.system_max_trade_risk_pct
+    return {
+        "aether_rules": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded,
+                                 max_trade_risk_pct=cap),
+        "aether_no_cap": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded),
+        **({f"no_{rule}": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps,
+                                   excluded=excluded, max_trade_risk_pct=cap, disable={rule})
+            for rule in RULES if rule != "loss_cap"} if attribution else {}),
+        "signal_only": simulate(panel, bars, calendar, risk_rules=False, cost_bps=cost_bps, excluded=excluded),
+        "spy_buy_hold": buy_and_hold(bars, calendar, ["SPY"], cost_bps),
+        "ew_buy_hold": buy_and_hold(bars, calendar, eligible, cost_bps),
+    }
+
+
+def rank_by_sharpe(table: dict) -> list:
+    """Rule variants (aether_rules, aether_no_cap, no_*), best Sharpe first; no Sharpe last."""
+    rule_variants = [k for k in table if k.startswith(("aether_", "no_"))]
+    return sorted(rule_variants, key=lambda k: (table[k].get("sharpe") is None,
+                                                -(table[k].get("sharpe") or 0.0)))
+
+
+def pick_by_sharpe(table: dict) -> str:
+    return rank_by_sharpe(table)[0]
+
+
+def _iso_date(s: str) -> str:
+    """argparse type for --split: an ISO date (string order = date order), else an error."""
+    try:
+        return datetime.date.fromisoformat(s).isoformat()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a YYYY-MM-DD date: {s!r}") from None
+
+
+def oos_split(calendar, split, run_table) -> dict:
+    """Out-of-sample check: run_table(days) -> {variant: metrics} runs on the days before
+    `split` (train) and from `split` on (test); the pick is the best train Sharpe, and
+    test_rank is its 1-based rank by test Sharpe. `split` is an ISO date (YYYY-MM-DD)."""
+    split = datetime.date.fromisoformat(split).isoformat()
+    train_cal = [d for d in calendar if d < split]
+    test_cal = [d for d in calendar if d >= split]
+    if len(train_cal) < 2 or len(test_cal) < 2:
+        raise SystemExit(f"--split {split} leaves no train or test days")
+    train, test = run_table(train_cal), run_table(test_cal)
+    picked = pick_by_sharpe(train)
+    return {"date": split, "train": train, "test": test, "picked": picked,
+            "test_rank": rank_by_sharpe(test).index(picked) + 1}
+
+
+def _print_table(calendar, table) -> None:
+    cols = [("cagr_pct", "CAGR%"), ("total_return_pct", "Total%"), ("max_drawdown_pct", "MaxDD%"),
+            ("sharpe", "Sharpe"), ("ann_vol_pct", "Vol%"), ("avg_exposure_pct", "Expo%"),
+            ("n_trades", "Trades"), ("win_rate", "Win"), ("turnover_x_per_yr", "Turn/yr"),
+            ("cap_trims", "Trims")]
+    _out(f"\n  {calendar[0]} -> {calendar[-1]}  ({table['spy_buy_hold'].get('years')} yr)")
+    _out("  " + f"{'variant':<20}" + "".join(f"{h:>9}" for _k, h in cols))
+    for name, m in table.items():
+        _out("  " + f"{name:<20}" + "".join(f"{('-' if m.get(k) is None else m.get(k)):>9}" for k, _h in cols))
+
+
 def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=False,
-        attribution=False) -> dict:
+        attribution=False, split=None) -> dict:
     ohlcv = {os.path.basename(f)[:-len("_daily.json")]
              for f in glob.glob(os.path.join(_br.OHLCV_DIR, "*_daily.json"))}
     cached = {d for d in os.listdir(_br.SYM_DIR) if os.path.isdir(os.path.join(_br.SYM_DIR, d))}
@@ -406,28 +472,22 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
     excluded = frozenset(s for s in symbols if instruments.is_excluded(s))
     eligible = [s for s in symbols if s not in excluded]
 
-    results = {
-        "aether_rules": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded,
-                                 max_trade_risk_pct=CFG.system_max_trade_risk_pct),
-        "aether_no_cap": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded),
-        **({f"no_{rule}": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps,
-                                   excluded=excluded, max_trade_risk_pct=CFG.system_max_trade_risk_pct,
-                                   disable={rule})
-            for rule in RULES if rule != "loss_cap"} if attribution else {}),
-        "signal_only": simulate(panel, bars, calendar, risk_rules=False, cost_bps=cost_bps, excluded=excluded),
-        "spy_buy_hold": buy_and_hold(bars, calendar, ["SPY"], cost_bps),
-        "ew_buy_hold": buy_and_hold(bars, calendar, eligible, cost_bps),
-    }
+    attribution = attribution or bool(split)
+    results = run_variants(panel, bars, calendar, cost_bps, excluded, eligible, attribution)
     table = {k: metrics(v) for k, v in results.items()}
+    _print_table(calendar, table)
 
-    cols = [("cagr_pct", "CAGR%"), ("total_return_pct", "Total%"), ("max_drawdown_pct", "MaxDD%"),
-            ("sharpe", "Sharpe"), ("ann_vol_pct", "Vol%"), ("avg_exposure_pct", "Expo%"),
-            ("n_trades", "Trades"), ("win_rate", "Win"), ("turnover_x_per_yr", "Turn/yr"),
-            ("cap_trims", "Trims")]
-    _out(f"\n  {calendar[0]} -> {calendar[-1]}  ({table['spy_buy_hold'].get('years')} yr)")
-    _out("  " + f"{'variant':<20}" + "".join(f"{h:>9}" for _k, h in cols))
-    for name, m in table.items():
-        _out("  " + f"{name:<20}" + "".join(f"{('-' if m.get(k) is None else m.get(k)):>9}" for k, _h in cols))
+    split_out = None
+    if split:
+        split_out = oos_split(calendar, split, lambda cal: {
+            k: metrics(v) for k, v in run_variants(panel, bars, cal, cost_bps, excluded, eligible, True).items()})
+        train, test, picked = split_out["train"], split_out["test"], split_out["picked"]
+        _out("\n  TRAIN (pick on Sharpe)")
+        _print_table([d for d in calendar if d < split_out["date"]], train)
+        _out("\n  TEST (never seen by the pick)")
+        _print_table([d for d in calendar if d >= split_out["date"]], test)
+        _out(f"\n  picked on train: {picked}  ->  test Sharpe {test[picked].get('sharpe')}, "
+             f"rank {split_out['test_rank']}/{len(rank_by_sharpe(test))} among rule variants")
 
     payload = {
         "as_of": calendar[-1], "min_year": min_year, "cost_bps": cost_bps,
@@ -442,6 +502,7 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
             "calendar, but backtest_ratings' score reconstruction still reads them",
         ],
         "metrics": table,
+        "split": split_out,
         "curves": {k: [[d, round(e, 2)] for d, e, _i in v["curve"]] for k, v in results.items()},
         "trades": {k: v["trades"] for k, v in results.items() if v["trades"]},
         "open_positions": {k: v["open_positions"] for k, v in results.items()},
@@ -461,5 +522,9 @@ if __name__ == "__main__":
     ap.add_argument("--rebuild", action="store_true")
     ap.add_argument("--attribution", action="store_true",
                     help="add one aether_rules variant per rule switched off")
+    ap.add_argument("--split", default=None, metavar="YYYY-MM-DD",
+                    type=_iso_date,
+                    help="out-of-sample check: pick a rule variant on days before this date, "
+                         "test it on the days from it (implies --attribution)")
     a = ap.parse_args()
-    run(a.min_year, a.workers, a.cost_bps, a.max_symbols, a.rebuild, a.attribution)
+    run(a.min_year, a.workers, a.cost_bps, a.max_symbols, a.rebuild, a.attribution, a.split)
