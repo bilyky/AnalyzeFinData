@@ -291,7 +291,8 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
         # ``locked`` distinguishes "another process owns the lock" from "these symbols were
         # already current" — both otherwise look like updated=0. Callers (e.g. the on-demand
         # self-healer) use it to retry later instead of treating the symbol as un-healable.
-        return {"updated": 0, "skipped": len(symbols), "errors": [], "locked": True}
+        # Same keys as a normal run (the CLI summary reads "deferred"; it raised KeyError here).
+        return {**results, "skipped": len(symbols), "locked": True}
 
     try:
         queue = []

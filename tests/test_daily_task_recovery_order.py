@@ -10,6 +10,7 @@ email back by the length of the pass. Pins:
   - it is invoked with the budgeted timeout, not run_command's 600 s default.
 Everything external (subprocesses, email, sync, data load) is mocked.
 """
+import datetime
 import os
 import sys
 import unittest
@@ -31,8 +32,13 @@ class TestRecoveryRunsLast(unittest.TestCase):
             mock.patch.object(daily_task.os, "chdir"),
             mock.patch.object(daily_task.subprocess, "run", return_value=lint_ok),
             mock.patch.object(daily_task, "get_description", return_value=""),
+            # daily_task must not sync Data any more (the nightly AETHER_Data_Backup task does);
+            # a call would show up as "sync" and fail the order tests below.
             mock.patch.object(daily_task.watchdog, "sync_data_folder",
                               side_effect=lambda: self.calls.append("sync") or True),
+            mock.patch.object(daily_task.watchdog, "backup_status",
+                              return_value={"last_success": datetime.datetime.now().isoformat(),
+                                            "last_result": "ok"}),
             mock.patch.object(daily_task.notify, "send_email",
                               side_effect=lambda subject, *a, **k: self.calls.append(f"email:{subject}")),
             mock.patch.object(daily_task, "run_command",
@@ -64,7 +70,7 @@ class TestRecoveryRunsLast(unittest.TestCase):
         report = next(i for i, c in enumerate(calls)
                       if isinstance(c, str) and c.startswith("email:AETHER Daily Rotation"))
         self.assertLess(report, self._recovery_index(calls))
-        self.assertLess(calls.index("sync"), self._recovery_index(calls))
+        self.assertNotIn("sync", calls)
         self.assertEqual(calls[-2:], ["pack", calls[self._recovery_index(calls)]])  # pack, then repair, last
 
     def test_recovery_uses_the_budgeted_timeout(self):

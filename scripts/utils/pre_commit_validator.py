@@ -15,6 +15,7 @@ Enforces:
   7. R&D item numbers in plans/roadmap.md are unique and match each item's own label.
 """
 import ast
+import json
 import os
 import re
 import shutil
@@ -22,6 +23,10 @@ import subprocess
 import sys
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT_DIR)
+from aether import scheduled_tasks as _scheduled_tasks
+
+TASK_MANIFEST_PATH = os.path.join(ROOT_DIR, "scripts", "utils", "scheduled_tasks.json")
 
 # The BLOCK/PASS messages below use emoji, but a git hook on Windows usually inherits a
 # cp1252 console that cannot encode them -> a legitimate BLOCK would die with
@@ -441,6 +446,19 @@ def check_rd_item_numbers() -> bool:
         sys.stderr.write(f"🚨 [GIT PRE-COMMIT] BLOCK - plans/roadmap.md: {issue}\n")
     return not issues
 
+def check_task_manifest() -> bool:
+    """scripts/utils/scheduled_tasks.json is valid. It is the one task list: the registrar, the
+    watchdog and the System page read it, so a broken edit must be caught here (and in CI's
+    quality-gate), not on PROD (review of #187)."""
+    try:
+        with open(TASK_MANIFEST_PATH, "r", encoding="utf-8") as f:
+            problems = _scheduled_tasks.validate(json.load(f))
+    except (OSError, ValueError) as e:
+        problems = [str(e)]
+    for problem in problems:
+        sys.stderr.write(f"🚨 [GIT PRE-COMMIT] BLOCK - scheduled_tasks.json: {problem}\n")
+    return not problems
+
 def check_new_features_tested() -> bool:
     """Verify that any newly introduced core trading features have corresponding automated unit tests in the tests/ directory."""
     FEATURE_CHECKS = [
@@ -577,6 +595,10 @@ def main():
 
     # Check every R&D item in plans/roadmap.md has its own number
     if not check_rd_item_numbers():
+        success = False
+
+    # Check the scheduled-task manifest (the one task list) is valid
+    if not check_task_manifest():
         success = False
 
     # Check Feature <-> Documentation Synchronicity (@doc-sync anchors)
