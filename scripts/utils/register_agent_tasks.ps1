@@ -14,16 +14,21 @@
     Replace tasks that already exist (default on).
 .PARAMETER DryRun
     Build every task and print it as JSON (one line per task) without registering anything.
+.PARAMETER Only
+    Register (or dry-run) only the named manifest task(s); every other task is left as it is.
+    Use it to add one new task without rebuilding the rest (and their -Engine).
 .EXAMPLE
     .\register_agent_tasks.ps1 -Force
     .\register_agent_tasks.ps1 -DryRun
+    .\register_agent_tasks.ps1 -Only AETHER_OptionChainSnapshot
 #>
 [CmdletBinding()]
 param (
     [string]$Engine = "gemini",
     [string]$Args = "--approval-mode yolo --skip-trust",
     [switch]$Force = $true,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [string[]]$Only
 )
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -33,11 +38,20 @@ $Manifest = Get-Content (Join-Path $ScriptDir "scheduled_tasks.json") -Raw -Enco
 $Folder = $Manifest.folder
 $Python = "venv_new\Scripts\python.exe"
 $Launcher = Join-Path $RepoRoot "run_agent.cmd"
+$Tasks = @($Manifest.tasks)
+if ($Only) {
+    $Unknown = @($Only | Where-Object { $_ -notin $Tasks.name })
+    if ($Unknown.Count) {
+        Write-Error "Not in scheduled_tasks.json: $($Unknown -join ', ')"
+        exit 1
+    }
+    $Tasks = @($Tasks | Where-Object { $_.name -in $Only })
+}
 
 if (-not $DryRun) {
     if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
     Write-Host "==========================================================" -ForegroundColor Cyan
-    Write-Host "   AETHER scheduled-task registration ($($Manifest.tasks.Count) tasks)" -ForegroundColor Cyan
+    Write-Host "   AETHER scheduled-task registration ($($Tasks.Count) tasks)" -ForegroundColor Cyan
     Write-Host "==========================================================" -ForegroundColor Cyan
     Write-Host "Repo Root:  $RepoRoot"
     Write-Host "CLI Engine: $Engine"
@@ -66,7 +80,7 @@ function New-AetherTrigger($s) {
 # MultipleInstances IgnoreNew: if an instance is still running, skip the new trigger. These tasks
 # mutate shared state (ai_portfolio_game.json, state_of_the_day.xlsx) and send email, so two
 # concurrent runs would race writes and duplicate reports.
-foreach ($T in $Manifest.tasks) {
+foreach ($T in $Tasks) {
     $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes $T.time_limit_min)
     $Trigger = New-AetherTrigger $T.schedule
     $LogFile = Join-Path $LogDir $T.log
