@@ -16,7 +16,7 @@ it with buy-and-hold:
                  stop-out loses at most CFG.system_max_trade_risk_pct of equity (the
                  live per-trade loss cap in _execute_buys).
   aether_no_cap  aether_rules without the per-trade loss cap: what the cap costs or buys.
-  signal_only   the same entry ranking with a fixed BALANCED threshold, full equal-weight
+  signal_only    the same entry ranking with a fixed BALANCED threshold, full equal-weight
                  deployment, no stop and no cash buffer; exits on the soft rule only.
                  aether_rules minus signal_only = what the risk overlay costs or buys.
   spy_buy_hold   SPY bought on the first day and held.
@@ -410,11 +410,35 @@ def run_variants(panel, bars, calendar, cost_bps, excluded, eligible, attributio
 def rank_by_sharpe(table: dict) -> list:
     """Rule variants (aether_rules, aether_no_cap, no_*), best Sharpe first; no Sharpe last."""
     rule_variants = [k for k in table if k.startswith(("aether_", "no_"))]
-    return sorted(rule_variants, key=lambda k: -(table[k].get("sharpe") or -math.inf))
+    return sorted(rule_variants, key=lambda k: (table[k].get("sharpe") is None,
+                                                -(table[k].get("sharpe") or 0.0)))
 
 
 def pick_by_sharpe(table: dict) -> str:
     return rank_by_sharpe(table)[0]
+
+
+def _iso_date(s: str) -> str:
+    """argparse type for --split: an ISO date (string order = date order), else an error."""
+    try:
+        return datetime.date.fromisoformat(s).isoformat()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a YYYY-MM-DD date: {s!r}") from None
+
+
+def oos_split(calendar, split, run_table) -> dict:
+    """Out-of-sample check: run_table(days) -> {variant: metrics} runs on the days before
+    `split` (train) and from `split` on (test); the pick is the best train Sharpe, and
+    test_rank is its 1-based rank by test Sharpe. `split` is an ISO date (YYYY-MM-DD)."""
+    split = datetime.date.fromisoformat(split).isoformat()
+    train_cal = [d for d in calendar if d < split]
+    test_cal = [d for d in calendar if d >= split]
+    if len(train_cal) < 2 or len(test_cal) < 2:
+        raise SystemExit(f"--split {split} leaves no train or test days")
+    train, test = run_table(train_cal), run_table(test_cal)
+    picked = pick_by_sharpe(train)
+    return {"date": split, "train": train, "test": test, "picked": picked,
+            "test_rank": rank_by_sharpe(test).index(picked) + 1}
 
 
 def _print_table(calendar, table) -> None:
@@ -455,24 +479,15 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
 
     split_out = None
     if split:
-        train_cal = [d for d in calendar if d < split]
-        test_cal = [d for d in calendar if d >= split]
-        if len(train_cal) < 2 or len(test_cal) < 2:
-            raise SystemExit(f"--split {split} leaves no train or test days")
-        train = {k: metrics(v) for k, v in
-                 run_variants(panel, bars, train_cal, cost_bps, excluded, eligible, True).items()}
-        test = {k: metrics(v) for k, v in
-                run_variants(panel, bars, test_cal, cost_bps, excluded, eligible, True).items()}
-        picked = pick_by_sharpe(train)
-        ranked = rank_by_sharpe(test)
-        rank = ranked.index(picked) + 1
+        split_out = oos_split(calendar, split, lambda cal: {
+            k: metrics(v) for k, v in run_variants(panel, bars, cal, cost_bps, excluded, eligible, True).items()})
+        train, test, picked = split_out["train"], split_out["test"], split_out["picked"]
         _out("\n  TRAIN (pick on Sharpe)")
-        _print_table(train_cal, train)
+        _print_table([d for d in calendar if d < split_out["date"]], train)
         _out("\n  TEST (never seen by the pick)")
-        _print_table(test_cal, test)
+        _print_table([d for d in calendar if d >= split_out["date"]], test)
         _out(f"\n  picked on train: {picked}  ->  test Sharpe {test[picked].get('sharpe')}, "
-             f"rank {rank}/{len(ranked)} among rule variants")
-        split_out = {"date": split, "train": train, "test": test, "picked": picked, "test_rank": rank}
+             f"rank {split_out['test_rank']}/{len(rank_by_sharpe(test))} among rule variants")
 
     payload = {
         "as_of": calendar[-1], "min_year": min_year, "cost_bps": cost_bps,
@@ -508,6 +523,7 @@ if __name__ == "__main__":
     ap.add_argument("--attribution", action="store_true",
                     help="add one aether_rules variant per rule switched off")
     ap.add_argument("--split", default=None, metavar="YYYY-MM-DD",
+                    type=_iso_date,
                     help="out-of-sample check: pick a rule variant on days before this date, "
                          "test it on the days from it (implies --attribution)")
     a = ap.parse_args()
