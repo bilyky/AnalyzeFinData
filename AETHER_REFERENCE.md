@@ -88,14 +88,14 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 *   **Strict Pricing Verification Gate (`data_api.py`):** Reconciles every loaded position price (E*TRADE live, Excel fallback, and AI Game) against the local `Symbol_full` settled close cache. Raises `PricingDiscrepancyError` on deviation exceeding the configured tolerance, protecting the portfolio from silent price corruption.
 *   **Autonomic Cache Self-Healer (`ai_portfolio_game.py`):** Checks `Symbol_full` OHLCV caches for missing or stale files before each evaluation loop. If a cache is stale, triggers an on-demand RapidAPI backfill (`_heal_symbol_cache`), un-blinding critical safety rules like Winner Protection and MA crossovers.
 *   **Consolidated Intraday Stop Breach Alerts (`intraday_monitor.py`):** Batches all stop breaches detected in a single monitor pass into one summary email instead of one email per breach.
-*   **Daily-Repeating Task Triggers (`register_agent_tasks.ps1`):** Registers Windows Task Scheduler triggers with `-Daily` repetition so the Watchdog and Stop Monitor continue through weekends without manual re-registration. All active scheduled tasks run headlessly as **S4U background services (No-Password `/np` mode)** under your Windows user account, permanently preventing Event ID 332 "user not logged on" scheduling failures.
+*   **Daily-Repeating Task Triggers (`register_agent_tasks.ps1`, from `scripts/utils/scheduled_tasks.json`):** Registers Windows Task Scheduler triggers with `-Daily` repetition so the Watchdog and Stop Monitor continue through weekends without manual re-registration. All active scheduled tasks run headlessly as **S4U background services (No-Password `/np` mode)** under your Windows user account, permanently preventing Event ID 332 "user not logged on" scheduling failures.
 *   **Systemic Crash Circuit Breaker (`circuit_breaker.py`):** Audits SPY single-day return (< −2%), rolling 10-day drawdown (< −5%), and VXX surge (> +15%) every run. When triggered: freezes queued BUY orders, tightens non-scarcity stop-losses to 1×ATR, and backfeeds the event to `Data/trade_history_dna.json`. AETHER Elastic Memory caches original stops and restores them automatically once the market stabilizes.
 *   **Trade DNA Bootstrapper (`bootstrap_dna.py`):** One-time setup script. Parses `Data/ai_portfolio_game.json` history, pairs BUY/SELL transactions via FIFO, backfills buy-state DNA (PGR, scores) from Excel backups, and seeds `Data/trade_history_dna.json` with past closed trades.
 *   **Feedback Retrospective Analyzer (`retrospective_analyzer.py`):** Run weekly (manually or scheduled). Separates winners from losers across `trade_history_dna.json`, statistically clusters recurring failure patterns (requires ≥3-trade samples), writes rejection rules to `Data/failure_dna_rules.json`, audits circuit breaker "near-miss" threshold boundaries, and outputs `Data/retrospective_report.txt`.
 *   **The \"AETHER Healer\" (`watchdog.py`):** Headless, synchronously blocking AI self-healing loop. Intercepts pipeline tracebacks, invokes `claude.exe` (configured via `AETHER_HEALER_CMD` env var) with a structured 6-step diagnostic protocol (`prompts/self_healing.md`), applies a minimal code fix, runs the full test suite, and commits only on green. A `self_healing.lock` circuit breaker prevents recursive loops.
     *   *Cross-Process Execution Singleton (`watchdog_run.lock`):* Implements a strict, atomic file-lock (`Data/watchdog_run.lock` with native `tasklist` PID matching and automatic `atexit` cleanup handlers) that immediately exits if another instance is already running, preventing dual-process file locks, database conflicts, or log collusions.
     *   *Non-Destructive Network Synchronization & Task Auto-Purging:* 
-        *   *Network Sync:* Recursively synchronizes and backs up your local `Data/` folder to your UNC network storage (`\\\\10.0.0.156\\Storage\\`) using native `robocopy` with non-destructive `/E` parameters. Automatically skips/pauses during active NYSE trading hours (6:30 AM - 1:15 PM PST) to prevent active file-locking conflicts.
+        *   *Network Sync:* Backs up the local `Data/` folder to the configured network backup share with native `robocopy` (non-destructive `/E`). Runs once a day from the `AETHER_Data_Backup` task (time in `scripts/utils/scheduled_tasks.json`; `scripts/utils/run_data_backup.py` is the only caller), after the day's data collection: if a collecting script (daily_task, main.py, run_history.py, rapidapi.py, the pipeline) is still running it waits up to 2 hours first. Exits 1 when the share is offline or the copy fails. The sync still refuses to run during NYSE trading hours (6:30 AM - 1:15 PM PST). The evening report shows the last successful backup and flags it when older than 30 h.
         *   *Stray-Task Auto-Purging (Pillar 1 Self-Sanitation):* Scans Windows Task Scheduler hourly, parses all AETHER/AnalyzeFinData tasks, and programmatically exports stray, non-whitelisted, or duplicate tasks (such as `AnalyzeFinData_Morning_Test`) to `Data/task_backups/` as an XML config, deletes them, and dispatches an active email warning notification.
 *   **Live Requalify (`POST /api/requalify`, `GET /api/requalify/{run_id}`):** Two-phase AI position analysis available from the Accounts tab and Symbol detail modal. Phase 1 fetches live Chaikin data (`powergauge.get_symbol_data`), runs the deterministic exit engine (`sell_rules.exit_decision`), and generates an AI recommendation using `prompts/requalify.md` (BUY MORE / HOLD / REVIEW / REDUCE / SELL). Phase 2 runs in a background thread, scrapes recent news, re-runs the AI with news context, and the frontend polls `GET /api/requalify/{run_id}` to update the result in place.
 *   **Proactive E*TRADE Session Keeper & Anti-Ban Cooldown (`watchdog.py` & `aether/etrade/__init__.py`):**
@@ -113,7 +113,7 @@ AETHER operates via a strict, circular **"Zero-Trust" data loop** designed to ma
 
 ## 🛡️ 4. Production & Real-Account Integrations
 
-*   **R&D Item 14: AI Second-Opinion Exit Override Gate (`ai_portfolio_game.py`):** Intercepts deterministic momentum pullbacks (soft exits) and automatically overrides and downgrades them to `WATCH` or `HOLD` if the position's AI shadow verdict (e.g. `github_gpt` or `claude-3-5-sonnet`) is positive (`FLAG-FOR-REVIEW` or `HOLD`), letting strong winners run.
+*   **R&D Item 14: AI Second-Opinion Exit Override Gate (`sell_rules.ai_exit_override`, used by the game, its scenario stage and the Oracle):** Never applies to a stop breach, which always executes. Intercepts deterministic momentum pullbacks (soft exits) and automatically overrides and downgrades them to `WATCH` or `HOLD` if the position's AI shadow verdict (e.g. `github_gpt` or `claude-3-5-sonnet`) is positive (`FLAG-FOR-REVIEW` or `HOLD`), letting strong winners run.
 *   **AETHER Profit-Lock Trailing Stop Ratchet (`ai_portfolio_game.py`):** Dynamically ratchets trailing stop-losses upward as positions rally. Employs **Peter Lynch Flower Protection** (only ratcheting stops once safely in profit by $> 1.0x$ ATR) and the **Breakeven Lock Trigger** (bumping the stop to the exact purchase cost basis once the price rallies $> 1.5x$ ATR, so a normal-fill exit no longer closes below entry — subject to gap/slippage risk).
 *   **Zero-Cash Drag Autopilot & 0% Cash Floors (`ai_portfolio_game.py`):** Dynamically drops the cash buffer floor to `0.0%` (allowing full 100% capital deployment) strictly during the `AGGRESSIVE` market regime (strong bull, SPY L60 > 2), completely eliminating cash drag.
 *   **Fractional Share Sizing Precision (`aether/instruments.py` & `ai_portfolio_game.py`):** Supports precise, 3-decimal-place fractional share sizing (e.g., buying `1.458` shares) for core ETFs (DIA, SPY, QQQ, IWM) and S&P 100 blue chips, completely eliminating residual cash drag from whole-share integer rounding.
@@ -190,39 +190,19 @@ AETHER's factor weights are fully customizable and backtest-driven:
 
 To achieve complete off-market stability and prevent system timeouts, AETHER separates **Lightweight Session Refreshers** (always run first with Priority 1) from **Heavy, Slow Diagnostics** (CIM process sweeps, code compilation checks, and workbook refreshes). Heavy diagnostic tasks are strictly time-locked and run only during active market/preparation hours.
 
-The master execution timeline is structured as follows:
+**The task list lives in one file: `scripts/utils/scheduled_tasks.json`.** Each task there has its
+schedule, command (Python script and arguments, or AI-agent prompt), time limit, log file, run-as
+mode, a short summary and a full description. Everything reads it:
 
-```text
-  [05:15 AM PST] AETHER_Chaikin_Reauth ────────► Proactive token refreshes (Priority 1)
-  [05:30 AM PST] AETHER_Morning ───────────────► Pre-market data-fetching pipeline
-  [06:45 AM PST] AETHER_StopMonitor ───────────► Active session trailing stop watchdog
-  [07:00 AM PST] AETHER_ExecuteTrades ─────────► Market-open rebalancing & trade manager
-  [07:05 AM PST] AETHER_DailyDriver ───────────► AI qualitative scoring & re-qualification
-  [01:30 PM PST] AETHER_PostMarketSync ────────► Finalized daily close backfiller (No-pollution)
-  [02:00 PM PST] AETHER_PostMarketReporter ────► Closing portfolio valuation audit
-  [03:00 PM PST] AETHER_Data_Backup ───────────► Off-market Robocopy UNC sync (Pristine)
-  [09:30 PM PST] AETHER_PreFlight_Audit ───────► Nightly API and email gateway diagnostic
-  [Hourly 24/7]  AETHER_Watchdog ──────────────► Proactive keep-alive & session keeper (2h limit)
-```
+*   `scripts/utils/register_agent_tasks.ps1` registers exactly those tasks under `\AETHER_Agents\`
+    (`-DryRun` prints what it would register without touching Task Scheduler).
+*   The watchdog audits them (`watchdog.TASKS`); any other AETHER/AnalyzeFinData task is reported
+    as a stray. The watchdog never creates tasks.
+*   The dashboard's **System** page lists every task with its live status, schedule, description
+    and parameters (`/api/tasks`, built by `data_api.read_scheduled_tasks`).
 
-### 📋 Schedulers Execution & Timeout Registry
-
-> ℹ️ **Single Source of Truth Note:** To prevent documentation drift, the authoritative parameters (triggers, schedules, and active execution timeouts) for all tasks are defined programmatically inside the system source code (specifically `watchdog.py`'s `_TASK_DEFS` dictionary and the task-registration PowerShell scripts). The table below serves as a high-level operational map for developer reference.
-
-| Task Name | Active Time | Priority / Role | Key Dependencies | Expected Duration | Task Timeout |
-| :--- | :---: | :--- | :--- | :---: | :---: |
-| **`AETHER_Watchdog`** | Hourly (24/7) | **CRITICAL (P1)** / Keeps OAuth cookies and Chaikin logins warm; executes self-healing. | Active network gateway; E*TRADE production tokens. | < 3 seconds (Overnight); < 10 seconds (Market Hours) | **2 Hours** (`New-TimeSpan -Hours 2`) |
-| **`AETHER_Morning`** | 05:30 AM PST | **HIGH (P2)** / Scrapes Chaikin ratings, parses email newsletters, and backfills history. | Validated E*TRADE/Chaikin cookies; fresh email ideas. | 4 – 6 minutes (Throttled API) | **2 Hours** (`New-TimeSpan -Hours 2`) |
-| **`AETHER_StopMonitor`** | 06:45 AM PST | **CRITICAL (P1)** / Interday real-time stop-loss monitoring; repeats every 30 mins for 7 hours. | E*TRADE real-time streaming quotes. | 15 – 30 seconds | **30 Minutes** |
-| **`AETHER_ExecuteTrades`**| 07:00 AM PST | **CRITICAL (P1)** / Opens opening rebalancing; executes trailing stop ratchets & buy entries. | Completed 5:30 AM workbook; fresh E*TRADE tokens. | 10 – 20 seconds | **30 Minutes** |
-| **`AETHER_DailyDriver`** | 07:05 AM PST | **MEDIUM** / AI qualitative reasoning and position re-qualification. | Live market quotes; Claude/Gemini API key. | 2 – 3 minutes | **30 Minutes** |
-| **`AETHER_PostMarketSync`**| 01:30 PM PST | **MEDIUM** / Backfills finalized daily closes (15 mins post-close; no intraday pollution). | Alpha Vantage / RapidAPI daily close bars. | 2 – 3 minutes | **1 Hour** |
-| **`AETHER_PostMarketReporter`**| 02:00 PM PST | **LOW** / Computes closing portfolio equity and sends daily performance reports. | Finalized portfolio prices on disk. | 15 – 30 seconds | **30 Minutes** |
-| **`AETHER_Data_Backup`** | 03:00 PM PST | **LOW** / Robocopy syncs local Data/ folder to backup network drive. | Network storage online. | 30 – 90 seconds | **1 Hour** |
-| **`AETHER_PreFlight_Audit`**| 09:30 PM PST | **MEDIUM** / Nightly connection diagnostics and gateway check. | Centralized API, email, and directory gateways. | 10 – 15 seconds | **30 Minutes** |
-| **`AETHER_Chaikin_Reauth`**| Sunday 08:00 AM | **LOW** / Proactive headed Playwright Chrome login cookie refresh. | Logged-on user session (No-S4U). | 2 – 3 minutes (Supervised) | **30 Minutes** |
-
----
+To add or change a task, edit the manifest, then run the registrar in an elevated PowerShell.
+Do not copy the schedule into this document or anywhere else.
 
 ## 🏁 8. Developer Modification Checklist
 

@@ -386,7 +386,7 @@
       "Target: Double the configured real account by its target date (config oracle.start_equity / oracle.target_date).",
       "Execution: Runs daily at 7:00 AM PST immediately following ai_portfolio_game.py.",
       "Auditing: Flags CRITICAL BREACHES when current price <= technical stop loss.",
-      "Override: Seamlessly integrates the AI Second-Opinion Exit Override Gate, automatically auditing shadow verdicts to downgrade critical stop-loss breaches or momentum collapses to HOLD or WATCH.",
+      "Override: Seamlessly integrates the AI Second-Opinion Exit Override Gate, auditing shadow verdicts to downgrade a momentum collapse to HOLD or WATCH (sell_rules.ai_exit_override). A stop-loss breach is never downgraded.",
       "Rotations: Chooses the single highest-scoring, non-overlapping bullish setup (s10 >= 2.5).",
       "Zero-Risk: Operational read-only advisory (no automated orders are placed on your brokerage)."
     ]
@@ -400,7 +400,8 @@
       "Volatility: sigma = clamp((ATR/price) x sqrt(252) x 0.67, 0.18, 0.64), calibrated by scripts/backtesting/covered_call_iv_study.py; falls back to a flat 0.30 when ATR or price is unavailable.",
       "Flower Protection: winners with Long60 >= 6.0 (config cc_l60_ceiling / env AETHER_CC_L60_CEILING) are never written against, leaving their upside uncapped.",
       "Pricing: European Black-Scholes-Merton, 7-day weekly expiry, risk-free rate 0.04; strike = max(1.05 x price, price + 1.5 x ATR) rounded to a $1 / $2.50 / $5 ladder by price tier.",
-      "Symmetry: the sold volatility is stored on the written call and reused at buy-to-close, so writes and unwinds price against the same model."
+      "Symmetry: the sold volatility is stored on the written call and reused at buy-to-close, so writes and unwinds price against the same model.",
+      "Expiry and settlement: the call expires on the last NYSE session on or before Friday (Thursday when Friday is a holiday) and settles on the first run after that session, at its close from Symbol_full; with no cached close it waits."
     ],
     "origin": "Project AETHER R&D #26 (Option Trading & Volatility Patterns). Base weekly writer plus two backtest-gated refinements (per-symbol ATR-implied vol; high-conviction flower exclusion) shipped September 2026 on the covered-call follow-up (PR #60)."
   }

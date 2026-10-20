@@ -85,6 +85,70 @@ def _num(x):
         return None
 
 
+# Reason prefix of a hard stop exit. is_stop_exit() reads it, so the AI override gate (R&D #14,
+# momentum sells only) can never cancel a stop.
+STOP_BREACH_REASON = "stop breached"
+
+
+def is_stop_exit(reason) -> bool:
+    """True when an exit_decision reason is a hard stop breach (never overridable)."""
+    return str(reason or "").startswith(STOP_BREACH_REASON)
+
+
+# ── AI second-opinion exit override (R&D #14) ────────────────────────────────
+# The verdicts that downgrade a momentum SELL, and the action each one gives.
+OVERRIDE_ACTIONS = {"HOLD": "HOLD", "FLAG-FOR-REVIEW": "WATCH"}
+_STORED_VERDICT_KEYS = ("shadow_verdict", "ai_verdict", "verdict")
+
+
+def _verdict_and_note(v_info):
+    if isinstance(v_info, dict):
+        return v_info.get("verdict", "").upper(), v_info.get("note", "")
+    return str(v_info).upper(), ""
+
+
+def override_verdict(live_verdicts=None, holding=None):
+    """(verdict, source) of the first AI verdict that would override a sell, else (None, "").
+
+    Looks, in order, at the real-time verdicts ({provider: verdict-or-dict}), then the
+    holding's stored shadow_verdict / ai_verdict / verdict keys, then its stored verdicts dict.
+    """
+    for prov, v_info in (live_verdicts or {}).items():
+        v, note = _verdict_and_note(v_info)
+        if v in OVERRIDE_ACTIONS:
+            return v, f"Real-time AI Shadow Heuristic ({prov}) returned {v}" + (f": {note}" if note else "")
+    holding = holding or {}
+    for key in _STORED_VERDICT_KEYS:
+        if key in holding:
+            v, note = _verdict_and_note(holding[key])
+            if v in OVERRIDE_ACTIONS:
+                return v, f"Stored position {key} returned {v}" + (f": {note}" if note else "")
+    stored = holding.get("verdicts", {})
+    if isinstance(stored, dict):
+        for prov, v_info in stored.items():
+            v, note = _verdict_and_note(v_info)
+            if v in OVERRIDE_ACTIONS:
+                return v, f"Stored position verdicts ({prov}) returned {v}" + (f": {note}" if note else "")
+    return None, ""
+
+
+def ai_exit_override(action, reason, *, live_verdicts=None, holding=None, is_stop=None):
+    """Apply the AI second-opinion exit override (R&D #14): (action, override_reason).
+
+    Only a momentum SELL is downgraded: an AI HOLD gives HOLD, a FLAG-FOR-REVIEW gives WATCH.
+    A stop exit always executes (Rule of Loss Minimization), so it, and any action other than
+    SELL, comes back unchanged with override_reason "". `is_stop` defaults to
+    is_stop_exit(reason); callers whose reasons aren't exit_decision's pass it explicitly.
+    """
+    stop = is_stop_exit(reason) if is_stop is None else is_stop
+    if action != "SELL" or stop:
+        return action, ""
+    verdict, source = override_verdict(live_verdicts, holding)
+    if verdict is None:
+        return action, ""
+    return OVERRIDE_ACTIONS[verdict], source
+
+
 def exit_decision(price, cost, stop_loss, s10, l60, sma50=None, in_profit=None):
     """Return (action, reason) where action is 'SELL' | 'REVIEW' | 'HOLD'.
 
@@ -109,7 +173,7 @@ def exit_decision(price, cost, stop_loss, s10, l60, sma50=None, in_profit=None):
 
     # 1. HARD FLOOR — capital preservation, always wins.
     if stop and price is not None and price > 0 and price <= stop:
-        return "SELL", f"stop breached (price {price} <= stop {stop})"
+        return "SELL", f"{STOP_BREACH_REASON} (price {price} <= stop {stop})"
 
     # 2. SOFT SIGNAL — momentum decay, with winner-protection.
     if soft_exit(s10, l60):

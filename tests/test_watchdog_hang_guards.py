@@ -28,32 +28,14 @@ _OK = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
 
 
 class TestHealTasksNeverBlocks(unittest.TestCase):
-    def _heal(self, run_side_effect, tasks=("AnalyzeFinData_Morning", "AnalyzeFinData_Evening")):
-        with mock.patch("subprocess.run", side_effect=run_side_effect) as run, \
-             mock.patch.object(watchdog.ctypes, "windll", create=True) as windll, \
-             mock.patch("watchdog._log") as log:
-            windll.shell32.IsUserAnAdmin.return_value = 1
-            watchdog.heal_tasks(list(tasks))
-        return run, log
+    """heal_tasks no longer creates tasks (register_agent_tasks.ps1 does, from the manifest), so it
+    runs no schtasks/PowerShell at all and cannot hang the cycle."""
 
-    def test_every_subprocess_call_has_timeout_and_no_stdin(self):
-        run, _ = self._heal(lambda *a, **k: _OK)
-        self.assertGreater(run.call_count, 0)
-        for call in run.call_args_list:
-            self.assertIsNotNone(call.kwargs.get("timeout"), f"no timeout: {call.args[0][:3]}")
-            self.assertIs(call.kwargs.get("stdin"), subprocess.DEVNULL, f"stdin inherited: {call.args[0][:3]}")
-
-    def test_hung_schtasks_is_logged_and_next_task_still_healed(self):
-        def side_effect(args, **kwargs):
-            if args[0] == "schtasks" and "\\AnalyzeFinData_Morning" in args:
-                raise subprocess.TimeoutExpired(args, kwargs.get("timeout"))
-            return _OK
-        run, log = self._heal(side_effect)
-        errors = " ".join(str(c.args[0]) for c in log.error.call_args_list)
-        self.assertIn("AnalyzeFinData_Morning", errors)
-        self.assertIn("timed out", errors)
-        healed = [c.args[0] for c in run.call_args_list if c.args[0][0] == "schtasks"]
-        self.assertTrue(any("\\AnalyzeFinData_Evening" in a for a in healed))
+    def test_heal_runs_no_subprocess_and_says_how_to_register(self):
+        with mock.patch("subprocess.run") as run, mock.patch("watchdog._log") as log:
+            watchdog.heal_tasks(watchdog._tasks()[:2])
+        run.assert_not_called()
+        self.assertIn("register_agent_tasks.ps1", str(log.warning.call_args.args[0]))
 
 
 class TestSingletonLockReclaim(unittest.TestCase):
