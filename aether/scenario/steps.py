@@ -550,66 +550,20 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             s10=s10, l60=l60, sma50=sma50,
             date=today, run_shadow=None)
 
-        # AI Second-Opinion Exit Override Gate (R&D Item 14)
-        if entry["rules_action"] == "SELL":
-            ai_override = False
-            override_reason = ""
-            override_verdict = ""
-
-            # 1. Check real-time shadow verdicts generated in entry
-            realtime_verdicts = entry.get("verdicts", {})
-            for prov, v_info in realtime_verdicts.items():
-                v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
-                if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                    ai_override = True
-                    override_verdict = v
-                    override_reason = f"Real-time AI Shadow Heuristic ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
-                    break
-
-            # 2. Check stored position shadow verdicts if any
-            if not ai_override:
-                for key in ["shadow_verdict", "ai_verdict", "verdict"]:
-                    if key in pos:
-                        val = pos[key]
-                        if isinstance(val, dict):
-                            v = val.get("verdict", "").upper()
-                            note = val.get("note", "")
-                        else:
-                            v = str(val).upper()
-                            note = ""
-                        if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                            ai_override = True
-                            override_verdict = v
-                            override_reason = f"Stored position {key} returned {v}" + (f": {note}" if note else "")
-                            break
-
-            # 3. Check verdicts dictionary inside the stored position
-            if not ai_override:
-                pos_verdicts = pos.get("verdicts", {})
-                if isinstance(pos_verdicts, dict):
-                    for prov, v_info in pos_verdicts.items():
-                        v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
-                        if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                            ai_override = True
-                            override_verdict = v
-                            override_reason = f"Stored position verdicts ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
-                            break
-
-            if ai_override:
-                old_action = entry["rules_action"]
-                if override_verdict == "HOLD":
-                    new_action = "HOLD"
-                else:
-                    new_action = "WATCH"
-
-                entry["rules_action"] = new_action
-                entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
-
-                game._log.info(
-                    f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
-                    f"Decision downgraded from {old_action} to {new_action}. Reason: {override_reason}"
-                )
-                game._log.info(f"🛡️ [AI Override] Overriding sell of {sym} -> Downgrading to {new_action} due to: {override_reason}")
+        # AI Second-Opinion Exit Override Gate (R&D Item 14), one rule in sell_rules.ai_exit_override:
+        # an AI HOLD / FLAG-FOR-REVIEW downgrades a momentum SELL; a stop breach always executes.
+        old_action = entry["rules_action"]
+        entry["rules_action"], override_reason = game.sell_rules.ai_exit_override(
+            old_action, entry["rules_reason"], live_verdicts=entry.get("verdicts"), holding=pos)
+        if override_reason:
+            entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
+            game._log.info(
+                f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
+                f"Decision downgraded from {old_action} to {entry['rules_action']}. Reason: {override_reason}"
+            )
+        elif (old_action == "SELL" and game.sell_rules.is_stop_exit(entry["rules_reason"])
+                and game.sell_rules.override_verdict(entry.get("verdicts"), pos)[0]):
+            game._log.info(f"🛑 [AI Override] {sym}: AI verdict ignored, stop exits are never overridden ({entry['rules_reason']}).")
 
         decision_entries.append(entry)
         if entry["rules_action"] == "SELL":
@@ -643,9 +597,10 @@ def execute_exits(state, symbols_to_sell, prices, today, now_time, new_transacti
     * ``options.unwind_option_liability_if_held`` buys back a written covered
       call first, so no naked call is left behind;
     * the position is popped from ``state["positions"]``;
-    * **STP LMT fill** (R&D #8) — if the price is at or below a positive
-      ``stop_loss``, the fill is the stop price, not the gapped market price, and
-      the tx details get ``[STP LMT fill]``;
+    * **STP LMT @ market** (R&D #8) — if the price is at or below a positive
+      ``stop_loss``, the order is a stop-limit with its limit at the market price,
+      so the fill is the market price (never the stop), and the tx details get
+      ``[STP LMT @ market, stop <stop>]``;
     * the proceeds are credited to ``state["balance"]``; the SELL tx (with
       ``pnl``, ``Exit: <reason>`` and the position's ``stop_loss``, #136) is
       appended to ``state["history"]`` and ``new_transactions``;
@@ -664,18 +619,18 @@ def execute_exits(state, symbols_to_sell, prices, today, now_time, new_transacti
         game.options.unwind_option_liability_if_held(sym, pos, state, price, today)
         state["positions"].pop(sym)
 
-        # Slippage-Protected Limit Stop (STP LMT - R&D #8): Execute at exactly the stop price
-        # if the market close price dropped below our stop-loss floor, preventing slippage leaks.
+        # Slippage-Protected Limit Stop (STP LMT - R&D #8): once the price is at or below the
+        # stop, the order is a stop-limit whose limit is the market price, so it fills at the
+        # market price. A gap below the stop is a real loss; filling at the stop overstated P&L.
         stop_loss = pos.get("stop_loss", 0.0)
         stop_fill = stop_loss > 0.0 and price <= stop_loss
         if stop_fill:
-            game._log.info(f"🛡️ [STP LMT] Executed {sym} stop-loss at Limit price ${stop_loss:.2f} (protected against market gap ${price:.2f}).")
-            price = stop_loss
+            game._log.info(f"🛡️ [STP LMT] {sym} stop ${stop_loss:.2f} triggered; limit at market ${price:.2f}, filled at ${price:.2f}.")
 
         proceeds = pos["qty"] * price
         state["balance"] += proceeds
         tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2),
-              "details": f"Exit: {exit_reason}" + (" [STP LMT fill]" if stop_fill else ""),
+              "details": f"Exit: {exit_reason}" + (f" [STP LMT @ market, stop {stop_loss:.2f}]" if stop_fill else ""),
               "stop_loss": pos.get("stop_loss")}
         state["history"].append(tx)
         new_transactions.append(tx)

@@ -38,30 +38,15 @@ INITIAL_BALANCE = 10000.0
 import risk_utils
 import sell_rules
 import decision_eval
-import watchdog
 import instruments
 from aether import options
+from aether.market_calendar import NYSE_HOLIDAYS, last_session_on_or_before
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
 
-# Full-day NYSE closures (one list: is_market_hours and the stale-workbook gate both use it).
-NYSE_HOLIDAYS = frozenset({
-    "2026-01-01",  # New Year's Day
-    "2026-01-19",  # Martin Luther King Jr. Day
-    "2026-02-16",  # Presidents' Day
-    "2026-04-03",  # Good Friday
-    "2026-05-25",  # Memorial Day
-    "2026-06-19",  # Juneteenth National Independence Day
-    "2026-07-03",  # Independence Day (Observed)
-    "2026-09-07",  # Labor Day
-    "2026-11-26",  # Thanksgiving Day
-    "2026-12-25",  # Christmas Day
-    
-    # Future Years Support (2027)
-    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
-    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24"
-})
+# Full-day NYSE closures live in aether.market_calendar (one list: is_market_hours, the
+# stale-workbook gate and covered-call expiry all use it); re-exported here.
 
 _SESSION_CLOSE_LA = (13, 0)  # 4:00 PM ET
 
@@ -69,9 +54,7 @@ _SESSION_CLOSE_LA = (13, 0)  # 4:00 PM ET
 def _previous_session_close(now):
     """13:00 America/Los_Angeles on the last weekday before `now`'s date that wasn't an NYSE holiday."""
     tz_la = pytz.timezone("America/Los_Angeles")
-    day = now.astimezone(tz_la).date() - datetime.timedelta(days=1)
-    while day.weekday() >= 5 or day.isoformat() in NYSE_HOLIDAYS:
-        day -= datetime.timedelta(days=1)
+    day = last_session_on_or_before(now.astimezone(tz_la).date() - datetime.timedelta(days=1))
     return tz_la.localize(datetime.datetime(day.year, day.month, day.day, *_SESSION_CLOSE_LA))
 
 
@@ -1781,66 +1764,20 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 s10=s10, l60=l60, sma50=sma50,
                 date=today, run_shadow=None)
             
-            # AI Second-Opinion Exit Override Gate (R&D Item 14)
-            if entry["rules_action"] == "SELL":
-                ai_override = False
-                override_reason = ""
-                override_verdict = ""
-
-                # 1. Check real-time shadow verdicts generated in entry
-                realtime_verdicts = entry.get("verdicts", {})
-                for prov, v_info in realtime_verdicts.items():
-                    v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
-                    if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                        ai_override = True
-                        override_verdict = v
-                        override_reason = f"Real-time AI Shadow Heuristic ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
-                        break
-
-                # 2. Check stored position shadow verdicts if any
-                if not ai_override:
-                    for key in ["shadow_verdict", "ai_verdict", "verdict"]:
-                        if key in pos:
-                            val = pos[key]
-                            if isinstance(val, dict):
-                                v = val.get("verdict", "").upper()
-                                note = val.get("note", "")
-                            else:
-                                v = str(val).upper()
-                                note = ""
-                            if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                                ai_override = True
-                                override_verdict = v
-                                override_reason = f"Stored position {key} returned {v}" + (f": {note}" if note else "")
-                                break
-
-                # 3. Check verdicts dictionary inside the stored position
-                if not ai_override:
-                    pos_verdicts = pos.get("verdicts", {})
-                    if isinstance(pos_verdicts, dict):
-                        for prov, v_info in pos_verdicts.items():
-                            v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
-                            if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                                ai_override = True
-                                override_verdict = v
-                                override_reason = f"Stored position verdicts ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
-                                break
-
-                if ai_override:
-                    old_action = entry["rules_action"]
-                    if override_verdict == "HOLD":
-                        new_action = "HOLD"
-                    else:
-                        new_action = "WATCH"
-                    
-                    entry["rules_action"] = new_action
-                    entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
-                    
-                    _log.info(
-                        f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
-                        f"Decision downgraded from {old_action} to {new_action}. Reason: {override_reason}"
-                    )
-                    _log.info(f"🛡️ [AI Override] Overriding sell of {sym} -> Downgrading to {new_action} due to: {override_reason}")
+            # AI Second-Opinion Exit Override Gate (R&D Item 14), one rule in sell_rules.ai_exit_override:
+            # an AI HOLD / FLAG-FOR-REVIEW downgrades a momentum SELL; a stop breach always executes.
+            old_action = entry["rules_action"]
+            entry["rules_action"], override_reason = sell_rules.ai_exit_override(
+                old_action, entry["rules_reason"], live_verdicts=entry.get("verdicts"), holding=pos)
+            if override_reason:
+                entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
+                _log.info(
+                    f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
+                    f"Decision downgraded from {old_action} to {entry['rules_action']}. Reason: {override_reason}"
+                )
+            elif (old_action == "SELL" and sell_rules.is_stop_exit(entry["rules_reason"])
+                    and sell_rules.override_verdict(entry.get("verdicts"), pos)[0]):
+                _log.info(f"🛑 [AI Override] {sym}: AI verdict ignored, stop exits are never overridden ({entry['rules_reason']}).")
 
             decision_entries.append(entry)
             if entry["rules_action"] == "SELL":
@@ -1866,18 +1803,18 @@ def run_daily_ai_management(force=False, manual_profile=None):
             options.unwind_option_liability_if_held(sym, pos, state, price, today)
             state["positions"].pop(sym)
             
-            # Slippage-Protected Limit Stop (STP LMT - R&D #8): Execute at exactly the stop price
-            # if the market close price dropped below our stop-loss floor, preventing slippage leaks.
+            # Slippage-Protected Limit Stop (STP LMT - R&D #8): once the price is at or below the
+            # stop, the order is a stop-limit whose limit is the market price, so it fills at the
+            # market price. A gap below the stop is a real loss; filling at the stop overstated P&L.
             stop_loss = pos.get("stop_loss", 0.0)
             stop_fill = stop_loss > 0.0 and price <= stop_loss
             if stop_fill:
-                _log.info(f"🛡️ [STP LMT] Executed {sym} stop-loss at Limit price ${stop_loss:.2f} (protected against market gap ${price:.2f}).")
-                price = stop_loss
+                _log.info(f"🛡️ [STP LMT] {sym} stop ${stop_loss:.2f} triggered; limit at market ${price:.2f}, filled at ${price:.2f}.")
                 
             proceeds = pos["qty"] * price
             state["balance"] += proceeds
             tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2),
-                  "details": f"Exit: {exit_reason}" + (" [STP LMT fill]" if stop_fill else ""),
+                  "details": f"Exit: {exit_reason}" + (f" [STP LMT @ market, stop {stop_loss:.2f}]" if stop_fill else ""),
                   "stop_loss": pos.get("stop_loss")}
             state["history"].append(tx)
             new_transactions.append(tx)
@@ -2115,6 +2052,13 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 if cash_ratio > CFG.system_pyramiding_cash_ratio:  # idle-cash trigger for scaling in
                     _log.info(f"🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash ({cash_ratio*100:.1f}%)...")
                     for sym, pos in list(state["positions"].items()):
+                        # Never buy back what this run (or an earlier run today) just sold, e.g.
+                        # a Bank-As-You-Go scale-out: that books profit and restores the
+                        # exposure at the same price (PROD GNE 2026-10-02).
+                        if any(t.get("symbol") == sym and t.get("type") == "SELL" and t.get("date") == today
+                               for t in state["history"]):
+                            _log.info(f"🛡️ [Pyramiding Pass] {sym}: sold earlier today; no scale-in.")
+                            continue
                         current_px = prices.get(sym, pos["cost"])
                         # A winner is in profit and trading at or near its peak close
                         is_winner = (current_px > pos["cost"])
@@ -2274,18 +2218,10 @@ if __name__ == "__main__":
             ):
                 run_daily_ai_management(force=args.force, manual_profile=args.profile)
                 send_consolidated_morning_report()
-                try:
-                    watchdog.sync_data_folder()
-                except Exception as e:
-                    _log.warning(f"Post-run sync failed: {e}")
         except RunSkipped as e:
             _log.info(f"Trade execution skipped — {e}. Another scheduler already ran "
                       "it today, or the state is busy (single-executor guard).")
     elif args.summary:
         send_daily_summary()
-        try:
-            watchdog.sync_data_folder()
-        except Exception as e:
-            _log.warning(f"Post-run sync failed: {e}")
     else:
         show_report()

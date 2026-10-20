@@ -44,13 +44,12 @@ machine's only job is to keep a *human-created* session warm during the day.
 
 1. **Scheduled code logs in only through two gated paths, and never opens an interactive browser.**
    It always tries a renew first and opens at most one headless browser:
-   - **`etrade.scheduled_reauth(env)`**. Used by the daily `AnalyzeFinData_ETrade_Reauth` task (05:15,
-     runs `server.py etrade-reauth --scheduled`, set up by `scripts/etrade_totp_wizard.py`), the hourly
-     watchdog, the nightly preflight (ET weekdays only), `goal_sentry`, `scripts/etrade_reauth.py`, and
+   - **`etrade.scheduled_reauth(env)`**. Used by the hourly watchdog (`AETHER_Watchdog`), the nightly
+     preflight (ET weekdays only), `goal_sentry`, `scripts/etrade_reauth.py`, and
      the admin `POST /api/etrade/scheduled-reauth` endpoint. That endpoint is not the manual
      `POST /api/etrade/reauth` in §4.1. It calls `keep_alive` first, and only logs in if the profile is
-     trusted (or a TOTP secret is set), the breaker is clear, and it gets the single-flight lock. On ET weekends the watchdog, the
-     05:15 task and preflight only renew; they don't log in (`reason=weekend`). The web "+" button,
+     trusted (or a TOTP secret is set), the breaker is clear, and it gets the single-flight lock. On ET weekends the watchdog and
+     preflight only renew; they don't log in (`reason=weekend`). The web "+" button,
      `scripts/etrade_reauth.py` and `goal_sentry` can still log in on a weekend. The
      login is headless unless `AETHER_ETRADE_SCHEDULED_HEADLESS` / `CFG.etrade_scheduled_headless` says
      otherwise.
@@ -171,17 +170,17 @@ breaker.
 
 ### Daily (normal weekday)
 1. The token expires at midnight ET. A scheduled run logs in for the new day with nobody present: the
-   nightly preflight at 21:30 PT (00:30 ET), the 05:15 `AnalyzeFinData_ETrade_Reauth` task, or the
-   hourly watchdog. Whichever runs first logs in; the others just renew.
+   nightly preflight at 21:30 PT (00:30 ET) or the hourly watchdog. Whichever runs first logs in; the
+   other just renews. (The separate 05:15 `AnalyzeFinData_ETrade_Reauth` task was removed in Oct 2026;
+   the task list is `scripts/utils/scheduled_tasks.json`.)
 2. During the day, `keep_alive` renews the token, including after a 2-hour idle gap. No browser.
 3. A person only acts on an alert. For `sms_required` or `unseeded`, run `aether etrade-login
    --bootstrap`. For `blocked`, fix the cause, then run `aether etrade-login` to clear the breaker.
 
 ### Weekends
 - On ET Saturdays and Sundays nothing scheduled logs in. Preflight only renews and reports
-  `WAIVED`. The watchdog and the 05:15 task call `scheduled_reauth(..., weekend_mint=False)`, which
-  only renews and returns `reason=weekend`. The 05:15 task exits 0 in that case, so it doesn't show
-  as failed.
+  `WAIVED`. The watchdog calls `scheduled_reauth(..., weekend_mint=False)`, which only renews and
+  returns `reason=weekend`.
 - Monday's token comes from the first run after midnight ET on Monday: Sunday's 21:30 PT preflight,
   or the watchdog.
 - You can still log in by hand on a weekend (`aether etrade-login` or the web re-auth button). If

@@ -54,8 +54,8 @@ class TestExitReasonLogging(unittest.TestCase):
     def test_stop_breach_records_reason_and_stop_fill(self, mock_load_wb, _save, mock_load_game, mock_get_prices, _mh):
         tx = self._run(mock_load_wb, mock_load_game, mock_get_prices, "TSCO", 100.0, 80.0, 78.0, 1.0, 1.0)
         self.assertIn("stop breached", tx["details"])
-        self.assertIn("[STP LMT fill]", tx["details"])
-        self.assertEqual(tx["price"], 80.0)
+        self.assertIn("[STP LMT @ market, stop 80.00]", tx["details"])
+        self.assertEqual(tx["price"], 78.0)  # the market price, not the 80.0 stop
         self.assertEqual(tx["stop_loss"], 80.0)
 
     def test_missing_stop_uses_fallback_and_records_none(self, mock_load_wb, _save, mock_load_game, mock_get_prices, _mh):
