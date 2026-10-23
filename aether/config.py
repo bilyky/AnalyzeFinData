@@ -156,6 +156,11 @@ class _Config:
         self.ai_max_intel_emails = int(
             os.environ.get("AI_MAX_INTEL_EMAILS", "") or ai.get("max_intel_emails", 20)
         )
+        # Parallel email-intel extractions (each makes 2+ AI calls). Free AI tiers rate-limit
+        # (HTTP 429 bursts on PROD at 5 workers), so the default is one at a time.
+        self.ai_max_parallel_extractions = max(1, int(
+            os.environ.get("AI_MAX_PARALLEL_EXTRACTIONS", "") or ai.get("max_parallel_extractions", 1)
+        ))
 
         # ── Real brokerage accounts (last-4 IDs; PII — never hardcode in source) ─
         # Ordered: [0] = top Short_Long table (T1), [1] = bottom table (T2).
