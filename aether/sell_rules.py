@@ -98,6 +98,10 @@ def is_stop_exit(reason) -> bool:
 # ── AI second-opinion exit override (R&D #14) ────────────────────────────────
 # The verdicts that downgrade a momentum SELL, and the action each one gives.
 OVERRIDE_ACTIONS = {"HOLD": "HOLD", "FLAG-FOR-REVIEW": "WATCH"}
+# "Safely in profit": more than this many ATRs above cost. Peter Lynch Flower Protection uses it
+# to start ratcheting a stop, and the AI override needs it too: it exists to let winners run, so
+# it never holds a loser or a position that is only marginally up.
+FLOWER_PROFIT_ATR = 1.0
 _STORED_VERDICT_KEYS = ("shadow_verdict", "ai_verdict", "verdict")
 
 
@@ -132,21 +136,34 @@ def override_verdict(live_verdicts=None, holding=None):
     return None, ""
 
 
-def ai_exit_override(action, reason, *, live_verdicts=None, holding=None, is_stop=None):
-    """Apply the AI second-opinion exit override (R&D #14): (action, override_reason).
+def safely_in_profit(price, cost, atr) -> bool:
+    """True when price is more than FLOWER_PROFIT_ATR x ATR above cost. Unknown ATR -> False."""
+    if not atr or atr <= 0 or price is None or cost is None:
+        return False
+    return (price - cost) > FLOWER_PROFIT_ATR * atr
 
-    Only a momentum SELL is downgraded: an AI HOLD gives HOLD, a FLAG-FOR-REVIEW gives WATCH.
-    A stop exit always executes (Rule of Loss Minimization), so it, and any action other than
-    SELL, comes back unchanged with override_reason "". `is_stop` defaults to
+
+def ai_exit_override(action, reason, *, price, cost, atr, live_verdicts=None, holding=None, is_stop=None):
+    """Apply the AI second-opinion exit override (R&D #14): (action, override_reason, ignored_reason).
+
+    Only a momentum SELL of a position that is safely in profit (safely_in_profit) is downgraded:
+    an AI HOLD gives HOLD, a FLAG-FOR-REVIEW gives WATCH, and override_reason names the verdict.
+    A stop exit always executes (Rule of Loss Minimization), and a loser or a marginal gain is
+    not held on an AI opinion. When an overriding verdict exists but is not applied, the action
+    comes back unchanged and ignored_reason says why, for the caller's log. `is_stop` defaults to
     is_stop_exit(reason); callers whose reasons aren't exit_decision's pass it explicitly.
     """
-    stop = is_stop_exit(reason) if is_stop is None else is_stop
-    if action != "SELL" or stop:
-        return action, ""
+    if action != "SELL":
+        return action, "", ""
     verdict, source = override_verdict(live_verdicts, holding)
     if verdict is None:
-        return action, ""
-    return OVERRIDE_ACTIONS[verdict], source
+        return action, "", ""
+    if is_stop_exit(reason) if is_stop is None else is_stop:
+        return action, "", f"{source}; ignored, stop exits are never overridden"
+    if not safely_in_profit(price, cost, atr):
+        gain = "unknown ATR" if not atr or atr <= 0 else f"{(price - cost) / atr:+.2f} ATR vs cost"
+        return action, "", f"{source}; ignored, not safely in profit ({gain}, needs > {FLOWER_PROFIT_ATR:g} ATR)"
+    return OVERRIDE_ACTIONS[verdict], source, ""
 
 
 def exit_decision(price, cost, stop_loss, s10, l60, sma50=None, in_profit=None):
