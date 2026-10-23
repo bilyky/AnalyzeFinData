@@ -104,6 +104,15 @@ class TestSymbols(unittest.TestCase):
             with mock.patch.dict(os.environ, {"AETHER_DATA_DIR": tmp}):
                 self.assertEqual(snap.default_symbols(), ["INTC", "AMD", "NVDA"])
 
+    def test_snapshots_go_to_the_same_data_dir_the_state_is_read_from(self):
+        # AETHER_DATA_DIR moves both: symbols are read from it and snapshots appended under it.
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"AETHER_DATA_DIR": tmp}), \
+                mock.patch.object(snap, "OUT_DIR", None):
+            out = snap._write_snapshot("INTC", spot=1.0, expiry=None, quotes=[], source="test")
+            self.assertEqual(out, Path(tmp) / "option_chains" / "INTC.jsonl")
+            self.assertTrue(out.exists())
+
     def test_default_symbols_unreadable_state_is_intc_only(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"AETHER_DATA_DIR": tmp}):
             self.assertEqual(snap.default_symbols(), ["INTC"])

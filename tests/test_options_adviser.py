@@ -446,6 +446,23 @@ class TestExpirySelection(unittest.TestCase):
         _q, spot, _e = oa.fetch_chain("INTC", client, expiry=datetime.date(2026, 12, 18), today=TODAY)
         self.assertEqual(spot, 85.25)
 
+    def test_fetch_chain_warns_when_the_quote_call_returns_no_price(self):
+        # etrade.fetch_quotes swallows a rejected quote call and returns {}: nothing raises, so
+        # the missing spot itself must be logged, not dropped silently into spot=None.
+        class FakeMarket:
+            def options_chain(self, symbol, expiry=None, **kw):
+                return RAW
+
+            def quotes(self, syms):
+                return {}
+
+        client = type("C", (), {"market": FakeMarket()})()
+        with self.assertLogs("aether.options_adviser", level="WARNING") as cm:
+            quotes, spot, _e = oa.fetch_chain("INTC", client, expiry=datetime.date(2026, 12, 18), today=TODAY)
+        self.assertIsNone(spot)
+        self.assertTrue(quotes)
+        self.assertIn("No spot price for INTC", "\n".join(cm.output))
+
     def test_extract_spot_shapes(self):
         self.assertEqual(oa._extract_spot({"INTC": 85.25}, "intc"), 85.25)
         self.assertIsNone(oa._extract_spot({"AMD": 150.0}, "INTC"))

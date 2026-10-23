@@ -725,6 +725,12 @@ def fetch_chain(symbol: str, client, expiry: Optional[datetime.date] = None,
         spot = _extract_spot(client.market.quotes([symbol]), symbol)
     except Exception as e:
         _log.warning("Spot quote for %s failed (%s); the chain is returned without a spot.", symbol, e)
+    else:
+        # etrade.fetch_quotes swallows per-batch errors and returns {}, so a rejected quote
+        # call raises nothing here: warn on the missing price itself.
+        if spot is None:
+            _log.warning("No spot price for %s in the quote response; the chain is returned "
+                         "without a spot.", symbol)
     resolved_expiry = expiry or next((qt.expiry for qt in quotes if qt.expiry), None)
     return quotes, spot, resolved_expiry
 

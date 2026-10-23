@@ -10,10 +10,10 @@ Ban-safety (CLAUDE.md E*TRADE rule — automated jobs NEVER open a browser):
     * Uses ``ETradeClient(role="data")`` — the read-only data plane, which by construction cannot
       renew tokens or open a browser (the ban-safety boundary in aether/etrade/client.py). If tokens
       are absent/expired it fails LOUDLY and exits non-zero; it never launches an interactive login.
-    * Exactly one chain fetch per invocation (expiry auto-select + chain + spot), via the same
+    * One chain fetch per symbol (expiry auto-select + chain + spot), via the same
       ``oa.fetch_chain`` the adviser uses.
 
-This is a SCAFFOLD to schedule (e.g. a daily task after the close); it recommends/collects only and
+Scheduled daily 25 minutes before the close (see below); it recommends/collects only and
 places no orders. Run ``--dry-run`` to exercise the serialization path against the offline fixture
 with no network call.
 
@@ -53,7 +53,9 @@ from aether.logger import get_logger as _get_logger
 _log = _get_logger("option_chain_snapshot")
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-OUT_DIR = BASE_DIR / "Data" / "option_chains"
+# None = <Data dir>/option_chains, resolved at write time so AETHER_DATA_DIR applies (the game
+# state is read from the same place). Tests point it at a temp dir.
+OUT_DIR = None
 _FIXTURE = BASE_DIR / "tests" / "fixtures" / "intc_option_chain.json"
 CORE_SYMBOLS = ("INTC",)
 _ET = pytz.timezone("America/New_York")
@@ -86,8 +88,9 @@ def _serialize_quote(q: oa.OptionQuote) -> dict:
 
 def _write_snapshot(symbol: str, spot, expiry, quotes: list, source: str) -> Path:
     """Append one JSONL record for this snapshot; returns the file path."""
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / f"{symbol.upper()}.jsonl"
+    out_dir = OUT_DIR or Path(paths.data_dir()) / "option_chains"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"{symbol.upper()}.jsonl"
     record = {
         "captured_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "symbol": symbol.upper(),
