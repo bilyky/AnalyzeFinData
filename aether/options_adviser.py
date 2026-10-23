@@ -722,16 +722,28 @@ def fetch_chain(symbol: str, client, expiry: Optional[datetime.date] = None,
     quotes = normalize_chain(raw)
     spot = None
     try:
-        q = client.market.quotes([symbol])
-        spot = _extract_spot(q)
-    except Exception:
-        spot = None
+        spot = _extract_spot(client.market.quotes([symbol]), symbol)
+    except Exception as e:
+        _log.warning("Spot quote for %s failed (%s); the chain is returned without a spot.", symbol, e)
+    else:
+        # etrade.fetch_quotes swallows per-batch errors and returns {}, so a rejected quote
+        # call raises nothing here: warn on the missing price itself.
+        if spot is None:
+            _log.warning("No spot price for %s in the quote response; the chain is returned "
+                         "without a spot.", symbol)
     resolved_expiry = expiry or next((qt.expiry for qt in quotes if qt.expiry), None)
     return quotes, spot, resolved_expiry
 
 
-def _extract_spot(quote_resp) -> Optional[float]:
-    """Best-effort last price out of a pyetrade quote payload (shape-tolerant)."""
+def _extract_spot(quote_resp, symbol: str = "") -> Optional[float]:
+    """Last price for `symbol` from a quotes response, or None.
+
+    ETradeClient.market.quotes returns {SYMBOL: last_price} (etrade.fetch_quotes); a raw
+    pyetrade QuoteResponse payload is still read as a fallback."""
+    if isinstance(quote_resp, dict) and symbol:
+        for key in (symbol.upper(), symbol):
+            if key in quote_resp:
+                return _num(quote_resp[key], None) or None
     try:
         qd = (quote_resp.get("QuoteResponse", {}).get("QuoteData", []))
         qd = qd[0] if isinstance(qd, list) else qd
