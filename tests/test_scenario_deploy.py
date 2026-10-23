@@ -49,7 +49,8 @@ def _row(sym, s10=4.0, l60=5.0):
 
 def _state(balance=6000.0, equity=10000.0, **positions):
     return {"balance": balance, "equity": equity, "history": [], "queued_orders": [],
-            "positions": dict(positions or {"WIN": {"qty": 10, "cost": 100.0, "highest_close_since_acq": 110.0}})}
+            "positions": dict(positions or {"WIN": {"qty": 10, "cost": 100.0, "stop_loss": 100.0,
+                                                   "highest_close_since_acq": 110.0}})}
 
 
 class _Harness:
@@ -193,12 +194,12 @@ class TestPyramiding(unittest.TestCase):
         ]
         for px, peak, (s10, l60), expected in cases:
             with self.subTest(px=px, peak=peak, s10=s10), _Harness(pyramid=False) as h:
-                state = _state(WIN={"qty": 10, "cost": 100.0, "highest_close_since_acq": peak})
+                state = _state(WIN={"qty": 10, "cost": 100.0, "stop_loss": 100.0, "highest_close_since_acq": peak})
                 _run(state, prices={"WIN": px}, rows=(_row("OTHER", 9.0, 9.0), _row("WIN", s10, l60)))
                 h.pyramid.assert_called_once_with(*expected)
 
     def test_unlisted_symbol_and_unquoted_price_use_defaults(self):
-        state = _state(WIN={"qty": 10, "cost": 100.0})
+        state = _state(WIN={"qty": 10, "cost": 100.0, "stop_loss": 100.0})
         with _Harness(pyramid=False) as h:
             _run(state, prices={}, rows=())
         h.pyramid.assert_called_once_with(False, False, 0.0, 0.0)
@@ -207,9 +208,27 @@ class TestPyramiding(unittest.TestCase):
         # room = 0.2*10000 - qty*100: qty 14 -> 600, qty 15 -> exactly 500 (not enough)
         for qty, sized in ((14, True), (15, False)):
             with self.subTest(qty=qty), _Harness() as h:
-                state = _state(WIN={"qty": qty, "cost": 90.0, "highest_close_since_acq": 100.0})
+                state = _state(WIN={"qty": qty, "cost": 90.0, "stop_loss": 90.0, "highest_close_since_acq": 100.0})
                 _run(state, prices={"WIN": 100.0})
                 self.assertEqual(h.qty.called, sized)
+
+    def test_no_scale_in_while_the_stop_is_below_cost(self):
+        state = _state(WIN={"qty": 10, "cost": 100.0, "stop_loss": 99.0, "highest_close_since_acq": 110.0})
+        with _Harness() as h:
+            txs = _run(state)
+        self.assertEqual(txs, [])
+        h.qty.assert_not_called()
+        self.assertIn("WIN: stop $99.00 is below cost $100.00; no scale-in.", h.logged())
+
+    def test_scale_in_cash_is_capped_by_the_per_trade_loss_limit(self):
+        # stop 100, price 110: $10 at risk per share; 1% of $10,000 = $100 -> at most $1,100 of stock.
+        state = _state(balance=9000.0, WIN={"qty": 1, "cost": 100.0, "stop_loss": 100.0,
+                                            "highest_close_since_acq": 110.0})
+        with _Harness() as h, mock.patch.object(game.CFG, "system_max_trade_risk_pct", 0.01):
+            _run(state)
+        sym, cash, px = h.qty.call_args.args
+        self.assertEqual((sym, px), ("WIN", 110.0))
+        self.assertAlmostEqual(cash, 1100.0)
 
     def test_zero_shares_changes_nothing(self):
         state = _state()
