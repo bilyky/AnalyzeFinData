@@ -142,9 +142,12 @@ class TestBrokenManifestIsLoudNotFatal(unittest.TestCase):
     def test_trade_run_still_imports_with_a_broken_manifest(self):
         with tempfile.TemporaryDirectory() as d:
             bad = self._broken(d)
-            env = dict(os.environ, AETHER_TASK_MANIFEST=str(bad))
+            # The child logs emoji. Fix its output encoding and decode with the same one, so the
+            # parent's locale codec (cp1252 on Windows) can't fail and leave stderr as None.
+            env = dict(os.environ, AETHER_TASK_MANIFEST=str(bad), PYTHONIOENCODING="utf-8")
             res = subprocess.run([sys.executable, "-c", "import ai_portfolio_game; print('IMPORT_OK')"],
-                                 cwd=str(_REPO), env=env, capture_output=True, text=True, timeout=180,
+                                 cwd=str(_REPO), env=env, capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", timeout=180,
                                  stdin=subprocess.DEVNULL)
         self.assertIn("IMPORT_OK", res.stdout, res.stderr[-1500:])
 
