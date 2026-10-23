@@ -63,6 +63,13 @@ class TestEvaluateExit(unittest.TestCase):
              mock.patch("sell_eval.ai_client.evaluate_with_provider", return_value=("", "github_gpt")):
             self.assertEqual(sell_eval.evaluate_exit(_CTX), {})
 
+    def test_verdict_is_asked_at_temperature_zero(self):
+        """A verdict can cancel a sell, so it must be repeatable: the call uses temperature 0."""
+        with mock.patch("sell_eval.ai_client.primary", return_value="openrouter"),              mock.patch("sell_eval.ai_client.evaluate_with_provider",
+                        return_value=('{"verdict":"AGREE","note":"ok"}', "openrouter")) as ev:
+            sell_eval.evaluate_exit(_CTX)
+        self.assertEqual(ev.call_args.kwargs.get("temperature"), 0.0)
+
     def test_explicit_provider_passed_through(self):
         with mock.patch("sell_eval.ai_client.evaluate_with_provider",
                         return_value=('{"verdict":"AGREE","note":"ok"}', "claude")) as ev:
