@@ -372,7 +372,7 @@
     "body": "Prevents cash drag when the portfolio is fully allocated but still holding idle cash. <b>Dynamic Slot Expansion:</b> when the cash ratio exceeds 15% and every position slot is occupied, the maximum-positions limit is bumped by one so a fresh high-conviction candidate can still be entered rather than leaving cash uninvested. <b>Dynamic Pyramiding:</b> instead of only opening new names, the autopilot can add to existing winning positions trading near their recent peak closes, concentrating capital into what is already working. Both mechanisms remain bounded by the standard per-position and Scarcity-bucket caps &mdash; they deploy idle cash, they do not override the allocation ceilings.",
     "config": [
       "Slot Expansion: cash ratio > 15% AND all slots full -> max_positions += 1",
-      "Dynamic Pyramiding: add idle cash to existing green winners near peak closes",
+      "Dynamic Pyramiding: add idle cash to existing green winners near peak closes; only when the stop is at or above cost, and the added shares may lose at most max_trade_risk_pct (default 1%) of equity at the stop",
       "Bounded: still clamped by the per-position ceiling and the Scarcity-core cap",
       "Source: ai_portfolio_game.py slot-expansion + pyramiding blocks"
     ]
