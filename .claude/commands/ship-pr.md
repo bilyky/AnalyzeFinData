@@ -23,6 +23,14 @@ pre-flight (test command, linters, commit conventions) comes from the repo's own
   pre-change file in with `git show origin/main:<path> > <path>`, run the test, then restore with
   `git checkout HEAD -- <path>` (or from your private copy). Never restore from the shared stash or from
   `stash@{0}` — another session's entry may be on top. A test that passes either way proves nothing.
+  - A test that only *errors* on the old code (the new name doesn't exist yet) is not a red. Mutate
+    the new code instead (delete the counter, flip the comparison) and confirm a test fails.
+  - When the code under test runs inside a longer flow, assert the test's own precondition still
+    held at that point (an earlier step may move the stop, refill the cash, reset the state).
+    Otherwise the test can pass for the wrong reason.
+- **Code with a pinned copy** (a parity test, a strangler-fig extraction): change both copies, their
+  tests and any mutation anchors in the same PR. If another open PR adds such a copy of code you
+  change, whichever merges second ports the change, and only a suite run on the merged tree shows it.
 - **No new lint debt.** The change must not add a raw `print()` (use the project logger, or
   `sys.stdout.write` for intentional CLI output), an inline/mid-file import, a bare `except`, or a
   silent `except: … pass`. Touching a file makes its pre-existing violations yours when the gate checks
@@ -58,6 +66,8 @@ git add <paths> && git commit -m "<type>: <summary>" && git push -u origin HEAD
   verdict, a scope cut), edit them: `gh pr edit <n> --title … --body-file …`.
 - **Several open PRs at once?** Each merge puts the others behind. Re-merge `main` into each, and when
   git auto-merged a file both edited, check that both sides' content survived before re-running tests.
+  A text-clean merge can still fail the suite, so test the merged tree. Re-check `behind` just before
+  saying "ready": `main` often moves while the suite runs.
 - **CI:** a bot-opened PR may not trigger `pull_request` runs; the push-triggered run is the gate.
   Read the check-runs for the head SHA, not the PR badge. A failed job that ran **zero steps** never
   checked the code: `gh run rerun <run-id>`, don't debug it.
