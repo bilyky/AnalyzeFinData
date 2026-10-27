@@ -25,6 +25,12 @@ it with buy-and-hold:
 --attribution adds one variant per rule in RULES: aether_rules with only that rule
 switched off (simulate(disable={rule})), so each row shows what that one rule adds.
 
+Every run also reports the stop-out tail (R&D #54a): for each variant, how often a stop
+filled below the stop price (a gap through it) and the loss per stopped trade as % of
+equity, against the per-trade loss cap. Gate (set before the first run): the cap needs
+work if the 95th-percentile stop-out loss exceeds STOP_TAIL_P95_GATE (1.5%) of equity or
+the worst exceeds STOP_TAIL_WORST_GATE (3%).
+
 --split DATE (implies --attribution) is an out-of-sample check: every variant runs again
 from fresh cash on the days before DATE (train) and on DATE onward (test). The rule
 variant with the best train Sharpe is the one "picked"; its test result and rank among
@@ -95,6 +101,8 @@ REGIME_BAND = 2.0          # determine_profile: SPY L60 > +2 AGGRESSIVE, < -2 DE
 SLOT_EXPAND_CASH = 0.15    # determine_max_positions: add slots while cash ratio > 15%
 MIN_TICKET_USD = 100.0
 INITIAL_EQUITY = 100_000.0
+STOP_TAIL_P95_GATE = 1.5     # % of equity (R&D #54a, pre-registered)
+STOP_TAIL_WORST_GATE = 3.0
 # Rules simulate(disable=...) can switch off one at a time (--attribution).
 RULES = ("stop", "soft_exit", "winner_protection", "regime", "cash_buffer",
          "slot_expansion", "loss_cap")
@@ -230,9 +238,13 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
         p = pos.pop(sym)
         cash += p["qty"] * px * (1 - c)
         traded_usd += p["qty"] * px
+        pnl = p["qty"] * (px * (1 - c) - p["entry"] * (1 + c))
         trades.append({"symbol": sym, "entry_date": p["entry_date"], "exit_date": day,
                        "entry": round(p["entry"], 4), "exit": round(px, 4), "reason": reason,
-                       "ret_pct": round((px * (1 - c) / (p["entry"] * (1 + c)) - 1) * 100, 3)})
+                       "ret_pct": round((px * (1 - c) / (p["entry"] * (1 + c)) - 1) * 100, 3),
+                       "stop": round(p["stop"], 4) if p["stop"] else None,
+                       # P&L as % of the equity the buy was sized on (the loss cap's basis).
+                       "pnl_pct_equity": round(pnl / p["equity_basis"] * 100, 4)})
 
     for t, day in enumerate(calendar):
         # 1. Orders queued at yesterday's close fill at today's open (sells first).
@@ -258,7 +270,8 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
                 continue
             cash -= usd
             traded_usd += qty * o
-            pos[sym] = {"qty": qty, "entry": o, "stop": stop, "entry_date": day, "last": o}
+            pos[sym] = {"qty": qty, "entry": o, "stop": stop, "entry_date": day, "last": o,
+                        "equity_basis": curve[-1][1] if curve else initial}
         pending_buys = []
 
         # 2. Intraday hard stop; 3. mark to the close.
@@ -357,6 +370,44 @@ def buy_and_hold(bars, calendar, symbols, cost_bps=10.0, initial=INITIAL_EQUITY)
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
+
+def stop_tail(trades: list, cap_pct=None) -> dict:
+    """Stop-out tail of one variant (R&D #54a): gap-throughs and loss per stopped trade as %
+    of equity. Losses are positive numbers; `cap_pct` is the per-trade cap as a fraction."""
+    stops = [t for t in trades if t["reason"] == "stop"]
+    if not stops:
+        return {"n_stop_exits": 0}
+    losses = np.array([-t["pnl_pct_equity"] for t in stops])
+    gaps = [t for t in stops if t.get("stop") and t["exit"] < t["stop"]]
+    out = {
+        "n_stop_exits": len(stops),
+        "n_gap_through": len(gaps),
+        "gap_through_share": round(len(gaps) / len(stops), 3),
+        "loss_median_pct": round(float(np.median(losses)), 3),
+        "loss_p95_pct": round(float(np.percentile(losses, 95)), 3),
+        "loss_worst_pct": round(float(losses.max()), 3),
+        "worst_trade": max(stops, key=lambda t: -t["pnl_pct_equity"]),
+    }
+    if gaps:
+        out["gap_median_pct_below_stop"] = round(float(np.median(
+            [(1 - t["exit"] / t["stop"]) * 100 for t in gaps])), 3)
+    if cap_pct:
+        out["share_over_cap"] = round(float(np.mean(losses > cap_pct * 100)), 3)
+        out["gate_fail"] = bool(out["loss_p95_pct"] > STOP_TAIL_P95_GATE
+                                or out["loss_worst_pct"] > STOP_TAIL_WORST_GATE)
+    return out
+
+
+def _print_stop_tail(tails: dict) -> None:
+    cols = [("n_stop_exits", "Stops"), ("n_gap_through", "Gaps"), ("gap_through_share", "Gap%"),
+            ("loss_median_pct", "Med%"), ("loss_p95_pct", "P95%"), ("loss_worst_pct", "Worst%"),
+            ("share_over_cap", ">Cap")]
+    _out("\n  Stop-out loss, % of equity (R&D #54a)")
+    _out("  " + f"{'variant':<20}" + "".join(f"{h:>9}" for _k, h in cols))
+    for name, t in tails.items():
+        if t.get("n_stop_exits"):
+            _out("  " + f"{name:<20}" + "".join(f"{('-' if t.get(k) is None else t.get(k)):>9}" for k, _h in cols))
+
 
 def metrics(result: dict) -> dict:
     curve = result["curve"]
@@ -476,6 +527,14 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
     results = run_variants(panel, bars, calendar, cost_bps, excluded, eligible, attribution)
     table = {k: metrics(v) for k, v in results.items()}
     _print_table(calendar, table)
+    cap = CFG.system_max_trade_risk_pct
+    tails = {k: stop_tail(v["trades"], None if k == "aether_no_cap" else cap) for k, v in results.items()}
+    _print_stop_tail(tails)
+    gate = tails["aether_rules"]
+    if gate.get("n_stop_exits"):
+        _out(f"  gate (aether_rules): P95 {gate['loss_p95_pct']}% vs {STOP_TAIL_P95_GATE}%, worst "
+             f"{gate['loss_worst_pct']}% vs {STOP_TAIL_WORST_GATE}% -> "
+             f"{'FAIL: the cap needs work' if gate['gate_fail'] else 'PASS: the cap holds'}")
 
     split_out = None
     if split:
@@ -503,6 +562,7 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
         ],
         "metrics": table,
         "split": split_out,
+        "stop_tail": tails,
         "curves": {k: [[d, round(e, 2)] for d, e, _i in v["curve"]] for k, v in results.items()},
         "trades": {k: v["trades"] for k, v in results.items() if v["trades"]},
         "open_positions": {k: v["open_positions"] for k, v in results.items()},
