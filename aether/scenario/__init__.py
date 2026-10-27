@@ -49,6 +49,7 @@ from aether.scenario.schema import (
 from aether.scenario.steps import (
     assemble_symbol_universe,
     decide_exits,
+    deploy_capital,
     determine_profile,
     execute_exits,
     execute_queued_orders,
@@ -95,4 +96,5 @@ __all__ = [
     "execute_exits",
     "screen_buys",
     "rotate_positions",
+    "deploy_capital",
 ]

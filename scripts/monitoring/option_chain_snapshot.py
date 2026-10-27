@@ -10,16 +10,22 @@ Ban-safety (CLAUDE.md E*TRADE rule — automated jobs NEVER open a browser):
     * Uses ``ETradeClient(role="data")`` — the read-only data plane, which by construction cannot
       renew tokens or open a browser (the ban-safety boundary in aether/etrade/client.py). If tokens
       are absent/expired it fails LOUDLY and exits non-zero; it never launches an interactive login.
-    * Exactly one chain fetch per invocation (expiry auto-select + chain + spot), via the same
+    * One chain fetch per symbol (expiry auto-select + chain + spot), via the same
       ``oa.fetch_chain`` the adviser uses.
 
-This is a SCAFFOLD to schedule (e.g. a daily task after the close); it recommends/collects only and
+Scheduled daily 25 minutes before the close (see below); it recommends/collects only and
 places no orders. Run ``--dry-run`` to exercise the serialization path against the offline fixture
 with no network call.
 
+Symbols: INTC plus every symbol the paper game holds a covered call on (`written_call` in
+Data/ai_portfolio_game.json), one chain fetch each. On a non-trading day (ET weekend or NYSE
+holiday) it records nothing and exits 0, so a daily schedule needs no weekday filter.
+Scheduled as AETHER_OptionChainSnapshot (scripts/utils/scheduled_tasks.json).
+
 Usage:
-    python scripts/monitoring/option_chain_snapshot.py                     # live INTC snapshot
-    python scripts/monitoring/option_chain_snapshot.py --symbol AMD
+    python scripts/monitoring/option_chain_snapshot.py                     # INTC + covered calls
+    python scripts/monitoring/option_chain_snapshot.py --symbol AMD        # one symbol only
+    python scripts/monitoring/option_chain_snapshot.py --force             # also on a closed day
     python scripts/monitoring/option_chain_snapshot.py --dry-run           # offline, no live call
 """
 from __future__ import annotations
@@ -34,7 +40,12 @@ from pathlib import Path
 
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import pytz
+
 from aether import options_adviser as oa
+from aether import paths
+from aether.market_calendar import is_session
+from aether.options import written_call_symbols
 from aether.etrade.client import ETradeClient
 from aether.logger import get_logger as _get_logger
 
@@ -42,8 +53,29 @@ from aether.logger import get_logger as _get_logger
 _log = _get_logger("option_chain_snapshot")
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-OUT_DIR = BASE_DIR / "Data" / "option_chains"
+# None = <Data dir>/option_chains, resolved at write time so AETHER_DATA_DIR applies (the game
+# state is read from the same place). Tests point it at a temp dir.
+OUT_DIR = None
 _FIXTURE = BASE_DIR / "tests" / "fixtures" / "intc_option_chain.json"
+CORE_SYMBOLS = ("INTC",)
+_ET = pytz.timezone("America/New_York")
+
+
+def default_symbols() -> list:
+    """INTC first, then the game's covered-call symbols (unreadable state -> INTC only)."""
+    try:
+        with open(os.path.join(paths.data_dir(), "ai_portfolio_game.json"), encoding="utf-8") as f:
+            calls = written_call_symbols(json.load(f))
+    except (OSError, ValueError) as e:
+        _log.warning("Game state unreadable (%s); snapshotting %s only.", e, ", ".join(CORE_SYMBOLS))
+        calls = []
+    return list(CORE_SYMBOLS) + [s for s in calls if s not in CORE_SYMBOLS]
+
+
+def is_trading_day_et(now=None) -> bool:
+    """True when today's ET date is an NYSE session."""
+    now = now or datetime.datetime.now(_ET)
+    return is_session(now.astimezone(_ET).date())
 
 
 def _serialize_quote(q: oa.OptionQuote) -> dict:
@@ -56,8 +88,9 @@ def _serialize_quote(q: oa.OptionQuote) -> dict:
 
 def _write_snapshot(symbol: str, spot, expiry, quotes: list, source: str) -> Path:
     """Append one JSONL record for this snapshot; returns the file path."""
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / f"{symbol.upper()}.jsonl"
+    out_dir = OUT_DIR or Path(paths.data_dir()) / "option_chains"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"{symbol.upper()}.jsonl"
     record = {
         "captured_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "symbol": symbol.upper(),
@@ -114,11 +147,24 @@ def snapshot(symbol: str = "INTC") -> int:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Ban-safe daily E*TRADE option-chain snapshot collector")
-    ap.add_argument("--symbol", default="INTC")
+    ap.add_argument("--symbol", default=None,
+                    help="one symbol only (default: INTC + the game's covered-call symbols)")
+    ap.add_argument("--force", action="store_true", help="snapshot even on a non-trading day")
     ap.add_argument("--dry-run", action="store_true",
                     help="exercise serialization against the offline fixture (no live call)")
     args = ap.parse_args(argv)
-    return _dry_run(args.symbol) if args.dry_run else snapshot(args.symbol)
+    if args.dry_run:
+        return _dry_run(args.symbol or CORE_SYMBOLS[0])
+    if not args.force and not is_trading_day_et():
+        _log.console("Not an NYSE trading day (ET); no snapshot taken (use --force to override).")
+        return 0
+    symbols = [args.symbol.upper()] if args.symbol else default_symbols()
+    failed = [s for s in symbols if snapshot(s) != 0]
+    if failed:
+        _log.error("Option-chain snapshot failed for %d of %d symbols: %s",
+                   len(failed), len(symbols), ", ".join(failed))
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

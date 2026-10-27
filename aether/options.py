@@ -15,6 +15,7 @@ from aether import instruments, paths
 from aether.market_calendar import last_session_on_or_before
 from aether.config import CFG
 from aether.option_pricing import bs_price
+from aether.options_adviser import SHARES_PER_CONTRACT
 from aether.option_pricing import norm_cdf as norm_cdf  # re-export: single BS-math home
 from aether_logger import get_logger as _get_logger
 
@@ -130,6 +131,12 @@ def _expiry_close(symbol: str, date_str: str):
         return float(bar["4. close"]) if bar else None
     except (OSError, ValueError, KeyError, TypeError):
         return None
+
+
+def written_call_symbols(state: dict) -> list:
+    """Symbols whose game position carries an active covered call (`written_call`), sorted."""
+    return sorted(sym for sym, pos in (state.get("positions") or {}).items()
+                  if isinstance(pos, dict) and pos.get("written_call"))
 
 
 def resolve_expiring_options(state: dict, today_str: str, prices: dict):
@@ -319,6 +326,13 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
 
         # Only write Covered Calls on risk-locked winners (downside already capped at breakeven),
         # excluding high-conviction flowers whose upside we protect.
+        # A call covers whole 100-share contracts only; shares past the last full lot stay uncovered.
+        contracts = int(pos.get("qty", 0) // SHARES_PER_CONTRACT)
+        covered_qty = contracts * SHARES_PER_CONTRACT
+        if contracts < 1 and is_winner and is_risk_locked and not has_active_call and is_optionable and not is_high_conviction:
+            _log.info(f"[Option Write] Skipping {sym}: {pos.get('qty', 0)} share(s) is less than one {SHARES_PER_CONTRACT}-share contract.")
+            continue
+
         if is_winner and is_risk_locked and not has_active_call and is_optionable and not is_high_conviction:
             atr = atr_map.get(sym, current_px * 0.04) # fallback to 4% ATR
 
@@ -328,7 +342,7 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
             opt = select_covered_call(sym, current_px, atr, volatility=sigma)
             strike = opt["strike"]
             premium_price = opt["premium_price"]
-            premium_usd = round(premium_price * pos["qty"], 2)
+            premium_usd = round(premium_price * covered_qty, 2)
 
             _log.info(f"[Option Write] Writing weekly Covered Call on {sym} @ Strike ${strike:.2f} (collected ${premium_usd:.2f} premium).")
             
@@ -340,7 +354,7 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
                 "strike": strike,
                 "premium": premium_price,
                 "expiration_date": expiry_str,
-                "qty": pos["qty"],
+                "qty": covered_qty,
                 "sigma": sigma
             }
             
@@ -351,9 +365,9 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
                 "type": "OPTION_WRITE",
                 "symbol": sym,
                 "price": premium_price,
-                "qty": pos["qty"],
+                "qty": covered_qty,
                 "pnl": premium_usd,
-                "details": f"Wrote Weekly Covered Call (Strike: ${strike:.2f}, Exp: {expiry_str}, collected ${premium_usd:.2f})"
+                "details": f"Wrote Weekly Covered Call x{contracts} (Strike: ${strike:.2f}, Exp: {expiry_str}, collected ${premium_usd:.2f})"
             }
             state.setdefault("history", []).append(tx)
             new_options.append(tx)

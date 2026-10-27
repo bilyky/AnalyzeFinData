@@ -72,12 +72,13 @@
     },
     {
       "name": "AETHER_Data_Backup",
-      "schedule": {"type": "daily", "at": "15:00"},
+      "schedule": {"type": "daily", "at": "22:10"},
       "script": "scripts/utils/run_data_backup.py", "args": "",
-      "time_limit_min": 15,
+      "time_limit_min": 150,
       "log": "data_backup_agent.log",
-      "summary": "Robocopy of Data/ to the network share.",
-      "description": "Syncs the local Data folder to the backup share and records the result in Data/backup_status.json. Exits 1 when the sync fails."
+      "summary": "The one daily backup of Data/ to the network share.",
+      "description": "Robocopy of the local Data folder to the backup share, once a day after the day's data collection. If a collecting script is still running (daily_task and its children, a late pipeline) it waits up to 2 hours, then backs up anyway. Records the result in Data/backup_status.json; exits 1 when the share is offline or the copy fails. No other script syncs Data.",
+      "notes": "22:10, not 22:00: the hourly watchdog starts on the hour and writes under Data/. The evening daily_task usually ends by 19:30 but may run to midnight; the wait covers that. Limit = 120 min wait + 10 min robocopy + headroom."
     },
     {
       "name": "AETHER_AftermarketReport",
@@ -139,6 +140,16 @@
       "summary": "Daily Chaikin token runway check.",
       "description": "Checks how long the Chaikin token has left and emails a reminder under 2.5 days. Opens no browser.",
       "manual_run": "chaikin_reauth_check"
+    },
+    {
+      "name": "AETHER_OptionChainSnapshot",
+      "schedule": {"type": "daily", "at": "12:35"},
+      "script": "scripts/monitoring/option_chain_snapshot.py", "args": "",
+      "time_limit_min": 15,
+      "log": "option_chain_snapshot.log",
+      "summary": "Daily live option-chain snapshot near the close.",
+      "description": "Appends one live E*TRADE option chain per symbol (INTC plus the game's covered-call symbols) to Data/option_chains/<SYM>.jsonl, 25 minutes before the close (15:35 ET). Read-only data client: it never renews a token or opens a browser, and fails loudly if the token is dead. Skips ET weekends and NYSE holidays.",
+      "manual_run": "option_chain_snapshot"
     }
   ]
 }

@@ -38,7 +38,6 @@ INITIAL_BALANCE = 10000.0
 import risk_utils
 import sell_rules
 import decision_eval
-import watchdog
 import instruments
 from aether import options
 from aether.market_calendar import NYSE_HOLIDAYS, last_session_on_or_before
@@ -840,7 +839,8 @@ def should_pyramid_into_winner(is_winner: bool, has_peak: bool, s10: float, l60:
     short-term momentum holds (s10 >= system_pyramiding_s10_floor) OR long-term
     trend support is strong (l60 >= system_pyramiding_l60_floor) — the latter lets
     us add on minor short-term pullbacks within an established uptrend. Thresholds
-    are single-sourced from CFG.system_pyramiding_*.
+    are single-sourced from CFG.system_pyramiding_*. The pass checks the risk lock
+    (stop >= cost) and the per-trade loss cap; this gate checks momentum only.
     """
     return (
         is_winner
@@ -2061,6 +2061,11 @@ def run_daily_ai_management(force=False, manual_profile=None):
                                for t in state["history"]):
                             _log.info(f"🛡️ [Pyramiding Pass] {sym}: sold earlier today; no scale-in.")
                             continue
+                        # R&D #31 adds only to protected positions: the stop is at or above cost.
+                        stop_loss = pos.get("stop_loss") or 0.0
+                        if stop_loss < pos["cost"]:
+                            _log.info(f"🛡️ [Pyramiding Pass] {sym}: stop ${stop_loss:.2f} is below cost ${pos['cost']:.2f}; no scale-in.")
+                            continue
                         current_px = prices.get(sym, pos["cost"])
                         # A winner is in profit and trading at or near its peak close
                         is_winner = (current_px > pos["cost"])
@@ -2083,6 +2088,13 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
                             if remaining_room > 500.0:  # Minimum scale-in size is $500
                                 cash_to_deploy = min(state["balance"] - (state["equity"] * rules["cash_buffer_pct"]), remaining_room)
+                                # Same per-trade loss cap as a new buy: the added shares may lose at most
+                                # equity * max_trade_risk_pct at the stop (the old shares' locked gain is not counted).
+                                max_risk_usd = state["equity"] * CFG.system_max_trade_risk_pct
+                                risk_cap_usd = risk_utils.risk_capped_cash(current_px, stop_loss, max_risk_usd)
+                                if risk_cap_usd is not None and cash_to_deploy > risk_cap_usd:
+                                    _log.info(f"🛡️ [Pyramiding Pass] {sym}: add capped at ${risk_cap_usd:,.2f} so a stop-out at ${stop_loss:.2f} loses at most ${max_risk_usd:,.2f}.")
+                                    cash_to_deploy = risk_cap_usd
                                 add_qty = calculate_share_qty(sym, cash_to_deploy, current_px)
 
                                 if add_qty > 0:
@@ -2220,18 +2232,10 @@ if __name__ == "__main__":
             ):
                 run_daily_ai_management(force=args.force, manual_profile=args.profile)
                 send_consolidated_morning_report()
-                try:
-                    watchdog.sync_data_folder()
-                except Exception as e:
-                    _log.warning(f"Post-run sync failed: {e}")
         except RunSkipped as e:
             _log.info(f"Trade execution skipped — {e}. Another scheduler already ran "
                       "it today, or the state is busy (single-executor guard).")
     elif args.summary:
         send_daily_summary()
-        try:
-            watchdog.sync_data_folder()
-        except Exception as e:
-            _log.warning(f"Post-run sync failed: {e}")
     else:
         show_report()

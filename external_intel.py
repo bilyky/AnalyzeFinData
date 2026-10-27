@@ -5,7 +5,6 @@ import json
 import imaplib
 import email
 import extract_email_intel
-import watchdog
 import openpyxl
 import ai_client
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -52,7 +51,10 @@ def get_existing_symbols():
         _log.error(f"Failed to load symbols for verification: {e}")
         return set()
 
-# Common English words that are also valid stock tickers. 
+# What the last fetch_idea_emails() call saw, so a caller can say why it got 0 ideas.
+last_scan = {"mailbox_errors": 0, "candidates": 0, "extraction_failures": 0}
+
+# Common English words that are also valid stock tickers.
 # We ignore these unless they are explicitly prefixed with a '$' (e.g., $ALL vs. 'all').
 TICKER_BLACKLIST = {"ALL", "IT", "ME", "SO", "OR", "GO", "AM", "ON", "HE", "WE", "DO"}
 
@@ -184,6 +186,7 @@ def fetch_idea_emails():
         "[Gmail]/Trash",
     ]
 
+    last_scan.update(mailbox_errors=0, candidates=0, extraction_failures=0)
     ideas = []
     processed_msg_ids = set()
     max_intel = _max_intel_emails()
@@ -299,6 +302,7 @@ def fetch_idea_emails():
             # silently drop the entire External Intelligence section. Log and move on to the
             # next mailbox so the remaining ones still contribute candidates.
             _log.error(f"Failed to fetch emails for {email_user}: {e}")
+            last_scan["mailbox_errors"] += 1
         finally:
             if mail:
                 try:
@@ -306,6 +310,7 @@ def fetch_idea_emails():
                 except Exception:
                     pass
 
+    last_scan["candidates"] = len(candidates)
     # Now, execute AI extractions on these candidates in parallel!
     if candidates:
         _log.console(f"Running parallel AI extractions on {len(candidates)} filtered newsletters...")
@@ -331,6 +336,7 @@ def fetch_idea_emails():
             for fut in as_completed(futures):
                 res = fut.result()
                 if not res or not isinstance(res, dict):
+                    last_scan["extraction_failures"] += 1
                     continue
                 cand = res.get("cand")
                 if not isinstance(cand, dict):
@@ -382,6 +388,18 @@ def fetch_idea_emails():
 
     return ideas
 
+
+def zero_ideas_reason() -> str:
+    """Why the last fetch_idea_emails() call returned no ideas, from last_scan."""
+    s = last_scan
+    if not s["candidates"]:
+        if s["mailbox_errors"]:
+            return f"the mailbox scan failed for {s['mailbox_errors']} mailbox(es)"
+        return "no matching emails in the last 24h"
+    if s["extraction_failures"] >= s["candidates"]:
+        return f"{s['candidates']} email(s) were read, but every AI extraction failed"
+    return f"{s['candidates']} email(s) were read, but none had an idea"
+
 def get_market_news(symbols):
     _log.console(f"get_market_news called for: {', '.join(symbols)}")
     return []
@@ -392,7 +410,3 @@ if __name__ == "__main__":
     for idea in new_ideas:
         _log.console(f"Idea from {idea['from']}: {idea['subject']} (Symbol: {idea.get('symbol')}, Sentiment: {idea.get('sentiment')})")
 
-    try:
-        watchdog.sync_data_folder()
-    except Exception as e:
-        _log.warning(f"Post-run sync failed: {e}")

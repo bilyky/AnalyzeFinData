@@ -27,7 +27,8 @@ ROOT = Path(__file__).resolve().parents[2]
 STEPS = ROOT / "aether" / "scenario" / "steps.py"
 MODULES = ["tests.test_scenario_steps", "tests.test_scenario_assemble", "tests.test_scenario_settle",
            "tests.test_scenario_queued", "tests.test_scenario_exits",
-           "tests.test_scenario_sell_exec", "tests.test_scenario_buy_screen", "tests.test_scenario_rotation"]
+           "tests.test_scenario_sell_exec", "tests.test_scenario_buy_screen", "tests.test_scenario_rotation",
+           "tests.test_scenario_deploy"]
 
 # (label, exact text in steps.py, replacement). Each anchor must occur exactly once.
 MUTANTS = [
@@ -191,6 +192,53 @@ MUTANTS += [  # rotate_positions (R&D #27 momentum rotation)
      '        new_transactions.append(tx)\n        game._log.info(f"🔄'),
     ("rot: no dna", 'game.log_closed_trade_dna(sym_to_sell, pos, price, today)', 'pass'),
     ("rot: no cash added", 'state["balance"] += balance_addition', 'state["balance"] += 0'),
+]
+
+MUTANTS += [  # deploy_capital (BUY execution / queue, pyramiding, covered calls)
+    ("dep: gate slots >= 0", 'if available_slots > 0 and state["balance"] > min_cash_required:',
+     'if available_slots >= 0 and state["balance"] > min_cash_required:'),
+    ("dep: gate cash >=", 'if available_slots > 0 and state["balance"] > min_cash_required:',
+     'if available_slots > 0 and state["balance"] >= min_cash_required:'),
+    ("dep: queue every candidate", 'for buy in top_buys[:available_slots]:', 'for buy in top_buys:'),
+    ("dep: queue no dedup", 'if not any(q["symbol"] == buy["sym"] and q["type"] == "BUY" for q in state.get("queued_orders", [])):',
+     'if True:'),
+    ("dep: dedup ignores type", 'q["symbol"] == buy["sym"] and q["type"] == "BUY" for q',
+     'q["symbol"] == buy["sym"] for q'),
+    ("dep: no execute_buys", 'game._execute_buys(state, top_buys, available_slots, min_cash_required, rules,\n'
+     '                          today, now_time, new_transactions, prices)', 'pass'),
+    ("dep: degenerate ratio -2", 'else 0.0\n            if cash_ratio > game.CFG.system_pyramiding_cash_ratio:',
+     'else -2.0\n            if cash_ratio > game.CFG.system_pyramiding_cash_ratio:'),
+    ("dep: same-day guard off", 'sold earlier today; no scale-in.")\n                        continue',
+     'sold earlier today; no scale-in.")\n                        pass'),
+    ("dep: stop-below-cost guard off", "is below cost ${pos['cost']:.2f}; no scale-in.\")\n                        continue",
+     "is below cost ${pos['cost']:.2f}; no scale-in.\")\n                        pass"),
+    ("dep: loss cap off", 'if risk_cap_usd is not None and cash_to_deploy > risk_cap_usd:',
+     'if False and risk_cap_usd is not None and cash_to_deploy > risk_cap_usd:'),
+    ("dep: guard ignores symbol", 'if any(t.get("symbol") == sym and t.get("type") == "SELL"', 'if any(t.get("type") == "SELL"'),
+    ("dep: guard ignores type", 't.get("symbol") == sym and t.get("type") == "SELL" and t.get("date") == today',
+     't.get("symbol") == sym and t.get("date") == today'),
+    ("dep: guard ignores date", 't.get("type") == "SELL" and t.get("date") == today\n', 't.get("type") == "SELL"\n'),
+    ("dep: trigger >=", 'if cash_ratio > game.CFG.system_pyramiding_cash_ratio:',
+     'if cash_ratio >= game.CFG.system_pyramiding_cash_ratio:'),
+    ("dep: price fallback 0", '                    current_px = prices.get(sym, pos["cost"])',
+     '                    current_px = prices.get(sym, 0.0)'),
+    ("dep: winner >=", 'is_winner = (current_px > pos["cost"])', 'is_winner = (current_px >= pos["cost"])'),
+    ("dep: peak 98%->97%", '>= current_px * 0.98)', '>= current_px * 0.97)'),
+    ("dep: s10 off row[25]", '                            s10 = row[24] or 0.0\n                            l60 = row[25] or 0.0',
+     '                            s10 = row[25] or 0.0\n                            l60 = row[25] or 0.0'),
+    ("dep: room > -> >=", 'if remaining_room > 500.0:', 'if remaining_room >= 500.0:'),
+    ("dep: buffer ignored", 'cash_to_deploy = min(state["balance"] - (state["equity"] * rules["cash_buffer_pct"]), remaining_room)',
+     'cash_to_deploy = remaining_room'),
+    ("dep: zero qty bought", 'if add_qty > 0:', 'if add_qty >= 0:'),
+    ("dep: no debit", 'cost = add_qty * current_px\n                                state["balance"] -= cost',
+     'cost = add_qty * current_px\n                                state["balance"] -= 0'),
+    ("dep: qty not added", 'pos["qty"] = new_qty', 'pass'),
+    ("dep: cost not blended", 'pos["cost"] = blended_cost', 'pass'),
+    ("dep: no history", '                                state["history"].append(tx)\n                                new_transactions.append(tx)\n\n',
+     '                                new_transactions.append(tx)\n\n'),
+    ("dep: calls always", '            if game.is_market_hours():\n                game._log.info("🚀',
+     '            if True:\n                game._log.info("🚀'),
+    ("dep: no covered calls", 'game.options.execute_weekly_covered_call_pass(state, today, prices, ws)', 'pass'),
 ]
 
 

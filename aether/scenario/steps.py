@@ -916,3 +916,129 @@ def rotate_positions(state, prices, profile, available_slots, max_positions, top
 
     state["balance"] += balance_addition
     return available_slots
+
+
+def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash_required,
+                   today, now_time, new_transactions):
+    """Buy the ranked candidates, scale into winners and write covered calls (B6).
+
+    Extracted verbatim from the block that follows momentum rotation in
+    ``run_daily_ai_management`` (``if available_slots > 0 and state["balance"] >
+    min_cash_required:``) — the last trading stage before the root's
+    ``except``/``finally``. It is one stage because the pyramiding and
+    covered-call passes are nested inside its market-hours branch. Unchanged
+    from the root, and only when there is a free slot and cash above the buffer:
+
+    * **After hours** — the top ``available_slots`` candidates are queued as
+      BUY orders in ``state["queued_orders"]`` (deduped by symbol).
+    * **Market hours** — ``_execute_buys`` buys them, then:
+
+      * **Pyramiding** (R&D #31) — only when cash is above
+        ``CFG.system_pyramiding_cash_ratio`` of equity. A symbol with a SELL
+        dated today in ``state["history"]`` is skipped (no buying back what was
+        just sold, #181). Otherwise a held position in profit and within 2% of
+        its peak close, passing
+        ``should_pyramid_into_winner`` on its Research-sheet s10/l60, gets more
+        shares if it has more than $500 of room under
+        ``rules["max_allocation_pct"]`` of equity. The cost comes out of cash, the
+        cost basis is blended, and a ``BUY_SCALE_IN`` tx is recorded.
+      * **Covered calls** (R&D #26) — ``options.execute_weekly_covered_call_pass``
+        when the market is still open (``is_market_hours`` is read again here).
+
+    Returns nothing; every change lands on the caller's ``state`` and
+    ``new_transactions``. Every collaborator is resolved off the live root
+    module at call time via :func:`_pkg`, so ``mock.patch.object(game, ...)``
+    still intercepts.
+    """
+    game = _pkg()
+
+    if available_slots > 0 and state["balance"] > min_cash_required:
+        if not game.is_market_hours():
+            # Queue the buys up to available slots
+            for buy in top_buys[:available_slots]:
+                if not any(q["symbol"] == buy["sym"] and q["type"] == "BUY" for q in state.get("queued_orders", [])):
+                    state.setdefault("queued_orders", []).append({
+                        "type": "BUY", "symbol": buy["sym"], "reason": "Top-ranked quantitative pick (After-Hours)"
+                    })
+                    game._log.info(f"📝 [Queued] After-hours BUY queued for {buy['sym']}")
+        else:
+            game._execute_buys(state, top_buys, available_slots, min_cash_required, rules,
+                          today, now_time, new_transactions, prices)
+
+            # ── Dynamic Pyramiding: Scale into winning trends with idle cash ──
+            cash_ratio = state["balance"] / state["equity"] if state["equity"] > 1.0 else 0.0
+            if cash_ratio > game.CFG.system_pyramiding_cash_ratio:  # idle-cash trigger for scaling in
+                game._log.info(f"🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash ({cash_ratio*100:.1f}%)...")
+                for sym, pos in list(state["positions"].items()):
+                    # Never buy back what this run (or an earlier run today) just sold, e.g.
+                    # a Bank-As-You-Go scale-out: that books profit and restores the
+                    # exposure at the same price (PROD GNE 2026-10-02).
+                    if any(t.get("symbol") == sym and t.get("type") == "SELL" and t.get("date") == today
+                           for t in state["history"]):
+                        game._log.info(f"🛡️ [Pyramiding Pass] {sym}: sold earlier today; no scale-in.")
+                        continue
+                    # R&D #31 adds only to protected positions: the stop is at or above cost.
+                    stop_loss = pos.get("stop_loss") or 0.0
+                    if stop_loss < pos["cost"]:
+                        game._log.info(f"🛡️ [Pyramiding Pass] {sym}: stop ${stop_loss:.2f} is below cost ${pos['cost']:.2f}; no scale-in.")
+                        continue
+                    current_px = prices.get(sym, pos["cost"])
+                    # A winner is in profit and trading at or near its peak close
+                    is_winner = (current_px > pos["cost"])
+                    has_peak = (pos.get("highest_close_since_acq", 0.0) >= current_px * 0.98) # within 2% of peak close
+
+                    # Retrieve its Short10 and Long60 momentum scores from row
+                    s10 = 0.0
+                    l60 = 0.0
+                    for row in ws.iter_rows(min_row=2, values_only=True):
+                        if row[3] == sym:
+                            s10 = row[24] or 0.0
+                            l60 = row[25] or 0.0
+                            break
+
+                    # Pyramiding momentum gate (R&D #31) — delegated to a single-sourced helper.
+                    if game.should_pyramid_into_winner(is_winner, has_peak, s10, l60):
+                        max_pos_allocation = state["equity"] * rules["max_allocation_pct"]
+                        current_allocation = pos["qty"] * current_px
+                        remaining_room = max_pos_allocation - current_allocation
+
+                        if remaining_room > 500.0:  # Minimum scale-in size is $500
+                            cash_to_deploy = min(state["balance"] - (state["equity"] * rules["cash_buffer_pct"]), remaining_room)
+                            # Same per-trade loss cap as a new buy: the added shares may lose at most
+                            # equity * max_trade_risk_pct at the stop (the old shares' locked gain is not counted).
+                            max_risk_usd = state["equity"] * game.CFG.system_max_trade_risk_pct
+                            risk_cap_usd = game.risk_utils.risk_capped_cash(current_px, stop_loss, max_risk_usd)
+                            if risk_cap_usd is not None and cash_to_deploy > risk_cap_usd:
+                                game._log.info(f"🛡️ [Pyramiding Pass] {sym}: add capped at ${risk_cap_usd:,.2f} so a stop-out at ${stop_loss:.2f} loses at most ${max_risk_usd:,.2f}.")
+                                cash_to_deploy = risk_cap_usd
+                            add_qty = game.calculate_share_qty(sym, cash_to_deploy, current_px)
+
+                            if add_qty > 0:
+                                cost = add_qty * current_px
+                                state["balance"] -= cost
+
+                                # Blended cost basis recalculation
+                                old_qty = pos["qty"]
+                                old_cost = pos["cost"]
+                                new_qty = old_qty + add_qty
+                                blended_cost = round(((old_qty * old_cost) + (cost)) / new_qty, 2)
+
+                                pos["qty"] = new_qty
+                                pos["cost"] = blended_cost
+
+                                tx = {
+                                    "date": today, "time": now_time, "type": "BUY_SCALE_IN",
+                                    "symbol": sym, "price": current_px, "qty": add_qty,
+                                    "details": f"Pyramiding Scale-In (Breakout Peak, s10={s10})"
+                                }
+                                state["history"].append(tx)
+                                new_transactions.append(tx)
+
+                                game._log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f} (Blended Cost: ${blended_cost:.2f})")
+                                game._log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f}")
+            # ───────────────────────────────────────────────────────────
+
+            # ── Dynamic Covered Call Writing (R&D #26): Generate weekly premium cash-flow ──
+            if game.is_market_hours():
+                game._log.info("🚀 [Options Pass] Checking active holdings to write weekly Covered Calls...")
+                game.options.execute_weekly_covered_call_pass(state, today, prices, ws)

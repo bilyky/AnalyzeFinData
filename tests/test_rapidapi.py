@@ -276,6 +276,11 @@ class TestCrossProcessLock(unittest.TestCase):
         self.assertEqual(res["updated"], 0)
         self.assertEqual(res["skipped"], 1)
         self.assertTrue(os.path.exists(self.lock_path))    # the holder's lock left intact
+        # Same keys as a normal run: rapidapi's own summary read res["deferred"] and crashed
+        # with KeyError whenever the lock was held (PROD 10-09, 10-12: two evening runs).
+        for key in ("updated", "skipped", "errors", "deferred", "quota_stopped"):
+            self.assertIn(key, res)
+        self.assertEqual((res["deferred"], res["quota_stopped"]), (0, False))
 
     def test_stale_lock_is_reclaimed(self):
         # A lock older than the TTL (crashed run) must not block recovery forever.

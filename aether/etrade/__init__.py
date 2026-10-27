@@ -1206,7 +1206,13 @@ def _get_failure_state():
 def check_etrade_cookie_freshness():
     """Verify that our saved Playwright browser state (cookies) is fresh.
     If it is older than 25 days, send a proactive email warning to re-auth.
+
+    Skipped when a TOTP secret is configured: the TOTP login (_get_verifier_via_totp) uses a
+    fresh browser and never reads or refreshes this file, so its age says nothing and the
+    warning repeated daily on PROD.
     """
+    if getattr(CFG, "etrade_totp_secret", ""):
+        return
     state_path = _BROWSER_STATE_PATH
     if os.path.exists(state_path):
         try:
