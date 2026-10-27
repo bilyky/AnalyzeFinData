@@ -137,8 +137,9 @@ def override_verdict(live_verdicts=None, holding=None):
 
 
 def safely_in_profit(price, cost, atr) -> bool:
-    """True when price is more than FLOWER_PROFIT_ATR x ATR above cost. Unknown ATR -> False."""
-    if not atr or atr <= 0 or price is None or cost is None:
+    """True when price is more than FLOWER_PROFIT_ATR x ATR above cost. Unknown ATR, price or
+    cost (None, or a cost of 0 such as an empty sheet cell) -> False."""
+    if not atr or atr <= 0 or price is None or not cost or cost <= 0:
         return False
     return (price - cost) > FLOWER_PROFIT_ATR * atr
 
@@ -161,7 +162,12 @@ def ai_exit_override(action, reason, *, price, cost, atr, live_verdicts=None, ho
     if is_stop_exit(reason) if is_stop is None else is_stop:
         return action, "", f"{source}; ignored, stop exits are never overridden"
     if not safely_in_profit(price, cost, atr):
-        gain = "unknown ATR" if not atr or atr <= 0 else f"{(price - cost) / atr:+.2f} ATR vs cost"
+        if not atr or atr <= 0:
+            gain = "unknown ATR"
+        elif price is None or not cost or cost <= 0:
+            gain = "unknown price or cost"
+        else:
+            gain = f"{(price - cost) / atr:+.2f} ATR vs cost"
         return action, "", f"{source}; ignored, not safely in profit ({gain}, needs > {FLOWER_PROFIT_ATR:g} ATR)"
     return OVERRIDE_ACTIONS[verdict], source, ""
 

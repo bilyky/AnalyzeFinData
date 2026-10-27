@@ -55,6 +55,9 @@ class TestAiExitOverride(unittest.TestCase):
             ("exactly 1 ATR sells", "SELL", SOFT, {"price": 105.0, "live_verdicts": {"p": "HOLD"}}, ("SELL", "")),
             ("just over 1 ATR holds", "SELL", SOFT, {"price": 105.01, "live_verdicts": {"p": "HOLD"}}, ("HOLD", "Real-time")),
             ("unknown ATR sells", "SELL", SOFT, {"atr": None, "live_verdicts": {"p": "HOLD"}}, ("SELL", "")),
+            # Unknown cost (None, or 0 from an empty Oracle sheet cell) is not safely in profit.
+            ("unknown cost sells", "SELL", SOFT, {"cost": None, "live_verdicts": {"p": "HOLD"}}, ("SELL", "")),
+            ("zero cost sells", "SELL", SOFT, {"cost": 0.0, "live_verdicts": {"p": "HOLD"}}, ("SELL", "")),
         ]
         for label, action, reason, kw, (want_action, want_src) in cases:
             with self.subTest(label):
@@ -75,6 +78,13 @@ class TestAiExitOverride(unittest.TestCase):
         self.assertFalse(sell_rules.safely_in_profit(105.0, 100.0, 5.0))
         self.assertTrue(sell_rules.safely_in_profit(105.01, 100.0, 5.0))
         self.assertFalse(sell_rules.safely_in_profit(200.0, 100.0, None))
+        self.assertFalse(sell_rules.safely_in_profit(200.0, None, 5.0))
+        self.assertFalse(sell_rules.safely_in_profit(200.0, 0.0, 5.0))
+
+    def test_unknown_cost_is_logged_not_raised(self):
+        _, _, why = sell_rules.ai_exit_override("SELL", SOFT, price=110.0, cost=None, atr=5.0,
+                                                live_verdicts={"p": "HOLD"})
+        self.assertIn("unknown price or cost", why)
 
     def test_stop_reason_is_what_exit_decision_returns(self):
         self.assertTrue(sell_rules.is_stop_exit(STOP))

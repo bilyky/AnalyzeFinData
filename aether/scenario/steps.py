@@ -416,11 +416,14 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
       the stop (passes ``stop_loss=None``) so an opening whipsaw can't trip it.
     * **Exit decision** — ``decision_eval.build_entry`` is the single source of the
       action (``_sma50`` is read only when ``sell_rules.soft_exit`` fires).
-    * **AI second-opinion override** (R&D #14) — a ``SELL`` is downgraded to
-      ``HOLD`` / ``WATCH`` when a real-time shadow verdict, a stored position
-      verdict key (``shadow_verdict`` / ``ai_verdict`` / ``verdict``), or the
-      stored ``verdicts`` dict says ``HOLD`` / ``FLAG-FOR-REVIEW``, checked in that
-      order.
+    * **AI second-opinion override** (R&D #14, ``sell_rules.ai_exit_override``) — a
+      momentum ``SELL`` of a position safely in profit (more than
+      ``FLOWER_PROFIT_ATR`` x ATR above cost) is downgraded to ``HOLD`` / ``WATCH``
+      when a real-time shadow verdict, a stored position verdict key
+      (``shadow_verdict`` / ``ai_verdict`` / ``verdict``), or the stored
+      ``verdicts`` dict says ``HOLD`` / ``FLAG-FOR-REVIEW``, checked in that order.
+      A stop exit, a loser or a marginal gain always sells; an ignored verdict is
+      logged with the reason.
     * **Routing** — a surviving ``SELL`` is queued in ``state["queued_orders"]``
       (deduped) when outside market hours, else collected for liquidation; a
       ``REVIEW`` is logged as winner-protected. All entries are then written via

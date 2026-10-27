@@ -367,7 +367,9 @@ class TestAiOverride(unittest.TestCase):
         verdict path says HOLD / FLAG-FOR-REVIEW (PROD 2026-10-09: the free model's verdict
         reached this gate; a stop exit must not depend on it)."""
         reason = "stop breached (price 85.0 <= stop 90.0)"
-        state = _state(shadow_verdict="HOLD", verdicts={"p": "FLAG-FOR-REVIEW"})
+        # A winner (cost 60, price 85, ATR 5: +5 ATR): winners-only alone would let the AI hold it,
+        # so only the stop check makes this sell.
+        state = _state(cost=60.0, shadow_verdict="HOLD", verdicts={"p": "FLAG-FOR-REVIEW"})
         with _Harness(atr=5.0, action="SELL", reason=reason, verdicts={"ai": {"verdict": "HOLD", "note": "winner"}}) as h:
             out, _ = _run(state, prices={"AAA": 85.0})
         self.assertEqual(out, {"AAA": reason})
