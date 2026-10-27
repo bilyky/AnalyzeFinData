@@ -520,8 +520,9 @@ def main():
                 except Exception as e:
                     log(f"Warning: Failed to cache email ideas: {e}")
             else:
-                _pipeline_log.warning("External intel fetch returned 0 ideas — mailbox auth may have failed. Check aether.jsonl for details.")
-                log("Warning: 0 ideas from email scan — see log for details.")
+                reason = external_intel.zero_ideas_reason()
+                _pipeline_log.warning(f"External intel fetch returned 0 ideas: {reason}. Check aether.jsonl for details.")
+                log(f"Warning: 0 ideas from email scan ({reason}).")
         except Exception as e:
             _pipeline_log.error(f"Could not fetch external intel: {e}")
             log(f"ERROR: Could not fetch external intel: {e}")
