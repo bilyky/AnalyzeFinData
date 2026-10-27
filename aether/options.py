@@ -133,6 +133,12 @@ def _expiry_close(symbol: str, date_str: str):
         return None
 
 
+def written_call_symbols(state: dict) -> list:
+    """Symbols whose game position carries an active covered call (`written_call`), sorted."""
+    return sorted(sym for sym, pos in (state.get("positions") or {}).items()
+                  if isinstance(pos, dict) and pos.get("written_call"))
+
+
 def resolve_expiring_options(state: dict, today_str: str, prices: dict):
     """Scan and settle written Covered Calls whose expiry session is over.
 

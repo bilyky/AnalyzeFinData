@@ -140,6 +140,16 @@
       "summary": "Daily Chaikin token runway check.",
       "description": "Checks how long the Chaikin token has left and emails a reminder under 2.5 days. Opens no browser.",
       "manual_run": "chaikin_reauth_check"
+    },
+    {
+      "name": "AETHER_OptionChainSnapshot",
+      "schedule": {"type": "daily", "at": "12:35"},
+      "script": "scripts/monitoring/option_chain_snapshot.py", "args": "",
+      "time_limit_min": 15,
+      "log": "option_chain_snapshot.log",
+      "summary": "Daily live option-chain snapshot near the close.",
+      "description": "Appends one live E*TRADE option chain per symbol (INTC plus the game's covered-call symbols) to Data/option_chains/<SYM>.jsonl, 25 minutes before the close (15:35 ET). Read-only data client: it never renews a token or opens a browser, and fails loudly if the token is dead. Skips ET weekends and NYSE holidays.",
+      "manual_run": "option_chain_snapshot"
     }
   ]
 }
