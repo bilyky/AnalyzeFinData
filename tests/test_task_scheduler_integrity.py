@@ -170,3 +170,56 @@ class TestRecoveryReportWording(unittest.TestCase):
         self.assertNotIn("Healed missing tasks", html)
         self.assertIn("AETHER_AI_Summary", html)
         self.assertIn("register_agent_tasks.ps1", html)
+
+
+class TestRecoveryReportForLogErrors(unittest.TestCase):
+    """PROD 10-16..10-20: 78 recovery emails, many sent only because some module logged an ERROR.
+    The email named none of them and read "NOMINAL (HEALED)". Now it lists new errors, sends each
+    one once a day, says ATTENTION, and ignores the watchdog's own scheduler-audit lines."""
+
+    def _run(self, errors):
+        with mock.patch("watchdog.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
+             mock.patch("watchdog.notify.send_email") as email, \
+             mock.patch("watchdog.is_pid_running", return_value=False), \
+             mock.patch("watchdog.check_data_freshness", return_value=None), \
+             mock.patch("watchdog.check_logs", return_value=errors), \
+             mock.patch("watchdog.extract_latest_traceback", return_value=""), \
+             mock.patch("watchdog.powergauge.ensure_valid_session", return_value={"jsessionid": "x"}), \
+             mock.patch("watchdog.etrade.scheduled_reauth", return_value={"ok": True, "reason": "renewed"}), \
+             mock.patch("watchdog.check_task_scheduler", return_value=([], [])), \
+             mock.patch("watchdog._log"):
+            watchdog.run_watchdog()
+        reports = [c for c in email.call_args_list if "Recovery Report" in c.args[0]]
+        return reports[-1].args[1] if reports else None
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        p = mock.patch.object(watchdog, "LOG_ERROR_STATE", Path(self._tmp.name) / "state.json")
+        p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_new_error_is_listed_once_and_not_called_healed(self):
+        err = "[aether.rapidapi] ERROR GMED: Alpha Vantage error for GMED: {}"
+        html = self._run([err])
+        self.assertIsNotNone(html)
+        self.assertIn("Alpha Vantage error for GMED", html)
+        self.assertNotIn("HEALED", html)
+        self.assertIsNone(self._run([err]), "the same error was emailed twice in one day")
+
+    def test_scheduler_audit_lines_alone_send_nothing(self):
+        line = "[aether.watchdog] 🛑 [Scheduler Audit] Task '\AETHER_Agents\AETHER_DailyDriver' failed"
+        self.assertIsNone(self._run([line]))
+
+    def test_status_says_healed_only_after_an_action(self):
+        cases = [
+            (("SKIPPED", False, []), "SKIPPED (OFF-MARKET)"),
+            ((False, False, []), "MANUAL INTERVENTION REQUIRED"),
+            ((True, True, []), "NOMINAL (HEALED)"),
+            ((True, False, ["Killed ghost processes to resolve resource lock."]), "NOMINAL (HEALED)"),
+            ((True, False, ["⚠️ Tasks failed their last execution: X"]), "ATTENTION: SEE FINDINGS BELOW"),
+            ((True, False, []), "ATTENTION: SEE FINDINGS BELOW"),
+        ]
+        for args, text in cases:
+            with self.subTest(args=args):
+                self.assertEqual(watchdog._report_status(*args)[1], text)

@@ -52,6 +52,8 @@ def _tasks() -> list[str]:
 # LastRunTime of each failed task already reported, so a task that keeps failing is reported
 # once per failed run instead of in every hourly cycle (PROD 10-09..10-11: hourly emails).
 SCHEDULER_AUDIT_STATE = BASE_DIR / "Data" / "scheduler_audit_state.json"
+# Log errors already emailed today, so the same error isn't re-sent by every hourly cycle.
+LOG_ERROR_STATE = BASE_DIR / "Data" / "watchdog_log_errors_state.json"
 SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
 WATCHDOG_LOCK_FILE = BASE_DIR / "Data" / "watchdog_run.lock"   # cross-process singleton (PID)
 # Data-loss / backup detection (see check_data_sentinel / check_backup_health).
@@ -286,6 +288,43 @@ def _first_report_of_failed_run(task: str, last_run: str) -> bool:
     except OSError as e:
         _log.warning(f"Could not save the scheduler audit state: {e}")
     return True
+
+
+def _new_log_errors(errors: list[str], today: str) -> list[str]:
+    """Log errors not yet emailed today. The watchdog's own "[Scheduler Audit]" lines are left
+    out: those failures are reported through check_task_scheduler, once per failed run."""
+    try:
+        state = json.loads(LOG_ERROR_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    seen = set(state.get(today, []))
+    new = []
+    for err in errors:
+        if "[Scheduler Audit]" in err:
+            continue
+        sig = re.sub(r"\d+", "#", err)[:200]
+        if sig not in seen:
+            seen.add(sig)
+            new.append(err)
+    if new:
+        try:
+            LOG_ERROR_STATE.parent.mkdir(parents=True, exist_ok=True)
+            LOG_ERROR_STATE.write_text(json.dumps({today: sorted(seen)}, indent=1), encoding="utf-8")
+        except OSError as e:
+            _log.warning(f"Could not save the log-error state: {e}")
+    return new
+
+
+def _report_status(compilation_passed, ai_triggered: bool, recovery_actions: list[str]) -> tuple[str, str]:
+    """(color, text) for the recovery email's status badge. "HEALED" only when the watchdog acted
+    (AI healer ran, or ghost processes were killed); findings alone read ATTENTION."""
+    if compilation_passed == "SKIPPED":
+        return "#7f8c8d", "SKIPPED (OFF-MARKET)"
+    if not compilation_passed:
+        return "#c0392b", "MANUAL INTERVENTION REQUIRED"
+    if ai_triggered or any(a.startswith("Killed ghost") for a in recovery_actions):
+        return "#27ae60", "NOMINAL (HEALED)"
+    return "#e67700", "ATTENTION: SEE FINDINGS BELOW"
 
 
 def check_task_scheduler():
@@ -1048,6 +1087,7 @@ def run_watchdog():
 
     # 6. Re-Audit Logs after the fix
     remaining_errors = check_logs()
+    new_errors = [] if ai_triggered else _new_log_errors(remaining_errors, now_la.strftime("%Y-%m-%d"))
     
     # Check if there are any active issues left
     issues = []
@@ -1058,18 +1098,15 @@ def run_watchdog():
 
     # 7. Construct the Consolidated HTML Recovery Report (The Final Step!)
     # We send an email if a healing action occurred, an AI healer triggered, or there are active code errors in the logs.
-    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered):
+    if ai_triggered or recovery_actions or new_errors:
         _log.console("Healer cycle complete. Constructing consolidated recovery report...")
         
         # Color badges & status texts based on compilation result
+        status_color, status_text = _report_status(compilation_passed, ai_triggered, recovery_actions)
         if compilation_passed == "SKIPPED":
-            status_color = "#7f8c8d"  # Gray
-            status_text = "SKIPPED (OFF-MARKET)"
             comp_color = "#7f8c8d"
             comp_text = "SKIPPED (Outside Active Prep/Trading Window)"
         else:
-            status_color = "#27ae60" if compilation_passed else "#c0392b"
-            status_text = "NOMINAL (HEALED)" if compilation_passed else "MANUAL INTERVENTION REQUIRED"
             comp_color = "#27ae60" if compilation_passed else "#c0392b"
             comp_text = "SUCCESS / PASSED" if compilation_passed else "FAILED / COMPILE ERROR"
         
@@ -1102,6 +1139,14 @@ def run_watchdog():
             </div>
             ''' if recovery_actions else ''}
 
+            <!-- SECTION 1c: NEW LOG ERRORS (first time seen today) -->
+            {f'''
+            <div style="background: #fff4e6; border-left: 5px solid #e67700; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
+                <h3 style="margin-top: 0; color: #d9480f; font-size: 15px;">📋 NEW LOG ERRORS IN THE LAST HOUR ({len(new_errors)}):</h3>
+                <ul style="font-size: 12px; padding-left: 20px; color: #333; font-family: monospace;">{"".join(f"<li>{html.escape(e[:300])}</li>" for e in new_errors[:20])}</ul>
+            </div>
+            ''' if new_errors else ''}
+
             <!-- SECTION 2: AI DEBUGGING & HEALING ACTIONS -->
             {f'''
             <div style="background: #eef9ff; border-left: 5px solid #3498db; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
@@ -1119,7 +1164,7 @@ def run_watchdog():
                 <p style="font-size: 13px; font-weight: bold;">Validation Script: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">python ai_portfolio_game.py --report</span></p>
                 <p style="font-size: 13px; font-weight: bold;">Compilation Result: <span style="color: {comp_color}; font-size: 14px;">{comp_text}</span></p>
                 <h4 style="margin-bottom: 5px; font-size: 13px; color: #333;">Validation Console Output:</h4>
-                <pre style="background: #f1f2f6; color: #2c3e50; padding: 12px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; overflow-x: auto; font-family: monospace;">{validation_output}</pre>
+                <pre style="background: #f1f2f6; color: #2c3e50; padding: 12px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; overflow-x: auto; font-family: monospace;">{html.escape(validation_output) or "(no console output)"}</pre>
             </div>
 
             <!-- SECTION 4: NEXT STEPS -->
