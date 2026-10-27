@@ -107,6 +107,47 @@ class TestSimulate(unittest.TestCase):
         self.assertLessEqual(invested, 0.5 * 10_000.0 + 1e-6)
         self.assertAlmostEqual(invested, 0.10 * 10_000.0 * len(r["open_positions"]))
 
+    def test_trade_records_stop_and_loss_as_pct_of_equity(self):
+        # Capped to 40 shares (stop 7.5); the stop fills at 7.5: a loss of exactly 1% of 10k.
+        bars = {"A": _bars([10, 10, 7.5, 7.5], lows=[10, 10, 7.0, 7.0]), "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        t = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, initial=10_000.0,
+                        max_trade_risk_pct=0.01)["trades"][0]
+        self.assertEqual((t["reason"], t["stop"], t["exit"]), ("stop", 7.5, 7.5))
+        self.assertAlmostEqual(t["pnl_pct_equity"], -1.0)
+
+    def test_loss_is_measured_on_the_equity_the_buy_was_sized_on(self):
+        # A lifts equity to 12,000 before B's buy: B is capped at 120 / 2.5 = 48 shares, and
+        # its stop-out (48 x 2.5 = $120) is 1% of 12,000, not 1.2% of the starting 10,000.
+        bars = {"A": _bars([10, 10, 60, 60, 60], closes=[10, 60, 60, 60, 60]),
+                "B": _bars([10, 10, 10, 7.5, 7.5], lows=[10, 10, 10, 7.0, 7.0]),
+                "SPY": _bars([100] * 5)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}, "B": {DAYS[1]: [6.0, 0.0]}}
+        r = pb.simulate(panel, bars, DAYS[:5], cost_bps=0.0, initial=10_000.0, max_trade_risk_pct=0.01)
+        t = next(t for t in r["trades"] if t["symbol"] == "B")
+        self.assertEqual(t["reason"], "stop")
+        self.assertAlmostEqual(t["pnl_pct_equity"], -1.0)
+
+    def test_loss_includes_costs(self):
+        bars = {"A": _bars([10, 10, 7.5, 7.5], lows=[10, 10, 7.0, 7.0]), "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        t = pb.simulate(panel, bars, DAYS[:4], cost_bps=10.0, initial=10_000.0,
+                        max_trade_risk_pct=0.01)["trades"][0]
+        qty = 400.0 / (10 * 1.001)                            # the capped $400 buys at open + cost
+        self.assertAlmostEqual(t["pnl_pct_equity"], qty * (7.5 * 0.999 - 10 * 1.001) / 100, places=3)
+
+    def test_gap_through_the_stop_loses_more_than_the_cap(self):
+        # Same buy, but day 2 opens at 6, below the 7.5 stop: 40 x (10 - 6) = $160 = 1.6%.
+        bars = {"A": _bars([10, 10, 6, 6], lows=[10, 10, 5.0, 5.0]), "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        r = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, initial=10_000.0, max_trade_risk_pct=0.01)
+        self.assertAlmostEqual(r["trades"][0]["pnl_pct_equity"], -1.6)
+        tail = pb.stop_tail(r["trades"], 0.01)
+        self.assertEqual((tail["n_stop_exits"], tail["n_gap_through"]), (1, 1))
+        self.assertAlmostEqual(tail["gap_median_pct_below_stop"], 20.0)
+        self.assertEqual(tail["share_over_cap"], 1.0)
+        self.assertTrue(tail["gate_fail"])                  # P95 1.6% > 1.5%
+
     def test_loss_cap_trims_buy_to_pct_of_equity(self):
         # Entry at open 10, stop 10 - 2.5 x ATR 1 = 7.5: a 1% cap on 10k equity allows
         # 100 / 2.5 = 40 shares = $400, not the 15% ($1,500) allocation.
@@ -316,6 +357,11 @@ class TestRunWiring(unittest.TestCase):
         for row in rows:
             self.assertGreaterEqual(m[row]["cap_trims"], 1, row)
 
+    def test_payload_carries_the_stop_tail(self):
+        out = self._run()
+        self.assertIn("aether_rules", out["stop_tail"])
+        self.assertIn("n_stop_exits", out["stop_tail"]["aether_rules"])
+
     def test_split_runs_attribution_on_both_halves(self):
         # --split implies --attribution, and train and test both carry every no_* row.
         out = self._run(split="2026-02-10")
@@ -325,6 +371,33 @@ class TestRunWiring(unittest.TestCase):
         self.assertTrue(rows <= set(out["split"]["test"]))
         self.assertEqual(out["split"]["train"]["spy_buy_hold"]["end"], "2026-02-09")
         self.assertEqual(out["split"]["test"]["spy_buy_hold"]["start"], "2026-02-10")
+
+
+class TestStopTail(unittest.TestCase):
+    @staticmethod
+    def _t(pnl, exit_=9.0, stop=9.0, reason="stop"):
+        return {"reason": reason, "exit": exit_, "stop": stop, "pnl_pct_equity": pnl}
+
+    def test_no_stop_exits(self):
+        self.assertEqual(pb.stop_tail([self._t(-5.0, reason="momentum decay")], 0.01),
+                         {"n_stop_exits": 0})
+
+    def test_percentiles_and_gate(self):
+        trades = [self._t(-1.0) for _ in range(19)] + [self._t(-3.5, exit_=8.0)]
+        trades.append(self._t(-9.0, reason="momentum decay"))          # not a stop: ignored
+        tail = pb.stop_tail(trades, 0.01)
+        self.assertEqual((tail["n_stop_exits"], tail["n_gap_through"]), (20, 1))
+        self.assertEqual(tail["loss_median_pct"], 1.0)
+        self.assertEqual(tail["loss_worst_pct"], 3.5)
+        self.assertEqual(tail["worst_trade"]["pnl_pct_equity"], -3.5)
+        self.assertTrue(tail["gate_fail"])                               # worst 3.5% > 3%
+        ok = pb.stop_tail([self._t(-1.0) for _ in range(20)], 0.01)
+        self.assertFalse(ok["gate_fail"])
+        self.assertEqual(ok["share_over_cap"], 0.0)
+
+    def test_no_cap_means_no_gate(self):
+        tail = pb.stop_tail([self._t(-2.0)], None)
+        self.assertNotIn("gate_fail", tail)
 
 
 class TestMetricsAndBenchmarks(unittest.TestCase):
