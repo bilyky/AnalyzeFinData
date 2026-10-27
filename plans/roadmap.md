@@ -114,7 +114,7 @@ A *family* of symbol-agnostic capital-preservation primitives, each placed in it
     1.  ✅ *The 2.5-Sigma Bubble Detector:* **SHIPPED** — `calculate_bubble_z_score()` in `ai_portfolio_game.py`; rejects any symbol > 2.5 SD above its 500-day mean.
     2.  ✅ *Structural Scarcity Core:* **SHIPPED** — 20% allocation cap, LLM classifier, shrink-ray sizer in `instruments.py` + `ai_portfolio_game.py`.
     3.  *E*TRADE Alerts API Integration:* Research and prototype a headless client for E*TRADE's native Alerts API (`GET /v1/user/alerts`) to dynamically capture "Power Inflow" and broker order-flow events directly from the broker in real-time.
-    4.  *The Intraday Sentinel Trigger:* Code the real-time event-driven loop to parse these broker alerts every 15 minutes, run technical bottom checks, and instantly execute buy orders inside the active session.
+    4.  *The Intraday Sentinel Trigger:* Code the real-time event-driven loop to parse these broker alerts every 15 minutes, run technical bottom checks, and raise an alert (email / web) with the setup and its levels inside the active session. Recommend and alert only: a human decides, and nothing places an order in a real account (the paper game may act on the alert).
     5.  ✅ *The Real-Account Shadow Copilot:* **SHIPPED** — `real_copilot.py` headlessly scans real E*TRADE holdings and emails HTML trade tickets.
 
 *   **Session: Saturday, July 11, 2026 (10:00 AM PST) — Peter Lynch & Portfolio Gardening:**
