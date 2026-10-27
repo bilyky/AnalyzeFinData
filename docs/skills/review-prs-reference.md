@@ -160,3 +160,21 @@ copy of each file the child touches equals the parent branch's final tip (`git d
 origin/main -- <files>` is empty). Only then resolve **from the child branch** with
 `git merge -X ours origin/main` (ours = the checked-out branch; `-X theirs` here would silently put the
 parent's old lines back). Confirm the result's PR files equal the child's head.
+
+## J. Inline comments and measuring review value
+
+**Inline comments.** Post one review with `event: COMMENT` (allowed on your own PR, unlike approve or
+request changes). Its `comments` carry `path`, `line` and `side: RIGHT`; the verdict and the
+line-free findings go in its `body`:
+```bash
+gh api repos/<owner>/<repo>/pulls/<n>/reviews --method POST --input review.json
+# review.json: {"commit_id": "<head sha>", "event": "COMMENT", "body": "...",
+#               "comments": [{"path": "a.py", "line": 42, "side": "RIGHT", "body": "..."}]}
+```
+Every line must sit inside a diff hunk, or the whole POST fails with 422. Check each against
+`gh pr diff <n>` first and move any outside a hunk into the body. Write `reviews/PR-<n>-*.md` first,
+so the file stays the record.
+
+**Is reviewing worth it?** When a PR merges, note in its review file which findings were fixed and
+which were declined. Over many PRs, fixed ÷ posted shows whether the reviews earn their length; a low
+ratio means too many findings nobody acts on.
