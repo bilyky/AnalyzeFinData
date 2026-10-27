@@ -271,7 +271,7 @@ class TestCoveredCallOptions(unittest.TestCase):
                               ("2027-03-22", "2027-03-25")):  # Good Friday 2027-03-26
             with self.subTest(today=today):
                 state = {"balance": 0.0, "history": [],
-                         "positions": {"AAPL": {"qty": 10, "cost": 100.0, "stop_loss": 100.0}}}
+                         "positions": {"AAPL": {"qty": 100, "cost": 100.0, "stop_loss": 100.0}}}
                 options.execute_weekly_covered_call_pass(state, today, {"AAPL": 110.0},
                                                          _FakeWS(_HEADER, [_research_row("AAPL", 4.0)]))
                 self.assertEqual(state["positions"]["AAPL"]["written_call"]["expiration_date"], expiry)
@@ -296,8 +296,8 @@ class TestCoveredCallOptions(unittest.TestCase):
         state = {
             "balance": 0.0,
             "positions": {
-                "AAPL": {"qty": 10, "cost": 100.0, "stop_loss": 100.0},  # winner, risk-locked -> qualifies
-                "MSFT": {"qty": 5, "cost": 100.0, "stop_loss": 90.0},    # winner but NOT risk-locked -> skip
+                "AAPL": {"qty": 100, "cost": 100.0, "stop_loss": 100.0},  # winner, risk-locked -> qualifies
+                "MSFT": {"qty": 100, "cost": 100.0, "stop_loss": 90.0},    # winner but NOT risk-locked -> skip
             },
             "history": [],
         }
@@ -331,8 +331,8 @@ class TestCoveredCallOptions(unittest.TestCase):
             "balance": 0.0,
             "positions": {
                 # SQQQ is a leveraged-inverse ETF -> instruments.is_excluded(SQQQ) is True.
-                "SQQQ": {"qty": 10, "cost": 100.0, "stop_loss": 100.0},  # winner + risk-locked, but excluded
-                "AAPL": {"qty": 10, "cost": 100.0, "stop_loss": 100.0},  # normal control -> should write
+                "SQQQ": {"qty": 100, "cost": 100.0, "stop_loss": 100.0},  # winner + risk-locked, but excluded
+                "AAPL": {"qty": 100, "cost": 100.0, "stop_loss": 100.0},  # normal control -> should write
             },
             "history": [],
         }
@@ -368,8 +368,8 @@ class TestCoveredCallOptions(unittest.TestCase):
         state = {
             "balance": 0.0,
             "positions": {
-                "NVDA": {"qty": 10, "cost": 100.0, "stop_loss": 100.0},  # winner, risk-locked
-                "MSFT": {"qty": 10, "cost": 100.0, "stop_loss": 100.0},  # winner, risk-locked
+                "NVDA": {"qty": 100, "cost": 100.0, "stop_loss": 100.0},  # winner, risk-locked
+                "MSFT": {"qty": 100, "cost": 100.0, "stop_loss": 100.0},  # winner, risk-locked
             },
             "history": [],
         }
@@ -405,7 +405,7 @@ class TestCoveredCallOptions(unittest.TestCase):
         the ATR proxy, and the ledger invariant (sum pnl == balance) still holds."""
         state = {
             "balance": 0.0,
-            "positions": {"KO": {"qty": 10, "cost": 100.0, "stop_loss": 100.0}},  # calm winner
+            "positions": {"KO": {"qty": 100, "cost": 100.0, "stop_loss": 100.0}},  # calm winner
             "history": [],
         }
         px, atr = 110.0, 2.5
@@ -454,6 +454,55 @@ class TestCoveredCallOptions(unittest.TestCase):
         self.assertNotIn("written_call", pos)
         self.assertEqual(state["balance"], 1000.0)
         self.assertEqual(state["history"], [])
+
+    def test_no_call_on_less_than_one_contract(self):
+        """A call covers 100 shares. Under 100 shares nothing is written and no premium is booked
+        (PROD wrote calls on 6 COIN and 43 KE shares)."""
+        for qty in (6, 43, 99):
+            with self.subTest(qty=qty):
+                state = {"balance": 0.0, "history": [],
+                         "positions": {"AAPL": {"qty": qty, "cost": 100.0, "stop_loss": 100.0}}}
+                written = options.execute_weekly_covered_call_pass(
+                    state, "2026-08-17", {"AAPL": 110.0}, _FakeWS(_HEADER, [_research_row("AAPL", 4.0)]))
+                self.assertEqual(written, [])
+                self.assertNotIn("written_call", state["positions"]["AAPL"])
+                self.assertEqual(state["balance"], 0.0)
+
+    def test_contract_skip_log_names_only_positions_that_would_otherwise_be_written(self):
+        """An excluded instrument under 100 shares is skipped as excluded, so the
+        'less than one contract' line must not name it (#196 review)."""
+        state = {"balance": 0.0, "history": [],
+                 "positions": {"SQQQ": {"qty": 10, "cost": 100.0, "stop_loss": 100.0},
+                               "AAPL": {"qty": 10, "cost": 100.0, "stop_loss": 100.0}}}
+        with mock.patch.object(options._log, "info") as info:
+            options.execute_weekly_covered_call_pass(
+                state, "2026-08-17", {"SQQQ": 110.0, "AAPL": 110.0},
+                _FakeWS(_HEADER, [_research_row("SQQQ", 4.0), _research_row("AAPL", 4.0)]))
+        skipped = [c.args[0] for c in info.call_args_list if "less than one" in c.args[0]]
+        self.assertEqual(len(skipped), 1, skipped)
+        self.assertIn("AAPL", skipped[0])
+
+    def test_call_covers_whole_contracts_and_assignment_keeps_the_rest(self):
+        """250 shares -> 2 contracts: premium on 200 shares, and an assignment calls away 200 and
+        leaves 50 held."""
+        state = {"balance": 0.0, "history": [],
+                 "positions": {"AAPL": {"qty": 250, "cost": 100.0, "stop_loss": 100.0}}}
+        options.execute_weekly_covered_call_pass(
+            state, "2026-08-17", {"AAPL": 110.0}, _FakeWS(_HEADER, [_research_row("AAPL", 4.0)]))
+
+        call = state["positions"]["AAPL"]["written_call"]
+        tx = state["history"][-1]
+        self.assertEqual(call["qty"], 200)
+        self.assertEqual(tx["qty"], 200)
+        self.assertAlmostEqual(tx["pnl"], round(call["premium"] * 200, 2))
+        self.assertAlmostEqual(state["balance"], tx["pnl"])
+
+        day_after = str(datetime.date.fromisoformat(call["expiration_date"]) + datetime.timedelta(days=1))
+        with mock.patch.object(options, "_expiry_close", return_value=call["strike"] + 1.0):
+            options.resolve_expiring_options(state, today_str=day_after, prices={})
+        self.assertEqual(state["history"][-1]["type"], "OPTION_ASSIGNMENT")
+        self.assertEqual(state["history"][-1]["qty"], 200)
+        self.assertEqual(state["positions"]["AAPL"]["qty"], 50)
 
 
 if __name__ == "__main__":
