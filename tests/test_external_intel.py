@@ -234,6 +234,47 @@ class TestIntelCacheKeying(unittest.TestCase):
         self.assertNotIn("LEGACY", [i.get("symbol") for i in ideas])
 
 
+class TestZeroIdeasReason(unittest.TestCase):
+    """The pipeline's 0-ideas warning says why (PROD 2026-10-20: mail was read, the AI step 404'd,
+    and the old warning blamed mailbox auth)."""
+
+    def test_reason_per_scan_outcome(self):
+        cases = [
+            ({"mailbox_errors": 1, "candidates": 0, "extraction_failures": 0}, "mailbox scan failed for 1"),
+            ({"mailbox_errors": 0, "candidates": 0, "extraction_failures": 0}, "no matching emails"),
+            ({"mailbox_errors": 0, "candidates": 5, "extraction_failures": 5}, "5 email(s) were read, but every AI extraction failed"),
+            ({"mailbox_errors": 0, "candidates": 5, "extraction_failures": 2}, "none had an idea"),
+        ]
+        for scan, expected in cases:
+            with self.subTest(scan=scan), mock.patch.dict(external_intel.last_scan, scan):
+                self.assertIn(expected, external_intel.zero_ideas_reason())
+
+    def test_failed_extractions_are_counted_by_a_real_scan(self):
+        with mock.patch("external_intel.CFG") as mock_cfg, \
+             mock.patch("external_intel._log"), \
+             mock.patch("imaplib.IMAP4_SSL") as mock_imap_cls:
+            TestIntelCacheKeying._base_cfg(self, mock_cfg)
+            mock_mail = mock.MagicMock()
+            mock_imap_cls.return_value = mock_mail
+            mock_mail.select.return_value = ("OK", b"1")
+            mock_mail.search.return_value = ("OK", [b"1"])
+            mock_mail.fetch.return_value = ("OK", [(None, b"raw")])
+            mock_msg = mock.MagicMock()
+            mock_msg.get.return_value = "<mid-404>"
+            mock_msg.__getitem__.return_value = "Two Themes to Own"
+            mock_msg.is_multipart.return_value = False
+            mock_msg.get_payload.return_value = b"Stock alert: buy $AAPL now!"
+            with mock.patch("external_intel.email.message_from_bytes", return_value=mock_msg), \
+                 mock.patch("external_intel.os.path.exists", return_value=False), \
+                 mock.patch("external_intel.analyze_email_content",
+                            side_effect=RuntimeError("404 Client Error: Not Found")):
+                ideas = external_intel.fetch_idea_emails()
+        self.assertEqual(ideas, [])
+        self.assertEqual(external_intel.last_scan,
+                         {"mailbox_errors": 0, "candidates": 1, "extraction_failures": 1})
+        self.assertIn("every AI extraction failed", external_intel.zero_ideas_reason())
+
+
 class TestDedupRdTopics(unittest.TestCase):
     """The single-source R&D dedup shared by /api/intel-ideas and the email report."""
 
