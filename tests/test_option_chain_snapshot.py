@@ -12,6 +12,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+import pytz
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "monitoring"))
 import option_chain_snapshot as snap                # noqa: E402
@@ -80,6 +83,79 @@ class TestWriteSnapshot(unittest.TestCase):
         rec = json.loads(out.read_text(encoding="utf-8").splitlines()[-1])
         self.assertEqual(rec["source"], "dry-run-fixture")
         self.assertGreater(rec["n_quotes"], 0)           # fixture parsed to >=1 quote
+
+
+ET = pytz.timezone("America/New_York")
+
+
+class TestSymbols(unittest.TestCase):
+    def test_written_call_symbols(self):
+        state = {"positions": {"NVDA": {"written_call": {"strike": 1}}, "AMD": {"written_call": {"qty": 1}},
+                               "MSFT": {"qty": 3}, "XLF": {"written_call": None}}}
+        self.assertEqual(snap.written_call_symbols(state), ["AMD", "NVDA"])
+        self.assertEqual(snap.written_call_symbols({}), [])
+
+    def test_default_symbols_intc_first_then_covered_calls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "ai_portfolio_game.json"), "w", encoding="utf-8") as f:
+                json.dump({"positions": {"NVDA": {"written_call": {"strike": 1}},
+                                         "INTC": {"written_call": {"strike": 2}},
+                                         "AMD": {"written_call": {"strike": 3}}}}, f)
+            with mock.patch.dict(os.environ, {"AETHER_DATA_DIR": tmp}):
+                self.assertEqual(snap.default_symbols(), ["INTC", "AMD", "NVDA"])
+
+    def test_snapshots_go_to_the_same_data_dir_the_state_is_read_from(self):
+        # AETHER_DATA_DIR moves both: symbols are read from it and snapshots appended under it.
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"AETHER_DATA_DIR": tmp}), \
+                mock.patch.object(snap, "OUT_DIR", None):
+            out = snap._write_snapshot("INTC", spot=1.0, expiry=None, quotes=[], source="test")
+            self.assertEqual(out, Path(tmp) / "option_chains" / "INTC.jsonl")
+            self.assertTrue(out.exists())
+
+    def test_default_symbols_unreadable_state_is_intc_only(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"AETHER_DATA_DIR": tmp}):
+            self.assertEqual(snap.default_symbols(), ["INTC"])
+
+
+class TestTradingDay(unittest.TestCase):
+    def test_weekday_weekend_holiday(self):
+        self.assertTrue(snap.is_trading_day_et(ET.localize(datetime.datetime(2026, 10, 20, 12))))
+        self.assertFalse(snap.is_trading_day_et(ET.localize(datetime.datetime(2026, 10, 24, 12))))   # Sat
+        self.assertFalse(snap.is_trading_day_et(ET.localize(datetime.datetime(2026, 11, 26, 12))))   # Thanksgiving
+
+    def test_uses_the_et_date(self):
+        # Friday 22:30 PT is already Saturday in New York.
+        pt = pytz.timezone("America/Los_Angeles").localize(datetime.datetime(2026, 10, 23, 22, 30))
+        self.assertFalse(snap.is_trading_day_et(pt))
+
+
+class TestMain(unittest.TestCase):
+    """main() with snapshot() stubbed: no broker client, no network."""
+
+    def _main(self, argv, trading_day=True, fails=()):
+        calls = []
+
+        def fake_snapshot(sym):
+            calls.append(sym)
+            return 2 if sym in fails else 0
+
+        with (mock.patch.object(snap, "snapshot", side_effect=fake_snapshot),
+              mock.patch.object(snap, "is_trading_day_et", return_value=trading_day),
+              mock.patch.object(snap, "default_symbols", return_value=["INTC", "AMD", "NVDA"])):
+            return snap.main(argv), calls
+
+    def test_closed_day_takes_no_snapshot(self):
+        self.assertEqual(self._main([], trading_day=False), (0, []))
+
+    def test_force_snapshots_on_a_closed_day(self):
+        self.assertEqual(self._main(["--force"], trading_day=False), (0, ["INTC", "AMD", "NVDA"]))
+
+    def test_one_failure_still_tries_the_rest_and_exits_nonzero(self):
+        self.assertEqual(self._main([], fails=("AMD",)), (2, ["INTC", "AMD", "NVDA"]))
+
+    def test_symbol_flag_snapshots_one_symbol(self):
+        self.assertEqual(self._main(["--symbol", "msft"]), (0, ["MSFT"]))
 
 
 if __name__ == "__main__":

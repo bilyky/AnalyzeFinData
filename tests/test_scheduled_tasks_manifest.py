@@ -173,6 +173,24 @@ class TestRegistrarDryRun(unittest.TestCase):
             raise AssertionError(res.stderr)
         cls.built = {d["name"]: d for d in (json.loads(l) for l in res.stdout.splitlines() if l.strip())}
 
+    @staticmethod
+    def _dry_run(*extra):
+        return subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                               str(_PS1), "-DryRun", *extra], capture_output=True, text=True,
+                              timeout=120, stdin=subprocess.DEVNULL)
+
+    def test_only_builds_just_the_named_task(self):
+        # PROD adds one new task without rebuilding the others (or changing their -Engine).
+        res = self._dry_run("-Only", "AETHER_OptionChainSnapshot")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        names = [json.loads(line)["name"] for line in res.stdout.splitlines() if line.strip()]
+        self.assertEqual(names, ["AETHER_OptionChainSnapshot"])
+
+    def test_only_with_an_unknown_name_fails(self):
+        res = self._dry_run("-Only", "AETHER_NoSuchTask")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("AETHER_NoSuchTask", res.stderr)
+
     def test_every_manifest_task_is_built_as_declared(self):
         tasks = {t["name"]: t for t in st.tasks()}
         self.assertEqual(set(self.built), set(tasks))
