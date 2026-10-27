@@ -1041,3 +1041,38 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
             if game.is_market_hours():
                 game._log.info("🚀 [Options Pass] Checking active holdings to write weekly Covered Calls...")
                 game.options.execute_weekly_covered_call_pass(state, today, prices, ws)
+
+
+def finalize_run(state, wb, new_transactions):
+    """Close the workbook and save the run's state (B6).
+
+    Extracted verbatim from the ``finally:`` block of
+    ``run_daily_ai_management``, so it runs whether the trading stages finished,
+    returned early or raised. Unchanged from the root:
+
+    * the workbook is closed when there is one; a failed close is ignored;
+    * if ``state`` was loaded, ``save_game`` writes it, ``update_excel_log``
+      records ``new_transactions``, and the portfolio value is logged;
+    * if the run stopped before ``state`` was loaded, nothing is saved and that
+      is logged.
+
+    ``wb`` is ``None`` when the run never opened the workbook. The root's
+    ``"wb" in locals()`` test is kept as-is for parity; here ``wb`` is always a
+    local, so only ``and wb`` decides. Returns nothing. ``save_game``,
+    ``update_excel_log`` and ``_log`` are resolved off the live root module at
+    call time via :func:`_pkg`, so ``mock.patch.object(game, ...)`` still
+    intercepts.
+    """
+    game = _pkg()
+
+    if "wb" in locals() and wb:
+        try:
+            wb.close()
+        except Exception:
+            pass
+    if state is not None:
+        game.save_game(state)
+        game.update_excel_log(state, new_transactions)
+        game._log.info(f"🤖 AI Portfolio Value: ${state['equity']} (Cash: ${round(state['balance'], 2)})")
+    else:
+        game._log.info("🤖 AI Management aborted before state initialization. Game state preserved.")
