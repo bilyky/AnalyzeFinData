@@ -2,7 +2,7 @@
 
 With a TOTP secret configured the nightly login uses a fresh browser and never refreshes
 etrade_browser_state.json, so the file only ages and the "expiring soon" email repeated daily
-on PROD (2026-10-13 onwards) while the logins kept working.
+on PROD (in the logs from at least 2026-10-12) while the logins kept working.
 """
 import os
 import sys
