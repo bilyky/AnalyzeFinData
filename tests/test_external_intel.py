@@ -274,6 +274,18 @@ class TestZeroIdeasReason(unittest.TestCase):
                          {"mailbox_errors": 0, "candidates": 1, "extraction_failures": 1})
         self.assertIn("every AI extraction failed", external_intel.zero_ideas_reason())
 
+        # A second scan in the same process starts from zero, and a failed login is counted.
+        with mock.patch("external_intel.CFG") as mock_cfg, \
+             mock.patch("external_intel._log"), \
+             mock.patch("imaplib.IMAP4_SSL") as mock_imap_cls, \
+             mock.patch("external_intel.os.path.exists", return_value=False):
+            TestIntelCacheKeying._base_cfg(self, mock_cfg)
+            mock_imap_cls.return_value.login.side_effect = imaplib.IMAP4.error("AUTHENTICATIONFAILED")
+            self.assertEqual(external_intel.fetch_idea_emails(), [])
+        self.assertEqual(external_intel.last_scan,
+                         {"mailbox_errors": 1, "candidates": 0, "extraction_failures": 0})
+        self.assertIn("mailbox scan failed for 1", external_intel.zero_ideas_reason())
+
 
 class TestDedupRdTopics(unittest.TestCase):
     """The single-source R&D dedup shared by /api/intel-ideas and the email report."""

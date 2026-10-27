@@ -51,11 +51,11 @@ def get_existing_symbols():
         _log.error(f"Failed to load symbols for verification: {e}")
         return set()
 
-# Common English words that are also valid stock tickers. 
-# We ignore these unless they are explicitly prefixed with a '$' (e.g., $ALL vs. 'all').
 # What the last fetch_idea_emails() call saw, so a caller can say why it got 0 ideas.
 last_scan = {"mailbox_errors": 0, "candidates": 0, "extraction_failures": 0}
 
+# Common English words that are also valid stock tickers.
+# We ignore these unless they are explicitly prefixed with a '$' (e.g., $ALL vs. 'all').
 TICKER_BLACKLIST = {"ALL", "IT", "ME", "SO", "OR", "GO", "AM", "ON", "HE", "WE", "DO"}
 
 def extract_tickers(text):
