@@ -18,10 +18,12 @@ Nothing touches the network or the real Data folder.
 """
 import copy
 import datetime as _real_datetime
+import json
 import os
 import sys
 import unittest
 from contextlib import ExitStack
+from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -172,13 +174,47 @@ class _Run:
         }
 
 
+# Golden snapshot of the game's own output for every case below, recorded from
+# run_daily_ai_management before the game was switched to the runner. Once the game
+# calls the runner, "runner == game" compares the runner with itself; the golden file is
+# what still pins the old behaviour. Regenerate only on purpose:
+#   AETHER_UPDATE_GOLDEN=1 python -m unittest tests.test_scenario_runner
+_GOLDEN_FILE = Path(__file__).resolve().parent / "fixtures" / "scenario_runner_golden.json"
+_UPDATE_GOLDEN = os.environ.get("AETHER_UPDATE_GOLDEN") == "1"
+_RECORDED = {}
+
+
+def _jsonable(result):
+    """The result as it round-trips through the golden file (tuples become lists)."""
+    return json.loads(json.dumps(result, ensure_ascii=False))
+
+
+def _golden():
+    return json.loads(_GOLDEN_FILE.read_text(encoding="utf-8"))
+
+
+def tearDownModule():
+    if _UPDATE_GOLDEN and _RECORDED:
+        _GOLDEN_FILE.write_text(json.dumps(_RECORDED, indent=1, sort_keys=True, ensure_ascii=False) + "\n",
+                                encoding="utf-8", newline="\n")
+
+
 class TestRunnerMatchesRoot(unittest.TestCase):
     def _same(self, run, **expect):
-        root = run(game.run_daily_ai_management)
-        mine = run(runners.run_daily_management)
+        root = _jsonable(run(game.run_daily_ai_management))
+        mine = _jsonable(run(runners.run_daily_management))
         for key in root:
             with self.subTest(key=key):
                 self.assertEqual(mine[key], root[key])
+        case = self._testMethodName
+        if _UPDATE_GOLDEN:
+            _RECORDED[case] = root
+        else:
+            golden = _golden()
+            self.assertIn(case, golden, f"no golden entry for {case}; regenerate on purpose")
+            for key in golden[case]:
+                with self.subTest(golden=key):
+                    self.assertEqual(mine[key], golden[case][key])
         for key, check in expect.items():
             with self.subTest(expect=key):
                 self.assertTrue(check(root), f"case precondition {key!r} failed: {root[key.split(':')[0]]!r}")
@@ -273,6 +309,12 @@ class TestRunnerMatchesRoot(unittest.TestCase):
 
     def test_adaptive_profile(self):
         self._same(_Run(manual_profile=None))
+
+
+class TestGoldenFile(unittest.TestCase):
+    def test_golden_has_exactly_the_cases(self):
+        cases = {n for n in dir(TestRunnerMatchesRoot) if n.startswith("test_")}
+        self.assertEqual(set(_golden()), cases)
 
 
 class TestPackageExport(unittest.TestCase):
