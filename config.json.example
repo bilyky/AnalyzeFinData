@@ -48,21 +48,42 @@
     "real": ["XXXX", "YYYY"]
   },
   "ai": {
-    "_note": "GitHub Models (the old free 'github_gpt' provider on models.inference.ai.azure.com) was RETIRED on 2026-07-30 and removed here. Pick any provider below as `primary`.",
-    "primary": "gemini_oai",
+    "_note": "Advisory AI only, never gates a trade. Call sites ask for a tier ('cheap' or 'strong'), never a provider. A call tries its tier's providers in order, then the 'strong' tier's, then `primary`, then any other enabled provider. To change providers, edit the tier lists and enable the blocks below; no code change. Start free; the paid blocks are ready but disabled. See AETHER_REFERENCE.md 'AI provider layer'.",
+    "primary": "groq",
     "max_intel_emails": 20,
+    "tiers": {
+      "_note": "Ordered provider names. 'cheap' = short, frequent calls (intraday stop note, intel extraction, sell eval, classification); about 35 calls/day, 56 at most (PROD, Sept-Oct 2026). 'strong' = rare, longer calls (stock compare, web chat, research Q&A, intel verification). Unknown or disabled names are skipped. Free providers only for now (owner decision 2026-10-13): Groq first, Gemini last.",
+      "cheap": ["groq", "gemini_lite"],
+      "strong": ["groq", "gemini_oai"]
+    },
     "providers": {
 
-      "gemini_oai": {
-        "_note": "Free tier via Google AI Studio — aistudio.google.com. Get GEMINI_API_KEY there (no credit card). Uses OpenAI-compatible REST so no extra dependencies.",
+      "groq": {
+        "_note": "FREE (default primary). Free tier reported at ~1,000 requests/day (Oct 2026), paid ~$0.15/$0.60 per 1M tokens after. console.groq.com, GROQ_API_KEY. Check the model id on Groq's model list, and check Groq's data policy for the free tier, before enabling.",
         "enabled": true,
         "type": "openai_compatible",
-        "model": "gemini-2.5-flash",
+        "model": "openai/gpt-oss-120b",
+        "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+        "api_key_source": "env:GROQ_API_KEY"
+      },
+      "gemini_lite": {
+        "_note": "FREE, cheap-tier fallback. Gemini Flash-Lite via Google AI Studio (aistudio.google.com), GEMINI_API_KEY, no credit card. Flash-Lite had the larger free quota (reported ~500 requests/day, Sept 2026); see your live limits at aistudio.google.com/rate-limit. Google may use free-tier prompts for training. Check the model id in AI Studio.",
+        "enabled": true,
+        "type": "openai_compatible",
+        "model": "gemini-3.1-flash-lite",
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "api_key_source": "env:GEMINI_API_KEY"
+      },
+      "gemini_oai": {
+        "_note": "FREE, strong-tier fallback. Gemini Flash via Google AI Studio, same GEMINI_API_KEY. The free quota is small (reported ~20 requests/day on Flash, Sept 2026), which is fine for the rare strong calls. Google may use free-tier prompts for training. One source says the 2.5 models shut down around 2026-10-16.",
+        "enabled": true,
+        "type": "openai_compatible",
+        "model": "gemini-3.8-flash",
         "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "api_key_source": "env:GEMINI_API_KEY"
       },
       "openrouter": {
-        "_note": "OpenRouter (free route) — sign up at openrouter.ai (no credit card), create a key, set OPENROUTER_API_KEY. Free models rotate in/out and rate-limit (429), so check openrouter.ai/models for a current ':free' model. Free models reason by default and spend the small max_tokens on it (empty answer, finish_reason=length): keep extra_body.reasoning.enabled=false. Tested 2026-10-08: nemotron-3-super and apodex-1.1-mini 5/5 OK; poolside/laguna-s-2.1 and gemma-4 429 (shared upstream pool). The free tier is capped per day (the key showed 50/day).",
+        "_note": "NOT USED (owner decision 2026-10-13): about half of OpenRouter's free-model hosts may train on prompts, and these prompts hold positions. Kept for a paid OpenRouter model later (pick a host that keeps no data). Notes from the free route: free models rotate and answer 429; they reason by default and spend the small max_tokens on it, so keep extra_body.reasoning.enabled=false; the free cap is 50/day (1,000/day after a $10 credit purchase).",
         "enabled": false,
         "type": "openai_compatible",
         "model": "nvidia/nemotron-3-super-120b-a12b:free",
@@ -71,7 +92,7 @@
         "extra_body": {"reasoning": {"enabled": false}}
       },
       "openrouter_fb": {
-        "_note": "Second free OpenRouter model, used by the fallback chain when the first is rate-limited.",
+        "_note": "NOT USED (see openrouter). Was the second free OpenRouter model.",
         "enabled": false,
         "type": "openai_compatible",
         "model": "apodex/apodex-1.1-mini:free",
@@ -79,18 +100,67 @@
         "api_key_source": "env:OPENROUTER_API_KEY",
         "extra_body": {"reasoning": {"enabled": false}}
       },
-      "claude": {
-        "_note": "Anthropic API — console.anthropic.com. Set ANTHROPIC_API_KEY env var.",
-        "enabled": false,
-        "type": "anthropic",
-        "model": "claude-opus-4-8",
-        "api_key_source": "env:ANTHROPIC_API_KEY"
-      },
       "gemini_cli": {
-        "_note": "Gemini via the gemini CLI binary (gemini.google.com/app — install gemini CLI). No API key needed but requires the CLI installed.",
+        "_note": "FREE. Gemini via the gemini CLI binary, signed in with a personal Google account (an organization account can be blocked by its policy: PROD got 403 'prohibited by organization's policy', 2026-09-15..23). No API key, but needs the CLI installed.",
         "enabled": false,
         "type": "gemini_cli",
         "model": "gemini-2.5-flash"
+      },
+
+      "together_deepseek": {
+        "_note": "PAID, cheap tier candidate. DeepSeek V4 Flash hosted in the US by Together (~$0.14/$0.28 per 1M, Sept 2026; $5 minimum top-up). together.ai, TOGETHER_API_KEY. Check the exact model id on Together's model list. Never use DeepSeek's own API for position data (stored in China).",
+        "enabled": false,
+        "type": "openai_compatible",
+        "model": "deepseek-ai/DeepSeek-V4-Flash",
+        "endpoint": "https://api.together.xyz/v1/chat/completions",
+        "api_key_source": "env:TOGETHER_API_KEY"
+      },
+      "fireworks": {
+        "_note": "PAID. Fireworks serverless (from ~$0.10 per 1M; $1 free credit). fireworks.ai, FIREWORKS_API_KEY. Check the model id on Fireworks' model list.",
+        "enabled": false,
+        "type": "openai_compatible",
+        "model": "accounts/fireworks/models/gpt-oss-120b",
+        "endpoint": "https://api.fireworks.ai/inference/v1/chat/completions",
+        "api_key_source": "env:FIREWORKS_API_KEY"
+      },
+      "mistral": {
+        "_note": "PAID (free plan had monthly credits; amount changed 2026-10-07). Mistral Small ~$0.15/$0.60 per 1M. console.mistral.ai, MISTRAL_API_KEY.",
+        "enabled": false,
+        "type": "openai_compatible",
+        "model": "mistral-small-latest",
+        "endpoint": "https://api.mistral.ai/v1/chat/completions",
+        "api_key_source": "env:MISTRAL_API_KEY"
+      },
+      "azure_openai": {
+        "_note": "PAID. Azure OpenAI v1 endpoint, which accepts the key as a Bearer token. Replace <resource> with your Azure OpenAI resource name and set `model` to your deployment name (e.g. a GPT-5 mini deployment). AZURE_OPENAI_API_KEY. The classic /deployments/...?api-version= URLs need an `api-key` header and will not work here.",
+        "enabled": false,
+        "type": "openai_compatible",
+        "model": "<your-deployment-name>",
+        "endpoint": "https://<resource>.openai.azure.com/openai/v1/chat/completions",
+        "api_key_source": "env:AZURE_OPENAI_API_KEY"
+      },
+      "bedrock": {
+        "_note": "PAID. Amazon Bedrock's OpenAI-compatible endpoint with a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK). Pick your region. Not every Bedrock model is available on this endpoint: check the model card.",
+        "enabled": false,
+        "type": "openai_compatible",
+        "model": "openai.gpt-oss-20b-1:0",
+        "endpoint": "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions",
+        "api_key_source": "env:AWS_BEARER_TOKEN_BEDROCK"
+      },
+      "claude_haiku": {
+        "_note": "PAID, cheap tier candidate. Claude Haiku 4.5 ($1/$5 per 1M). Needs a real Anthropic API key from console.anthropic.com (ANTHROPIC_API_KEY); the GNAI dev-relay token is not one.",
+        "enabled": false,
+        "type": "anthropic",
+        "model": "claude-haiku-4-5",
+        "api_key_source": "env:ANTHROPIC_API_KEY"
+      },
+      "claude": {
+        "_note": "PAID, strong tier candidate. Claude Sonnet 5.5 ($2/$10 per 1M). Needs a real Anthropic API key (ANTHROPIC_API_KEY). Sonnet 5.5 thinks by default and thinking counts against max_tokens, which is small on these calls; extra_body turns thinking off.",
+        "enabled": false,
+        "type": "anthropic",
+        "model": "claude-sonnet-5-5",
+        "api_key_source": "env:ANTHROPIC_API_KEY",
+        "extra_body": {"thinking": {"type": "between_tools"}}
       }
     }
   },
