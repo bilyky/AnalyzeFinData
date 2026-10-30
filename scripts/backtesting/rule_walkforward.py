@@ -26,7 +26,8 @@ Rule grid (each a full gate stack; scores from backtest_ratings.compute_br):
 CURRENT = (2, full, 2, False, False, False), today's live stack (adaptive floor not modelled).
 
 Per-date return of a rule: the mean 20-day forward return of what it admits that day
-(winsorized 1/99%), or 0 when it admits nothing (cash). TRAIN objective: the mean of that
+(winsorized 1/99%), or 0 when it admits nothing (cash). The 1/99% bounds are taken over the
+whole sample, test months included: a small use of later data, kept for simplicity. TRAIN objective: the mean of that
 per-date return, among rules that admit on at least 20% of TRAIN dates and whose admitted
 names lose 20%+ in 20 days no more often than the whole universe does (pre-registered;
 catch-rate is reported, never optimized, or "admit everything" would win).
@@ -86,7 +87,7 @@ GRID = {"s10_floor": (-2.0, 0.0, 1.0, 2.0, 3.0), "setup": ("full", "sma", "dir",
         "rebound_path": (False, True)}
 CURRENT = (2.0, "full", 2.0, False, False, False)
 FIELDS = ("day", "sym", "s10", "s10w", "l60", "above", "up3", "rr", "gain", "leader",
-          "mf_weak", "past60", "f20", "f60")
+          "mf_weak", "past60", "f20", "f60", "setup_full")
 
 
 # ── Extraction ────────────────────────────────────────────────────────────────
@@ -148,7 +149,8 @@ def _symbol_rows(job):
         rows.append((day, sym, r[1], rw[1], r[2], price > sma, price > c(i - 3), rr, gain, leader,
                      str(cl.get("moneyFlow") or "").strip() == "Weak", (price - c(i - 60)) / c(i - 60) * 100,
                      (c(i + 20) - price) / price * 100,
-                     (c(i + 60) - price) / price * 100 if i + 60 < len(dates) else float("nan")))
+                     (c(i + 60) - price) / price * 100 if i + 60 < len(dates) else float("nan"),
+                     bool(br.compute_setup_ok(price, i, dates, ts))))
         prev = data
     return rows
 
@@ -186,7 +188,7 @@ def admit_mask(a, rule) -> np.ndarray:
     l60 = a["l60"]   # long_score does not read setup_ok, so the waiver leaves L60 unchanged
     m = (s10 >= floor) & (s10 + l60 >= MIN_COMBINED)
     if setup == "full":
-        m &= a["above"] & a["up3"]
+        m &= a["setup_full"]          # risk_utils.setup_ok itself; the halves below are inline
     elif setup == "sma":
         m &= a["above"]
     elif setup == "dir":
@@ -232,6 +234,15 @@ def per_date_return(day_idx, ndays, f20w, mask):
     s = np.bincount(day_idx[mask], weights=f20w[mask], minlength=ndays)
     n = np.bincount(day_idx[mask], minlength=ndays)
     return np.where(n > 0, s / np.maximum(n, 1), 0.0), n
+
+
+def train_window(days: np.ndarray, month: str) -> np.ndarray:
+    """Indices of `days` whose 20-day outcome was known on `month`'s first day: dated at least
+    KNOWN_LAG_DAYS before it, and within TRAIN_MONTHS before it. Never the month itself."""
+    m0 = datetime.date.fromisoformat(month + "-01")
+    known = (m0 - datetime.timedelta(days=KNOWN_LAG_DAYS)).isoformat()
+    first = (m0 - datetime.timedelta(days=31 * TRAIN_MONTHS)).isoformat()
+    return np.where((days >= first) & (days <= known))[0]
 
 
 def choose(train_days, ret, cnt, loss_cnt, base_loss_share):
@@ -288,12 +299,9 @@ def run(rows) -> dict:
     caught_adaptive = np.zeros(len(starts), dtype=bool)
     in_test = np.zeros(len(starts), dtype=bool)
     for mth in months:
-        m0 = datetime.date.fromisoformat(mth + "-01")
-        known = (m0 - datetime.timedelta(days=KNOWN_LAG_DAYS)).isoformat()
-        first = (m0 - datetime.timedelta(days=31 * TRAIN_MONTHS)).isoformat()
-        train = np.where((days >= first) & (days <= known))[0]
+        train = train_window(days, mth)
         test = np.where(np.char.startswith(days, mth))[0]
-        in_train = (a["day"] >= first) & (a["day"] <= known)
+        in_train = np.isin(a["day"], days[train])
         base_loss = float(loss[in_train].mean()) if in_train.any() else 0.0
         r = choose(train, ret, cnt, loss_cnt, base_loss)
         if r is None:

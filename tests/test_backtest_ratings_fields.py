@@ -33,20 +33,31 @@ class TestReplayPassesSetup(unittest.TestCase):
         self.assertIn("setup_ok", seen)
         self.assertIs(seen["setup_ok"], True)
 
-    def test_replay_passes_vrecovery_and_digit_sum_like_production(self):
+    def _run_fields(self, digit_flag):
         closes = [100.0] * 25 + [110.0] * 4 + [115.0]   # prior close 110 != snapshot-day close 115
         dates = [f"2026-02-{i + 1:02d}" for i in range(len(closes))]
         ts = {d: {"1. open": str(c), "2. high": str(c), "3. low": str(c), "4. close": str(c),
                   "5. volume": "1000"} for d, c in zip(dates, closes)}
         data = {"metaInfo": [{"symbol": "ABC"}], "checklist_stocks": {"ltTrend": "Strong"}}
         seen = {}
-        with mock.patch.object(br, "_short_score_fn", side_effect=lambda f: seen.update(f) or 0.0),              mock.patch.object(br, "_rbr_score", return_value=(1.5, ["RBR"])) as rbr,              mock.patch.object(br, "_digit_sum_score", return_value=0.7) as ds:
+        with mock.patch.object(br, "_short_score_fn", side_effect=lambda f: seen.update(f) or 0.0),              mock.patch.object(br, "_rbr_score", return_value=(1.5, ["RBR"])) as rbr,              mock.patch.object(br, "_digit_sum_score", return_value=0.7) as ds,              mock.patch.object(br, "REPLAY_DIGIT_SUM", digit_flag):
             br.compute_br(data, data, 112.0, len(dates) - 1, dates, ts, br.SeasonalitySlots({}))
+        return seen, rbr, ds, ts, dates
+
+    def test_replay_passes_vrecovery_and_digit_sum_like_production(self):
+        seen, rbr, ds, ts, dates = self._run_fields(True)
         self.assertEqual(seen["vrecovery_score"], 1.5)
         self.assertEqual(seen["digit_sum"], 0.7)
         rbr.assert_called_once_with(ts, dates[-1])
         # Production feeds the PRIOR close (powergauge._compute_pgr_fields), not the snapshot price.
         ds.assert_called_once_with("ABC", close_price=110.0)
+
+    def test_digit_sum_is_off_by_default_in_studies(self):
+        """Its index is fitted on the replay window, so studies leave it at 0 (#212 review)."""
+        seen, _rbr, ds, _ts, _dates = self._run_fields(False)
+        self.assertEqual(seen["digit_sum"], 0.0)
+        ds.assert_not_called()
+        self.assertFalse(br.REPLAY_DIGIT_SUM)        # the module default, without the env var
 
     def test_callers_can_force_setup_ok(self):
         closes = [110.0] * 25 + [100.0] * 5          # last bar below SMA20 -> computed Setup is False
@@ -56,7 +67,8 @@ class TestReplayPassesSetup(unittest.TestCase):
         data = {"checklist_stocks": {"ltTrend": "Strong"}}
         for forced, want in ((None, False), (True, True)):
             with mock.patch.object(br, "_short_score_fn", return_value=0.0) as spy:
-                br.compute_br(data, data, 100.0, len(dates) - 1, dates, ts, br.SeasonalitySlots({}), setup_ok=forced)
+                br.compute_br(data, data, 100.0, len(dates) - 1, dates, ts, br.SeasonalitySlots({}),
+                              setup_ok=forced)
             self.assertIs(spy.call_args.args[0]["setup_ok"], want)
 
 
