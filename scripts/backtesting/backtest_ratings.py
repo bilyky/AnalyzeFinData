@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 
 
+import bisect
 import json
 import os
 import sys
@@ -101,8 +102,44 @@ def _week_of_month(day: int) -> int:
     return 4
 
 
+def _season_bucket(avg):
+    """Average 10-day return (%) -> seasonality score, as aether.scoring.compute_seasonality."""
+    if avg > 2.0:
+        return 1.0
+    if avg > 1.0:
+        return 0.5
+    if avg > -1.0:
+        return 0.0
+    if avg > -2.0:
+        return -0.5
+    return -1.0
+
+
+class SeasonalitySlots:
+    """10-day returns per (month, week-of-month) slot, each with the date its outcome was known.
+
+    asof(month, week, day) uses only slots whose 10-day window ended before `day`, as the live
+    aether.scoring.compute_seasonality does (its cache holds no future bars). The old map averaged
+    every year in the file, so a replayed date saw its own future (R&D #60 follow-up)."""
+
+    def __init__(self, raw):
+        self._slots = {}
+        for key, items in raw.items():
+            items = sorted(items)
+            ends = [e for e, _r in items]
+            cum = [0.0]
+            for _e, r in items:
+                cum.append(cum[-1] + r)
+            self._slots[key] = (ends, cum)
+
+    def asof(self, month, week, day):
+        ends, cum = self._slots.get((month, week), ([], [0.0]))
+        n = bisect.bisect_left(ends, day)
+        return 0.0 if n < 3 else _season_bucket(cum[n] / n)
+
+
 def precompute_seasonality(ohlcv_ts):
-    """Returns {(month, week): score} using historical 10-day returns per slot."""
+    """SeasonalitySlots from historical 10-day returns per (month, week) slot."""
     all_dates = sorted(ohlcv_ts.keys())
     date_idx  = {d: i for i, d in enumerate(all_dates)}
 
@@ -112,7 +149,6 @@ def precompute_seasonality(ohlcv_ts):
         w = _week_of_month(day)
         wk_last[(y, m, w)] = d
 
-    from collections import defaultdict
     raw = defaultdict(list)
     for (y, m, w), start_date in wk_last.items():
         idx = date_idx[start_date]
@@ -122,22 +158,8 @@ def precompute_seasonality(ohlcv_ts):
         c_start  = float(ohlcv_ts[start_date].get('4. close', 0))
         c_future = float(ohlcv_ts[all_dates[future_idx]].get('4. close', 0))
         if c_start > 0 and c_future > 0:
-            raw[(m, w)].append((c_future - c_start) / c_start * 100)
-
-    result = {}
-    for m in range(1, 13):
-        for w in range(1, 5):
-            rets = raw.get((m, w), [])
-            if len(rets) < 3:
-                result[(m, w)] = 0.0
-                continue
-            avg = sum(rets) / len(rets)
-            if avg > 2.0:   result[(m, w)] =  1.0
-            elif avg > 1.0: result[(m, w)] =  0.5
-            elif avg > -1.0:result[(m, w)] =  0.0
-            elif avg > -2.0:result[(m, w)] = -0.5
-            else:           result[(m, w)] = -1.0
-    return result
+            raw[(m, w)].append((all_dates[future_idx], (c_future - c_start) / c_start * 100))
+    return SeasonalitySlots(raw)
 
 
 def extract_pgr_corr(data):
@@ -200,7 +222,7 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     else:
         rr = 0.0
 
-    seasonality = seasonality_map.get((month, week), 0.0)
+    seasonality = seasonality_map.asof(month, week, date_str)
     
     # BR score
     br = 0.0
