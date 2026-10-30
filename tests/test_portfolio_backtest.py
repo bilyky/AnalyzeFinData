@@ -552,6 +552,14 @@ class TestRobustness(unittest.TestCase):
         self.assertEqual(s["periods"]["test"]["no_regime"]["sharpe"]["median"], 1.5)
         self.assertEqual(s["verdicts"], {"no_regime": "robustly better", "spy_buy_hold": "robustly worse"})
 
+    def test_summary_against_another_base(self):
+        # R&D #64 judges against SPY: the win rate is then measured against spy_buy_hold.
+        draws = [self._draw(1.0, 1.5, 2.0 if i < 9 else 0.5) for i in range(10)]
+        s = pb.robustness_summary(draws, base="spy_buy_hold")
+        self.assertEqual(s["periods"]["test"]["aether_rules"]["win_rate"], 0.1)
+        self.assertEqual(s["periods"]["test"]["no_regime"]["win_rate"], 0.1)
+        self.assertNotIn("spy_buy_hold", s["verdicts"])
+
     def test_verdict_needs_both_halves(self):
         draws = [self._draw(1.0, 1.5, 0.5) for _ in range(10)]
         for d in draws:
