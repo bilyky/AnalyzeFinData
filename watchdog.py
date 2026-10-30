@@ -290,9 +290,16 @@ def _first_report_of_failed_run(task: str, last_run: str) -> bool:
     return True
 
 
-def _new_log_errors(errors: list[str], today: str) -> list[str]:
-    """Log errors not yet emailed today. The watchdog's own "[Scheduler Audit]" lines are left
-    out: those failures are reported through check_task_scheduler, once per failed run."""
+# The per-task failed-run line check_task_scheduler logs. Those failures are reported through
+# check_task_scheduler, once per failed run, so the log scan leaves them out. Other
+# "[Scheduler Audit]" errors (e.g. an unreadable task manifest) have no other route to the email.
+_AUDIT_FAILED_RUN = "failed on its last execution"
+
+
+def _new_log_errors(errors: list[str], today: str) -> tuple[list[str], set]:
+    """(log errors not yet emailed today, the day's signatures including them). Nothing is saved
+    here: call _save_log_error_state only after the email went out, so a failed send doesn't
+    mark the errors as sent."""
     try:
         state = json.loads(LOG_ERROR_STATE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -300,19 +307,22 @@ def _new_log_errors(errors: list[str], today: str) -> list[str]:
     seen = set(state.get(today, []))
     new = []
     for err in errors:
-        if "[Scheduler Audit]" in err:
+        if "[Scheduler Audit]" in err and _AUDIT_FAILED_RUN in err:
             continue
         sig = re.sub(r"\d+", "#", err)[:200]
         if sig not in seen:
             seen.add(sig)
             new.append(err)
-    if new:
-        try:
-            LOG_ERROR_STATE.parent.mkdir(parents=True, exist_ok=True)
-            LOG_ERROR_STATE.write_text(json.dumps({today: sorted(seen)}, indent=1), encoding="utf-8")
-        except OSError as e:
-            _log.warning(f"Could not save the log-error state: {e}")
-    return new
+    return new, seen
+
+
+def _save_log_error_state(today: str, seen: set) -> None:
+    """Record the day's emailed log-error signatures (after a successful send)."""
+    try:
+        LOG_ERROR_STATE.parent.mkdir(parents=True, exist_ok=True)
+        LOG_ERROR_STATE.write_text(json.dumps({today: sorted(seen)}, indent=1), encoding="utf-8")
+    except OSError as e:
+        _log.warning(f"Could not save the log-error state: {e}")
 
 
 def _report_status(compilation_passed, ai_triggered: bool, recovery_actions: list[str]) -> tuple[str, str]:
@@ -1087,7 +1097,8 @@ def run_watchdog():
 
     # 6. Re-Audit Logs after the fix
     remaining_errors = check_logs()
-    new_errors = [] if ai_triggered else _new_log_errors(remaining_errors, now_la.strftime("%Y-%m-%d"))
+    today_str = now_la.strftime("%Y-%m-%d")
+    new_errors, log_error_sigs = ([], set()) if ai_triggered else _new_log_errors(remaining_errors, today_str)
     
     # Check if there are any active issues left
     issues = []
@@ -1184,6 +1195,8 @@ def run_watchdog():
         
         notify.send_email("🛡️ Project AETHER: Autonomous Health & AI Recovery Report", html_report, is_html=True)
         _log.info("Consolidated Recovery Report emailed successfully!")
+        if new_errors:
+            _save_log_error_state(today_str, log_error_sigs)
     else:
         _log.info("✅ System Health Check: All systems nominal.")
 

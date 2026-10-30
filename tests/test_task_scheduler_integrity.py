@@ -177,9 +177,9 @@ class TestRecoveryReportForLogErrors(unittest.TestCase):
     The email named none of them and read "NOMINAL (HEALED)". Now it lists new errors, sends each
     one once a day, says ATTENTION, and ignores the watchdog's own scheduler-audit lines."""
 
-    def _run(self, errors):
+    def _run(self, errors, send_error=None):
         with mock.patch("watchdog.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
-             mock.patch("watchdog.notify.send_email") as email, \
+             mock.patch("watchdog.notify.send_email", side_effect=send_error) as email, \
              mock.patch("watchdog.is_pid_running", return_value=False), \
              mock.patch("watchdog.check_data_freshness", return_value=None), \
              mock.patch("watchdog.check_logs", return_value=errors), \
@@ -208,8 +208,29 @@ class TestRecoveryReportForLogErrors(unittest.TestCase):
         self.assertIsNone(self._run([err]), "the same error was emailed twice in one day")
 
     def test_scheduler_audit_lines_alone_send_nothing(self):
-        line = "[aether.watchdog] 🛑 [Scheduler Audit] Task '\AETHER_Agents\AETHER_DailyDriver' failed"
+        # The real per-task line (check_task_scheduler); that failure is reported once per failed run.
+        line = ("[aether.watchdog] 🛑 [Scheduler Audit] Task '\\AETHER_Agents\\AETHER_DailyDriver' "
+                "failed on its last execution (Exit Code: 1).")
         self.assertIsNone(self._run([line]))
+
+    def test_broken_manifest_still_reaches_the_email(self):
+        # #187: an unreadable manifest audits nothing, so this log error is its only route to the email.
+        line = "[aether.watchdog] 🛑 [Scheduler Audit] Task manifest is unreadable or invalid: Expecting value"
+        html = self._run([line])
+        self.assertIsNotNone(html, "a broken task manifest sent no recovery email")
+        self.assertIn("Task manifest is unreadable", html)
+
+    def test_failed_send_does_not_mark_errors_sent(self):
+        err = "[aether.chaikin] Chaikin login timed out"
+        with self.assertRaises(RuntimeError):
+            self._run([err], send_error=RuntimeError("SMTP email dispatch failed"))
+        html = self._run([err])
+        self.assertIsNotNone(html, "an error lost to a failed send was never emailed")
+        self.assertIn("Chaikin login timed out", html)
+
+    def test_same_error_with_another_count_is_the_same_error(self):
+        self.assertIsNotNone(self._run(["[aether.rapidapi] 3 symbol(s) failed this run"]))
+        self.assertIsNone(self._run(["[aether.rapidapi] 41 symbol(s) failed this run"]))
 
     def test_status_says_healed_only_after_an_action(self):
         cases = [
