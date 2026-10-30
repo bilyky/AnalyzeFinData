@@ -2,12 +2,14 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "backtesting"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import rank_ic_study as ri
+import rule_walkforward as wf
 
 
 class TestSpearman(unittest.TestCase):
@@ -47,6 +49,33 @@ class TestVerdict(unittest.TestCase):
         self.assertEqual(ri.verdict({"mean_ic": -0.02, "t_hac": -2.3}), "COMBINED_RANKS_BETTER")
         self.assertEqual(ri.verdict({"mean_ic": 0.02, "t_hac": 1.2}), "INCONCLUSIVE")
         self.assertEqual(ri.verdict({"mean_ic": None, "t_hac": None}), "INCONCLUSIVE")
+
+class TestRun(unittest.TestCase):
+    def test_verdict_comes_from_the_gated_20d_test_with_lag_19(self):
+        rows = []
+        for d in range(1, 29):
+            day = f"2024-02-{d:02d}"
+            for k in range(12):
+                gated = k < 10             # 10 candidates pass today's gates, 2 do not
+                s10 = 3.0 + k if gated else -5.0
+                # among candidates S10 orders returns perfectly; S10 + L60 is reversed by L60
+                rows.append((day, f"S{k}", s10, s10, (20.0 - 3 * k) if gated else 0.0,
+                             gated, gated, 3.0, 10.0, False, False, 0.0, float(k), float(k), gated))
+        assert len(rows[0]) == len(wf.FIELDS)
+        lags = []
+        real = ri.sg._t_hac
+        with mock.patch.object(ri.sg, "_t_hac", side_effect=lambda xs, lag: lags.append(lag) or real(xs, lag)):
+            rep = ri.run(rows)
+        self.assertIn(19, lags)
+        self.assertIn(59, lags)
+        self.assertNotIn(0, lags)
+        self.assertEqual(rep["counts"]["gated_obs"], 28 * 10)
+        self.assertGreater(rep["gated_20d"]["s10_minus_combined"]["mean_ic"], 0)
+        seen = []
+        real_verdict = ri.verdict
+        with mock.patch.object(ri, "verdict", side_effect=lambda d: seen.append(d) or real_verdict(d)):
+            rep = ri.run(rows)
+        self.assertIs(seen[0], rep["gated_20d"]["s10_minus_combined"])   # not the all-stocks test
 
 
 if __name__ == "__main__":

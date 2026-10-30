@@ -10,7 +10,9 @@ passes today's live gates (S10 >= 2, Setup, R/R >= 2 with the elite waiver).
 
 Decision rule (fixed before running):
     Primary   per date with >= MIN_NAMES candidates: IC(S10) - IC(S10 + L60), 20-day returns;
-              Newey-West t across dates, lag 19 (daily samples of a 20-day return).
+              Newey-West t across dates, lag 19 (daily samples of a 20-day return). The lag
+              counts dated samples; dates with < MIN_NAMES are skipped, so 19 samples can span
+              more than 19 trading days (conservative).
     S10_RANKS_BETTER       mean > 0 AND HAC t >= 1.96 -> propose ranking by S10 (own PR).
     COMBINED_RANKS_BETTER  mean < 0 AND HAC t <= -1.96 -> keep today's ranking.
     INCONCLUSIVE           otherwise -> keep today's ranking.
