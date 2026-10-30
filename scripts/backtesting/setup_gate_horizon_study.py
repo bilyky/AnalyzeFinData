@@ -65,6 +65,19 @@ def setup_parts(price, idx, all_dates, ts, sma_period=20, dir_days=3):
     return above, up
 
 
+def eligible(s10, l60) -> bool:
+    """Passes everything but Setup: the S10 floor and the BALANCED combined minimum."""
+    return s10 >= S10_FLOOR and s10 + l60 >= MIN_COMBINED
+
+
+def forward_stats(price, closes_after):
+    """(fwd20 %, fwd60 % or None, worst20 %) from the closes after the entry day."""
+    f20 = (closes_after[FWD[0] - 1] - price) / price * 100
+    f60 = (closes_after[FWD[1] - 1] - price) / price * 100 if len(closes_after) >= FWD[1] else None
+    worst20 = (min(closes_after[:FWD[0]]) - price) / price * 100
+    return f20, f60, worst20
+
+
 def _symbol_obs(job) -> list:
     """(date, eligible, setup, above_sma, up3, fwd20, fwd60|None, worst20) per obs.
     worst20 = lowest close over the next 20 sessions vs entry, in % (<= 0 when it dipped)."""
@@ -105,10 +118,8 @@ def _symbol_obs(job) -> list:
         setup = bool(br.compute_setup_ok(price, i, dates, ts))
         above, up = setup_parts(price, i, dates, ts)
         c = [float(ts[dates[k]]["4. close"]) for k in range(i + 1, min(i + FWD[1] + 1, len(dates)))]
-        f20 = (c[FWD[0] - 1] - price) / price * 100
-        f60 = (c[FWD[1] - 1] - price) / price * 100 if len(c) >= FWD[1] else None
-        worst20 = (min(c[:FWD[0]]) - price) / price * 100
-        rows.append((day, s10 >= S10_FLOOR and s10 + l60 >= MIN_COMBINED, setup, above, up, f20, f60, worst20))
+        f20, f60, worst20 = forward_stats(price, c)
+        rows.append((day, eligible(s10, l60), setup, above, up, f20, f60, worst20))
         prev = data
     return rows
 
@@ -218,7 +229,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-year", type=int, default=2023)
     ap.add_argument("--data-dir", default=os.path.join(os.path.dirname(os.path.dirname(_HERE)), "Data"))
-    ap.add_argument("--out", default=None)
+    ap.add_argument("--out", default=None,
+                    help="report path (default: <data-dir>/setup_gate_horizon_<run date>.json)")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     args = ap.parse_args()
     obs = observations(os.path.join(args.data_dir, "Symbol"), os.path.join(args.data_dir, "Symbol_full"),
@@ -229,9 +241,10 @@ def main():
                    "first_obs": min(o[0] for o in obs), "last_obs": max(o[0] for o in obs),
                    "setup_parts_mismatch": mismatch}
     sg._out(json.dumps(rep, indent=1))
-    if args.out:
-        with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(rep, f, indent=2)
+    out = args.out or os.path.join(args.data_dir, f"setup_gate_horizon_{rep['meta']['run_date']}.json")
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(rep, f, indent=2)
+    sg._out(f"report -> {out}")
 
 
 if __name__ == "__main__":

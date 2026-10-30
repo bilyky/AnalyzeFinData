@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "backtesting"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -73,6 +74,31 @@ class TestVerdict(unittest.TestCase):
         for p60, p20, worst, want in cases:
             with self.subTest(p60=p60, p20=p20, worst=worst):
                 self.assertEqual(st.verdict(p60, p20, worst), want)
+
+class TestEligibilityAndForwardStats(unittest.TestCase):
+    def test_eligible_needs_floor_and_combined(self):
+        self.assertTrue(st.eligible(2.0, 3.0))
+        self.assertFalse(st.eligible(1.9, 9.0))      # under the S10 floor
+        self.assertFalse(st.eligible(2.0, 2.9))      # combined 4.9 < 5
+
+    def test_forward_stats_windows(self):
+        closes = [100.0 + k for k in range(70)]      # rising, except one dip at day 30
+        closes[29] = 50.0                             # inside 60 days, outside 20
+        f20, f60, worst20 = st.forward_stats(100.0, closes)
+        self.assertAlmostEqual(f20, 19.0)             # closes[19] = 119
+        self.assertAlmostEqual(f60, 59.0)
+        self.assertAlmostEqual(worst20, 0.0)          # min of the first 20 = 100; the dip is later
+        self.assertIsNone(st.forward_stats(100.0, closes[:30])[1])
+
+    def test_summarize_uses_horizon_minus_one_as_hac_lag(self):
+        obs = [(f"2024-01-{d:02d}", True, d % 2 == 0, True, True, float(d), float(d), -1.0) for d in range(1, 29)]
+        lags = []
+        real = st.sg._t_hac
+        with mock.patch.object(st.sg, "_t_hac", side_effect=lambda xs, lag: lags.append(lag) or real(xs, lag)):
+            st.summarize(obs)
+        self.assertIn(19, lags)
+        self.assertIn(59, lags)
+        self.assertNotIn(0, lags)
 
 
 if __name__ == "__main__":
