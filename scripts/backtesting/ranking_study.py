@@ -80,6 +80,16 @@ def verdict(picked: str, test: dict, dd_pick, dd_current) -> str:
     return "INCONCLUSIVE"
 
 
+def decide(out: dict, daily: dict) -> None:
+    """Pick on train, test the pick's daily returns against `combined` on test, set the verdict."""
+    picked = pick(out["train"])
+    test = eg.diff_test(daily[("test", picked)], daily[("test", "combined")])
+    out["picked_on_train"] = picked
+    out["picked_minus_combined_test"] = test
+    out["verdict"] = verdict(picked, test, out["test"][picked]["max_drawdown_pct"],
+                             out["test"]["combined"]["max_drawdown_pct"])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--panel", required=True)
@@ -113,12 +123,7 @@ def main():
                               max_trade_risk_pct=CFG.system_max_trade_risk_pct, admit=gate, rank=rk)
             out[window][name] = pb.metrics(res)
             daily[(window, name)] = eg.daily_returns(res["curve"])
-    picked = pick(out["train"])
-    test = eg.diff_test(daily[("test", picked)], daily[("test", "combined")])
-    out["picked_on_train"] = picked
-    out["picked_minus_combined_test"] = test
-    out["verdict"] = verdict(picked, test, out["test"][picked]["max_drawdown_pct"],
-                             out["test"]["combined"]["max_drawdown_pct"])
+    decide(out, daily)
     sg._out(json.dumps({k: out[k] for k in ("meta", "picked_on_train", "picked_minus_combined_test", "verdict")},
                        indent=1))
     cols = ("cagr_pct", "total_return_pct", "max_drawdown_pct", "sharpe", "n_trades", "win_rate")

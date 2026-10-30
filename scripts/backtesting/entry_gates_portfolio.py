@@ -31,6 +31,10 @@ tests, so a single |t| ~ 2 among them is weak evidence.
 Also reported per variant: CAGR, total return, max drawdown, Sharpe, exposure, trades, win rate,
 and winner runs (+40% in 60 days) the portfolio actually bought within 4 weeks of their start.
 
+Panel selection: scores come from the rule_walkforward panel, whose rows need 20 future bars, a
+60-bar history and a snapshot within 10% of the OHLCV close. Every variant therefore sees no scores
+in each symbol's last 20 bars (symmetric across variants, but delistings drop out early).
+
 Not simulated (as in portfolio_backtest): overrides, bottom-confirmed buys, breadth downgrade,
 scarcity sizing, scale-outs, covered calls, rotation, the adaptive S10 floor. Today's universe.
 
