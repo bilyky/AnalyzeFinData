@@ -214,7 +214,11 @@ class TestRunnerMatchesRoot(unittest.TestCase):
         self.assertNotIn(("BUY", "GAP"), types)        # -10% gap, no confirmed bottom
         self.assertNotIn(("BUY", "LOWRR"), types)
         self.assertIn(("BUY_SCALE_IN", "OLD"), types)  # pyramiding ran
-        self.assertTrue(any("CNXC Trap): GAP" in str(a[0]) for _, a in root["log"] if a))
+        self.assertIn(("SELL", "WIN"), types)          # WIN banked a slice (scale-out)
+        logged = " | ".join(str(a[0]) for _, a in root["log"] if a)
+        self.assertIn("CNXC Trap): GAP", logged)
+        self.assertIn("Risk-Reward Gate): LOWRR", logged)
+        self.assertIn("Momentum Floor): FLOOR", logged)
         self.assertEqual(root["calls"], 1)
         self.assertTrue(root["decisions"])
 
