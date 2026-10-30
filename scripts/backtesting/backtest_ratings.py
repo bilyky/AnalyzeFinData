@@ -164,7 +164,7 @@ def data_symbol(data):
     return meta.get('symbol') or (data.get('checklist_stocks') or {}).get('symbol') or ''
 
 
-def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map):
+def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map, setup_ok=None):
     cl = data.get('checklist_stocks') or {}
     pgr_corr      = extract_pgr_corr(data)
     prev_pgr_corr = extract_pgr_corr(prev_data) if prev_data else pgr_corr
@@ -178,7 +178,8 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     day           = int(date_str[8:10])
     week          = _week_of_month(day)
 
-    setup_ok = compute_setup_ok(price, idx, all_dates, ohlcv_ts)
+    if setup_ok is None:   # callers may force it (rule studies scoring the R&D #34 waiver both ways)
+        setup_ok = compute_setup_ok(price, idx, all_dates, ohlcv_ts)
 
     # risk/reward from OHLCV
     stop_w = all_dates[max(0, idx - STOP_DAYS): idx]
