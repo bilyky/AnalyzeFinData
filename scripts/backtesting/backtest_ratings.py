@@ -158,6 +158,12 @@ def compute_setup_ok(price, idx, all_dates, ohlcv_ts):
     return _setup_ok(price, idx, all_dates, ohlcv_ts, sma_period=SMA_DAYS, dir_days=3)
 
 
+# digit_sum's index (Data/digit_sum_*study.json) was fitted on most of the replay window, so
+# using it in a study is look-ahead. Studies leave it at 0; set AETHER_REPLAY_DIGIT_SUM=1 to
+# score exactly as production does (parity checks).
+REPLAY_DIGIT_SUM = os.environ.get("AETHER_REPLAY_DIGIT_SUM") == "1"
+
+
 def data_symbol(data):
     """The snapshot's symbol (metaInfo, else the checklist)."""
     meta = (data.get('metaInfo') or [{}])[0]
@@ -237,11 +243,10 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
         # R&D #34 breakout waiver in short_score; without it every Setup = 1 day was under-scored.
         'setup_ok': setup_ok,
         'vrecovery_score': _rbr_score(ohlcv_ts, date_str)[0],
-        # Prior close, as production. The digit index comes from Data/digit_sum_*study.json,
-        # fitted on this same history (in-sample), and is empty when those files are absent.
+        # Prior close, as production; off unless REPLAY_DIGIT_SUM (in-sample index, see above).
         'digit_sum': _digit_sum_score(data_symbol(data),
                                       close_price=float(ohlcv_ts[all_dates[idx - 1]].get('4. close', 0) or 0)
-                                      if idx > 0 else None),
+                                      if idx > 0 else None) if REPLAY_DIGIT_SUM else 0.0,
     }
     short = _short_score_fn(fields)
     long = _long_score_fn(fields)
