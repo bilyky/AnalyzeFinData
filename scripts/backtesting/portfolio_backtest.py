@@ -303,7 +303,7 @@ def _bar(bars, sym, day):
 
 def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
              initial=INITIAL_EQUITY, excluded=frozenset(), max_trade_risk_pct=None,
-             disable=frozenset(), hurst_filter=None, admit=None, exit_rules=None) -> dict:
+             disable=frozenset(), hurst_filter=None, admit=None, rank=None, exit_rules=None) -> dict:
     """Replay `panel` ({sym: {date: [s10, l60]}}) over `calendar` (sorted trading days).
 
     max_trade_risk_pct: when set (and risk_rules is on), each buy is trimmed so
@@ -314,6 +314,8 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
     hurst_filter: (bar key, min H) skips new entries whose H on the signal day is below min.
     admit: optional callable(sym, day) -> bool, an extra entry gate (the live Setup / Short10
     floor / R/R gates are not in this simulator; entry_gates_portfolio.py passes them here).
+    rank: optional callable(sym, day, (s10, l60)) -> float, the entry ranking key (highest
+    first); default S10 + L60, as the live game. The score threshold still uses S10 + L60.
     exit_rules (risk_rules only, R&D #63): {"trail": True} ratchets the stop up to the highest
     close since entry minus the entry ATR multiple x today's ATR (never down); {"hold_profit":
     True} lets the soft exit fire only at a loss; {"stop_scale": x} puts the initial stop x times
@@ -443,7 +445,8 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
             max_pos, per_cap, buffer = rules["max_positions"], equity / rules["max_positions"], 0.0
         kept = sum(p["qty"] * p["last"] for s, p in pos.items() if s not in pending_sells)
         investable = equity * (1 - buffer) - kept
-        cands = sorted(((sc[0] + sc[1], sym) for sym, by_day in panel.items()
+        cands = sorted(((sc[0] + sc[1] if rank is None else rank(sym, day, sc), sym)
+                        for sym, by_day in panel.items()
                         if (sc := by_day.get(day)) and sym not in pos and sym not in excluded
                         and sc[0] + sc[1] >= rules["min_score_threshold"]
                         and _hurst_ok(bars, sym, day, hurst_filter)
