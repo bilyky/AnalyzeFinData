@@ -387,6 +387,17 @@ class TestHurst(unittest.TestCase):
         rng = np.random.default_rng(7)
         self.assertAlmostEqual(self._median_h(rng.standard_normal(3000)), 0.5, delta=0.08)
 
+    def test_random_walk_null_distribution_on_one_window(self):
+        # The gate depends on this noise (#210 review): on a single 120-return window, a pure
+        # random walk reads H ~ 0.46 +/- 0.08, so a "skip H < 0.50" filter drops most
+        # memoryless stocks. Any future threshold should sit below the null's P5 (~0.33).
+        rng = np.random.default_rng(0)
+        h = np.array([pb.rolling_hurst(rng.standard_normal(pb.HURST_WINDOW))[-1] for _ in range(1000)])
+        self.assertAlmostEqual(float(h.mean()), 0.46, delta=0.02)
+        self.assertAlmostEqual(float(h.std()), 0.078, delta=0.015)
+        self.assertGreater(float((h < 0.50).mean()), 0.6)
+        self.assertAlmostEqual(float(np.percentile(h, 5)), 0.33, delta=0.03)
+
     def test_mean_reverting_is_below_and_persistent_above(self):
         rng = np.random.default_rng(7)
         e = rng.standard_normal(3000)
