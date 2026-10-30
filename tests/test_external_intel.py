@@ -94,7 +94,7 @@ class TestExternalIntelResilience(unittest.TestCase):
         pcfg = {"type": "gemini_cli", "model": "gemini-2.5-flash"}
         system = "system instruction"
         user = "B" * 20000
-        ai_client._call_gemini_cli(pcfg, system, user, 200, 0.3)
+        ai_client._t_gemini_cli(pcfg, "gem", system, [{"role": "user", "content": user}], 200, 0.3)
         
         # Verify that subprocess.run was called, and the prompt was passed inside the input keyword argument
         args = mock_run.call_args[0][0]

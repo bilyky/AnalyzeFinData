@@ -163,7 +163,7 @@ class TestSummarizeComparison(unittest.TestCase):
     def test_summary_returns_none_on_evaluate_failure(self):
         with mock.patch.object(stock_compare.ai_client, "primary", return_value="fake"), \
              mock.patch.object(stock_compare.Path, "read_text", return_value="RUBRIC"), \
-             mock.patch.object(stock_compare.ai_client, "evaluate",
+             mock.patch.object(stock_compare.ai_client, "evaluate_with_provider",
                                side_effect=RuntimeError("boom")):
             summary, reason = stock_compare.summarize_comparison(self._data())
         self.assertIsNone(summary)
@@ -175,8 +175,8 @@ class TestSummarizeComparison(unittest.TestCase):
     def test_summary_returns_evaluate_string_when_mocked(self):
         with mock.patch.object(stock_compare.ai_client, "primary", return_value="fake"), \
              mock.patch.object(stock_compare.Path, "read_text", return_value="RUBRIC"), \
-             mock.patch.object(stock_compare.ai_client, "evaluate",
-                               return_value="RANKED WHY") as m:
+             mock.patch.object(stock_compare.ai_client, "evaluate_with_provider",
+                               return_value=("RANKED WHY", "fake")) as m:
             summary, reason = stock_compare.summarize_comparison(self._data())
         self.assertEqual(summary, "RANKED WHY")
         self.assertIsNone(reason)

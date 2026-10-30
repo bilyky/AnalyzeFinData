@@ -85,7 +85,7 @@ def generate_ai_analysis(sym: str, price: float, stop: float) -> str:
     )
     user_prompt = f"Asset {sym} has breached its ATR stop-loss floor. Current Price: ${price:.2f} | Stop-Loss level: ${stop:.2f}."
     try:
-        raw_reply = ai_client.evaluate(system_prompt, user_prompt, max_tokens=150)
+        raw_reply = ai_client.evaluate(system_prompt, user_prompt, max_tokens=150, tier="cheap")
         return raw_reply.strip()
     except Exception as e:
         _log.warning(f"Failed calling AI analyzer for {sym}: {e}")

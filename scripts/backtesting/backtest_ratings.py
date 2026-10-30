@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 
 
+import bisect
 import json
 import os
 import sys
@@ -40,6 +41,7 @@ from scoring import (
     rsi_divergence_score as _rsi_div_score,
     rel_volume_bucket as _rel_vol_fn,
     market_regime as _market_regime,
+    digit_sum_score as _digit_sum_score,
 )
 from aether import paths
 from aether.risk_utils import setup_ok as _setup_ok
@@ -47,6 +49,7 @@ from patterns import (
     candlestick_score as _cs_score,
     chart_pattern_score as _cp_score,
     momentum_pattern_score as _mo_score,
+    rubber_band_reversal_score as _rbr_score,
 )
 
 # $AETHER_CACHE_DIR-aware: a worktree study reads the real caches with AETHER_CACHE_DIR=<main>/Data,
@@ -99,8 +102,44 @@ def _week_of_month(day: int) -> int:
     return 4
 
 
+def _season_bucket(avg):
+    """Average 10-day return (%) -> seasonality score, as aether.scoring.compute_seasonality."""
+    if avg > 2.0:
+        return 1.0
+    if avg > 1.0:
+        return 0.5
+    if avg > -1.0:
+        return 0.0
+    if avg > -2.0:
+        return -0.5
+    return -1.0
+
+
+class SeasonalitySlots:
+    """10-day returns per (month, week-of-month) slot, each with the date its outcome was known.
+
+    asof(month, week, day) uses only slots whose 10-day window ended before `day`, as the live
+    aether.scoring.compute_seasonality does (its cache holds no future bars). The old map averaged
+    every year in the file, so a replayed date saw its own future (R&D #60 follow-up)."""
+
+    def __init__(self, raw):
+        self._slots = {}
+        for key, items in raw.items():
+            items = sorted(items)
+            ends = [e for e, _r in items]
+            cum = [0.0]
+            for _e, r in items:
+                cum.append(cum[-1] + r)
+            self._slots[key] = (ends, cum)
+
+    def asof(self, month, week, day):
+        ends, cum = self._slots.get((month, week), ([], [0.0]))
+        n = bisect.bisect_left(ends, day)
+        return 0.0 if n < 3 else _season_bucket(cum[n] / n)
+
+
 def precompute_seasonality(ohlcv_ts):
-    """Returns {(month, week): score} using historical 10-day returns per slot."""
+    """SeasonalitySlots from historical 10-day returns per (month, week) slot."""
     all_dates = sorted(ohlcv_ts.keys())
     date_idx  = {d: i for i, d in enumerate(all_dates)}
 
@@ -110,7 +149,6 @@ def precompute_seasonality(ohlcv_ts):
         w = _week_of_month(day)
         wk_last[(y, m, w)] = d
 
-    from collections import defaultdict
     raw = defaultdict(list)
     for (y, m, w), start_date in wk_last.items():
         idx = date_idx[start_date]
@@ -120,22 +158,8 @@ def precompute_seasonality(ohlcv_ts):
         c_start  = float(ohlcv_ts[start_date].get('4. close', 0))
         c_future = float(ohlcv_ts[all_dates[future_idx]].get('4. close', 0))
         if c_start > 0 and c_future > 0:
-            raw[(m, w)].append((c_future - c_start) / c_start * 100)
-
-    result = {}
-    for m in range(1, 13):
-        for w in range(1, 5):
-            rets = raw.get((m, w), [])
-            if len(rets) < 3:
-                result[(m, w)] = 0.0
-                continue
-            avg = sum(rets) / len(rets)
-            if avg > 2.0:   result[(m, w)] =  1.0
-            elif avg > 1.0: result[(m, w)] =  0.5
-            elif avg > -1.0:result[(m, w)] =  0.0
-            elif avg > -2.0:result[(m, w)] = -0.5
-            else:           result[(m, w)] = -1.0
-    return result
+            raw[(m, w)].append((all_dates[future_idx], (c_future - c_start) / c_start * 100))
+    return SeasonalitySlots(raw)
 
 
 def extract_pgr_corr(data):
@@ -154,6 +178,18 @@ def extract_pgr_corr(data):
 def compute_setup_ok(price, idx, all_dates, ohlcv_ts):
     """The Research-sheet Setup flag, via the one production definition (risk_utils.setup_ok)."""
     return _setup_ok(price, idx, all_dates, ohlcv_ts, sma_period=SMA_DAYS, dir_days=3)
+
+
+# digit_sum's index (Data/digit_sum_*study.json) was fitted on most of the replay window, so
+# using it in a study is look-ahead. Studies leave it at 0; set AETHER_REPLAY_DIGIT_SUM=1 to
+# score exactly as production does (parity checks).
+REPLAY_DIGIT_SUM = os.environ.get("AETHER_REPLAY_DIGIT_SUM") == "1"
+
+
+def data_symbol(data):
+    """The snapshot's symbol (metaInfo, else the checklist)."""
+    meta = (data.get('metaInfo') or [{}])[0]
+    return meta.get('symbol') or (data.get('checklist_stocks') or {}).get('symbol') or ''
 
 
 def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map):
@@ -186,7 +222,7 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
     else:
         rr = 0.0
 
-    seasonality = seasonality_map.get((month, week), 0.0)
+    seasonality = seasonality_map.asof(month, week, date_str)
     
     # BR score
     br = 0.0
@@ -225,6 +261,14 @@ def compute_br(data, prev_data, price, idx, all_dates, ohlcv_ts, seasonality_map
         'candlestick_score': cs_val,
         'chart_score': cps_val,
         'momentum_score': ms_val,
+        # The three inputs below match powergauge._compute_pgr_fields. setup_ok drives the
+        # R&D #34 breakout waiver in short_score; without it every Setup = 1 day was under-scored.
+        'setup_ok': setup_ok,
+        'vrecovery_score': _rbr_score(ohlcv_ts, date_str)[0],
+        # Prior close, as production; off unless REPLAY_DIGIT_SUM (in-sample index, see above).
+        'digit_sum': _digit_sum_score(data_symbol(data),
+                                      close_price=float(ohlcv_ts[all_dates[idx - 1]].get('4. close', 0) or 0)
+                                      if idx > 0 else None) if REPLAY_DIGIT_SUM else 0.0,
     }
     short = _short_score_fn(fields)
     long = _long_score_fn(fields)
