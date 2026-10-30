@@ -49,6 +49,7 @@ _CHECKED = (
     "rotate_positions",
     "deploy_capital",
     "finalize_run",
+    "open_research_workbook",
 )
 
 # Functions deliberately NOT checked, with the reason.

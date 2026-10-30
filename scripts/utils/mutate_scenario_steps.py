@@ -28,7 +28,7 @@ STEPS = ROOT / "aether" / "scenario" / "steps.py"
 MODULES = ["tests.test_scenario_steps", "tests.test_scenario_assemble", "tests.test_scenario_settle",
            "tests.test_scenario_queued", "tests.test_scenario_exits",
            "tests.test_scenario_sell_exec", "tests.test_scenario_buy_screen", "tests.test_scenario_rotation",
-           "tests.test_scenario_deploy", "tests.test_scenario_finalize"]
+           "tests.test_scenario_deploy", "tests.test_scenario_finalize", "tests.test_scenario_workbook_gate"]
 
 # (label, exact text in steps.py, replacement). Each anchor must occur exactly once.
 MUTANTS = [
@@ -250,6 +250,20 @@ MUTANTS += [  # finalize_run (the finally: block)
     ("fin: excel log drops txs", 'game.update_excel_log(state, new_transactions)', 'game.update_excel_log(state, [])'),
     ("fin: save without state", '    if state is not None:\n        game.save_game(state)', '    if True:\n        game.save_game(state)'),
     ("fin: no abort log", 'game._log.info("🤖 AI Management aborted', 'game._log.debug("🤖 AI Management aborted'),
+]
+
+MUTANTS += [  # open_research_workbook (workbook gate)
+    ("wbg: missing file not deferred", 'Management deferred.")\n        return', 'Management deferred.")\n        pass'),
+    ("wbg: staleness ignored", '    if stale:\n        game._log.error', '    if False:\n        game._log.error'),
+    ("wbg: stale not refused", 'stale-workbook alert: {e}")\n        return', 'stale-workbook alert: {e}")\n        pass'),
+    ("wbg: no alert", 'game.notify.send_email(f"ALERT: AI trades skipped', 'str(f"ALERT: AI trades skipped'),
+    ("wbg: email error escapes", '        except Exception as e:\n            game._log.error(f"Could not send the stale-workbook',
+     '        except KeyError as e:\n            game._log.error(f"Could not send the stale-workbook'),
+    ("wbg: writable workbook", 'read_only=True, data_only=True)\n    ws = wb["Research"]',
+     'read_only=False, data_only=True)\n    ws = wb["Research"]'),
+    ("wbg: formulas not values", 'read_only=True, data_only=True)\n    ws = wb["Research"]',
+     'read_only=True, data_only=False)\n    ws = wb["Research"]'),
+    ("wbg: wrong sheet", 'ws = wb["Research"]\n    return wb, ws', 'ws = wb["Short_Long"]\n    return wb, ws'),
 ]
 
 
