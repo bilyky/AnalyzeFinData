@@ -232,7 +232,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-year", type=int, default=2023)
     ap.add_argument("--data-dir", default=os.path.join(os.path.dirname(os.path.dirname(_HERE)), "Data"))
-    ap.add_argument("--out", default=None)
+    ap.add_argument("--out", default=None,
+                    help="report path (default: <data-dir>/trend_leader_<run date>.json)")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     args = ap.parse_args()
     obs = observations(os.path.join(args.data_dir, "Symbol"), os.path.join(args.data_dir, "Symbol_full"),
@@ -241,9 +242,10 @@ def main():
     rep["meta"] = {"min_year": args.min_year, "run_date": str(datetime.date.today()),
                    "first_obs": min(o[0] for o in obs), "last_obs": max(o[0] for o in obs)}
     sg._out(json.dumps(rep, indent=1))
-    if args.out:
-        with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(rep, f, indent=2)
+    out = args.out or os.path.join(args.data_dir, f"trend_leader_{rep['meta']['run_date']}.json")
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(rep, f, indent=2)
+    sg._out(f"report -> {out}")
 
 
 if __name__ == "__main__":
