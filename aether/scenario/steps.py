@@ -416,11 +416,14 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
       the stop (passes ``stop_loss=None``) so an opening whipsaw can't trip it.
     * **Exit decision** — ``decision_eval.build_entry`` is the single source of the
       action (``_sma50`` is read only when ``sell_rules.soft_exit`` fires).
-    * **AI second-opinion override** (R&D #14) — a ``SELL`` is downgraded to
-      ``HOLD`` / ``WATCH`` when a real-time shadow verdict, a stored position
-      verdict key (``shadow_verdict`` / ``ai_verdict`` / ``verdict``), or the
-      stored ``verdicts`` dict says ``HOLD`` / ``FLAG-FOR-REVIEW``, checked in that
-      order.
+    * **AI second-opinion override** (R&D #14, ``sell_rules.ai_exit_override``) — a
+      momentum ``SELL`` of a position safely in profit (more than
+      ``FLOWER_PROFIT_ATR`` x ATR above cost) is downgraded to ``HOLD`` / ``WATCH``
+      when a real-time shadow verdict, a stored position verdict key
+      (``shadow_verdict`` / ``ai_verdict`` / ``verdict``), or the stored
+      ``verdicts`` dict says ``HOLD`` / ``FLAG-FOR-REVIEW``, checked in that order.
+      A stop exit, a loser or a marginal gain always sells; an ignored verdict is
+      logged with the reason.
     * **Routing** — a surviving ``SELL`` is queued in ``state["queued_orders"]``
       (deduped) when outside market hours, else collected for liquidation; a
       ``REVIEW`` is logged as winner-protected. All entries are then written via
@@ -471,8 +474,8 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             is_scarcity = pos.get("is_scarcity", False)
             multiplier = 1.5 if is_scarcity else rules.get("atr_multiplier", 2.5)
 
-            # 2. Peter Lynch Flower Protection: Only ratchet stop upward once safely in profit by > 1.0x ATR
-            if (price - pos.get("cost", 0.0)) > (1.0 * atr):
+            # 2. Peter Lynch Flower Protection: Only ratchet stop upward once safely in profit (> FLOWER_PROFIT_ATR x ATR)
+            if game.sell_rules.safely_in_profit(price, pos.get("cost", 0.0), atr):
                 recalculated_stop = round(highest_close - (multiplier * atr), 2)
                 old_stop = pos.get("stop_loss", 0.0)
                 if recalculated_stop > old_stop:
@@ -551,19 +554,20 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             date=today, run_shadow=None)
 
         # AI Second-Opinion Exit Override Gate (R&D Item 14), one rule in sell_rules.ai_exit_override:
-        # an AI HOLD / FLAG-FOR-REVIEW downgrades a momentum SELL; a stop breach always executes.
+        # an AI HOLD / FLAG-FOR-REVIEW downgrades a momentum SELL of a position safely in profit;
+        # a stop breach, a loser or a marginal gain always sells.
         old_action = entry["rules_action"]
-        entry["rules_action"], override_reason = game.sell_rules.ai_exit_override(
-            old_action, entry["rules_reason"], live_verdicts=entry.get("verdicts"), holding=pos)
+        entry["rules_action"], override_reason, ignored_reason = game.sell_rules.ai_exit_override(
+            old_action, entry["rules_reason"], price=price, cost=pos.get("cost"), atr=atr,
+            live_verdicts=entry.get("verdicts"), holding=pos)
         if override_reason:
             entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
             game._log.info(
                 f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
                 f"Decision downgraded from {old_action} to {entry['rules_action']}. Reason: {override_reason}"
             )
-        elif (old_action == "SELL" and game.sell_rules.is_stop_exit(entry["rules_reason"])
-                and game.sell_rules.override_verdict(entry.get("verdicts"), pos)[0]):
-            game._log.info(f"🛑 [AI Override] {sym}: AI verdict ignored, stop exits are never overridden ({entry['rules_reason']}).")
+        elif ignored_reason:
+            game._log.info(f"🛑 [AI Override] {sym}: AI verdict not applied ({ignored_reason}).")
 
         decision_entries.append(entry)
         if entry["rules_action"] == "SELL":
