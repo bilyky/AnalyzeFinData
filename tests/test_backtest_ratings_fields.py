@@ -59,6 +59,18 @@ class TestReplayPassesSetup(unittest.TestCase):
         ds.assert_not_called()
         self.assertFalse(br.REPLAY_DIGIT_SUM)        # the module default, without the env var
 
+    def test_callers_can_force_setup_ok(self):
+        closes = [110.0] * 25 + [100.0] * 5          # last bar below SMA20 -> computed Setup is False
+        dates = [f"2026-02-{i + 1:02d}" for i in range(len(closes))]
+        ts = {d: {"1. open": str(c), "2. high": str(c), "3. low": str(c), "4. close": str(c),
+                  "5. volume": "1000"} for d, c in zip(dates, closes)}
+        data = {"checklist_stocks": {"ltTrend": "Strong"}}
+        for forced, want in ((None, False), (True, True)):
+            with mock.patch.object(br, "_short_score_fn", return_value=0.0) as spy:
+                br.compute_br(data, data, 100.0, len(dates) - 1, dates, ts, br.SeasonalitySlots({}),
+                              setup_ok=forced)
+            self.assertIs(spy.call_args.args[0]["setup_ok"], want)
+
 
 if __name__ == "__main__":
     unittest.main()
