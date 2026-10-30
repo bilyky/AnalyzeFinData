@@ -36,6 +36,13 @@ when the symbol's rolling Hurst exponent is below X". With --split it also print
 pre-registered verdict: the variant with the best train Sharpe passes only if its test
 Sharpe beats aether_rules and its test max drawdown is no deeper.
 
+--robust N --split DATE (R&D #62) re-runs every rule variant on N perturbed paths: each
+draw keeps a random ROBUST_FRAC of the non-SPY symbols and starts 0..ROBUST_MAX_OFFSET
+trading days late (seed ROBUST_SEED). It reports median and 10th-90th percentile Sharpe,
+CAGR and max drawdown, and each variant's win rate against aether_rules (share of draws
+where its Sharpe is higher on the same path). Robustly better = win rate >= ROBUST_WIN on
+both halves; robustly worse = <= ROBUST_LOSE on both; else inconclusive.
+
 --split DATE (implies --attribution) is an out-of-sample check: every variant runs again
 from fresh cash on the days before DATE (train) and on DATE onward (test). The rule
 variant with the best train Sharpe is the one "picked"; its test result and rank among
@@ -63,6 +70,7 @@ Usage:
                                                      [--cost-bps 10] [--max-symbols N]
                                                      [--rebuild] [--attribution]
                                                      [--split 2025-01-01] [--hurst]
+                                                     [--robust 50]
 """
 import argparse
 import datetime
@@ -71,6 +79,7 @@ import hashlib
 import json
 import math
 import os
+import random
 import sys
 from concurrent.futures import ProcessPoolExecutor
 
@@ -110,6 +119,12 @@ STOP_TAIL_P95_GATE = 1.5     # % of equity (R&D #54a, pre-registered)
 STOP_TAIL_WORST_GATE = 3.0
 # R&D #54b (pre-registered 2026-10-29): aggregated-variance Hurst over the trailing
 # HURST_WINDOW daily log returns; variant -> (bar key, skip entries below this H).
+# R&D #62 robustness check (pre-registered 2026-10-30).
+ROBUST_SEED = 62
+ROBUST_FRAC = 0.8
+ROBUST_MAX_OFFSET = 60
+ROBUST_WIN = 0.8
+ROBUST_LOSE = 0.2
 HURST_WINDOW = 120
 HURST_LAGS = (1, 2, 4, 8, 16)
 HURST_VARIANTS = {
@@ -559,6 +574,95 @@ def _iso_date(s: str) -> str:
         raise argparse.ArgumentTypeError(f"not a YYYY-MM-DD date: {s!r}") from None
 
 
+def draw_paths(symbols, calendar, n, seed=ROBUST_SEED, frac=ROBUST_FRAC,
+               max_offset=ROBUST_MAX_OFFSET, split=None) -> list:
+    """n reproducible perturbed paths: a random `frac` of the non-SPY symbols (SPY always kept,
+    it sets the regime) and a start 0..max_offset trading days into `calendar`. With `split`,
+    the offset is also capped so the half before it keeps at least 2 days."""
+    rng = random.Random(seed)
+    others = sorted(s for s in symbols if s != "SPY")
+    k = round(len(others) * frac)
+    top = max(0, min(max_offset, len(calendar) - 2))
+    if split:
+        top = max(0, min(top, sum(d < split for d in calendar) - 2))
+    return [{"symbols": frozenset(rng.sample(others, k)) | {"SPY"}, "start": calendar[rng.randint(0, top)]}
+            for _ in range(n)]
+
+
+def path_universe(panel, eligible, syms):
+    """A draw's universe: the score panel and the eligible list cut down to `syms`."""
+    return {s: panel[s] for s in syms if s in panel}, [s for s in eligible if s in syms]
+
+
+def _pct(vals, q):
+    return round(float(np.percentile(vals, q)), 2) if vals else None
+
+
+def robustness_summary(per_draw: list) -> dict:
+    """per_draw: [{period: {variant: metrics}}]. Per period and variant: median and 10th-90th
+    percentile Sharpe / CAGR / max drawdown, and the win rate against aether_rules (share of
+    draws where its Sharpe is higher on the same path). Then the pre-registered verdicts."""
+    periods = list(per_draw[0]) if per_draw else []
+    out = {}
+    for period in periods:
+        out[period] = {}
+        for v in per_draw[0][period]:
+            row = {}
+            for key in ("sharpe", "cagr_pct", "max_drawdown_pct"):
+                vals = [d[period][v].get(key) for d in per_draw if d[period][v].get(key) is not None]
+                row[key] = {"median": _pct(vals, 50), "p10": _pct(vals, 10), "p90": _pct(vals, 90)}
+            pairs = [(d[period][v].get("sharpe"), d[period]["aether_rules"].get("sharpe")) for d in per_draw]
+            pairs = [(a, b) for a, b in pairs if a is not None and b is not None]
+            row["win_rate"] = round(sum(a > b for a, b in pairs) / len(pairs), 3) if pairs else None
+            row["n"] = len(pairs)
+            out[period][v] = row
+    verdicts = {}
+    halves = [p for p in ("train", "test") if p in out]
+    if len(halves) == 2:
+        for v in out["test"]:
+            if v == "aether_rules":
+                continue
+            w = [out[h][v]["win_rate"] for h in halves]
+            if None in w:
+                verdicts[v] = "inconclusive"
+            elif all(x >= ROBUST_WIN for x in w):
+                verdicts[v] = "robustly better"
+            elif all(x <= ROBUST_LOSE for x in w):
+                verdicts[v] = "robustly worse"
+            else:
+                verdicts[v] = "inconclusive"
+    return {"periods": out, "verdicts": verdicts}
+
+
+def run_robustness(paths, calendar, split, run_table) -> dict:
+    """run_table(symbols, days) -> {variant: metrics}; each path runs full, train and test."""
+    per_draw = []
+    for path in paths:
+        full = [d for d in calendar if d >= path["start"]]
+        per_draw.append({"full": run_table(path["symbols"], full),
+                         "train": run_table(path["symbols"], [d for d in full if d < split]),
+                         "test": run_table(path["symbols"], [d for d in full if d >= split])})
+    summary = robustness_summary(per_draw)
+    summary["n_draws"] = len(paths)
+    summary["per_draw_sharpe"] = [{p: {v: m.get("sharpe") for v, m in d[p].items()} for p in d}
+                                  for d in per_draw]
+    return summary
+
+
+def _print_robustness(summary) -> None:
+    _out(f"\n  ROBUSTNESS (R&D #62): {summary['n_draws']} draws, {ROBUST_FRAC:.0%} of symbols, "
+         f"start offset 0-{ROBUST_MAX_OFFSET} days, seed {ROBUST_SEED}")
+    for period, rows in summary["periods"].items():
+        _out(f"\n  {period}: Sharpe median [p10, p90]   MaxDD% median   win vs aether_rules")
+        for v, r in rows.items():
+            sh, dd = r["sharpe"], r["max_drawdown_pct"]
+            win = "-" if v == "aether_rules" or r["win_rate"] is None else f"{r['win_rate']:.0%}"
+            _out(f"  {v:<22}{sh['median']!s:>7} [{sh['p10']!s:>6},{sh['p90']!s:>6}]   {dd['median']!s:>8}   {win:>6}")
+    _out("")
+    for v, verdict in summary["verdicts"].items():
+        _out(f"  {v:<22}{verdict}")
+
+
 def oos_split(calendar, split, run_table) -> dict:
     """Out-of-sample check: run_table(days) -> {variant: metrics} runs on the days before
     `split` (train) and from `split` on (test); the pick is the best train Sharpe, and
@@ -586,7 +690,7 @@ def _print_table(calendar, table) -> None:
 
 
 def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=False,
-        attribution=False, split=None, hurst=False) -> dict:
+        attribution=False, split=None, hurst=False, robust=0) -> dict:
     ohlcv = {os.path.basename(f)[:-len("_daily.json")]
              for f in glob.glob(os.path.join(_br.OHLCV_DIR, "*_daily.json"))}
     cached = {d for d in os.listdir(_br.SYM_DIR) if os.path.isdir(os.path.join(_br.SYM_DIR, d))}
@@ -637,6 +741,20 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
                  f"{hv['test_max_dd']}% vs {hv['base_test_max_dd']}% -> "
                  f"{'PASS' if hv['passed'] else 'FAIL: park the filter'}")
 
+    robust_out = None
+    if robust:
+        if not split:
+            raise SystemExit("--robust needs --split (it reports both halves)")
+        split_iso = datetime.date.fromisoformat(split).isoformat()
+
+        def run_table(syms, days):
+            sub, elig = path_universe(panel, eligible, syms)
+            return {k: metrics(v) for k, v in
+                    run_variants(sub, bars, days, cost_bps, excluded, elig, True).items()}
+
+        robust_out = run_robustness(draw_paths(symbols, calendar, robust, split=split_iso), calendar, split_iso, run_table)
+        _print_robustness(robust_out)
+
     payload = {
         "as_of": calendar[-1], "min_year": min_year, "cost_bps": cost_bps,
         "max_trade_risk_pct": CFG.system_max_trade_risk_pct,
@@ -651,6 +769,7 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
         ],
         "metrics": table,
         "split": split_out,
+        "robustness": robust_out,
         "stop_tail": tails,
         "curves": {k: [[d, round(e, 2)] for d, e, _i in v["curve"]] for k, v in results.items()},
         "trades": {k: v["trades"] for k, v in results.items() if v["trades"]},
@@ -677,5 +796,8 @@ if __name__ == "__main__":
                     type=_iso_date,
                     help="out-of-sample check: pick a rule variant on days before this date, "
                          "test it on the days from it (implies --attribution)")
+    ap.add_argument("--robust", type=int, default=0, metavar="N",
+                    help="R&D #62: re-run the rule variants on N perturbed paths (needs --split)")
     a = ap.parse_args()
-    run(a.min_year, a.workers, a.cost_bps, a.max_symbols, a.rebuild, a.attribution, a.split, a.hurst)
+    run(a.min_year, a.workers, a.cost_bps, a.max_symbols, a.rebuild, a.attribution, a.split, a.hurst,
+        a.robust)
