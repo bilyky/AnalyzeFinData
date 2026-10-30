@@ -99,11 +99,13 @@ class _Run:
     """Patch the world, run one entry point, and record what it did."""
 
     def __init__(self, *, market_open=True, market_hours=True, exists=True, stale=None,
-                 prices=None, load_error=None, manual_profile="BALANCED", force=True):
+                 prices=None, load_error=None, manual_profile="BALANCED", force=True, extra=None):
         self.market_open, self.market_hours = market_open, market_hours
         self.exists, self.stale = exists, stale
         self.prices = _PRICES if prices is None else prices
         self.load_error, self.manual_profile, self.force = load_error, manual_profile, force
+        # extra = {"positions": {...}, "rows": [...], "prices": {...}} added on top of the fixture
+        self.extra = extra or {}
 
     def __call__(self, entry):
         log = mock.MagicMock()
@@ -111,6 +113,9 @@ class _Run:
         path = mock.MagicMock()
         path.exists.return_value = self.exists
         state = _state()
+        state["positions"].update(copy.deepcopy(self.extra.get("positions", {})))
+        rows = _ROWS + list(self.extra.get("rows", []))
+        live = {**self.prices, **self.extra.get("prices", {})} if self.prices else {}
         load = mock.MagicMock(side_effect=self.load_error, return_value=state)
         # Snapshot at call time: later code may keep mutating the same objects.
         snap = {}
@@ -127,8 +132,8 @@ class _Run:
             mock.patch.object(game, "XLSX_FILE", path),
             mock.patch.object(game, "workbook_staleness", return_value=self.stale),
             mock.patch.object(game.notify, "send_email", email),
-            mock.patch.object(game.openpyxl, "load_workbook", side_effect=lambda *a, **k: research_workbook(*_ROWS)),
-            mock.patch.object(game, "get_live_prices", return_value=dict(self.prices)),
+            mock.patch.object(game.openpyxl, "load_workbook", side_effect=lambda *a, **k: research_workbook(*rows)),
+            mock.patch.object(game, "get_live_prices", return_value=dict(live)),
             mock.patch.object(game, "get_market_regime", return_value="BALANCED"),
             mock.patch.object(game, "_has_strong_setups_today", return_value=False),
             mock.patch.object(game, "_cache_stale", return_value=False),
@@ -235,6 +240,36 @@ class TestRunnerMatchesRoot(unittest.TestCase):
         root = self._same(_Run(manual_profile="AGGRESSIVE"))
         rotated = [t for t in root["txs"] if "[MOMENTUM ROTATION]" in t.get("details", "")]
         self.assertEqual([t["symbol"] for t in rotated], ["OLD"])
+
+    def test_ai_override_on_exits(self):
+        # R&D #14 / #195: a stored AI verdict downgrades a momentum SELL of a position safely
+        # in profit (FADE: HOLD -> HOLD, FLAG: FLAG-FOR-REVIEW -> WATCH); a stop exit always
+        # sells (SLIP). All three are soft exits (s10 + l60 < 0) below their 50-DMA (110),
+        # so winner protection doesn't apply.
+        extra = {
+            "positions": {
+                "FADE": {"qty": 20, "cost": 90.0, "stop_loss": 80.0, "highest_close_since_acq": 106.0,
+                         "shadow_verdict": "HOLD"},
+                "FLAG": {"qty": 20, "cost": 90.0, "stop_loss": 80.0, "highest_close_since_acq": 106.0,
+                         "verdicts": {"gemini": "FLAG-FOR-REVIEW"}},
+                "SLIP": {"qty": 20, "cost": 90.0, "stop_loss": 85.0, "highest_close_since_acq": 95.0,
+                         "ai_verdict": "HOLD"},
+            },
+            "rows": [_row("FADE", 105.0, -2.0, -1.0, prev_sell=105.0),
+                     _row("FLAG", 105.0, -2.0, -1.0, prev_sell=105.0),
+                     _row("SLIP", 84.0, -2.0, -1.0, prev_sell=84.0)],
+            "prices": {"FADE": 105.0, "FLAG": 105.0, "SLIP": 84.0},
+        }
+        root = self._same(_Run(extra=extra))
+        sold = {t["symbol"] for t in root["txs"] if t["type"] == "SELL"}
+        self.assertNotIn("FADE", sold)
+        self.assertNotIn("FLAG", sold)
+        self.assertIn("SLIP", sold)
+        actions = {e["symbol"]: e["rules_action"] for batch in root["decisions"] for e in batch}
+        self.assertEqual((actions["FADE"], actions["FLAG"], actions["SLIP"]), ("HOLD", "WATCH", "SELL"))
+        logged = " | ".join(str(a[0]) for _, a in root["log"] if a)
+        self.assertIn("[AI EXIT OVERRIDE] FADE", logged)
+        self.assertIn("SLIP: AI verdict not applied", logged)
 
     def test_adaptive_profile(self):
         self._same(_Run(manual_profile=None))
