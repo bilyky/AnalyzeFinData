@@ -21,6 +21,12 @@ class TestAdmit(unittest.TestCase):
         for name, rule in eg.relaxations().items():
             with self.subTest(name=name):
                 self.assertEqual(sum(x != y for x, y in zip(rule, eg.wf.CURRENT)), 1)
+        # ...and to the intended value (#215 review: "setup_sma" -> "off" passed the old test).
+        want = {"setup_off": (1, "off"), "setup_sma": (1, "sma"), "rr_1": (2, 1.0), "s10_floor_0": (0, 0.0),
+                "leader_path": (4, True), "rebound_path": (5, True)}
+        for name, (pos, value) in want.items():
+            with self.subTest(name=name):
+                self.assertEqual(eg.relaxations()[name][pos], value)
 
 
 class TestStats(unittest.TestCase):
