@@ -59,6 +59,13 @@ The active experimental backlog, scoring studies, and structural risk-mitigation
     *   *Report per variant and period:* median and 10th&ndash;90th percentile Sharpe, CAGR and max drawdown; and the **win rate** against `aether_rules`, meaning the share of draws where its Sharpe is higher on the same path.
     *   *What counts as robust:* a variant robustly beats `aether_rules` if its win rate is &ge; 80% on **both** halves. Robustly worse: &le; 20% on both. Anything else is **inconclusive**, and no rule change follows from it. The same test applies to `aether_rules` vs `spy_buy_hold`, which settles whether "beats SPY on the test half" (#191) holds.
     *   *No code in the trading path changes.* The output is a table that later studies cite instead of a single run.
+    **Result (2026-10-30, 604 symbols, through 2026-10-23, `--robust 50 --split 2025-01-01`):** every rule variant is **inconclusive** under the rules above. No single-rule change robustly beats or loses to `aether_rules` on both halves, so **none of the earlier single-path rule findings (#190/#191/#54) justifies a rule change.** Details (win rate = share of draws beating `aether_rules`; train / test):
+    *   *Soft exit:* removing it wins 74% of train draws but only 18% of test draws. The earlier "the soft exit helps in both halves" (#191) does not hold on train.
+    *   *Cash buffer:* removing it wins 32% / 10%. That's the nearest to robustly worse, but train misses the 20% bar.
+    *   *1% loss cap:* removing it wins 54% / 74%. Not robust either way, consistent with the cap sweep.
+    *   *Against SPY:* `aether_rules` beats SPY's Sharpe in **0 of 50** draws on the full period and on train, and **14 of 50** on test. "Beats SPY on the test half" (#191) does **not** hold: SPY wins 72% of test draws.
+    *   *Path spread:* `aether_rules` test Sharpe ranges from 0.37 to 1.23 (10th&ndash;90th percentile) across draws. One run can land anywhere in that band.
+    Results: `Data/portfolio_backtest_robust_2026-10-30.json`. **Use:** cite this table, not a single run. Future rule studies should report the win rate over these draws.
 
 ## 🛡️ Stability & Hardening Backlog (Anti-Fragility Sprints):
 
