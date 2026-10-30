@@ -56,7 +56,7 @@ class TestReplayPassesSetup(unittest.TestCase):
         data = {"checklist_stocks": {"ltTrend": "Strong"}}
         for forced, want in ((None, False), (True, True)):
             with mock.patch.object(br, "_short_score_fn", return_value=0.0) as spy:
-                br.compute_br(data, data, 100.0, len(dates) - 1, dates, ts, {}, setup_ok=forced)
+                br.compute_br(data, data, 100.0, len(dates) - 1, dates, ts, br.SeasonalitySlots({}), setup_ok=forced)
             self.assertIs(spy.call_args.args[0]["setup_ok"], want)
 
 
