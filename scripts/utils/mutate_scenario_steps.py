@@ -28,7 +28,7 @@ STEPS = ROOT / "aether" / "scenario" / "steps.py"
 MODULES = ["tests.test_scenario_steps", "tests.test_scenario_assemble", "tests.test_scenario_settle",
            "tests.test_scenario_queued", "tests.test_scenario_exits",
            "tests.test_scenario_sell_exec", "tests.test_scenario_buy_screen", "tests.test_scenario_rotation",
-           "tests.test_scenario_deploy"]
+           "tests.test_scenario_deploy", "tests.test_scenario_finalize"]
 
 # (label, exact text in steps.py, replacement). Each anchor must occur exactly once.
 MUTANTS = [
@@ -239,6 +239,17 @@ MUTANTS += [  # deploy_capital (BUY execution / queue, pyramiding, covered calls
     ("dep: calls always", '            if game.is_market_hours():\n                game._log.info("🚀',
      '            if True:\n                game._log.info("🚀'),
     ("dep: no covered calls", 'game.options.execute_weekly_covered_call_pass(state, today, prices, ws)', 'pass'),
+]
+
+MUTANTS += [  # finalize_run (the finally: block)
+    ("fin: no close", '            wb.close()\n        except Exception:', '            pass\n        except Exception:'),
+    ("fin: close error escapes", '            wb.close()\n        except Exception:\n            pass',
+     '            wb.close()\n        except KeyError:\n            pass'),
+    ("fin: no save", 'game.save_game(state)', 'pass'),
+    ("fin: no excel log", 'game.update_excel_log(state, new_transactions)', 'pass'),
+    ("fin: excel log drops txs", 'game.update_excel_log(state, new_transactions)', 'game.update_excel_log(state, [])'),
+    ("fin: save without state", '    if state is not None:\n        game.save_game(state)', '    if True:\n        game.save_game(state)'),
+    ("fin: no abort log", 'game._log.info("🤖 AI Management aborted', 'game._log.debug("🤖 AI Management aborted'),
 ]
 
 
