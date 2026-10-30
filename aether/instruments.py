@@ -103,7 +103,7 @@ def is_scarcity_asset(symbol: str, industry_str: str) -> bool:
         "Respond with exactly YES or NO."
     )
     try:
-        res = ai_client.evaluate(system, user, max_tokens=5, temperature=0.0)
+        res = ai_client.evaluate(system, user, max_tokens=5, temperature=0.0, tier="cheap")
         result = "YES" in (res or "").strip().upper()
     except Exception as e:
         _log.warning(f"Warning: AI classification failed for {s}: {e}. Not caching — will retry next run.")
