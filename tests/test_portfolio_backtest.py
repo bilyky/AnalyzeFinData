@@ -482,6 +482,97 @@ class TestHurst(unittest.TestCase):
         self.assertEqual(pb.hurst_verdict(train, test)["picked"], "aether_hurst_r45")
 
 
+class TestExitVariants(unittest.TestCase):
+    """R&D #63: each exit rule, the hold stats and the pre-registered verdict."""
+
+    def test_trailing_stop_ratchets_up_and_exits(self):
+        # Entry 10 (day 1), stop 7.5. Day-2 close 14 lifts the trail to 14 - 2.5 x 1 = 11.5;
+        # day 3 trades down to 11, so the trail sells at 11.5. The fixed stop never triggers.
+        bars = {"A": _bars([10, 10, 14, 12], lows=[10, 10, 14, 11]), "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        base = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0)
+        self.assertEqual((base["trades"], base["open_positions"]), ([], ["A"]))
+        t = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, exit_rules={"trail": True})["trades"][0]
+        self.assertEqual((t["reason"], t["exit_date"], t["exit"], t["stop"]), ("stop", DAYS[3], 11.5, 11.5))
+
+    def test_trailing_stop_never_moves_down(self):
+        # Day-2 close 14 sets the trail to 11.5. On day 3 ATR jumps to 3, so peak - 2.5 x 3 = 6.5:
+        # the stop must stay at 11.5, and day 4's low of 11 sells there (a stop allowed to drop
+        # to 6.5 would keep holding).
+        bars = {"A": _bars([10, 10, 14, 13, 12], lows=[10, 10, 14, 12, 11]), "SPY": _bars([100] * 5)}
+        bars["A"]["atr"] = [1.0, 1.0, 1.0, 3.0, 3.0]
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        t = pb.simulate(panel, bars, DAYS[:5], cost_bps=0.0, exit_rules={"trail": True})["trades"][0]
+        self.assertEqual((t["exit_date"], t["exit"]), (DAYS[4], 11.5))
+
+    def test_hold_profit_keeps_a_winner_and_still_sells_a_loser(self):
+        panel = {"A": {DAYS[0]: [6.0, 0.0], DAYS[2]: [-1.0, -1.0]}}     # soft exit on day 2
+        win = {"A": _bars([10, 10, 11, 11]), "SPY": _bars([100] * 4)}  # day-2 close 11 > entry 10
+        self.assertEqual(len(pb.simulate(panel, win, DAYS[:4], cost_bps=0.0)["trades"]), 1)
+        held = pb.simulate(panel, win, DAYS[:4], cost_bps=0.0, exit_rules={"hold_profit": True})
+        self.assertEqual((held["trades"], held["open_positions"]), ([], ["A"]))
+        lose = {"A": _bars([10, 10, 9, 9]), "SPY": _bars([100] * 4)}
+        sold = pb.simulate(panel, lose, DAYS[:4], cost_bps=0.0, exit_rules={"hold_profit": True})
+        self.assertEqual(sold["trades"][0]["reason"], "momentum decay")
+
+    def test_wide_stop_is_farther_and_the_cap_sizes_smaller(self):
+        bars = {"A": _bars([10] * 3), "SPY": _bars([100] * 3)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        base = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0, max_trade_risk_pct=0.01)
+        wide = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0, max_trade_risk_pct=0.01,
+                           exit_rules={"stop_scale": 1.5})
+        self.assertAlmostEqual(base["curve"][1][2], 400.0)              # 100 / 2.5 x 10
+        self.assertAlmostEqual(wide["curve"][1][2], 100 / 3.75 * 10)    # stop 6.25
+
+    def test_min_hold_blocks_an_early_soft_exit(self):
+        bars = {"A": _bars([10, 10, 9, 9]), "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0], DAYS[1]: [-1.0, -1.0]}}     # soft exit on entry day
+        self.assertEqual(len(pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0)["trades"]), 1)
+        r = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, exit_rules={"min_hold": 10})
+        self.assertEqual((r["trades"], r["open_positions"]), ([], ["A"]))
+        r2 = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, exit_rules={"min_hold": 1})
+        self.assertEqual(r2["open_positions"], ["A"])                  # 0 days held < 1: blocked
+
+    def test_trades_record_hold_days(self):
+        bars = {"A": _bars([10, 10, 9, 8]), "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0], DAYS[1]: [-1.0, -1.0]}}
+        t = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0)["trades"][0]
+        self.assertEqual((t["entry_date"], t["exit_date"], t["hold_days"]), (DAYS[1], DAYS[2], 1))
+
+    def test_hold_stats(self):
+        spy = _bars([100, 100, 110, 110])
+        trades = [{"entry_date": DAYS[0], "exit_date": DAYS[2], "ret_pct": 20.0, "hold_days": 2},
+                  {"entry_date": DAYS[0], "exit_date": DAYS[2], "ret_pct": 15.0, "hold_days": 3},
+                  {"entry_date": DAYS[0], "exit_date": DAYS[2], "ret_pct": 5.0, "hold_days": 4}]
+        h = pb.hold_stats(trades, spy)                                  # SPY +10% over those days
+        self.assertEqual((h["median_hold_days"], h["share_beating_spy"]), (3.0, 0.667))
+        self.assertEqual(pb.hold_stats([], spy)["median_hold_days"], None)
+
+    def test_run_variants_adds_the_five_exit_variants(self):
+        bars = {"A": _bars([10] * 3), "SPY": _bars([100] * 3)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        out = pb.run_variants(panel, bars, DAYS[:3], 0.0, frozenset(), ["A"], False, exits=True)
+        self.assertTrue(set(pb.EXIT_VARIANTS) <= set(out))
+        self.assertFalse(set(pb.EXIT_VARIANTS) & set(pb.run_variants(panel, bars, DAYS[:3], 0.0,
+                                                                     frozenset(), ["A"], False)))
+
+    @staticmethod
+    def _summary(verdict, dd, base_dd=-10.0):
+        test = {"aether_rules": {"max_drawdown_pct": {"median": base_dd}}}
+        test.update({v: {"max_drawdown_pct": {"median": -10.0}} for v in pb.EXIT_VARIANTS})
+        test["exit_trail"] = {"max_drawdown_pct": {"median": dd}}
+        verdicts = {v: "inconclusive" for v in pb.EXIT_VARIANTS}
+        verdicts["exit_trail"] = verdict
+        return {"periods": {"test": test}, "verdicts": verdicts}
+
+    def test_exit_verdicts(self):
+        self.assertEqual(pb.exit_verdicts(self._summary("robustly better", -12.9))["exit_trail"], "PASS")
+        self.assertEqual(pb.exit_verdicts(self._summary("robustly better", -13.0))["exit_trail"], "PASS")
+        self.assertEqual(pb.exit_verdicts(self._summary("robustly better", -13.1))["exit_trail"], "FAIL: drawdown")
+        self.assertEqual(pb.exit_verdicts(self._summary("inconclusive", -5.0))["exit_trail"], "inconclusive")
+        self.assertEqual(pb.exit_verdicts(self._summary("robustly worse", -5.0))["exit_trail"], "robustly worse")
+
+
 class TestRobustness(unittest.TestCase):
     """R&D #62: perturbed paths, the summary and the pre-registered verdicts."""
 
