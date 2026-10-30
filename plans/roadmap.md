@@ -65,6 +65,7 @@ The active experimental backlog, scoring studies, and structural risk-mitigation
     *   *1% loss cap:* removing it wins 54% / 74%. Not robust either way, consistent with the cap sweep.
     *   *Against SPY:* `aether_rules` beats SPY's Sharpe in **0 of 50** draws on the full period and on train, and **14 of 50** on test. "Beats SPY on the test half" (#191) does **not** hold: SPY wins 72% of test draws.
     *   *Path spread:* `aether_rules` test Sharpe ranges from 0.37 to 1.23 (10th&ndash;90th percentile) across draws. One run can land anywhere in that band.
+    **How to read the percentages (#222 review):** the draws are not independent samples. Every draw keeps 80% of the same universe, so any two share most symbols, and all replay the same price history. A win rate is the share of these overlapping re-cuts that favour the variant (a sensitivity measure). It is **not** the probability that the variant is better, and the 80% bar is not a significance level. On the test half only the universe varies (every draw starts it at the split date), so the test spread above comes only from which symbols a draw keeps.
     Results: `Data/portfolio_backtest_robust_2026-10-30.json`. **Use:** cite this table, not a single run. Future rule studies should report the win rate over these draws.
 
 ## 🛡️ Stability & Hardening Backlog (Anti-Fragility Sprints):
