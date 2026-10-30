@@ -164,6 +164,17 @@ class TestSimulate(unittest.TestCase):
         self.assertAlmostEqual(uncapped["curve"][-1][1], 10_000.0 - 375.0)
         self.assertEqual(uncapped["cap_trims"], 0)
 
+    def test_admit_hook_blocks_a_buy_the_score_allows(self):
+        bars = {"A": _bars([10] * 3), "SPY": _bars([100] * 3)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        seen = []
+        blocked = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0,
+                              admit=lambda sym, day: seen.append((sym, day)) or False)
+        self.assertEqual(blocked["curve"][1][2], 0.0)          # nothing bought
+        self.assertIn(("A", DAYS[0]), seen)
+        allowed = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0, admit=lambda s, d: True)
+        self.assertGreater(allowed["curve"][1][2], 0.0)
+
     def test_loss_cap_not_binding_keeps_allocation(self):
         # Stop gap 2.5 on a $1,500 buy risks $375 <= 5% of 10k: no trim.
         bars = {"A": _bars([10] * 3), "SPY": _bars([100] * 3)}

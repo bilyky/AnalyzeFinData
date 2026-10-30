@@ -211,14 +211,16 @@ def _bar(bars, sym, day):
 
 def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
              initial=INITIAL_EQUITY, excluded=frozenset(), max_trade_risk_pct=None,
-             disable=frozenset()) -> dict:
+             disable=frozenset(), admit=None) -> dict:
     """Replay `panel` ({sym: {date: [s10, l60]}}) over `calendar` (sorted trading days).
 
     max_trade_risk_pct: when set (and risk_rules is on), each buy is trimmed so
     (open - stop) * qty <= last close's equity * pct, as the live _execute_buys does.
     disable: rules from RULES to switch off (risk_rules only). "stop" removes every stop
     exit (intraday ATR stop and exit_decision's close floor, including its 8% fallback)
-    but the loss cap still sizes against the stop; "regime" runs BALANCED always."""
+    but the loss cap still sizes against the stop; "regime" runs BALANCED always.
+    admit: optional callable(sym, day) -> bool, an extra entry gate (the live Setup / Short10
+    floor / R/R gates are not in this simulator; entry_gates_portfolio.py passes them here)."""
     unknown = set(disable) - set(RULES)
     if unknown:
         raise ValueError(f"unknown rules: {sorted(unknown)}")
@@ -331,7 +333,8 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
         investable = equity * (1 - buffer) - kept
         cands = sorted(((sc[0] + sc[1], sym) for sym, by_day in panel.items()
                         if (sc := by_day.get(day)) and sym not in pos and sym not in excluded
-                        and sc[0] + sc[1] >= rules["min_score_threshold"]), reverse=True)
+                        and sc[0] + sc[1] >= rules["min_score_threshold"]
+                        and (admit is None or admit(sym, day))), reverse=True)
         for _score, sym in cands:
             if remaining >= max_pos:
                 break
