@@ -37,12 +37,12 @@ variant with the best train Sharpe is the one "picked"; its test result and rank
 the rule variants show whether the pick holds up on days it never saw.
 
 Execution: scores dated day t (close data) trigger orders filled at day t+1's OPEN —
-no look-ahead. Hard stops fill intraday at min(open, stop). Prices are split-adjusted.
+no look-ahead in order timing (the score inputs come from backtest_ratings; see its notes). Hard stops fill intraday at min(open, stop). Prices are split-adjusted.
 Costs: --cost-bps per side (default 10).
 
 NOT simulated (live-only rules): strategic overrides, bottom-confirmed buys, the SPY-RSP
 breadth downgrade, scarcity-core sizing, scale-outs/covered calls, rotation. The score
-reconstruction also omits the live digit_sum, setup_ok and vrecovery_score fields.
+reconstruction leaves the live digit_sum at 0 (its index is in-sample; backtest_ratings).
 The universe is TODAY's symbol list, so results carry survivorship bias (optimistic).
 Synthetic placeholder bars (provisional / O=H=L=C on zero volume) never price a fill.
 Loss-cap differences from live: a buy with no prior ATR gets no stop here, so no cap
@@ -556,7 +556,7 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
             "survivorship bias: universe is today's symbol list",
             "not simulated: overrides, bottom-confirmed buys, breadth downgrade, scarcity sizing, "
             "scale-outs, covered calls, rotation",
-            "score reconstruction omits live digit_sum, setup_ok, vrecovery_score",
+            "score reconstruction leaves live digit_sum at 0 (in-sample index)",
             "synthetic (provisional / flat zero-volume) bars are dropped from prices and the "
             "calendar, but backtest_ratings' score reconstruction still reads them",
         ],
