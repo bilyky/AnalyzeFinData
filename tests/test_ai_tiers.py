@@ -87,7 +87,7 @@ class TestTierChain(unittest.TestCase):
 
     def test_note_keys_and_non_lists_are_not_tiers(self):
         cfg = _Cfg(self.providers, primary="a",
-                   tiers={"_note": "free text", "cheap": ["b"], "broken": "c"})
+                   tiers={"_note": "free text", "_draft": ["a"], "cheap": ["b"], "broken": "c"})
         with _with_cfg(cfg):
             self.assertEqual(ai_client.configured_tiers(), {"cheap": ["b"]})
 
@@ -211,7 +211,8 @@ class TestPromptCapture(unittest.TestCase):
                 self.assertFalse(os.path.exists(path))
                 os.environ["AETHER_AI_CAPTURE"] = path
                 ai_client.evaluate("S", "U", tier="cheap", max_tokens=42)
-            rows = [json.loads(x) for x in open(path, encoding="utf-8")]
+            with open(path, encoding="utf-8") as f:
+                rows = [json.loads(x) for x in f]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["system"], "S")
         self.assertEqual(rows[0]["messages"], [{"role": "user", "content": "U"}])
@@ -233,7 +234,8 @@ def _ai_calls_without_tier():
                 continue
             path = os.path.join(root, fn)
             try:
-                tree = ast.parse(open(path, encoding="utf-8").read())
+                with open(path, encoding="utf-8") as f:
+                    tree = ast.parse(f.read())
             except (SyntaxError, UnicodeDecodeError):
                 continue
             for node in ast.walk(tree):
