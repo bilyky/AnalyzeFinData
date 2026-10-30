@@ -20,7 +20,12 @@ Judged on R&D #62's draws (portfolio_backtest.draw_paths, seed 62): the variant 
 median train Sharpe is the pick, and it passes only if it beats spy_buy_hold's Sharpe in at
 least PASS_RATE of the draws on both halves. aether_rules and the equal-weight hold are
 reported alongside (aether_rules needs the score panel, Data/portfolio_backtest_panel.json).
-The universe is today's symbol list: survivorship bias flatters MOM and HIGH.
+Point-in-time universe (--pit, the default; a correction found after the first run): a symbol
+is rankable only from the date it joined our universe (its first scored day in the score panel),
+and the equal-weight hold only buys symbols that had joined by its first day. Without it, ~90
+symbols added in 2026 (several after big runs) were rankable from 2023 - look-ahead in the
+choice of stocks that AETHER's own backtest doesn't have (it needs scores). --no-pit reproduces
+the first, biased run. The universe is still today's list: survivorship bias remains.
 
 Usage:
     python scripts/backtesting/factor_portfolio.py [--split 2025-01-01] [--robust 50]
@@ -87,10 +92,13 @@ def pct_ranks(values: dict) -> dict:
     return out
 
 
-def rank_symbols(bars: dict, universe, day: str, factor: str) -> list:
-    """[(score, sym)] best first, for the symbols in `universe` with a bar and enough history."""
+def rank_symbols(bars: dict, universe, day: str, factor: str, join=None) -> list:
+    """[(score, sym)] best first, for the symbols in `universe` with a bar and enough history.
+    join: {sym: first day it was in our universe}; a symbol is skipped before that day."""
     vals = {}
     for sym in universe:
+        if join is not None and day < join.get(sym, "9999-12-31"):
+            continue
         b, i = pb._bar(bars, sym, day)
         if b is not None and (f := factor_values(b, i)) is not None:
             vals[sym] = f
@@ -116,7 +124,7 @@ def spy_above_trend(spy: dict, day: str) -> bool:
 
 
 def simulate_factor(bars, calendar, universe, factor, *, trend=False, top_n=TOP_N, cost_bps=10.0,
-                    initial=pb.INITIAL_EQUITY) -> dict:
+                    initial=pb.INITIAL_EQUITY, join=None) -> dict:
     """Monthly top-N equal-weight portfolio; returns portfolio_backtest.metrics()-compatible output."""
     c = cost_bps / 10_000.0
     cash, qty, last = initial, {}, {}
@@ -161,7 +169,7 @@ def simulate_factor(bars, calendar, universe, factor, *, trend=False, top_n=TOP_
             if trend and not spy_above_trend(bars["SPY"], day):
                 target = []
             else:
-                target = [s for _sc, s in rank_symbols(bars, universe, day, factor)[:top_n]]
+                target = [s for _sc, s in rank_symbols(bars, universe, day, factor, join)[:top_n]]
     return {"curve": curve, "trades": [], "traded_usd": traded_usd, "open_positions": sorted(qty)}
 
 
@@ -176,7 +184,12 @@ def verdict(summary_vs_spy: dict) -> dict:
             "passed": bool(None not in w and min(w) >= PASS_RATE)}
 
 
-def run(split="2025-01-01", robust=50, min_year=2023, cost_bps=10.0) -> dict:
+def join_dates(panel: dict) -> dict:
+    """{sym: first scored day}: the day a symbol entered our universe (point-in-time eligibility)."""
+    return {s: min(by_day) for s, by_day in panel.items() if by_day}
+
+
+def run(split="2025-01-01", robust=50, min_year=2023, cost_bps=10.0, pit=True) -> dict:
     ohlcv = {os.path.basename(f)[:-len("_daily.json")] for f in glob.glob(os.path.join(_br.OHLCV_DIR, "*_daily.json"))}
     cached = {d for d in os.listdir(_br.SYM_DIR) if os.path.isdir(os.path.join(_br.SYM_DIR, d))}
     symbols = sorted(ohlcv & cached)
@@ -191,15 +204,19 @@ def run(split="2025-01-01", robust=50, min_year=2023, cost_bps=10.0) -> dict:
     calendar = [d for d in sorted(bars["SPY"]["idx"]) if d >= start]
     excluded = frozenset(s for s in symbols if instruments.is_excluded(s))
     eligible = [s for s in symbols if s not in excluded and s in bars]
-    pb._out(f"\nFactor portfolio (R&D #64): {len(symbols)} symbols, {calendar[0]} -> {calendar[-1]}, "
+    if pit and not panel:
+        raise SystemExit("--pit needs the score panel (Data/portfolio_backtest_panel.json) for join dates")
+    join = join_dates(panel) if pit else None
+    pb._out(f"\nFactor portfolio (R&D #64): {'point-in-time' if pit else 'today\'s'} universe, {len(symbols)} symbols, {calendar[0]} -> {calendar[-1]}, "
             f"top {TOP_N}, split {split}, {robust} draws")
 
     def run_table(syms, days):
         uni = [s for s in eligible if s in syms]
-        out = {v: pb.metrics(simulate_factor(bars, days, uni, f, trend=tr, cost_bps=cost_bps))
+        ew_uni = [s for s in uni if join is None or join.get(s, "9999-12-31") <= days[0]]
+        out = {v: pb.metrics(simulate_factor(bars, days, uni, f, trend=tr, cost_bps=cost_bps, join=join))
                for v, (f, tr) in VARIANTS.items()}
         out["spy_buy_hold"] = pb.metrics(pb.buy_and_hold(bars, days, ["SPY"], cost_bps))
-        out["ew_buy_hold"] = pb.metrics(pb.buy_and_hold(bars, days, uni, cost_bps))
+        out["ew_buy_hold"] = pb.metrics(pb.buy_and_hold(bars, days, ew_uni, cost_bps))
         if panel:
             sub = {s: panel[s] for s in syms if s in panel}
             out["aether_rules"] = pb.metrics(pb.simulate(sub, bars, days, cost_bps=cost_bps, excluded=excluded,
@@ -230,7 +247,7 @@ def run(split="2025-01-01", robust=50, min_year=2023, cost_bps=10.0) -> dict:
     pb._out(f"\n  R&D #64: picked on train {v['picked']} -> beats SPY in {v['win_vs_spy_train']:.0%} (train) / "
             f"{v['win_vs_spy_test']:.0%} (test) of draws -> "
             f"{'PASS' if v['passed'] else 'FAIL: not a golden mix'} (bar {PASS_RATE:.0%} on both)")
-    payload = {"as_of": calendar[-1], "n_symbols": len(symbols), "split": split, "n_draws": robust,
+    payload = {"as_of": calendar[-1], "n_symbols": len(symbols), "split": split, "n_draws": robust, "pit": pit,
                "top_n": TOP_N, "verdict": v, "vs_spy": vs_spy, "vs_aether": vs_aether,
                "caveats": ["survivorship bias: universe is today's symbol list (flatters MOM and HIGH)",
                            "draws overlap heavily; win rates are sensitivity, not probability (R&D #62)"]}
@@ -246,5 +263,7 @@ if __name__ == "__main__":
     ap.add_argument("--robust", type=int, default=50)
     ap.add_argument("--min-year", type=int, default=2023)
     ap.add_argument("--cost-bps", type=float, default=10.0)
+    ap.add_argument("--no-pit", dest="pit", action="store_false",
+                    help="rank every symbol from 2023 (the first, look-ahead-biased run)")
     a = ap.parse_args()
-    run(a.split, a.robust, a.min_year, a.cost_bps)
+    run(a.split, a.robust, a.min_year, a.cost_bps, a.pit)

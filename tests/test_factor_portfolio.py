@@ -70,6 +70,36 @@ class TestFactors(unittest.TestCase):
         self.assertEqual(fp.rank_symbols(bars, ["UP", "DN"], days[-1], "mix")[0][1], "UP")
 
 
+class TestPointInTime(unittest.TestCase):
+    """A symbol may only be ranked from the day it joined our universe."""
+
+    def test_join_dates_are_first_scored_days(self):
+        panel = {"A": {"2023-05-01": [1, 1], "2023-01-03": [1, 1]}, "B": {}, "C": {"2026-02-04": [0, 0]}}
+        self.assertEqual(fp.join_dates(panel), {"A": "2023-01-03", "C": "2026-02-04"})
+
+    def test_late_joiner_is_skipped_until_it_joins(self):
+        days = _days(300)
+        bars = {"UP": _bar_series(list(np.linspace(50, 100, 300)), days),
+                "DN": _bar_series(list(np.linspace(100, 50, 300)), days)}
+        join = {"UP": days[-1], "DN": days[0]}                          # UP joins on the last day
+        before = fp.rank_symbols(bars, ["UP", "DN"], days[-2], "mom", join)
+        self.assertEqual([s for _sc, s in before], ["DN"])
+        after = fp.rank_symbols(bars, ["UP", "DN"], days[-1], "mom", join)
+        self.assertEqual(after[0][1], "UP")
+        unknown = fp.rank_symbols(bars, ["UP", "DN"], days[-1], "mom", {"DN": days[0]})
+        self.assertEqual([s for _sc, s in unknown], ["DN"])               # never joined: never ranked
+
+    def test_portfolio_never_holds_a_symbol_before_it_joins(self):
+        days = _days(300)
+        bars = {f"S{k}": _bar_series(list(np.linspace(50, 50 + 10 * (k + 1), 300)), days) for k in range(4)}
+        bars["SPY"] = _bar_series(list(np.linspace(100, 200, 300)), days)
+        join = {s: days[0] for s in bars}
+        join["S3"] = "2099-01-01"                                       # strongest, but joins later
+        r = fp.simulate_factor(bars, days[250:], ["S0", "S1", "S2", "S3"], "mom", top_n=2, cost_bps=0.0,
+                               join=join)
+        self.assertEqual(sorted(r["open_positions"]), ["S1", "S2"])
+
+
 class TestPortfolio(unittest.TestCase):
     def test_month_ends(self):
         cal = ["2024-01-30", "2024-01-31", "2024-02-01", "2024-02-28", "2024-03-01"]
