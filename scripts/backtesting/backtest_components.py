@@ -21,6 +21,7 @@ import glob
 from collections import defaultdict
 
 from aether_logger import get_logger as _get_logger
+import scripts.backtesting.backtest_ratings as _br
 
 _log = _get_logger("backtest_components")
 
@@ -55,38 +56,8 @@ def _week_of_month(day: int) -> int:
 
 
 def precompute_seasonality(ohlcv_ts):
-    """Returns {(month, week): score} using 10-day forward returns per slot."""
-    from collections import defaultdict
-    all_dates = sorted(ohlcv_ts.keys())
-    date_idx  = {d: i for i, d in enumerate(all_dates)}
-    wk_last = {}
-    for d in all_dates:
-        y, m, day = int(d[:4]), int(d[5:7]), int(d[8:10])
-        wk_last[(y, m, _week_of_month(day))] = d
-    raw = defaultdict(list)
-    for (y, m, w), start_date in wk_last.items():
-        idx = date_idx[start_date]
-        fi = idx + FWD_W
-        if fi >= len(all_dates):
-            continue
-        c0 = float(ohlcv_ts[start_date].get('4. close', 0))
-        c1 = float(ohlcv_ts[all_dates[fi]].get('4. close', 0))
-        if c0 > 0 and c1 > 0:
-            raw[(m, w)].append((c1 - c0) / c0 * 100)
-    result = {}
-    for m in range(1, 13):
-        for w in range(1, 5):
-            rets = raw.get((m, w), [])
-            if len(rets) < 3:
-                result[(m, w)] = 0.0
-                continue
-            avg = sum(rets) / len(rets)
-            if avg > 2.0:   result[(m, w)] =  1.0
-            elif avg > 1.0: result[(m, w)] =  0.5
-            elif avg > -1.0:result[(m, w)] =  0.0
-            elif avg > -2.0:result[(m, w)] = -0.5
-            else:           result[(m, w)] = -1.0
-    return result
+    """Point-in-time seasonality slots; one implementation with the replay (backtest_ratings)."""
+    return _br.precompute_seasonality(ohlcv_ts)
 
 
 def extract_pgr_corr(data):
@@ -216,7 +187,7 @@ def process_symbol(symbol, min_year, ohlcv_ts, all_dates):
             'money_flow': money_flow,
             'over_bt_sl': over_bt_sl,
             'industry':  industry,
-            'season':    seasonality_map.get((month, week), 0.0),
+            'season':    seasonality_map.asof(month, week, date_str),
             'fwd10':     fwd10,
         })
         prev_data = data
