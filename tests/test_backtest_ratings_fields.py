@@ -29,7 +29,7 @@ class TestReplayPassesSetup(unittest.TestCase):
             return real(fields)
 
         with mock.patch.object(br, "_short_score_fn", side_effect=spy):
-            br.compute_br(data, data, 112.0, len(dates) - 1, dates, ts, {})
+            br.compute_br(data, data, 112.0, len(dates) - 1, dates, ts, br.SeasonalitySlots({}))
         self.assertIn("setup_ok", seen)
         self.assertIs(seen["setup_ok"], True)
 
@@ -41,7 +41,7 @@ class TestReplayPassesSetup(unittest.TestCase):
         data = {"metaInfo": [{"symbol": "ABC"}], "checklist_stocks": {"ltTrend": "Strong"}}
         seen = {}
         with mock.patch.object(br, "_short_score_fn", side_effect=lambda f: seen.update(f) or 0.0),              mock.patch.object(br, "_rbr_score", return_value=(1.5, ["RBR"])) as rbr,              mock.patch.object(br, "_digit_sum_score", return_value=0.7) as ds:
-            br.compute_br(data, data, 112.0, len(dates) - 1, dates, ts, {})
+            br.compute_br(data, data, 112.0, len(dates) - 1, dates, ts, br.SeasonalitySlots({}))
         self.assertEqual(seen["vrecovery_score"], 1.5)
         self.assertEqual(seen["digit_sum"], 0.7)
         rbr.assert_called_once_with(ts, dates[-1])
