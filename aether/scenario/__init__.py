@@ -7,8 +7,9 @@ action ports, and composable scenario runners, mirroring the shipped
 
 **Additive during BUILD:** nothing here is wired into ``ai_portfolio_game`` yet —
 the root script is untouched until the REPLACE phase, so the full test suite
-cannot regress while the package is assembled. B1 lands the price ports/adapters;
-later steps add ``schema``, ``steps``, and ``runners``.
+cannot regress while the package is assembled: prices (B1), entity views (B2),
+helpers (B3), ``steps`` (B5/B6) and ``runners`` (B7) are all built and tested, but
+the game doesn't call them yet.
 
 Re-exports the price surface (B1), the entity views (B2) and the stateless helper
 surface (B3) so scenario code (and, from the REPLACE phase, the root script) can
@@ -59,6 +60,7 @@ from aether.scenario.steps import (
     rotate_positions,
     screen_buys,
 )
+from aether.scenario.runners import run_daily_management
 
 __all__ = [
     # prices (B1)
@@ -101,4 +103,6 @@ __all__ = [
     "deploy_capital",
     "open_research_workbook",
     "finalize_run",
+    # runners (B7)
+    "run_daily_management",
 ]
