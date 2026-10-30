@@ -54,6 +54,7 @@ from aether.scenario.steps import (
     execute_exits,
     execute_queued_orders,
     finalize_run,
+    open_research_workbook,
     price_and_settle,
     rotate_positions,
     screen_buys,
@@ -98,5 +99,6 @@ __all__ = [
     "screen_buys",
     "rotate_positions",
     "deploy_capital",
+    "open_research_workbook",
     "finalize_run",
 ]
