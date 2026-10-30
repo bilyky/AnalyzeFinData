@@ -31,6 +31,9 @@ Take the text provided inline or read the file:
 ```bash
 cat Data/emails/<filename>.txt
 ```
+A web-mail link (e.g. a Gmail URL) needs the user's browser session, so it can't be opened here. Ask
+for the pasted text, a saved `.eml`/`.txt`, or the subject and sender. With the subject, fetch only
+that message through the project's configured mailbox access, if it is reachable from this host.
 
 ### 2. Run the extractor
 ```python
