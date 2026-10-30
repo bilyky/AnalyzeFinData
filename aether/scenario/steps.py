@@ -1080,3 +1080,46 @@ def finalize_run(state, wb, new_transactions):
         game._log.info(f"🤖 AI Portfolio Value: ${state['equity']} (Cash: ${round(state['balance'], 2)})")
     else:
         game._log.info("🤖 AI Management aborted before state initialization. Game state preserved.")
+
+
+def open_research_workbook(today):
+    """Open the workbook's Research sheet, or stop the run if it can't be trusted (B6).
+
+    Extracted verbatim from the block of ``run_daily_ai_management`` between the
+    profile/rules choice and :func:`assemble_symbol_universe`. Unchanged from the
+    root:
+
+    * no workbook file: logged, and the run is deferred;
+    * a stale workbook (``workbook_staleness`` says why, #176): logged as an
+      error, an alert email names the reason and how to rerun, and the run is
+      refused. A failed email is logged; it does not raise;
+    * otherwise the workbook is opened read-only with cached values and its
+      ``Research`` sheet is returned.
+
+    Returns ``(wb, ws)``, or ``None`` where the root returns, so the caller
+    stops the run. ``XLSX_FILE``, ``workbook_staleness``, ``notify``,
+    ``openpyxl`` and ``_log`` are resolved off the live root module at call
+    time via :func:`_pkg`, so ``mock.patch.object(game, ...)`` still intercepts.
+    """
+    game = _pkg()
+
+    if not game.XLSX_FILE.exists():
+        game._log.info("Workbook not found. AI Management deferred.")
+        return
+
+    # Live-data-only mandate: never trade on a workbook neither refresh updated.
+    stale = game.workbook_staleness(game.XLSX_FILE)
+    if stale:
+        game._log.error(f"🛑 Refusing to trade on a stale workbook: {stale}.")
+        try:
+            game.notify.send_email(f"ALERT: AI trades skipped - stale workbook ({today})",
+                              f"The trade run did not act because the {stale}.\n\n"
+                              "Check the evening daily_task and morning pipeline logs, refresh the "
+                              "workbook (python main.py), then rerun: python ai_portfolio_game.py --run --force")
+        except Exception as e:
+            game._log.error(f"Could not send the stale-workbook alert: {e}")
+        return
+
+    wb = game.openpyxl.load_workbook(game.XLSX_FILE, read_only=True, data_only=True)
+    ws = wb["Research"]
+    return wb, ws

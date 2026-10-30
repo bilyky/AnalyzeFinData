@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import numpy as np
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "backtesting"))
 import ai_portfolio_game as game
@@ -371,6 +373,103 @@ class TestRunWiring(unittest.TestCase):
         self.assertTrue(rows <= set(out["split"]["test"]))
         self.assertEqual(out["split"]["train"]["spy_buy_hold"]["end"], "2026-02-09")
         self.assertEqual(out["split"]["test"]["spy_buy_hold"]["start"], "2026-02-10")
+
+
+class TestHurst(unittest.TestCase):
+    """R&D #54b: the rolling Hurst estimator, the entry filter and the pre-registered verdict."""
+
+    @staticmethod
+    def _median_h(x):
+        vals = [h for h in pb.rolling_hurst(x) if h is not None]
+        return sorted(vals)[len(vals) // 2]
+
+    def test_random_walk_is_about_one_half(self):
+        rng = np.random.default_rng(7)
+        self.assertAlmostEqual(self._median_h(rng.standard_normal(3000)), 0.5, delta=0.08)
+
+    def test_random_walk_null_distribution_on_one_window(self):
+        # The gate depends on this noise (#210 review): on a single 120-return window, a pure
+        # random walk reads H ~ 0.46 +/- 0.08, so a "skip H < 0.50" filter drops most
+        # memoryless stocks. Any future threshold should sit below the null's P5 (~0.33).
+        rng = np.random.default_rng(0)
+        h = np.array([pb.rolling_hurst(rng.standard_normal(pb.HURST_WINDOW))[-1] for _ in range(1000)])
+        self.assertAlmostEqual(float(h.mean()), 0.46, delta=0.02)
+        self.assertAlmostEqual(float(h.std()), 0.078, delta=0.015)
+        self.assertGreater(float((h < 0.50).mean()), 0.6)
+        self.assertAlmostEqual(float(np.percentile(h, 5)), 0.33, delta=0.03)
+
+    def test_mean_reverting_is_below_and_persistent_above(self):
+        rng = np.random.default_rng(7)
+        e = rng.standard_normal(3000)
+        reverting = e[1:] - 0.9 * e[:-1]                    # MA(1), negative autocorrelation
+        persistent = np.zeros(3000)
+        for t in range(1, 3000):
+            persistent[t] = 0.5 * persistent[t - 1] + e[t]  # AR(1), positive autocorrelation
+        self.assertLess(self._median_h(reverting), 0.35)
+        self.assertGreater(self._median_h(persistent), 0.6)
+
+    def test_no_value_before_the_window_and_no_look_ahead(self):
+        rng = np.random.default_rng(3)
+        x = rng.standard_normal(300)
+        h = pb.rolling_hurst(x)
+        self.assertIsNone(h[pb.HURST_WINDOW - 2])
+        self.assertIsNotNone(h[pb.HURST_WINDOW - 1])
+        y = x.copy()
+        y[200:] = 50.0 * rng.standard_normal(100)          # change only the future
+        self.assertEqual(pb.rolling_hurst(y)[199], h[199])
+        self.assertNotEqual(pb.rolling_hurst(y)[200], h[200])
+
+    def test_filter_skips_low_h_and_allows_unknown(self):
+        bars = {s: _bars([10] * 3) for s in ("A", "B", "C")} | {"SPY": _bars([100] * 3)}
+        bars["A"]["hurst"] = [0.40] * 3                     # below 0.5: skipped
+        bars["B"]["hurst"] = [0.60] * 3                     # above: bought
+        bars["C"]["hurst"] = [None] * 3                     # not enough history: allowed
+        panel = {s: {DAYS[0]: [6.0, 0.0]} for s in ("A", "B", "C")}
+        r = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, hurst_filter=("hurst", 0.5))
+        self.assertEqual(r["open_positions"], ["B", "C"])
+        self.assertEqual(pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0)["open_positions"], ["A", "B", "C"])
+
+    def test_bars_carry_both_hurst_series(self):
+        days = [f"2025-{m:02d}-{d:02d}" for m in range(1, 13) for d in range(1, 28)][:200]
+        rng = np.random.default_rng(1)
+        px = 100 * np.exp(np.cumsum(0.01 * rng.standard_normal(200)))
+        ts = {d: {"1. open": p, "2. high": p * 1.01, "3. low": p * 0.99, "4. close": p, "5. volume": 1}
+              for d, p in zip(days, px, strict=True)}
+        b = pb.bars_from_series(ts)
+        self.assertEqual(len(b["hurst"]), 200)
+        self.assertIsNone(b["hurst"][pb.HURST_WINDOW - 1])  # needs WINDOW returns = WINDOW + 1 bars
+        self.assertIsNotNone(b["hurst"][pb.HURST_WINDOW])
+        self.assertIsNotNone(b["hurst_abs"][-1])
+
+    def test_run_variants_adds_the_five_hurst_variants(self):
+        bars = {"A": _bars([10] * 3), "SPY": _bars([100] * 3)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        out = pb.run_variants(panel, bars, DAYS[:3], 0.0, frozenset(), ["A"], False, hurst=True)
+        self.assertTrue(set(pb.HURST_VARIANTS) <= set(out))
+        base = pb.run_variants(panel, bars, DAYS[:3], 0.0, frozenset(), ["A"], False)
+        self.assertFalse(set(pb.HURST_VARIANTS) & set(base))
+
+    def _tables(self, train_sharpes, test_picked, base=(1.0, -10.0)):
+        train = {k: {"sharpe": s} for k, s in zip(pb.HURST_VARIANTS, train_sharpes, strict=True)}
+        test = {k: {"sharpe": 0.0, "max_drawdown_pct": -50.0} for k in pb.HURST_VARIANTS}
+        best = max(train, key=lambda k: train[k]["sharpe"])
+        test[best] = {"sharpe": test_picked[0], "max_drawdown_pct": test_picked[1]}
+        test["aether_rules"] = {"sharpe": base[0], "max_drawdown_pct": base[1]}
+        return train, test
+
+    def test_verdict_picks_on_train_and_needs_both_conditions(self):
+        train, test = self._tables([0.1, 0.9, 0.2, 0.3, 0.4], (1.2, -8.0))
+        v = pb.hurst_verdict(train, test)
+        self.assertEqual(v["picked"], "aether_hurst_r50")
+        self.assertTrue(v["passed"])
+        self.assertFalse(pb.hurst_verdict(*self._tables([0.1, 0.9, 0.2, 0.3, 0.4], (0.9, -8.0)))["passed"])
+        self.assertFalse(pb.hurst_verdict(*self._tables([0.1, 0.9, 0.2, 0.3, 0.4], (1.2, -12.0)))["passed"])
+
+    def test_verdict_ignores_test_when_picking(self):
+        # The best TEST Sharpe belongs to a variant that was poor on train: it must not be picked.
+        train, test = self._tables([0.9, 0.1, 0.2, 0.3, 0.4], (0.5, -8.0))
+        test["aether_hurst_r50"] = {"sharpe": 3.0, "max_drawdown_pct": -1.0}
+        self.assertEqual(pb.hurst_verdict(train, test)["picked"], "aether_hurst_r45")
 
 
 class TestStopTail(unittest.TestCase):
