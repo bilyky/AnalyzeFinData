@@ -70,6 +70,16 @@ The active experimental backlog, scoring studies, and structural risk-mitigation
     *   *Path spread:* `aether_rules` test Sharpe ranges from 0.37 to 1.23 (10th&ndash;90th percentile) across draws. One run can land anywhere in that band.
     **How to read the percentages (#222 review):** the draws are not independent samples. Every draw keeps 80% of the same universe, so any two share most symbols, and all replay the same price history. A win rate is the share of these overlapping re-cuts that favour the variant (a sensitivity measure). It is **not** the probability that the variant is better, and the 80% bar is not a significance level. On the test half only the universe varies (every draw starts it at the split date), so the test spread above comes only from which symbols a draw keeps.
     Results: `Data/portfolio_backtest_robust_2026-10-30.json`. **Use:** cite this table, not a single run. Future rule studies should report the win rate over these draws.
+63. **Let Winners Run &mdash; exit-side study (R&D #63):** The equal-weight hold of our own universe beat SPY (24.7% vs 19.9% CAGR, 2023&ndash;2026, 10-29 run), but `aether_rules` made 8.7%. A probe of its trades (on the replay before the #218 leak fix) found a median hold of 14 trading days; only 34% of trades beat SPY over the same days; and 61% of stopped-out stocks were higher 20 days later. The entry side (gates, ranking, Setup) is covered by R&D #55&ndash;#61; this item tests the **exit** side only. **Pre-registered 2026-10-30, before any exit code or results:**
+    *   *Variants,* each `aether_rules` with one exit change; entries, sizing, the 1% loss cap and regime unchanged:
+        1. `exit_trail`: the stop also trails up to the highest close since entry minus the entry ATR multiple &times; current ATR (a chandelier stop), and never moves down.
+        2. `exit_hold_profit`: the soft exit (S10+L60 &lt; 0) fires only while the position is at a loss; a position in profit is held until its stop.
+        3. `exit_wide_stop`: the initial ATR stop is 1.5&times; as far away. The 1% cap then sizes the position smaller.
+        4. `exit_min_hold`: no soft exit in the first 10 trading days (the stop still works).
+        5. `exit_trail_hold`: 1 + 2 together.
+    *   *Judged with R&D #62's machinery:* the same 50 draws (seed 62, 80% of symbols, start offset 0&ndash;60 days, split 2025-01-01). A variant **passes** only if its Sharpe beats `aether_rules` in &ge; 80% of draws on **both** halves **and** its median test max drawdown is no more than 3 points deeper. Otherwise it's inconclusive or worse, and nothing is wired.
+    *   *Also reported:* the R&D #54a stop-out tail for each variant (the wide stop and the trail change the loss per stop-out), median hold length, and the share of trades beating SPY over their holding days.
+    *   *Run only on the replay with the #218 seasonality-leak fix.*
 
 ## 🛡️ Stability & Hardening Backlog (Anti-Fragility Sprints):
 
