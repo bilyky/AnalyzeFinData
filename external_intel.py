@@ -32,7 +32,7 @@ def get_ai_reasoning(symbol, industry, pgr, s10, l60):
     Sentence 2: (Strategic Catalyst) Identify the 'Strategic Requirement' or 'AI Force Multiplier' if it exists, or the primary momentum driver.
     Keep the output extremely tight, professional, and under 50 words. Do not use prefixes like 'Devil's Advocate:'.
     """
-    content = ai_client.evaluate(system, user, max_tokens=100, temperature=0.3)
+    content = ai_client.evaluate(system, user, max_tokens=100, temperature=0.3, tier="cheap")
     if not content:
         return f"<b>Standard Audit:</b> Technicals and Fundamentals aligned ({pgr})."
     sentences = content.split(". ")
@@ -108,7 +108,7 @@ def analyze_email_content(subject, body):
         {{"symbol": "AAPL", "sentiment": "BUY", "thesis": "Strong iPhone sales in China driving immediate momentum."}}
     ]
     """
-    content = ai_client.evaluate(system, user, max_tokens=300, temperature=0.1)
+    content = ai_client.evaluate(system, user, max_tokens=300, temperature=0.1, tier="cheap")
     if not content:
         return []
     try:

@@ -96,7 +96,7 @@ def evaluate_exit(ctx: dict, provider: str | None = None) -> dict:
         # AGREE and FLAG-FOR-REVIEW on repeat calls; at 0 it did not).
         text, name = ai_client.evaluate_with_provider(rubric, build_user_prompt(ctx),
                                                       provider=provider, max_tokens=120,
-                                                      temperature=EXIT_TEMPERATURE)
+                                                      temperature=EXIT_TEMPERATURE, tier="cheap")
         parsed = _parse(text)
         if parsed:
             parsed["provider"] = name
