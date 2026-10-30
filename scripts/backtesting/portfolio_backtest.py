@@ -303,7 +303,7 @@ def _bar(bars, sym, day):
 
 def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
              initial=INITIAL_EQUITY, excluded=frozenset(), max_trade_risk_pct=None,
-             disable=frozenset(), hurst_filter=None, exit_rules=None) -> dict:
+             disable=frozenset(), hurst_filter=None, admit=None, exit_rules=None) -> dict:
     """Replay `panel` ({sym: {date: [s10, l60]}}) over `calendar` (sorted trading days).
 
     max_trade_risk_pct: when set (and risk_rules is on), each buy is trimmed so
@@ -312,6 +312,8 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
     exit (intraday ATR stop and exit_decision's close floor, including its 8% fallback)
     but the loss cap still sizes against the stop; "regime" runs BALANCED always.
     hurst_filter: (bar key, min H) skips new entries whose H on the signal day is below min.
+    admit: optional callable(sym, day) -> bool, an extra entry gate (the live Setup / Short10
+    floor / R/R gates are not in this simulator; entry_gates_portfolio.py passes them here).
     exit_rules (risk_rules only, R&D #63): {"trail": True} ratchets the stop up to the highest
     close since entry minus the entry ATR multiple x today's ATR (never down); {"hold_profit":
     True} lets the soft exit fire only at a loss; {"stop_scale": x} puts the initial stop x times
@@ -444,7 +446,8 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
         cands = sorted(((sc[0] + sc[1], sym) for sym, by_day in panel.items()
                         if (sc := by_day.get(day)) and sym not in pos and sym not in excluded
                         and sc[0] + sc[1] >= rules["min_score_threshold"]
-                        and _hurst_ok(bars, sym, day, hurst_filter)), reverse=True)
+                        and _hurst_ok(bars, sym, day, hurst_filter)
+                        and (admit is None or admit(sym, day))), reverse=True)
         for _score, sym in cands:
             if remaining >= max_pos:
                 break
