@@ -323,40 +323,43 @@ class TestGapAndSma(unittest.TestCase):
                 self.assertEqual(h.sma.called, soft)
 
 
+_WIN = {"AAA": 110.0}   # cost 100 + 2 ATR (atr=5.0): safely in profit, so the AI override applies
+
+
 class TestAiOverride(unittest.TestCase):
     def _entry(self, h):
         return h.log_decisions.call_args.args[0][0]
 
     def test_realtime_hold_downgrades_to_hold(self):
         state = _state()
-        with _Harness(action="SELL", verdicts={"ai": {"verdict": "hold", "note": "n"}}) as h:
-            out, _ = _run(state)
+        with _Harness(atr=5.0, action="SELL", verdicts={"ai": {"verdict": "hold", "note": "n"}}) as h:
+            out, _ = _run(state, prices=_WIN)
         self.assertEqual(out, {})
         self.assertEqual(self._entry(h)["rules_action"], "HOLD")
         self.assertIn("Real-time AI Shadow Heuristic (ai) returned HOLD: n", self._entry(h)["rules_reason"])
 
     def test_realtime_flag_downgrades_to_watch(self):
-        with _Harness(action="SELL", verdicts={"ai": "FLAG-FOR-REVIEW"}) as h:
-            out, _ = _run(_state())
+        with _Harness(atr=5.0, action="SELL", verdicts={"ai": "FLAG-FOR-REVIEW"}) as h:
+            out, _ = _run(_state(), prices=_WIN)
         self.assertEqual((out, self._entry(h)["rules_action"]), ({}, "WATCH"))
 
     def test_stored_verdict_key_overrides(self):
         state = _state(shadow_verdict={"verdict": "HOLD", "note": "x"})
-        with _Harness(action="SELL") as h:
-            out, _ = _run(state)
+        with _Harness(atr=5.0, action="SELL") as h:
+            out, _ = _run(state, prices=_WIN)
         self.assertEqual(out, {})
         self.assertIn("Stored position shadow_verdict returned HOLD: x", self._entry(h)["rules_reason"])
 
     def test_stored_verdicts_dict_overrides(self):
         state = _state(verdicts={"p": "flag-for-review"})
-        with _Harness(action="SELL") as h:
-            out, _ = _run(state)
+        with _Harness(atr=5.0, action="SELL") as h:
+            out, _ = _run(state, prices=_WIN)
         self.assertEqual((out, self._entry(h)["rules_action"]), ({}, "WATCH"))
 
     def test_realtime_takes_precedence_over_stored(self):
         state = _state(shadow_verdict="HOLD")
-        with _Harness(action="SELL", verdicts={"ai": "FLAG-FOR-REVIEW"}) as h:
-            _run(state)
+        with _Harness(atr=5.0, action="SELL", verdicts={"ai": "FLAG-FOR-REVIEW"}) as h:
+            _run(state, prices=_WIN)
         self.assertEqual(self._entry(h)["rules_action"], "WATCH")
 
     def test_stop_breach_is_never_overridden(self):
@@ -364,17 +367,30 @@ class TestAiOverride(unittest.TestCase):
         verdict path says HOLD / FLAG-FOR-REVIEW (PROD 2026-10-09: the free model's verdict
         reached this gate; a stop exit must not depend on it)."""
         reason = "stop breached (price 85.0 <= stop 90.0)"
-        state = _state(shadow_verdict="HOLD", verdicts={"p": "FLAG-FOR-REVIEW"})
-        with _Harness(action="SELL", reason=reason, verdicts={"ai": {"verdict": "HOLD", "note": "winner"}}) as h:
+        # A winner (cost 60, price 85, ATR 5: +5 ATR): winners-only alone would let the AI hold it,
+        # so only the stop check makes this sell.
+        state = _state(cost=60.0, shadow_verdict="HOLD", verdicts={"p": "FLAG-FOR-REVIEW"})
+        with _Harness(atr=5.0, action="SELL", reason=reason, verdicts={"ai": {"verdict": "HOLD", "note": "winner"}}) as h:
             out, _ = _run(state, prices={"AAA": 85.0})
         self.assertEqual(out, {"AAA": reason})
         self.assertEqual(self._entry(h)["rules_action"], "SELL")
         self.assertIn("stop exits are never overridden", h.logged())
 
     def test_non_override_verdict_still_sells(self):
-        with _Harness(action="SELL", verdicts={"ai": "SELL"}):
-            out, _ = _run(_state())
+        with _Harness(atr=5.0, action="SELL", verdicts={"ai": "SELL"}):
+            out, _ = _run(_state(), prices=_WIN)
         self.assertEqual(out, {"AAA": "r"})
+
+    def test_loser_or_marginal_gain_sells_despite_ai_hold(self):
+        """The override only lets winners run: below cost, or not more than 1 ATR above it, the
+        momentum SELL executes and the log says why the verdict was not applied."""
+        for price, gain in ((95.0, "-1.00 ATR"), (104.0, "+0.80 ATR")):
+            with self.subTest(price=price):
+                with _Harness(atr=5.0, action="SELL", verdicts={"ai": "HOLD"}) as h:
+                    out, _ = _run(_state(), prices={"AAA": price})
+                self.assertEqual(out, {"AAA": "r"})
+                self.assertEqual(self._entry(h)["rules_action"], "SELL")
+                self.assertIn(f"not safely in profit ({gain} vs cost", h.logged())
 
 
 if __name__ == "__main__":

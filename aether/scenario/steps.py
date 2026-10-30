@@ -416,11 +416,14 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
       the stop (passes ``stop_loss=None``) so an opening whipsaw can't trip it.
     * **Exit decision** — ``decision_eval.build_entry`` is the single source of the
       action (``_sma50`` is read only when ``sell_rules.soft_exit`` fires).
-    * **AI second-opinion override** (R&D #14) — a ``SELL`` is downgraded to
-      ``HOLD`` / ``WATCH`` when a real-time shadow verdict, a stored position
-      verdict key (``shadow_verdict`` / ``ai_verdict`` / ``verdict``), or the
-      stored ``verdicts`` dict says ``HOLD`` / ``FLAG-FOR-REVIEW``, checked in that
-      order.
+    * **AI second-opinion override** (R&D #14, ``sell_rules.ai_exit_override``) — a
+      momentum ``SELL`` of a position safely in profit (more than
+      ``FLOWER_PROFIT_ATR`` x ATR above cost) is downgraded to ``HOLD`` / ``WATCH``
+      when a real-time shadow verdict, a stored position verdict key
+      (``shadow_verdict`` / ``ai_verdict`` / ``verdict``), or the stored
+      ``verdicts`` dict says ``HOLD`` / ``FLAG-FOR-REVIEW``, checked in that order.
+      A stop exit, a loser or a marginal gain always sells; an ignored verdict is
+      logged with the reason.
     * **Routing** — a surviving ``SELL`` is queued in ``state["queued_orders"]``
       (deduped) when outside market hours, else collected for liquidation; a
       ``REVIEW`` is logged as winner-protected. All entries are then written via
@@ -471,8 +474,8 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             is_scarcity = pos.get("is_scarcity", False)
             multiplier = 1.5 if is_scarcity else rules.get("atr_multiplier", 2.5)
 
-            # 2. Peter Lynch Flower Protection: Only ratchet stop upward once safely in profit by > 1.0x ATR
-            if (price - pos.get("cost", 0.0)) > (1.0 * atr):
+            # 2. Peter Lynch Flower Protection: Only ratchet stop upward once safely in profit (> FLOWER_PROFIT_ATR x ATR)
+            if game.sell_rules.safely_in_profit(price, pos.get("cost", 0.0), atr):
                 recalculated_stop = round(highest_close - (multiplier * atr), 2)
                 old_stop = pos.get("stop_loss", 0.0)
                 if recalculated_stop > old_stop:
@@ -551,19 +554,20 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             date=today, run_shadow=None)
 
         # AI Second-Opinion Exit Override Gate (R&D Item 14), one rule in sell_rules.ai_exit_override:
-        # an AI HOLD / FLAG-FOR-REVIEW downgrades a momentum SELL; a stop breach always executes.
+        # an AI HOLD / FLAG-FOR-REVIEW downgrades a momentum SELL of a position safely in profit;
+        # a stop breach, a loser or a marginal gain always sells.
         old_action = entry["rules_action"]
-        entry["rules_action"], override_reason = game.sell_rules.ai_exit_override(
-            old_action, entry["rules_reason"], live_verdicts=entry.get("verdicts"), holding=pos)
+        entry["rules_action"], override_reason, ignored_reason = game.sell_rules.ai_exit_override(
+            old_action, entry["rules_reason"], price=price, cost=pos.get("cost"), atr=atr,
+            live_verdicts=entry.get("verdicts"), holding=pos)
         if override_reason:
             entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
             game._log.info(
                 f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
                 f"Decision downgraded from {old_action} to {entry['rules_action']}. Reason: {override_reason}"
             )
-        elif (old_action == "SELL" and game.sell_rules.is_stop_exit(entry["rules_reason"])
-                and game.sell_rules.override_verdict(entry.get("verdicts"), pos)[0]):
-            game._log.info(f"🛑 [AI Override] {sym}: AI verdict ignored, stop exits are never overridden ({entry['rules_reason']}).")
+        elif ignored_reason:
+            game._log.info(f"🛑 [AI Override] {sym}: AI verdict not applied ({ignored_reason}).")
 
         decision_entries.append(entry)
         if entry["rules_action"] == "SELL":
@@ -1041,3 +1045,81 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
             if game.is_market_hours():
                 game._log.info("🚀 [Options Pass] Checking active holdings to write weekly Covered Calls...")
                 game.options.execute_weekly_covered_call_pass(state, today, prices, ws)
+
+
+def finalize_run(state, wb, new_transactions):
+    """Close the workbook and save the run's state (B6).
+
+    Extracted verbatim from the ``finally:`` block of
+    ``run_daily_ai_management``, so it runs whether the trading stages finished,
+    returned early or raised. Unchanged from the root:
+
+    * the workbook is closed when there is one; a failed close is ignored;
+    * if ``state`` was loaded, ``save_game`` writes it, ``update_excel_log``
+      records ``new_transactions``, and the portfolio value is logged;
+    * if the run stopped before ``state`` was loaded, nothing is saved and that
+      is logged.
+
+    ``wb`` is ``None`` when the run never opened the workbook. The root's
+    ``"wb" in locals()`` test is kept as-is for parity; here ``wb`` is always a
+    local, so only ``and wb`` decides. Returns nothing. ``save_game``,
+    ``update_excel_log`` and ``_log`` are resolved off the live root module at
+    call time via :func:`_pkg`, so ``mock.patch.object(game, ...)`` still
+    intercepts.
+    """
+    game = _pkg()
+
+    if "wb" in locals() and wb:
+        try:
+            wb.close()
+        except Exception:
+            pass
+    if state is not None:
+        game.save_game(state)
+        game.update_excel_log(state, new_transactions)
+        game._log.info(f"🤖 AI Portfolio Value: ${state['equity']} (Cash: ${round(state['balance'], 2)})")
+    else:
+        game._log.info("🤖 AI Management aborted before state initialization. Game state preserved.")
+
+
+def open_research_workbook(today):
+    """Open the workbook's Research sheet, or stop the run if it can't be trusted (B6).
+
+    Extracted verbatim from the block of ``run_daily_ai_management`` between the
+    profile/rules choice and :func:`assemble_symbol_universe`. Unchanged from the
+    root:
+
+    * no workbook file: logged, and the run is deferred;
+    * a stale workbook (``workbook_staleness`` says why, #176): logged as an
+      error, an alert email names the reason and how to rerun, and the run is
+      refused. A failed email is logged; it does not raise;
+    * otherwise the workbook is opened read-only with cached values and its
+      ``Research`` sheet is returned.
+
+    Returns ``(wb, ws)``, or ``None`` where the root returns, so the caller
+    stops the run. ``XLSX_FILE``, ``workbook_staleness``, ``notify``,
+    ``openpyxl`` and ``_log`` are resolved off the live root module at call
+    time via :func:`_pkg`, so ``mock.patch.object(game, ...)`` still intercepts.
+    """
+    game = _pkg()
+
+    if not game.XLSX_FILE.exists():
+        game._log.info("Workbook not found. AI Management deferred.")
+        return
+
+    # Live-data-only mandate: never trade on a workbook neither refresh updated.
+    stale = game.workbook_staleness(game.XLSX_FILE)
+    if stale:
+        game._log.error(f"🛑 Refusing to trade on a stale workbook: {stale}.")
+        try:
+            game.notify.send_email(f"ALERT: AI trades skipped - stale workbook ({today})",
+                              f"The trade run did not act because the {stale}.\n\n"
+                              "Check the evening daily_task and morning pipeline logs, refresh the "
+                              "workbook (python main.py), then rerun: python ai_portfolio_game.py --run --force")
+        except Exception as e:
+            game._log.error(f"Could not send the stale-workbook alert: {e}")
+        return
+
+    wb = game.openpyxl.load_workbook(game.XLSX_FILE, read_only=True, data_only=True)
+    ws = wb["Research"]
+    return wb, ws
