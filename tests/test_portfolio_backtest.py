@@ -179,7 +179,8 @@ class TestSimulate(unittest.TestCase):
         bars = {"A": _bars([10] * 3), "B": _bars([10] * 3), "SPY": _bars([100] * 3)}
         panel = {"A": {DAYS[0]: [6.0, 0.0]}, "B": {DAYS[0]: [5.5, 0.0]}}
         one_slot = {k: dict(v, max_positions=1) for k, v in pb.PROFILE_RULES.items()}
-        with mock.patch.object(pb, "PROFILE_RULES", one_slot),              mock.patch.object(pb, "expanded_max_positions", side_effect=lambda c, n, base: base):
+        with mock.patch.object(pb, "PROFILE_RULES", one_slot), \
+             mock.patch.object(pb, "expanded_max_positions", side_effect=lambda c, n, base: base):
             default = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0)
             flipped = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0,
                                   rank=lambda sym, day, sc: -sc[0])

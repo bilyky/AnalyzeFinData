@@ -35,6 +35,20 @@ class TestPickAndVerdict(unittest.TestCase):
         self.assertEqual(rs.verdict("s10", {"mean_daily_pct": 0.03, "t_hac": 1.2}, -10, -10), "INCONCLUSIVE")
         self.assertEqual(rs.verdict("s10", {"mean_daily_pct": None, "t_hac": None}, -10, -10), "INCONCLUSIVE")
 
+class TestDecide(unittest.TestCase):
+    def test_pick_is_compared_with_combined_on_test(self):
+        out = {"train": {"combined": {"sharpe": 0.5}, "s10": {"sharpe": 0.9}, "l60": {"sharpe": 0.1}},
+               "test": {"combined": {"max_drawdown_pct": -10.0}, "s10": {"max_drawdown_pct": -11.0},
+                        "l60": {"max_drawdown_pct": -30.0}}}
+        up = {f"d{k}": 0.01 for k in range(40)}
+        flat = {f"d{k}": 0.0 for k in range(40)}
+        lower = {f"d{k}": -0.01 for k in range(40)}
+        daily = {("test", "combined"): flat, ("test", "s10"): up, ("test", "l60"): lower}
+        rs.decide(out, daily)
+        self.assertEqual(out["picked_on_train"], "s10")
+        self.assertAlmostEqual(out["picked_minus_combined_test"]["mean_daily_pct"], 1.0)   # (0.01 - 0) * 100
+        self.assertEqual(out["picked_minus_combined_test"]["days"], 40)
+
 
 if __name__ == "__main__":
     unittest.main()
