@@ -604,9 +604,9 @@ def _pct(vals, q):
     return round(float(np.percentile(vals, q)), 2) if vals else None
 
 
-def robustness_summary(per_draw: list) -> dict:
+def robustness_summary(per_draw: list, base: str = "aether_rules") -> dict:
     """per_draw: [{period: {variant: metrics}}]. Per period and variant: median and 10th-90th
-    percentile Sharpe / CAGR / max drawdown, and the win rate against aether_rules (share of
+    percentile Sharpe / CAGR / max drawdown, and the win rate against `base` (share of
     draws where its Sharpe is higher on the same path). Then the pre-registered verdicts."""
     periods = list(per_draw[0]) if per_draw else []
     out = {}
@@ -617,7 +617,7 @@ def robustness_summary(per_draw: list) -> dict:
             for key in ("sharpe", "cagr_pct", "max_drawdown_pct"):
                 vals = [d[period][v].get(key) for d in per_draw if d[period][v].get(key) is not None]
                 row[key] = {"median": _pct(vals, 50), "p10": _pct(vals, 10), "p90": _pct(vals, 90)}
-            pairs = [(d[period][v].get("sharpe"), d[period]["aether_rules"].get("sharpe")) for d in per_draw]
+            pairs = [(d[period][v].get("sharpe"), d[period][base].get("sharpe")) for d in per_draw]
             pairs = [(a, b) for a, b in pairs if a is not None and b is not None]
             row["win_rate"] = round(sum(a > b for a, b in pairs) / len(pairs), 3) if pairs else None
             row["n"] = len(pairs)
@@ -626,7 +626,7 @@ def robustness_summary(per_draw: list) -> dict:
     halves = [p for p in ("train", "test") if p in out]
     if len(halves) == 2:
         for v in out["test"]:
-            if v == "aether_rules":
+            if v == base:
                 continue
             w = [out[h][v]["win_rate"] for h in halves]
             if None in w:
