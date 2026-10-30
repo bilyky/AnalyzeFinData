@@ -387,6 +387,16 @@ class TestRunWiring(unittest.TestCase):
         self.assertIn("aether_rules", out["stop_tail"])
         self.assertIn("n_stop_exits", out["stop_tail"]["aether_rules"])
 
+    def test_robust_run_end_to_end(self):
+        out = self._run(split="2026-02-10", robust=3)["robustness"]
+        self.assertEqual(out["n_draws"], 3)
+        self.assertEqual(set(out["periods"]), {"full", "train", "test"})
+        self.assertIn("no_regime", out["verdicts"])
+
+    def test_robust_needs_split(self):
+        with self.assertRaises(SystemExit):
+            self._run(robust=2)
+
     def test_split_runs_attribution_on_both_halves(self):
         # --split implies --attribution, and train and test both carry every no_* row.
         out = self._run(split="2026-02-10")
@@ -493,6 +503,82 @@ class TestHurst(unittest.TestCase):
         train, test = self._tables([0.9, 0.1, 0.2, 0.3, 0.4], (0.5, -8.0))
         test["aether_hurst_r50"] = {"sharpe": 3.0, "max_drawdown_pct": -1.0}
         self.assertEqual(pb.hurst_verdict(train, test)["picked"], "aether_hurst_r45")
+
+
+class TestRobustness(unittest.TestCase):
+    """R&D #62: perturbed paths, the summary and the pre-registered verdicts."""
+
+    SYMS = ["SPY"] + [f"S{k:02d}" for k in range(20)]
+    CAL = [f"2024-01-{d:02d}" for d in range(1, 29)] + [f"2025-02-{d:02d}" for d in range(1, 29)]
+
+    def test_paths_are_reproducible_and_keep_spy(self):
+        a = pb.draw_paths(self.SYMS, self.CAL, 10, seed=62)
+        self.assertEqual(a, pb.draw_paths(self.SYMS, self.CAL, 10, seed=62))
+        self.assertNotEqual(a, pb.draw_paths(self.SYMS, self.CAL, 10, seed=63))
+        for path in a:
+            self.assertIn("SPY", path["symbols"])
+            self.assertEqual(len(path["symbols"]), 1 + 16)          # 80% of 20 others, plus SPY
+            self.assertLessEqual(self.CAL.index(path["start"]), pb.ROBUST_MAX_OFFSET)
+        self.assertGreater(len({p["symbols"] for p in a}), 1)
+
+    def test_path_universe_cuts_panel_and_eligible(self):
+        panel = {"SPY": {}, "A": {}, "B": {}, "C": {}}
+        sub, elig = pb.path_universe(panel, ["A", "B", "C"], frozenset({"SPY", "B", "Z"}))
+        self.assertEqual(set(sub), {"SPY", "B"})
+        self.assertEqual(elig, ["B"])
+
+    def test_offset_cap_keeps_two_days_before_the_split(self):
+        cal = [f"2025-01-{d:02d}" for d in range(1, 11)] + [f"2025-03-{d:02d}" for d in range(1, 11)]
+        for path in pb.draw_paths(self.SYMS, cal, 30, split="2025-03-01"):
+            self.assertGreaterEqual(sum(path["start"] <= d < "2025-03-01" for d in cal), 2)
+        # A long first half leaves the pre-registered 0..60 range untouched.
+        long_cal = [f"d{i:04d}" for i in range(600)]
+        offs = {long_cal.index(p["start"]) for p in pb.draw_paths(self.SYMS, long_cal, 200, split="d0500")}
+        self.assertEqual((min(offs), max(offs)), (0, pb.ROBUST_MAX_OFFSET))
+
+    @staticmethod
+    def _draw(base, other, spy):
+        tbl = lambda b, o, s: {"aether_rules": {"sharpe": b, "cagr_pct": 1.0, "max_drawdown_pct": -5.0},
+                               "no_regime": {"sharpe": o, "cagr_pct": 2.0, "max_drawdown_pct": -6.0},
+                               "spy_buy_hold": {"sharpe": s, "cagr_pct": 3.0, "max_drawdown_pct": -7.0}}
+        return {"full": tbl(base, other, spy), "train": tbl(base, other, spy), "test": tbl(base, other, spy)}
+
+    def test_summary_win_rate_and_verdicts(self):
+        # no_regime beats aether_rules in 9 of 10 draws; SPY in 1 of 10.
+        draws = [self._draw(1.0, 1.5 if i < 9 else 0.5, 0.5 if i < 9 else 2.0) for i in range(10)]
+        s = pb.robustness_summary(draws)
+        self.assertEqual(s["periods"]["test"]["no_regime"]["win_rate"], 0.9)
+        self.assertEqual(s["periods"]["test"]["spy_buy_hold"]["win_rate"], 0.1)
+        self.assertEqual(s["periods"]["test"]["no_regime"]["sharpe"]["median"], 1.5)
+        self.assertEqual(s["verdicts"], {"no_regime": "robustly better", "spy_buy_hold": "robustly worse"})
+
+    def test_verdict_needs_both_halves(self):
+        draws = [self._draw(1.0, 1.5, 0.5) for _ in range(10)]
+        for d in draws:
+            d["train"]["no_regime"]["sharpe"] = 0.5                 # loses on train, wins on test
+        self.assertEqual(pb.robustness_summary(draws)["verdicts"]["no_regime"], "inconclusive")
+
+    def test_win_rate_boundaries(self):
+        at80 = [self._draw(1.0, 1.5 if i < 8 else 0.5, 1.0) for i in range(10)]
+        self.assertEqual(pb.robustness_summary(at80)["verdicts"]["no_regime"], "robustly better")
+        at70 = [self._draw(1.0, 1.5 if i < 7 else 0.5, 1.0) for i in range(10)]
+        self.assertEqual(pb.robustness_summary(at70)["verdicts"]["no_regime"], "inconclusive")
+        ties = [self._draw(1.0, 1.0, 1.0) for _ in range(10)]   # a tie is not a win
+        self.assertEqual(pb.robustness_summary(ties)["periods"]["test"]["no_regime"]["win_rate"], 0.0)
+
+    def test_run_robustness_periods_use_the_split_and_the_start(self):
+        seen = []
+
+        def run_table(syms, days):
+            seen.append((syms, days[0], days[-1]))
+            return {"aether_rules": {"sharpe": 1.0}, "no_regime": {"sharpe": 2.0}}
+
+        paths = [{"symbols": frozenset({"SPY", "A"}), "start": "2024-01-05"}]
+        out = pb.run_robustness(paths, self.CAL, "2025-02-01", run_table)
+        self.assertEqual([s[1:] for s in seen], [("2024-01-05", "2025-02-28"), ("2024-01-05", "2024-01-28"),
+                                                ("2025-02-01", "2025-02-28")])
+        self.assertEqual(out["n_draws"], 1)
+        self.assertEqual(out["per_draw_sharpe"][0]["test"]["no_regime"], 2.0)
 
 
 class TestStopTail(unittest.TestCase):
