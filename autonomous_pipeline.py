@@ -7,7 +7,6 @@ import datetime
 import subprocess
 import openpyxl
 import notify
-import watchdog
 from watchdog import is_market_hours
 import html
 from aether import trash
@@ -353,6 +352,39 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
     """
     return html_doc
 
+# Same cap as daily_task.MAIN_TIMEOUT_S (a test keeps them equal). main.py is slow, not hung: on
+# PROD 2026-10-13 it was at 478/549 symbols after 8m45s when the old 600 s cap killed it.
+MAIN_TIMEOUT_S = 1800
+
+
+def _refresh_workbook(no_email: bool) -> bool:
+    """Run main.py (Chaikin refresh + workbook rebuild). False = abort the pipeline: the workbook
+    is the day's source of truth, so a failed refresh must not be traded on (Zero-Trust)."""
+    log("Refreshing workbook (main.py)...")
+    try:
+        subprocess.run(
+            [sys.executable, str(BASE_DIR / "main.py")],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
+            timeout=MAIN_TIMEOUT_S,
+        )
+        log("Workbook regenerated.")
+        return True
+    except subprocess.TimeoutExpired:
+        error_msg = f"main.py was still running after {MAIN_TIMEOUT_S}s and was stopped."
+        log(f"ABORT: {error_msg}")
+        if not no_email:
+            notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline aborted: {error_msg}")
+        return False
+    except subprocess.CalledProcessError as e:
+        error_msg = f"main.py failed: {e.stderr}"
+        log(f"ABORT: {error_msg}")
+        if not no_email:
+            notify.send_email("ALERT: Daily Pipeline Failed",
+                              f"Pipeline aborted during main.py execution.\n\n{error_msg}")
+        return False
+
+
 def main():
     cleanup_orphaned_processes()
     
@@ -488,8 +520,9 @@ def main():
                 except Exception as e:
                     log(f"Warning: Failed to cache email ideas: {e}")
             else:
-                _pipeline_log.warning("External intel fetch returned 0 ideas — mailbox auth may have failed. Check aether.jsonl for details.")
-                log("Warning: 0 ideas from email scan — see log for details.")
+                reason = external_intel.zero_ideas_reason()
+                _pipeline_log.warning(f"External intel fetch returned 0 ideas: {reason}. Check aether.jsonl for details.")
+                log(f"Warning: 0 ideas from email scan ({reason}).")
         except Exception as e:
             _pipeline_log.error(f"Could not fetch external intel: {e}")
             log(f"ERROR: Could not fetch external intel: {e}")
@@ -515,30 +548,7 @@ def main():
                 log(f"Warning: run_history.py failed (will continue): {e.stderr}")
 
         # 2. Execute main.py (writes today's closes into OHLCV JSON via _append_ohlcv_entry)
-        log("Refreshing workbook (main.py)...")
-        try:
-            script_path = str(BASE_DIR / "main.py")
-            subprocess.run(
-                [sys.executable, script_path], 
-                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, 
-                encoding="utf-8", errors="replace",
-                timeout=600  # Fail fast after 10 minutes!
-            )
-            log("Workbook regenerated.")
-        except subprocess.TimeoutExpired:
-            # The workbook is the day's source of truth — do NOT silently continue on
-            # stale data (Zero-Trust). Alert and abort so nothing downstream trades on it.
-            error_msg = "main.py execution timed out after 600s (Playwright hang likely)."
-            log(f"ABORT: {error_msg}")
-            if not no_email:
-                notify.send_email("ALERT: Daily Pipeline Failed", f"Pipeline aborted: {error_msg}")
-            return
-        except subprocess.CalledProcessError as e:
-            error_msg = f"main.py failed: {e.stderr}"
-            log(f"ABORT: {error_msg}")
-            if not no_email:
-                notify.send_email("ALERT: Daily Pipeline Failed",
-                                  f"Pipeline aborted during main.py execution.\n\n{error_msg}")
+        if not _refresh_workbook(no_email):
             return
 
     if not report_only:
@@ -588,11 +598,7 @@ def main():
         log("Drafting HTML report (email disabled via --no-email)...")
 
     log("Pipeline completed successfully.")
-
-    try:
-        watchdog.sync_data_folder()
-    except Exception as e:
-        log(f"Post-pipeline sync failed: {e}")
+    # The Data backup runs once a day, from the nightly AETHER_Data_Backup task (scripts/utils/scheduled_tasks.json), not here.
 
 
 if __name__ == "__main__":

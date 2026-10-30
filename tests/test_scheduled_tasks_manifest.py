@@ -142,9 +142,12 @@ class TestBrokenManifestIsLoudNotFatal(unittest.TestCase):
     def test_trade_run_still_imports_with_a_broken_manifest(self):
         with tempfile.TemporaryDirectory() as d:
             bad = self._broken(d)
-            env = dict(os.environ, AETHER_TASK_MANIFEST=str(bad))
+            # The child logs emoji. Fix its output encoding and decode with the same one, so the
+            # parent's locale codec (cp1252 on Windows) can't fail and leave stderr as None.
+            env = dict(os.environ, AETHER_TASK_MANIFEST=str(bad), PYTHONIOENCODING="utf-8")
             res = subprocess.run([sys.executable, "-c", "import ai_portfolio_game; print('IMPORT_OK')"],
-                                 cwd=str(_REPO), env=env, capture_output=True, text=True, timeout=180,
+                                 cwd=str(_REPO), env=env, capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", timeout=180,
                                  stdin=subprocess.DEVNULL)
         self.assertIn("IMPORT_OK", res.stdout, res.stderr[-1500:])
 
@@ -169,6 +172,24 @@ class TestRegistrarDryRun(unittest.TestCase):
         if res.returncode != 0:
             raise AssertionError(res.stderr)
         cls.built = {d["name"]: d for d in (json.loads(l) for l in res.stdout.splitlines() if l.strip())}
+
+    @staticmethod
+    def _dry_run(*extra):
+        return subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                               str(_PS1), "-DryRun", *extra], capture_output=True, text=True,
+                              timeout=120, stdin=subprocess.DEVNULL)
+
+    def test_only_builds_just_the_named_task(self):
+        # PROD adds one new task without rebuilding the others (or changing their -Engine).
+        res = self._dry_run("-Only", "AETHER_OptionChainSnapshot")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        names = [json.loads(line)["name"] for line in res.stdout.splitlines() if line.strip()]
+        self.assertEqual(names, ["AETHER_OptionChainSnapshot"])
+
+    def test_only_with_an_unknown_name_fails(self):
+        res = self._dry_run("-Only", "AETHER_NoSuchTask")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("AETHER_NoSuchTask", res.stderr)
 
     def test_every_manifest_task_is_built_as_declared(self):
         tasks = {t["name"]: t for t in st.tasks()}

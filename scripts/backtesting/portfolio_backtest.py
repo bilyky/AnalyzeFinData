@@ -12,22 +12,47 @@ it with buy-and-hold:
                  max_allocation_pct / min_score_threshold / cash_buffer_pct /
                  atr_multiplier (get_strategy_rules) + slot expansion
                  (determine_max_positions); exits via sell_rules.exit_decision (hard ATR
-                 stop, S10+L60<0 soft exit, winner protection).
+                 stop, S10+L60<0 soft exit, winner protection); each buy trimmed so a
+                 stop-out loses at most CFG.system_max_trade_risk_pct of equity (the
+                 live per-trade loss cap in _execute_buys).
+  aether_no_cap  aether_rules without the per-trade loss cap: what the cap costs or buys.
   signal_only    the same entry ranking with a fixed BALANCED threshold, full equal-weight
                  deployment, no stop and no cash buffer; exits on the soft rule only.
                  aether_rules minus signal_only = what the risk overlay costs or buys.
   spy_buy_hold   SPY bought on the first day and held.
   ew_buy_hold    equal dollars in every eligible universe symbol on the first day, held.
 
+--attribution adds one variant per rule in RULES: aether_rules with only that rule
+switched off (simulate(disable={rule})), so each row shows what that one rule adds.
+
+Every run also reports the stop-out tail (R&D #54a): for each variant, how often a stop
+filled below the stop price (a gap through it) and the loss per stopped trade as % of
+equity, against the per-trade loss cap. Gate (set before the first run): the cap needs
+work if the 95th-percentile stop-out loss exceeds STOP_TAIL_P95_GATE (1.5%) of equity or
+the worst exceeds STOP_TAIL_WORST_GATE (3%).
+
+--hurst adds the R&D #54b variants (HURST_VARIANTS): aether_rules plus "skip a new entry
+when the symbol's rolling Hurst exponent is below X". With --split it also prints the
+pre-registered verdict: the variant with the best train Sharpe passes only if its test
+Sharpe beats aether_rules and its test max drawdown is no deeper.
+
+--split DATE (implies --attribution) is an out-of-sample check: every variant runs again
+from fresh cash on the days before DATE (train) and on DATE onward (test). The rule
+variant with the best train Sharpe is the one "picked"; its test result and rank among
+the rule variants show whether the pick holds up on days it never saw.
+
 Execution: scores dated day t (close data) trigger orders filled at day t+1's OPEN —
-no look-ahead. Hard stops fill intraday at min(open, stop). Prices are split-adjusted.
+no look-ahead in order timing (the score inputs come from backtest_ratings; see its notes). Hard stops fill intraday at min(open, stop). Prices are split-adjusted.
 Costs: --cost-bps per side (default 10).
 
 NOT simulated (live-only rules): strategic overrides, bottom-confirmed buys, the SPY-RSP
 breadth downgrade, scarcity-core sizing, scale-outs/covered calls, rotation. The score
-reconstruction also omits the live digit_sum, setup_ok and vrecovery_score fields.
+reconstruction leaves the live digit_sum at 0 (its index is in-sample; backtest_ratings).
 The universe is TODAY's symbol list, so results carry survivorship bias (optimistic).
 Synthetic placeholder bars (provisional / O=H=L=C on zero volume) never price a fill.
+Loss-cap differences from live: a buy with no prior ATR gets no stop here, so no cap
+(live falls back to an 8% stop and caps against it); a trimmed buy may land under
+MIN_TICKET_USD (live rejects it only below 1 share); quantities are fractional.
 
 The score panel (~6s/symbol) is cached in Data/portfolio_backtest_panel.json, keyed by a
 fingerprint of the scoring code + calibration studies; --rebuild forces a recompute.
@@ -36,7 +61,8 @@ Output: Data/portfolio_backtest.json (config, metrics, equity curves, trades).
 Usage:
     python scripts/backtesting/portfolio_backtest.py [--min-year 2023] [--workers 8]
                                                      [--cost-bps 10] [--max-symbols N]
-                                                     [--rebuild]
+                                                     [--rebuild] [--attribution]
+                                                     [--split 2025-01-01] [--hurst]
 """
 import argparse
 import datetime
@@ -56,7 +82,8 @@ import numpy as np
 
 import backtest_ratings as _br
 import instruments
-from aether.risk_utils import split_adjust_ohlcv
+from aether.config import CFG
+from aether.risk_utils import risk_capped_cash, split_adjust_ohlcv
 from patterns import _wilder_atr
 from sell_rules import exit_decision, soft_exit, winner_protected
 
@@ -79,6 +106,22 @@ REGIME_BAND = 2.0          # determine_profile: SPY L60 > +2 AGGRESSIVE, < -2 DE
 SLOT_EXPAND_CASH = 0.15    # determine_max_positions: add slots while cash ratio > 15%
 MIN_TICKET_USD = 100.0
 INITIAL_EQUITY = 100_000.0
+STOP_TAIL_P95_GATE = 1.5     # % of equity (R&D #54a, pre-registered)
+STOP_TAIL_WORST_GATE = 3.0
+# R&D #54b (pre-registered 2026-10-29): aggregated-variance Hurst over the trailing
+# HURST_WINDOW daily log returns; variant -> (bar key, skip entries below this H).
+HURST_WINDOW = 120
+HURST_LAGS = (1, 2, 4, 8, 16)
+HURST_VARIANTS = {
+    "aether_hurst_r45": ("hurst", 0.45),
+    "aether_hurst_r50": ("hurst", 0.50),
+    "aether_hurst_r55": ("hurst", 0.55),
+    "aether_hurst_v50": ("hurst_abs", 0.50),
+    "aether_hurst_v60": ("hurst_abs", 0.60),
+}
+# Rules simulate(disable=...) can switch off one at a time (--attribution).
+RULES = ("stop", "soft_exit", "winner_protection", "regime", "cash_buffer",
+         "slot_expansion", "loss_cap")
 
 
 def _out(line: str = "") -> None:
@@ -115,6 +158,40 @@ def is_synthetic(bar: dict) -> bool:
             and bar["1. open"] == bar["2. high"] == bar["3. low"] == bar["4. close"])
 
 
+def rolling_hurst(x, window=HURST_WINDOW, lags=HURST_LAGS) -> list:
+    """Aggregated-variance Hurst exponent: out[i] = 1/2 x slope of log Var(k-sums) vs log k,
+    using only x[i-window+1 .. i] (overlapping k-sums that lie wholly inside it). None until
+    `window` values exist, or when a variance is zero. 0.5 = random walk, > 0.5 persistent,
+    < 0.5 mean-reverting."""
+    x = np.asarray(x, dtype=float)
+    n = len(x)
+    out = [None] * n
+    if n < window:
+        return out
+    idx = np.arange(window - 1, n)
+    logv = []
+    for k in lags:
+        cs = np.concatenate([[0.0], np.cumsum(x)])
+        sk = np.zeros(n)
+        sk[k - 1:] = cs[k:] - cs[:-k]                  # sk[i] = x[i-k+1] + ... + x[i]
+        m = window - k + 1                             # k-sums ending in [i-m+1, i]
+        c1 = np.concatenate([[0.0], np.cumsum(sk)])
+        c2 = np.concatenate([[0.0], np.cumsum(sk * sk)])
+        s1 = c1[idx + 1] - c1[idx + 1 - m]
+        s2 = c2[idx + 1] - c2[idx + 1 - m]
+        logv.append((s2 - s1 * s1 / m) / (m - 1))
+    v = np.array(logv)
+    ok = np.all(v > 1e-18, axis=0)
+    lv = np.log(np.where(v > 1e-18, v, 1.0))
+    lk = np.log(np.asarray(lags, dtype=float))
+    lk = lk - lk.mean()
+    slope = (lk[:, None] * (lv - lv.mean(axis=0))).sum(axis=0) / (lk * lk).sum()
+    for j, i in enumerate(idx):
+        if ok[j]:
+            out[i] = float(slope[j] / 2)
+    return out
+
+
 def bars_from_series(ts: dict) -> dict | None:
     """Split-adjusted bars + ATR(14) + SMA50 from an Alpha-Vantage-style daily series
     (synthetic placeholder bars dropped)."""
@@ -128,8 +205,21 @@ def bars_from_series(ts: dict) -> dict | None:
     atr = _wilder_atr(np.column_stack([opens, highs, lows, closes]))
     cs = np.cumsum([0.0, *closes])
     sma50 = [float((cs[i + 1] - cs[i - 49]) / 50) if i >= 49 else None for i in range(len(closes))]
+    # Bar i's H uses the log returns up to its own close (known when day i's signal fires).
+    rets = np.diff(np.log(np.maximum(np.asarray(closes, dtype=float), 1e-9)))
     return {"idx": {d: i for i, d in enumerate(dates)}, "o": opens, "h": list(highs),
-            "l": list(lows), "c": list(closes), "atr": [float(a) for a in atr], "sma50": sma50}
+            "l": list(lows), "c": list(closes), "atr": [float(a) for a in atr], "sma50": sma50,
+            "hurst": [None, *rolling_hurst(rets)], "hurst_abs": [None, *rolling_hurst(np.abs(rets))]}
+
+
+def _hurst_ok(bars, sym, day, hurst_filter) -> bool:
+    """False only when the symbol's H on `day` is known and below the filter's minimum."""
+    if not hurst_filter:
+        return True
+    key, min_h = hurst_filter
+    b, i = _bar(bars, sym, day)
+    h = b.get(key, [None] * (i + 1))[i] if b else None
+    return h is None or h >= min_h
 
 
 def _symbol_scores(args):
@@ -183,14 +273,28 @@ def _bar(bars, sym, day):
 
 
 def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
-             initial=INITIAL_EQUITY, excluded=frozenset()) -> dict:
-    """Replay `panel` ({sym: {date: [s10, l60]}}) over `calendar` (sorted trading days)."""
+             initial=INITIAL_EQUITY, excluded=frozenset(), max_trade_risk_pct=None,
+             disable=frozenset(), hurst_filter=None) -> dict:
+    """Replay `panel` ({sym: {date: [s10, l60]}}) over `calendar` (sorted trading days).
+
+    max_trade_risk_pct: when set (and risk_rules is on), each buy is trimmed so
+    (open - stop) * qty <= last close's equity * pct, as the live _execute_buys does.
+    disable: rules from RULES to switch off (risk_rules only). "stop" removes every stop
+    exit (intraday ATR stop and exit_decision's close floor, including its 8% fallback)
+    but the loss cap still sizes against the stop; "regime" runs BALANCED always.
+    hurst_filter: (bar key, min H) skips new entries whose H on the signal day is below min."""
+    unknown = set(disable) - set(RULES)
+    if unknown:
+        raise ValueError(f"unknown rules: {sorted(unknown)}")
+    if "loss_cap" in disable:
+        max_trade_risk_pct = None
     c = cost_bps / 10_000.0
     cash = initial
     pos = {}                                  # sym -> {qty, entry, stop, entry_date, last}
     pending_buys, pending_sells = [], {}      # [(sym, usd, atr_mult)], {sym: reason}
     trades, curve = [], []
     traded_usd = 0.0
+    cap_trims = 0
     spy = panel.get("SPY", {})
 
     def close_position(sym, px, day, reason):
@@ -198,9 +302,13 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
         p = pos.pop(sym)
         cash += p["qty"] * px * (1 - c)
         traded_usd += p["qty"] * px
+        pnl = p["qty"] * (px * (1 - c) - p["entry"] * (1 + c))
         trades.append({"symbol": sym, "entry_date": p["entry_date"], "exit_date": day,
                        "entry": round(p["entry"], 4), "exit": round(px, 4), "reason": reason,
-                       "ret_pct": round((px * (1 - c) / (p["entry"] * (1 + c)) - 1) * 100, 3)})
+                       "ret_pct": round((px * (1 - c) / (p["entry"] * (1 + c)) - 1) * 100, 3),
+                       "stop": round(p["stop"], 4) if p["stop"] else None,
+                       # P&L as % of the equity the buy was sized on (the loss cap's basis).
+                       "pnl_pct_equity": round(pnl / p["equity_basis"] * 100, 4)})
 
     for t, day in enumerate(calendar):
         # 1. Orders queued at yesterday's close fill at today's open (sells first).
@@ -213,15 +321,21 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
             if b is None or b["o"][i] <= 0:
                 continue
             o = b["o"][i]
+            atr_prev = b["atr"][i - 1] if i > 0 else 0.0
+            stop = o - mult * atr_prev if (risk_rules and atr_prev > 0) else None
             usd = min(usd, cash)
+            if risk_rules and max_trade_risk_pct and stop is not None and curve:
+                cap = risk_capped_cash(o, stop, curve[-1][1] * max_trade_risk_pct)
+                if cap is not None and usd > cap:
+                    usd = cap
+                    cap_trims += 1
             qty = usd / (o * (1 + c))
             if qty <= 0:
                 continue
             cash -= usd
             traded_usd += qty * o
-            atr_prev = b["atr"][i - 1] if i > 0 else 0.0
-            stop = o - mult * atr_prev if (risk_rules and atr_prev > 0) else None
-            pos[sym] = {"qty": qty, "entry": o, "stop": stop, "entry_date": day, "last": o}
+            pos[sym] = {"qty": qty, "entry": o, "stop": stop, "entry_date": day, "last": o,
+                        "equity_basis": curve[-1][1] if curve else initial}
         pending_buys = []
 
         # 2. Intraday hard stop; 3. mark to the close.
@@ -230,7 +344,7 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
             if b is None:
                 continue
             p = pos[sym]
-            if risk_rules and p["stop"] and b["l"][i] <= p["stop"]:
+            if risk_rules and "stop" not in disable and p["stop"] and b["l"][i] <= p["stop"]:
                 close_position(sym, min(b["o"][i], p["stop"]), day, "stop")
                 continue
             p["last"] = b["c"][i]
@@ -248,27 +362,41 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
             s10, l60 = sc
             b, i = _bar(bars, sym, day)
             sma50 = b["sma50"][i] if b else None
-            if risk_rules:
-                action, _ = exit_decision(p["last"], p["entry"], p["stop"] or 0, s10, l60, sma50)
+            if not risk_rules:
+                if soft_exit(s10, l60) and not winner_protected(p["last"] > p["entry"], p["last"], sma50):
+                    pending_sells[sym] = "momentum decay"
+                continue
+            # exit_decision split in two so each rule can be switched off on its own. The
+            # floor goes through exit_decision (scores None = no soft signal) to keep its
+            # 8%-of-cost fallback for a missing stop; passing stop 0 would not remove it.
+            if "stop" not in disable:
+                action, _ = exit_decision(p["last"], p["entry"], p["stop"] or 0, None, None, sma50)
                 if action == "SELL":
                     pending_sells[sym] = "momentum decay"
-            elif soft_exit(s10, l60) and not winner_protected(p["last"] > p["entry"], p["last"], sma50):
+                    continue
+            if "soft_exit" not in disable and soft_exit(s10, l60) and (
+                    "winner_protection" in disable
+                    or not winner_protected(p["last"] > p["entry"], p["last"], sma50)):
                 pending_sells[sym] = "momentum decay"
 
         # 5. Entry signals on today's scores, sized against today's equity.
-        rules = PROFILE_RULES[profile_for(spy.get(day, [None, None])[1]) if risk_rules else "BALANCED"]
+        regime = risk_rules and "regime" not in disable
+        rules = PROFILE_RULES[profile_for(spy.get(day, [None, None])[1]) if regime else "BALANCED"]
         remaining = len(pos) - len(pending_sells)
         if risk_rules:
-            max_pos = expanded_max_positions(cash / equity if equity else 0.0, remaining,
-                                             rules["max_positions"])
-            per_cap, buffer = rules["max_allocation_pct"] * equity, rules["cash_buffer_pct"]
+            max_pos = (rules["max_positions"] if "slot_expansion" in disable else
+                       expanded_max_positions(cash / equity if equity else 0.0, remaining,
+                                              rules["max_positions"]))
+            per_cap = rules["max_allocation_pct"] * equity
+            buffer = 0.0 if "cash_buffer" in disable else rules["cash_buffer_pct"]
         else:
             max_pos, per_cap, buffer = rules["max_positions"], equity / rules["max_positions"], 0.0
         kept = sum(p["qty"] * p["last"] for s, p in pos.items() if s not in pending_sells)
         investable = equity * (1 - buffer) - kept
         cands = sorted(((sc[0] + sc[1], sym) for sym, by_day in panel.items()
                         if (sc := by_day.get(day)) and sym not in pos and sym not in excluded
-                        and sc[0] + sc[1] >= rules["min_score_threshold"]), reverse=True)
+                        and sc[0] + sc[1] >= rules["min_score_threshold"]
+                        and _hurst_ok(bars, sym, day, hurst_filter)), reverse=True)
         for _score, sym in cands:
             if remaining >= max_pos:
                 break
@@ -280,7 +408,7 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
             remaining += 1
 
     return {"curve": curve, "trades": trades, "traded_usd": traded_usd,
-            "open_positions": sorted(pos)}
+            "open_positions": sorted(pos), "cap_trims": cap_trims}
 
 
 def buy_and_hold(bars, calendar, symbols, cost_bps=10.0, initial=INITIAL_EQUITY) -> dict:
@@ -307,6 +435,44 @@ def buy_and_hold(bars, calendar, symbols, cost_bps=10.0, initial=INITIAL_EQUITY)
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
+
+def stop_tail(trades: list, cap_pct=None) -> dict:
+    """Stop-out tail of one variant (R&D #54a): gap-throughs and loss per stopped trade as %
+    of equity. Losses are positive numbers; `cap_pct` is the per-trade cap as a fraction."""
+    stops = [t for t in trades if t["reason"] == "stop"]
+    if not stops:
+        return {"n_stop_exits": 0}
+    losses = np.array([-t["pnl_pct_equity"] for t in stops])
+    gaps = [t for t in stops if t.get("stop") and t["exit"] < t["stop"]]
+    out = {
+        "n_stop_exits": len(stops),
+        "n_gap_through": len(gaps),
+        "gap_through_share": round(len(gaps) / len(stops), 3),
+        "loss_median_pct": round(float(np.median(losses)), 3),
+        "loss_p95_pct": round(float(np.percentile(losses, 95)), 3),
+        "loss_worst_pct": round(float(losses.max()), 3),
+        "worst_trade": max(stops, key=lambda t: -t["pnl_pct_equity"]),
+    }
+    if gaps:
+        out["gap_median_pct_below_stop"] = round(float(np.median(
+            [(1 - t["exit"] / t["stop"]) * 100 for t in gaps])), 3)
+    if cap_pct:
+        out["share_over_cap"] = round(float(np.mean(losses > cap_pct * 100)), 3)
+        out["gate_fail"] = bool(out["loss_p95_pct"] > STOP_TAIL_P95_GATE
+                                or out["loss_worst_pct"] > STOP_TAIL_WORST_GATE)
+    return out
+
+
+def _print_stop_tail(tails: dict) -> None:
+    cols = [("n_stop_exits", "Stops"), ("n_gap_through", "Gaps"), ("gap_through_share", "Gap%"),
+            ("loss_median_pct", "Med%"), ("loss_p95_pct", "P95%"), ("loss_worst_pct", "Worst%"),
+            ("share_over_cap", ">Cap")]
+    _out("\n  Stop-out loss, % of equity (R&D #54a)")
+    _out("  " + f"{'variant':<20}" + "".join(f"{h:>9}" for _k, h in cols))
+    for name, t in tails.items():
+        if t.get("n_stop_exits"):
+            _out("  " + f"{name:<20}" + "".join(f"{('-' if t.get(k) is None else t.get(k)):>9}" for k, _h in cols))
+
 
 def metrics(result: dict) -> dict:
     curve = result["curve"]
@@ -335,13 +501,92 @@ def metrics(result: dict) -> dict:
         "win_rate": round(len(wins) / len(trades), 3) if trades else None,
         "avg_trade_ret_pct": round(float(np.mean([t["ret_pct"] for t in trades])), 3) if trades else None,
         "stop_exits": sum(t["reason"] == "stop" for t in trades),
+        "cap_trims": result.get("cap_trims", 0),
         "turnover_x_per_yr": round(result["traded_usd"] / avg_eq / years, 2) if avg_eq else None,
     }
 
 
 # ── Driver ────────────────────────────────────────────────────────────────────
 
-def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=False) -> dict:
+def run_variants(panel, bars, calendar, cost_bps, excluded, eligible, attribution, hurst=False) -> dict:
+    cap = CFG.system_max_trade_risk_pct
+    return {
+        "aether_rules": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded,
+                                 max_trade_risk_pct=cap),
+        "aether_no_cap": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded),
+        **({f"no_{rule}": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps,
+                                   excluded=excluded, max_trade_risk_pct=cap, disable={rule})
+            for rule in RULES if rule != "loss_cap"} if attribution else {}),
+        **({name: simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded,
+                           max_trade_risk_pct=cap, hurst_filter=hf)
+            for name, hf in HURST_VARIANTS.items()} if hurst else {}),
+        "signal_only": simulate(panel, bars, calendar, risk_rules=False, cost_bps=cost_bps, excluded=excluded),
+        "spy_buy_hold": buy_and_hold(bars, calendar, ["SPY"], cost_bps),
+        "ew_buy_hold": buy_and_hold(bars, calendar, eligible, cost_bps),
+    }
+
+
+def hurst_verdict(train: dict, test: dict) -> dict:
+    """R&D #54b gate: the Hurst variant with the best train Sharpe passes only if its test
+    Sharpe beats aether_rules and its test max drawdown is no deeper."""
+    picked = max(HURST_VARIANTS, key=lambda k: train[k].get("sharpe") if train[k].get("sharpe") is not None
+                 else -math.inf)
+    t, base = test[picked], test["aether_rules"]
+    sharpe_ok = (t.get("sharpe") or -math.inf) > (base.get("sharpe") or -math.inf)
+    dd_ok = t.get("max_drawdown_pct", -math.inf) >= base.get("max_drawdown_pct", -math.inf)
+    return {"picked": picked, "train_sharpe": train[picked].get("sharpe"),
+            "test_sharpe": t.get("sharpe"), "test_max_dd": t.get("max_drawdown_pct"),
+            "base_test_sharpe": base.get("sharpe"), "base_test_max_dd": base.get("max_drawdown_pct"),
+            "passed": bool(sharpe_ok and dd_ok)}
+
+
+def rank_by_sharpe(table: dict) -> list:
+    """Rule variants (aether_rules, aether_no_cap, no_*), best Sharpe first; no Sharpe last."""
+    rule_variants = [k for k in table if k.startswith(("aether_", "no_"))]
+    return sorted(rule_variants, key=lambda k: (table[k].get("sharpe") is None,
+                                                -(table[k].get("sharpe") or 0.0)))
+
+
+def pick_by_sharpe(table: dict) -> str:
+    return rank_by_sharpe(table)[0]
+
+
+def _iso_date(s: str) -> str:
+    """argparse type for --split: an ISO date (string order = date order), else an error."""
+    try:
+        return datetime.date.fromisoformat(s).isoformat()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a YYYY-MM-DD date: {s!r}") from None
+
+
+def oos_split(calendar, split, run_table) -> dict:
+    """Out-of-sample check: run_table(days) -> {variant: metrics} runs on the days before
+    `split` (train) and from `split` on (test); the pick is the best train Sharpe, and
+    test_rank is its 1-based rank by test Sharpe. `split` is an ISO date (YYYY-MM-DD)."""
+    split = datetime.date.fromisoformat(split).isoformat()
+    train_cal = [d for d in calendar if d < split]
+    test_cal = [d for d in calendar if d >= split]
+    if len(train_cal) < 2 or len(test_cal) < 2:
+        raise SystemExit(f"--split {split} leaves no train or test days")
+    train, test = run_table(train_cal), run_table(test_cal)
+    picked = pick_by_sharpe(train)
+    return {"date": split, "train": train, "test": test, "picked": picked,
+            "test_rank": rank_by_sharpe(test).index(picked) + 1}
+
+
+def _print_table(calendar, table) -> None:
+    cols = [("cagr_pct", "CAGR%"), ("total_return_pct", "Total%"), ("max_drawdown_pct", "MaxDD%"),
+            ("sharpe", "Sharpe"), ("ann_vol_pct", "Vol%"), ("avg_exposure_pct", "Expo%"),
+            ("n_trades", "Trades"), ("win_rate", "Win"), ("turnover_x_per_yr", "Turn/yr"),
+            ("cap_trims", "Trims")]
+    _out(f"\n  {calendar[0]} -> {calendar[-1]}  ({table['spy_buy_hold'].get('years')} yr)")
+    _out("  " + f"{'variant':<20}" + "".join(f"{h:>9}" for _k, h in cols))
+    for name, m in table.items():
+        _out("  " + f"{name:<20}" + "".join(f"{('-' if m.get(k) is None else m.get(k)):>9}" for k, _h in cols))
+
+
+def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=False,
+        attribution=False, split=None, hurst=False) -> dict:
     ohlcv = {os.path.basename(f)[:-len("_daily.json")]
              for f in glob.glob(os.path.join(_br.OHLCV_DIR, "*_daily.json"))}
     cached = {d for d in os.listdir(_br.SYM_DIR) if os.path.isdir(os.path.join(_br.SYM_DIR, d))}
@@ -360,34 +605,53 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
     excluded = frozenset(s for s in symbols if instruments.is_excluded(s))
     eligible = [s for s in symbols if s not in excluded]
 
-    results = {
-        "aether_rules": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded),
-        "signal_only": simulate(panel, bars, calendar, risk_rules=False, cost_bps=cost_bps, excluded=excluded),
-        "spy_buy_hold": buy_and_hold(bars, calendar, ["SPY"], cost_bps),
-        "ew_buy_hold": buy_and_hold(bars, calendar, eligible, cost_bps),
-    }
+    attribution = attribution or bool(split)
+    results = run_variants(panel, bars, calendar, cost_bps, excluded, eligible, attribution, hurst)
     table = {k: metrics(v) for k, v in results.items()}
+    _print_table(calendar, table)
+    cap = CFG.system_max_trade_risk_pct
+    tails = {k: stop_tail(v["trades"], None if k == "aether_no_cap" else cap) for k, v in results.items()}
+    _print_stop_tail(tails)
+    gate = tails["aether_rules"]
+    if gate.get("n_stop_exits"):
+        _out(f"  gate (aether_rules): P95 {gate['loss_p95_pct']}% vs {STOP_TAIL_P95_GATE}%, worst "
+             f"{gate['loss_worst_pct']}% vs {STOP_TAIL_WORST_GATE}% -> "
+             f"{'FAIL: the cap needs work' if gate['gate_fail'] else 'PASS: the cap holds'}")
 
-    cols = [("cagr_pct", "CAGR%"), ("total_return_pct", "Total%"), ("max_drawdown_pct", "MaxDD%"),
-            ("sharpe", "Sharpe"), ("ann_vol_pct", "Vol%"), ("avg_exposure_pct", "Expo%"),
-            ("n_trades", "Trades"), ("win_rate", "Win"), ("turnover_x_per_yr", "Turn/yr")]
-    _out(f"\n  {calendar[0]} -> {calendar[-1]}  ({table['spy_buy_hold'].get('years')} yr)")
-    _out("  " + f"{'variant':<14}" + "".join(f"{h:>9}" for _k, h in cols))
-    for name, m in table.items():
-        _out("  " + f"{name:<14}" + "".join(f"{('-' if m.get(k) is None else m.get(k)):>9}" for k, _h in cols))
+    split_out = None
+    if split:
+        split_out = oos_split(calendar, split, lambda cal: {
+            k: metrics(v) for k, v in run_variants(panel, bars, cal, cost_bps, excluded, eligible, True,
+                                                   hurst).items()})
+        train, test, picked = split_out["train"], split_out["test"], split_out["picked"]
+        _out("\n  TRAIN (pick on Sharpe)")
+        _print_table([d for d in calendar if d < split_out["date"]], train)
+        _out("\n  TEST (never seen by the pick)")
+        _print_table([d for d in calendar if d >= split_out["date"]], test)
+        _out(f"\n  picked on train: {picked}  ->  test Sharpe {test[picked].get('sharpe')}, "
+             f"rank {split_out['test_rank']}/{len(rank_by_sharpe(test))} among rule variants")
+        if hurst:
+            hv = split_out["hurst"] = hurst_verdict(train, test)
+            _out(f"\n  R&D #54b Hurst: picked on train {hv['picked']} (Sharpe {hv['train_sharpe']}) -> test "
+                 f"Sharpe {hv['test_sharpe']} vs aether_rules {hv['base_test_sharpe']}, MaxDD "
+                 f"{hv['test_max_dd']}% vs {hv['base_test_max_dd']}% -> "
+                 f"{'PASS' if hv['passed'] else 'FAIL: park the filter'}")
 
     payload = {
         "as_of": calendar[-1], "min_year": min_year, "cost_bps": cost_bps,
+        "max_trade_risk_pct": CFG.system_max_trade_risk_pct,
         "n_symbols": len(symbols), "n_excluded": len(excluded),
         "caveats": [
             "survivorship bias: universe is today's symbol list",
             "not simulated: overrides, bottom-confirmed buys, breadth downgrade, scarcity sizing, "
             "scale-outs, covered calls, rotation",
-            "score reconstruction omits live digit_sum, setup_ok, vrecovery_score",
+            "score reconstruction leaves live digit_sum at 0 (in-sample index)",
             "synthetic (provisional / flat zero-volume) bars are dropped from prices and the "
             "calendar, but backtest_ratings' score reconstruction still reads them",
         ],
         "metrics": table,
+        "split": split_out,
+        "stop_tail": tails,
         "curves": {k: [[d, round(e, 2)] for d, e, _i in v["curve"]] for k, v in results.items()},
         "trades": {k: v["trades"] for k, v in results.items() if v["trades"]},
         "open_positions": {k: v["open_positions"] for k, v in results.items()},
@@ -405,5 +669,13 @@ if __name__ == "__main__":
     ap.add_argument("--cost-bps", type=float, default=10.0)
     ap.add_argument("--max-symbols", type=int, default=None)
     ap.add_argument("--rebuild", action="store_true")
+    ap.add_argument("--attribution", action="store_true",
+                    help="add one aether_rules variant per rule switched off")
+    ap.add_argument("--hurst", action="store_true",
+                    help="add the R&D #54b Hurst entry-filter variants (verdict needs --split)")
+    ap.add_argument("--split", default=None, metavar="YYYY-MM-DD",
+                    type=_iso_date,
+                    help="out-of-sample check: pick a rule variant on days before this date, "
+                         "test it on the days from it (implies --attribution)")
     a = ap.parse_args()
-    run(a.min_year, a.workers, a.cost_bps, a.max_symbols, a.rebuild)
+    run(a.min_year, a.workers, a.cost_bps, a.max_symbols, a.rebuild, a.attribution, a.split, a.hurst)

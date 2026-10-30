@@ -433,6 +433,43 @@ class TestExpirySelection(unittest.TestCase):
         self.assertEqual(client.market.seen, pinned)
         self.assertEqual(expiry, pinned)
 
+    def test_fetch_chain_reads_spot_from_the_client_quotes_shape(self):
+        # ETradeClient.market.quotes returns {SYMBOL: last_price} (etrade.fetch_quotes).
+        class FakeMarket:
+            def options_chain(self, symbol, expiry=None, **kw):
+                return RAW
+
+            def quotes(self, syms):
+                return {s.upper(): 85.25 for s in syms}
+
+        client = type("C", (), {"market": FakeMarket()})()
+        _q, spot, _e = oa.fetch_chain("INTC", client, expiry=datetime.date(2026, 12, 18), today=TODAY)
+        self.assertEqual(spot, 85.25)
+
+    def test_fetch_chain_warns_when_the_quote_call_returns_no_price(self):
+        # etrade.fetch_quotes swallows a rejected quote call and returns {}: nothing raises, so
+        # the missing spot itself must be logged, not dropped silently into spot=None.
+        class FakeMarket:
+            def options_chain(self, symbol, expiry=None, **kw):
+                return RAW
+
+            def quotes(self, syms):
+                return {}
+
+        client = type("C", (), {"market": FakeMarket()})()
+        with self.assertLogs("aether.options_adviser", level="WARNING") as cm:
+            quotes, spot, _e = oa.fetch_chain("INTC", client, expiry=datetime.date(2026, 12, 18), today=TODAY)
+        self.assertIsNone(spot)
+        self.assertTrue(quotes)
+        self.assertIn("No spot price for INTC", "\n".join(cm.output))
+
+    def test_extract_spot_shapes(self):
+        self.assertEqual(oa._extract_spot({"INTC": 85.25}, "intc"), 85.25)
+        self.assertIsNone(oa._extract_spot({"AMD": 150.0}, "INTC"))
+        self.assertIsNone(oa._extract_spot({}, "INTC"))
+        raw = {"QuoteResponse": {"QuoteData": [{"All": {"lastTrade": 84.5}}]}}
+        self.assertEqual(oa._extract_spot(raw, "INTC"), 84.5)          # raw pyetrade payload
+
     def test_fetch_chain_warns_on_empty_expiry_list(self):
         # An empty / unrecognized expiry payload must not degrade *silently* to the front.
         class FakeMarket:

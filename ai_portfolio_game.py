@@ -38,7 +38,6 @@ INITIAL_BALANCE = 10000.0
 import risk_utils
 import sell_rules
 import decision_eval
-import watchdog
 import instruments
 from aether import options
 from aether.market_calendar import NYSE_HOLIDAYS, last_session_on_or_before
@@ -840,7 +839,8 @@ def should_pyramid_into_winner(is_winner: bool, has_peak: bool, s10: float, l60:
     short-term momentum holds (s10 >= system_pyramiding_s10_floor) OR long-term
     trend support is strong (l60 >= system_pyramiding_l60_floor) — the latter lets
     us add on minor short-term pullbacks within an established uptrend. Thresholds
-    are single-sourced from CFG.system_pyramiding_*.
+    are single-sourced from CFG.system_pyramiding_*. The pass checks the risk lock
+    (stop >= cost) and the per-trade loss cap; this gate checks momentum only.
     """
     return (
         is_winner
@@ -1686,8 +1686,8 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 is_scarcity = pos.get("is_scarcity", False)
                 multiplier = 1.5 if is_scarcity else rules.get("atr_multiplier", 2.5)
                 
-                # 2. Peter Lynch Flower Protection: Only ratchet stop upward once safely in profit by > 1.0x ATR
-                if (price - pos.get("cost", 0.0)) > (1.0 * atr):
+                # 2. Peter Lynch Flower Protection: Only ratchet stop upward once safely in profit (> FLOWER_PROFIT_ATR x ATR)
+                if sell_rules.safely_in_profit(price, pos.get("cost", 0.0), atr):
                     recalculated_stop = round(highest_close - (multiplier * atr), 2)
                     old_stop = pos.get("stop_loss", 0.0)
                     if recalculated_stop > old_stop:
@@ -1765,66 +1765,21 @@ def run_daily_ai_management(force=False, manual_profile=None):
                 s10=s10, l60=l60, sma50=sma50,
                 date=today, run_shadow=None)
             
-            # AI Second-Opinion Exit Override Gate (R&D Item 14)
-            if entry["rules_action"] == "SELL":
-                ai_override = False
-                override_reason = ""
-                override_verdict = ""
-
-                # 1. Check real-time shadow verdicts generated in entry
-                realtime_verdicts = entry.get("verdicts", {})
-                for prov, v_info in realtime_verdicts.items():
-                    v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
-                    if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                        ai_override = True
-                        override_verdict = v
-                        override_reason = f"Real-time AI Shadow Heuristic ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
-                        break
-
-                # 2. Check stored position shadow verdicts if any
-                if not ai_override:
-                    for key in ["shadow_verdict", "ai_verdict", "verdict"]:
-                        if key in pos:
-                            val = pos[key]
-                            if isinstance(val, dict):
-                                v = val.get("verdict", "").upper()
-                                note = val.get("note", "")
-                            else:
-                                v = str(val).upper()
-                                note = ""
-                            if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                                ai_override = True
-                                override_verdict = v
-                                override_reason = f"Stored position {key} returned {v}" + (f": {note}" if note else "")
-                                break
-
-                # 3. Check verdicts dictionary inside the stored position
-                if not ai_override:
-                    pos_verdicts = pos.get("verdicts", {})
-                    if isinstance(pos_verdicts, dict):
-                        for prov, v_info in pos_verdicts.items():
-                            v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
-                            if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                                ai_override = True
-                                override_verdict = v
-                                override_reason = f"Stored position verdicts ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
-                                break
-
-                if ai_override:
-                    old_action = entry["rules_action"]
-                    if override_verdict == "HOLD":
-                        new_action = "HOLD"
-                    else:
-                        new_action = "WATCH"
-                    
-                    entry["rules_action"] = new_action
-                    entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
-                    
-                    _log.info(
-                        f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
-                        f"Decision downgraded from {old_action} to {new_action}. Reason: {override_reason}"
-                    )
-                    _log.info(f"🛡️ [AI Override] Overriding sell of {sym} -> Downgrading to {new_action} due to: {override_reason}")
+            # AI Second-Opinion Exit Override Gate (R&D Item 14), one rule in sell_rules.ai_exit_override:
+            # an AI HOLD / FLAG-FOR-REVIEW downgrades a momentum SELL of a position safely in profit;
+            # a stop breach, a loser or a marginal gain always sells.
+            old_action = entry["rules_action"]
+            entry["rules_action"], override_reason, ignored_reason = sell_rules.ai_exit_override(
+                old_action, entry["rules_reason"], price=price, cost=pos.get("cost"), atr=atr,
+                live_verdicts=entry.get("verdicts"), holding=pos)
+            if override_reason:
+                entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
+                _log.info(
+                    f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
+                    f"Decision downgraded from {old_action} to {entry['rules_action']}. Reason: {override_reason}"
+                )
+            elif ignored_reason:
+                _log.info(f"🛑 [AI Override] {sym}: AI verdict not applied ({ignored_reason}).")
 
             decision_entries.append(entry)
             if entry["rules_action"] == "SELL":
@@ -2106,6 +2061,11 @@ def run_daily_ai_management(force=False, manual_profile=None):
                                for t in state["history"]):
                             _log.info(f"🛡️ [Pyramiding Pass] {sym}: sold earlier today; no scale-in.")
                             continue
+                        # R&D #31 adds only to protected positions: the stop is at or above cost.
+                        stop_loss = pos.get("stop_loss") or 0.0
+                        if stop_loss < pos["cost"]:
+                            _log.info(f"🛡️ [Pyramiding Pass] {sym}: stop ${stop_loss:.2f} is below cost ${pos['cost']:.2f}; no scale-in.")
+                            continue
                         current_px = prices.get(sym, pos["cost"])
                         # A winner is in profit and trading at or near its peak close
                         is_winner = (current_px > pos["cost"])
@@ -2128,6 +2088,13 @@ def run_daily_ai_management(force=False, manual_profile=None):
 
                             if remaining_room > 500.0:  # Minimum scale-in size is $500
                                 cash_to_deploy = min(state["balance"] - (state["equity"] * rules["cash_buffer_pct"]), remaining_room)
+                                # Same per-trade loss cap as a new buy: the added shares may lose at most
+                                # equity * max_trade_risk_pct at the stop (the old shares' locked gain is not counted).
+                                max_risk_usd = state["equity"] * CFG.system_max_trade_risk_pct
+                                risk_cap_usd = risk_utils.risk_capped_cash(current_px, stop_loss, max_risk_usd)
+                                if risk_cap_usd is not None and cash_to_deploy > risk_cap_usd:
+                                    _log.info(f"🛡️ [Pyramiding Pass] {sym}: add capped at ${risk_cap_usd:,.2f} so a stop-out at ${stop_loss:.2f} loses at most ${max_risk_usd:,.2f}.")
+                                    cash_to_deploy = risk_cap_usd
                                 add_qty = calculate_share_qty(sym, cash_to_deploy, current_px)
 
                                 if add_qty > 0:
@@ -2265,18 +2232,10 @@ if __name__ == "__main__":
             ):
                 run_daily_ai_management(force=args.force, manual_profile=args.profile)
                 send_consolidated_morning_report()
-                try:
-                    watchdog.sync_data_folder()
-                except Exception as e:
-                    _log.warning(f"Post-run sync failed: {e}")
         except RunSkipped as e:
             _log.info(f"Trade execution skipped — {e}. Another scheduler already ran "
                       "it today, or the state is busy (single-executor guard).")
     elif args.summary:
         send_daily_summary()
-        try:
-            watchdog.sync_data_folder()
-        except Exception as e:
-            _log.warning(f"Post-run sync failed: {e}")
     else:
         show_report()

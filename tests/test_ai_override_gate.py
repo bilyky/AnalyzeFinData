@@ -43,14 +43,15 @@ class TestAIOverrideGate(unittest.TestCase):
             "history": []
         }
         mock_load_game.return_value = state
-        mock_get_prices.return_value = {"ULTA": 450.0}
+        mock_get_prices.return_value = {"ULTA": 490.0}   # +2 ATR over cost: safely in profit
 
         wb = research_workbook(
-            [1, None, None, "ULTA", "Retail", None, "Bu", None, None, None, 450.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.65, -5.0, -5.0]
+            [1, None, None, "ULTA", "Retail", None, "Bu", None, None, None, 490.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.65, -5.0, -5.0]
         )
         mock_load_wb.return_value = wb
 
-        game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+        with mock.patch.object(game.risk_utils, "calculate_atr", return_value=10.0):
+            game.run_daily_ai_management(force=True, manual_profile="BALANCED")
 
         self.assertIn("ULTA", state["positions"])
         self.assertEqual(len(state["queued_orders"]), 0)
@@ -76,17 +77,41 @@ class TestAIOverrideGate(unittest.TestCase):
             "history": []
         }
         mock_load_game.return_value = state
-        mock_get_prices.return_value = {"GMED": 72.0}
+        mock_get_prices.return_value = {"GMED": 80.0}   # +2.6 ATR over cost: safely in profit
 
         wb = research_workbook(
-            [1, None, None, "GMED", "Medical", None, "Bu", None, None, None, 72.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.65, -3.0, -3.0]
+            [1, None, None, "GMED", "Medical", None, "Bu", None, None, None, 80.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.65, -3.0, -3.0]
         )
         mock_load_wb.return_value = wb
 
-        game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+        with mock.patch.object(game.risk_utils, "calculate_atr", return_value=2.0):
+            game.run_daily_ai_management(force=True, manual_profile="BALANCED")
 
         self.assertIn("GMED", state["positions"])
         self.assertEqual(len(state["queued_orders"]), 0)
+
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=True)
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
+    def test_losing_position_sells_despite_ai_flag(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
+        """The override lets winners run; it never holds a loser. ULTA 450 vs cost 469.56 with a
+        stored FLAG-FOR-REVIEW: the momentum SELL executes."""
+        state = {"balance": 5000.0, "equity": 10000.0, "queued_orders": [], "history": [],
+                 "positions": {"ULTA": {"qty": 3, "cost": 469.56, "stop_loss": 400.0,
+                                        "shadow_verdict": "FLAG-FOR-REVIEW"}}}
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"ULTA": 450.0}
+        mock_load_wb.return_value = research_workbook(
+            [1, None, None, "ULTA", "Retail", None, "Bu", None, None, None, 450.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.65, -5.0, -5.0]
+        )
+        with mock.patch.object(game.risk_utils, "calculate_atr", return_value=10.0):
+            game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+        self.assertNotIn("ULTA", state["positions"])
+        sells = [t for t in state["history"] if t.get("type") == "SELL" and t.get("symbol") == "ULTA"]
+        self.assertEqual(len(sells), 1)
+        self.assertIn("momentum decay", sells[0]["details"])
 
     @mock.patch("ai_portfolio_game.is_market_hours", return_value=True)
     @mock.patch("ai_portfolio_game.get_live_prices")
@@ -126,6 +151,61 @@ class TestAIOverrideGate(unittest.TestCase):
             or any(t.get("type") == "SELL" and t.get("symbol") == "TSCO" for t in state.get("history", []))
         )
         self.assertTrue(sold, "SELL without AI override should execute — position was not removed.")
+
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=True)
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
+    def test_stop_breach_sells_despite_ai_hold(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
+        """A price at/below the stop is a hard exit: an AI HOLD / FLAG-FOR-REVIEW (stored or
+        real-time) must not cancel it. R&D #14 is defined for momentum sells only."""
+        state = {
+            "balance": 5000.0, "equity": 10000.0, "queued_orders": [], "history": [],
+            "positions": {"ULTA": {"qty": 3, "cost": 469.56, "stop_loss": 400.0,
+                                   "shadow_verdict": {"verdict": "HOLD", "note": "winner above 50-DMA"}}},
+        }
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"ULTA": 390.0}
+        mock_load_wb.return_value = research_workbook(
+            [1, None, None, "ULTA", "Retail", None, "Bu", None, None, None, 390.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.65, 3.0, 3.0]
+        )
+
+        game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+
+        self.assertNotIn("ULTA", state["positions"])
+        sells = [t for t in state["history"] if t.get("type") == "SELL" and t.get("symbol") == "ULTA"]
+        self.assertEqual(len(sells), 1)
+        self.assertIn("stop breached", sells[0]["details"])
+
+    @mock.patch("ai_portfolio_game.is_market_hours", return_value=True)
+    @mock.patch("ai_portfolio_game.get_live_prices")
+    @mock.patch("ai_portfolio_game.load_game")
+    @mock.patch("ai_portfolio_game.save_game")
+    @mock.patch("ai_portfolio_game.openpyxl.load_workbook")
+    def test_winner_stop_breach_sells_despite_ai_hold(self, mock_load_wb, mock_save_game, mock_load_game, mock_get_prices, mock_market_hours):
+        """The case the stop exemption exists for: a winner whose ratcheted stop is breached.
+        ULTA cost 400, stop 480, price 470, ATR 10 is +7 ATR (safely in profit), so the
+        winners-only rule alone would let the AI HOLD through; only the stop check sells it."""
+        state = {
+            "balance": 5000.0, "equity": 10000.0, "queued_orders": [], "history": [],
+            "positions": {"ULTA": {"qty": 3, "cost": 400.0, "stop_loss": 480.0,
+                                   "highest_close_since_acq": 500.0,
+                                   "shadow_verdict": {"verdict": "HOLD", "note": "winner above 50-DMA"}}},
+        }
+        mock_load_game.return_value = state
+        mock_get_prices.return_value = {"ULTA": 470.0}
+        mock_load_wb.return_value = research_workbook(
+            [1, None, None, "ULTA", "Retail", None, "Bu", None, None, None, 470.0, None, None, None, None, None, None, None, None, None, "0", None, None, 0.65, 3.0, 3.0]
+        )
+        with mock.patch.object(game.risk_utils, "calculate_atr", return_value=10.0), \
+             mock.patch.object(game.risk_utils, "scale_out_plan", return_value=(0.0, "")):
+            game.run_daily_ai_management(force=True, manual_profile="BALANCED")
+
+        self.assertNotIn("ULTA", state["positions"])
+        sells = [t for t in state["history"] if t.get("type") == "SELL" and t.get("symbol") == "ULTA"]
+        self.assertEqual(len(sells), 1)
+        self.assertIn("stop breached", sells[0]["details"])
 
 if __name__ == "__main__":
     unittest.main()

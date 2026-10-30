@@ -1318,6 +1318,18 @@ MANUAL_TASKS = [
         "category": "research",
     },
     {
+        "id": "option_chain_snapshot",
+        "label": "Option-Chain Snapshot",
+        "description": "Append one live E*TRADE option chain for INTC and each covered-call symbol to "
+                       "Data/option_chains/ (scripts/monitoring/option_chain_snapshot.py). Read-only; "
+                       "never opens a browser. Does nothing on a non-trading day.",
+        "script": "scripts/monitoring/option_chain_snapshot.py",
+        "args": [],
+        "admin_only": True,
+        "confirm": "Take a live option-chain snapshot now? It makes one E*TRADE chain request per symbol.",
+        "category": "monitoring",
+    },
+    {
         "id": "intraday_monitor",
         "label": "Intraday Stop Monitor",
         "description": "Run one pass of the intraday stop-loss monitor and email alerts for breaches (intraday_monitor.py).",

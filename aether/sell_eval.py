@@ -20,6 +20,7 @@ _log = _get_logger("sell_eval")
 _RUBRIC_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "prompts", "sell_evaluation.md")
 _VALID = {"AGREE", "FLAG-FOR-REVIEW", "NO-OPINION"}
+EXIT_TEMPERATURE = 0.0
 _rubric_cache = None
 
 
@@ -90,9 +91,12 @@ def evaluate_exit(ctx: dict, provider: str | None = None) -> dict:
         if not (provider or ai_client.primary()):
             return {}
         # provider=None lets ai_client fall back to the other enabled providers; label the verdict
-        # with the provider that actually answered.
+        # with the provider that actually answered. Temperature 0: a verdict can cancel a sell, so the
+        # same position must get the same answer (at the provider default one prompt flipped between
+        # AGREE and FLAG-FOR-REVIEW on repeat calls; at 0 it did not).
         text, name = ai_client.evaluate_with_provider(rubric, build_user_prompt(ctx),
-                                                      provider=provider, max_tokens=120, tier="cheap")
+                                                      provider=provider, max_tokens=120,
+                                                      temperature=EXIT_TEMPERATURE, tier="cheap")
         parsed = _parse(text)
         if parsed:
             parsed["provider"] = name

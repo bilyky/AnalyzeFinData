@@ -416,11 +416,14 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
       the stop (passes ``stop_loss=None``) so an opening whipsaw can't trip it.
     * **Exit decision** — ``decision_eval.build_entry`` is the single source of the
       action (``_sma50`` is read only when ``sell_rules.soft_exit`` fires).
-    * **AI second-opinion override** (R&D #14) — a ``SELL`` is downgraded to
-      ``HOLD`` / ``WATCH`` when a real-time shadow verdict, a stored position
-      verdict key (``shadow_verdict`` / ``ai_verdict`` / ``verdict``), or the
-      stored ``verdicts`` dict says ``HOLD`` / ``FLAG-FOR-REVIEW``, checked in that
-      order.
+    * **AI second-opinion override** (R&D #14, ``sell_rules.ai_exit_override``) — a
+      momentum ``SELL`` of a position safely in profit (more than
+      ``FLOWER_PROFIT_ATR`` x ATR above cost) is downgraded to ``HOLD`` / ``WATCH``
+      when a real-time shadow verdict, a stored position verdict key
+      (``shadow_verdict`` / ``ai_verdict`` / ``verdict``), or the stored
+      ``verdicts`` dict says ``HOLD`` / ``FLAG-FOR-REVIEW``, checked in that order.
+      A stop exit, a loser or a marginal gain always sells; an ignored verdict is
+      logged with the reason.
     * **Routing** — a surviving ``SELL`` is queued in ``state["queued_orders"]``
       (deduped) when outside market hours, else collected for liquidation; a
       ``REVIEW`` is logged as winner-protected. All entries are then written via
@@ -471,8 +474,8 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             is_scarcity = pos.get("is_scarcity", False)
             multiplier = 1.5 if is_scarcity else rules.get("atr_multiplier", 2.5)
 
-            # 2. Peter Lynch Flower Protection: Only ratchet stop upward once safely in profit by > 1.0x ATR
-            if (price - pos.get("cost", 0.0)) > (1.0 * atr):
+            # 2. Peter Lynch Flower Protection: Only ratchet stop upward once safely in profit (> FLOWER_PROFIT_ATR x ATR)
+            if game.sell_rules.safely_in_profit(price, pos.get("cost", 0.0), atr):
                 recalculated_stop = round(highest_close - (multiplier * atr), 2)
                 old_stop = pos.get("stop_loss", 0.0)
                 if recalculated_stop > old_stop:
@@ -550,66 +553,21 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             s10=s10, l60=l60, sma50=sma50,
             date=today, run_shadow=None)
 
-        # AI Second-Opinion Exit Override Gate (R&D Item 14)
-        if entry["rules_action"] == "SELL":
-            ai_override = False
-            override_reason = ""
-            override_verdict = ""
-
-            # 1. Check real-time shadow verdicts generated in entry
-            realtime_verdicts = entry.get("verdicts", {})
-            for prov, v_info in realtime_verdicts.items():
-                v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
-                if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                    ai_override = True
-                    override_verdict = v
-                    override_reason = f"Real-time AI Shadow Heuristic ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
-                    break
-
-            # 2. Check stored position shadow verdicts if any
-            if not ai_override:
-                for key in ["shadow_verdict", "ai_verdict", "verdict"]:
-                    if key in pos:
-                        val = pos[key]
-                        if isinstance(val, dict):
-                            v = val.get("verdict", "").upper()
-                            note = val.get("note", "")
-                        else:
-                            v = str(val).upper()
-                            note = ""
-                        if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                            ai_override = True
-                            override_verdict = v
-                            override_reason = f"Stored position {key} returned {v}" + (f": {note}" if note else "")
-                            break
-
-            # 3. Check verdicts dictionary inside the stored position
-            if not ai_override:
-                pos_verdicts = pos.get("verdicts", {})
-                if isinstance(pos_verdicts, dict):
-                    for prov, v_info in pos_verdicts.items():
-                        v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
-                        if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                            ai_override = True
-                            override_verdict = v
-                            override_reason = f"Stored position verdicts ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
-                            break
-
-            if ai_override:
-                old_action = entry["rules_action"]
-                if override_verdict == "HOLD":
-                    new_action = "HOLD"
-                else:
-                    new_action = "WATCH"
-
-                entry["rules_action"] = new_action
-                entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
-
-                game._log.info(
-                    f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
-                    f"Decision downgraded from {old_action} to {new_action}. Reason: {override_reason}"
-                )
-                game._log.info(f"🛡️ [AI Override] Overriding sell of {sym} -> Downgrading to {new_action} due to: {override_reason}")
+        # AI Second-Opinion Exit Override Gate (R&D Item 14), one rule in sell_rules.ai_exit_override:
+        # an AI HOLD / FLAG-FOR-REVIEW downgrades a momentum SELL of a position safely in profit;
+        # a stop breach, a loser or a marginal gain always sells.
+        old_action = entry["rules_action"]
+        entry["rules_action"], override_reason, ignored_reason = game.sell_rules.ai_exit_override(
+            old_action, entry["rules_reason"], price=price, cost=pos.get("cost"), atr=atr,
+            live_verdicts=entry.get("verdicts"), holding=pos)
+        if override_reason:
+            entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
+            game._log.info(
+                f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
+                f"Decision downgraded from {old_action} to {entry['rules_action']}. Reason: {override_reason}"
+            )
+        elif ignored_reason:
+            game._log.info(f"🛑 [AI Override] {sym}: AI verdict not applied ({ignored_reason}).")
 
         decision_entries.append(entry)
         if entry["rules_action"] == "SELL":
@@ -961,3 +919,207 @@ def rotate_positions(state, prices, profile, available_slots, max_positions, top
 
     state["balance"] += balance_addition
     return available_slots
+
+
+def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash_required,
+                   today, now_time, new_transactions):
+    """Buy the ranked candidates, scale into winners and write covered calls (B6).
+
+    Extracted verbatim from the block that follows momentum rotation in
+    ``run_daily_ai_management`` (``if available_slots > 0 and state["balance"] >
+    min_cash_required:``) — the last trading stage before the root's
+    ``except``/``finally``. It is one stage because the pyramiding and
+    covered-call passes are nested inside its market-hours branch. Unchanged
+    from the root, and only when there is a free slot and cash above the buffer:
+
+    * **After hours** — the top ``available_slots`` candidates are queued as
+      BUY orders in ``state["queued_orders"]`` (deduped by symbol).
+    * **Market hours** — ``_execute_buys`` buys them, then:
+
+      * **Pyramiding** (R&D #31) — only when cash is above
+        ``CFG.system_pyramiding_cash_ratio`` of equity. A symbol with a SELL
+        dated today in ``state["history"]`` is skipped (no buying back what was
+        just sold, #181). Otherwise a held position in profit and within 2% of
+        its peak close, passing
+        ``should_pyramid_into_winner`` on its Research-sheet s10/l60, gets more
+        shares if it has more than $500 of room under
+        ``rules["max_allocation_pct"]`` of equity. The cost comes out of cash, the
+        cost basis is blended, and a ``BUY_SCALE_IN`` tx is recorded.
+      * **Covered calls** (R&D #26) — ``options.execute_weekly_covered_call_pass``
+        when the market is still open (``is_market_hours`` is read again here).
+
+    Returns nothing; every change lands on the caller's ``state`` and
+    ``new_transactions``. Every collaborator is resolved off the live root
+    module at call time via :func:`_pkg`, so ``mock.patch.object(game, ...)``
+    still intercepts.
+    """
+    game = _pkg()
+
+    if available_slots > 0 and state["balance"] > min_cash_required:
+        if not game.is_market_hours():
+            # Queue the buys up to available slots
+            for buy in top_buys[:available_slots]:
+                if not any(q["symbol"] == buy["sym"] and q["type"] == "BUY" for q in state.get("queued_orders", [])):
+                    state.setdefault("queued_orders", []).append({
+                        "type": "BUY", "symbol": buy["sym"], "reason": "Top-ranked quantitative pick (After-Hours)"
+                    })
+                    game._log.info(f"📝 [Queued] After-hours BUY queued for {buy['sym']}")
+        else:
+            game._execute_buys(state, top_buys, available_slots, min_cash_required, rules,
+                          today, now_time, new_transactions, prices)
+
+            # ── Dynamic Pyramiding: Scale into winning trends with idle cash ──
+            cash_ratio = state["balance"] / state["equity"] if state["equity"] > 1.0 else 0.0
+            if cash_ratio > game.CFG.system_pyramiding_cash_ratio:  # idle-cash trigger for scaling in
+                game._log.info(f"🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash ({cash_ratio*100:.1f}%)...")
+                for sym, pos in list(state["positions"].items()):
+                    # Never buy back what this run (or an earlier run today) just sold, e.g.
+                    # a Bank-As-You-Go scale-out: that books profit and restores the
+                    # exposure at the same price (PROD GNE 2026-10-02).
+                    if any(t.get("symbol") == sym and t.get("type") == "SELL" and t.get("date") == today
+                           for t in state["history"]):
+                        game._log.info(f"🛡️ [Pyramiding Pass] {sym}: sold earlier today; no scale-in.")
+                        continue
+                    # R&D #31 adds only to protected positions: the stop is at or above cost.
+                    stop_loss = pos.get("stop_loss") or 0.0
+                    if stop_loss < pos["cost"]:
+                        game._log.info(f"🛡️ [Pyramiding Pass] {sym}: stop ${stop_loss:.2f} is below cost ${pos['cost']:.2f}; no scale-in.")
+                        continue
+                    current_px = prices.get(sym, pos["cost"])
+                    # A winner is in profit and trading at or near its peak close
+                    is_winner = (current_px > pos["cost"])
+                    has_peak = (pos.get("highest_close_since_acq", 0.0) >= current_px * 0.98) # within 2% of peak close
+
+                    # Retrieve its Short10 and Long60 momentum scores from row
+                    s10 = 0.0
+                    l60 = 0.0
+                    for row in ws.iter_rows(min_row=2, values_only=True):
+                        if row[3] == sym:
+                            s10 = row[24] or 0.0
+                            l60 = row[25] or 0.0
+                            break
+
+                    # Pyramiding momentum gate (R&D #31) — delegated to a single-sourced helper.
+                    if game.should_pyramid_into_winner(is_winner, has_peak, s10, l60):
+                        max_pos_allocation = state["equity"] * rules["max_allocation_pct"]
+                        current_allocation = pos["qty"] * current_px
+                        remaining_room = max_pos_allocation - current_allocation
+
+                        if remaining_room > 500.0:  # Minimum scale-in size is $500
+                            cash_to_deploy = min(state["balance"] - (state["equity"] * rules["cash_buffer_pct"]), remaining_room)
+                            # Same per-trade loss cap as a new buy: the added shares may lose at most
+                            # equity * max_trade_risk_pct at the stop (the old shares' locked gain is not counted).
+                            max_risk_usd = state["equity"] * game.CFG.system_max_trade_risk_pct
+                            risk_cap_usd = game.risk_utils.risk_capped_cash(current_px, stop_loss, max_risk_usd)
+                            if risk_cap_usd is not None and cash_to_deploy > risk_cap_usd:
+                                game._log.info(f"🛡️ [Pyramiding Pass] {sym}: add capped at ${risk_cap_usd:,.2f} so a stop-out at ${stop_loss:.2f} loses at most ${max_risk_usd:,.2f}.")
+                                cash_to_deploy = risk_cap_usd
+                            add_qty = game.calculate_share_qty(sym, cash_to_deploy, current_px)
+
+                            if add_qty > 0:
+                                cost = add_qty * current_px
+                                state["balance"] -= cost
+
+                                # Blended cost basis recalculation
+                                old_qty = pos["qty"]
+                                old_cost = pos["cost"]
+                                new_qty = old_qty + add_qty
+                                blended_cost = round(((old_qty * old_cost) + (cost)) / new_qty, 2)
+
+                                pos["qty"] = new_qty
+                                pos["cost"] = blended_cost
+
+                                tx = {
+                                    "date": today, "time": now_time, "type": "BUY_SCALE_IN",
+                                    "symbol": sym, "price": current_px, "qty": add_qty,
+                                    "details": f"Pyramiding Scale-In (Breakout Peak, s10={s10})"
+                                }
+                                state["history"].append(tx)
+                                new_transactions.append(tx)
+
+                                game._log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f} (Blended Cost: ${blended_cost:.2f})")
+                                game._log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f}")
+            # ───────────────────────────────────────────────────────────
+
+            # ── Dynamic Covered Call Writing (R&D #26): Generate weekly premium cash-flow ──
+            if game.is_market_hours():
+                game._log.info("🚀 [Options Pass] Checking active holdings to write weekly Covered Calls...")
+                game.options.execute_weekly_covered_call_pass(state, today, prices, ws)
+
+
+def finalize_run(state, wb, new_transactions):
+    """Close the workbook and save the run's state (B6).
+
+    Extracted verbatim from the ``finally:`` block of
+    ``run_daily_ai_management``, so it runs whether the trading stages finished,
+    returned early or raised. Unchanged from the root:
+
+    * the workbook is closed when there is one; a failed close is ignored;
+    * if ``state`` was loaded, ``save_game`` writes it, ``update_excel_log``
+      records ``new_transactions``, and the portfolio value is logged;
+    * if the run stopped before ``state`` was loaded, nothing is saved and that
+      is logged.
+
+    ``wb`` is ``None`` when the run never opened the workbook. The root's
+    ``"wb" in locals()`` test is kept as-is for parity; here ``wb`` is always a
+    local, so only ``and wb`` decides. Returns nothing. ``save_game``,
+    ``update_excel_log`` and ``_log`` are resolved off the live root module at
+    call time via :func:`_pkg`, so ``mock.patch.object(game, ...)`` still
+    intercepts.
+    """
+    game = _pkg()
+
+    if "wb" in locals() and wb:
+        try:
+            wb.close()
+        except Exception:
+            pass
+    if state is not None:
+        game.save_game(state)
+        game.update_excel_log(state, new_transactions)
+        game._log.info(f"🤖 AI Portfolio Value: ${state['equity']} (Cash: ${round(state['balance'], 2)})")
+    else:
+        game._log.info("🤖 AI Management aborted before state initialization. Game state preserved.")
+
+
+def open_research_workbook(today):
+    """Open the workbook's Research sheet, or stop the run if it can't be trusted (B6).
+
+    Extracted verbatim from the block of ``run_daily_ai_management`` between the
+    profile/rules choice and :func:`assemble_symbol_universe`. Unchanged from the
+    root:
+
+    * no workbook file: logged, and the run is deferred;
+    * a stale workbook (``workbook_staleness`` says why, #176): logged as an
+      error, an alert email names the reason and how to rerun, and the run is
+      refused. A failed email is logged; it does not raise;
+    * otherwise the workbook is opened read-only with cached values and its
+      ``Research`` sheet is returned.
+
+    Returns ``(wb, ws)``, or ``None`` where the root returns, so the caller
+    stops the run. ``XLSX_FILE``, ``workbook_staleness``, ``notify``,
+    ``openpyxl`` and ``_log`` are resolved off the live root module at call
+    time via :func:`_pkg`, so ``mock.patch.object(game, ...)`` still intercepts.
+    """
+    game = _pkg()
+
+    if not game.XLSX_FILE.exists():
+        game._log.info("Workbook not found. AI Management deferred.")
+        return
+
+    # Live-data-only mandate: never trade on a workbook neither refresh updated.
+    stale = game.workbook_staleness(game.XLSX_FILE)
+    if stale:
+        game._log.error(f"🛑 Refusing to trade on a stale workbook: {stale}.")
+        try:
+            game.notify.send_email(f"ALERT: AI trades skipped - stale workbook ({today})",
+                              f"The trade run did not act because the {stale}.\n\n"
+                              "Check the evening daily_task and morning pipeline logs, refresh the "
+                              "workbook (python main.py), then rerun: python ai_portfolio_game.py --run --force")
+        except Exception as e:
+            game._log.error(f"Could not send the stale-workbook alert: {e}")
+        return
+
+    wb = game.openpyxl.load_workbook(game.XLSX_FILE, read_only=True, data_only=True)
+    ws = wb["Research"]
+    return wb, ws

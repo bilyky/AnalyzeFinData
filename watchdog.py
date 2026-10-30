@@ -52,6 +52,8 @@ def _tasks() -> list[str]:
 # LastRunTime of each failed task already reported, so a task that keeps failing is reported
 # once per failed run instead of in every hourly cycle (PROD 10-09..10-11: hourly emails).
 SCHEDULER_AUDIT_STATE = BASE_DIR / "Data" / "scheduler_audit_state.json"
+# Log errors already emailed today, so the same error isn't re-sent by every hourly cycle.
+LOG_ERROR_STATE = BASE_DIR / "Data" / "watchdog_log_errors_state.json"
 SELF_HEAL_LOCK = BASE_DIR / "Data" / "self_healing.lock"
 WATCHDOG_LOCK_FILE = BASE_DIR / "Data" / "watchdog_run.lock"   # cross-process singleton (PID)
 # Data-loss / backup detection (see check_data_sentinel / check_backup_health).
@@ -286,6 +288,53 @@ def _first_report_of_failed_run(task: str, last_run: str) -> bool:
     except OSError as e:
         _log.warning(f"Could not save the scheduler audit state: {e}")
     return True
+
+
+# The per-task failed-run line check_task_scheduler logs. Those failures are reported through
+# check_task_scheduler, once per failed run, so the log scan leaves them out. Other
+# "[Scheduler Audit]" errors (e.g. an unreadable task manifest) have no other route to the email.
+_AUDIT_FAILED_RUN = "failed on its last execution"
+
+
+def _new_log_errors(errors: list[str], today: str) -> tuple[list[str], set]:
+    """(log errors not yet emailed today, the day's signatures including them). Nothing is saved
+    here: call _save_log_error_state only after the email went out, so a failed send doesn't
+    mark the errors as sent."""
+    try:
+        state = json.loads(LOG_ERROR_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    seen = set(state.get(today, []))
+    new = []
+    for err in errors:
+        if "[Scheduler Audit]" in err and _AUDIT_FAILED_RUN in err:
+            continue
+        sig = re.sub(r"\d+", "#", err)[:200]
+        if sig not in seen:
+            seen.add(sig)
+            new.append(err)
+    return new, seen
+
+
+def _save_log_error_state(today: str, seen: set) -> None:
+    """Record the day's emailed log-error signatures (after a successful send)."""
+    try:
+        LOG_ERROR_STATE.parent.mkdir(parents=True, exist_ok=True)
+        LOG_ERROR_STATE.write_text(json.dumps({today: sorted(seen)}, indent=1), encoding="utf-8")
+    except OSError as e:
+        _log.warning(f"Could not save the log-error state: {e}")
+
+
+def _report_status(compilation_passed, ai_triggered: bool, recovery_actions: list[str]) -> tuple[str, str]:
+    """(color, text) for the recovery email's status badge. "HEALED" only when the watchdog acted
+    (AI healer ran, or ghost processes were killed); findings alone read ATTENTION."""
+    if compilation_passed == "SKIPPED":
+        return "#7f8c8d", "SKIPPED (OFF-MARKET)"
+    if not compilation_passed:
+        return "#c0392b", "MANUAL INTERVENTION REQUIRED"
+    if ai_triggered or any(a.startswith("Killed ghost") for a in recovery_actions):
+        return "#27ae60", "NOMINAL (HEALED)"
+    return "#e67700", "ATTENTION: SEE FINDINGS BELOW"
 
 
 def check_task_scheduler():
@@ -625,6 +674,12 @@ def _record_backup_status(result):
         _write_json(BACKUP_STATUS_FILE, status)
     except OSError as e:
         _log.warning(f"⚠️ Could not record backup status: {e}")
+
+
+def backup_status() -> dict:
+    """The recorded backup outcome: {"last_attempt", "last_result", "last_success"} (any may be
+    missing). Written by sync_data_folder(), which only the AETHER_Data_Backup task calls."""
+    return _read_json(BACKUP_STATUS_FILE) or {}
 
 
 def check_backup_health():
@@ -1042,6 +1097,8 @@ def run_watchdog():
 
     # 6. Re-Audit Logs after the fix
     remaining_errors = check_logs()
+    today_str = now_la.strftime("%Y-%m-%d")
+    new_errors, log_error_sigs = ([], set()) if ai_triggered else _new_log_errors(remaining_errors, today_str)
     
     # Check if there are any active issues left
     issues = []
@@ -1052,18 +1109,15 @@ def run_watchdog():
 
     # 7. Construct the Consolidated HTML Recovery Report (The Final Step!)
     # We send an email if a healing action occurred, an AI healer triggered, or there are active code errors in the logs.
-    if ai_triggered or recovery_actions or (remaining_errors and not ai_triggered):
+    if ai_triggered or recovery_actions or new_errors:
         _log.console("Healer cycle complete. Constructing consolidated recovery report...")
         
         # Color badges & status texts based on compilation result
+        status_color, status_text = _report_status(compilation_passed, ai_triggered, recovery_actions)
         if compilation_passed == "SKIPPED":
-            status_color = "#7f8c8d"  # Gray
-            status_text = "SKIPPED (OFF-MARKET)"
             comp_color = "#7f8c8d"
             comp_text = "SKIPPED (Outside Active Prep/Trading Window)"
         else:
-            status_color = "#27ae60" if compilation_passed else "#c0392b"
-            status_text = "NOMINAL (HEALED)" if compilation_passed else "MANUAL INTERVENTION REQUIRED"
             comp_color = "#27ae60" if compilation_passed else "#c0392b"
             comp_text = "SUCCESS / PASSED" if compilation_passed else "FAILED / COMPILE ERROR"
         
@@ -1096,6 +1150,14 @@ def run_watchdog():
             </div>
             ''' if recovery_actions else ''}
 
+            <!-- SECTION 1c: NEW LOG ERRORS (first time seen today) -->
+            {f'''
+            <div style="background: #fff4e6; border-left: 5px solid #e67700; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
+                <h3 style="margin-top: 0; color: #d9480f; font-size: 15px;">📋 NEW LOG ERRORS IN THE LAST HOUR ({len(new_errors)}):</h3>
+                <ul style="font-size: 12px; padding-left: 20px; color: #333; font-family: monospace;">{"".join(f"<li>{html.escape(e[:300])}</li>" for e in new_errors[:20])}</ul>
+            </div>
+            ''' if new_errors else ''}
+
             <!-- SECTION 2: AI DEBUGGING & HEALING ACTIONS -->
             {f'''
             <div style="background: #eef9ff; border-left: 5px solid #3498db; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
@@ -1113,7 +1175,7 @@ def run_watchdog():
                 <p style="font-size: 13px; font-weight: bold;">Validation Script: <span style="font-family: monospace; background: #ddd; padding: 2px 4px;">python ai_portfolio_game.py --report</span></p>
                 <p style="font-size: 13px; font-weight: bold;">Compilation Result: <span style="color: {comp_color}; font-size: 14px;">{comp_text}</span></p>
                 <h4 style="margin-bottom: 5px; font-size: 13px; color: #333;">Validation Console Output:</h4>
-                <pre style="background: #f1f2f6; color: #2c3e50; padding: 12px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; overflow-x: auto; font-family: monospace;">{validation_output}</pre>
+                <pre style="background: #f1f2f6; color: #2c3e50; padding: 12px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; overflow-x: auto; font-family: monospace;">{html.escape(validation_output) or "(no console output)"}</pre>
             </div>
 
             <!-- SECTION 4: NEXT STEPS -->
@@ -1133,6 +1195,8 @@ def run_watchdog():
         
         notify.send_email("🛡️ Project AETHER: Autonomous Health & AI Recovery Report", html_report, is_html=True)
         _log.info("Consolidated Recovery Report emailed successfully!")
+        if new_errors:
+            _save_log_error_state(today_str, log_error_sigs)
     else:
         _log.info("✅ System Health Check: All systems nominal.")
 

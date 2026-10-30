@@ -56,35 +56,35 @@ class TestAETHEROracle(unittest.TestCase):
                 {"symbol": "MSFT", "qty": 5, "buy": 400.0, "current": 370.0, "stop": 380.0, "pnl_pct": -7.5, "s10": -1.0, "l60": 2.0, "status": "Neutral"},
                 # Momentum decay (combined score < -2.0)
                 {"symbol": "TSLA", "qty": 8, "buy": 220.0, "current": 210.0, "stop": 190.0, "pnl_pct": -4.54, "s10": -4.0, "l60": -1.0, "status": "REDUCE"},
-                # Overridden Stop breach (current <= stop, but has shadow_verdict: HOLD)
+                # Stop breach with an AI HOLD: still a SELL, a stop is never overridden (R&D #14)
                 {"symbol": "GOOG", "qty": 5, "buy": 150.0, "current": 140.0, "stop": 150.0, "pnl_pct": -6.67, "s10": -1.0, "l60": -1.0, "status": "Neutral", "shadow_verdict": "HOLD"},
-                # Overridden Momentum decay (combined score < -2.0, but has shadow_verdict: FLAG-FOR-REVIEW)
-                {"symbol": "META", "qty": 5, "buy": 350.0, "current": 340.0, "stop": 300.0, "pnl_pct": -2.85, "s10": -4.0, "l60": -1.0, "status": "REDUCE", "shadow_verdict": "FLAG-FOR-REVIEW"}
+                # Momentum decay + FLAG-FOR-REVIEW on a LOSER (340 vs 350): still a SELL, the override only lets winners run
+                {"symbol": "META", "qty": 5, "buy": 350.0, "current": 340.0, "stop": 300.0, "pnl_pct": -2.85, "s10": -4.0, "l60": -1.0, "status": "REDUCE", "shadow_verdict": "FLAG-FOR-REVIEW"},
+                # Momentum decay + FLAG-FOR-REVIEW on a winner (+6 ATR): downgraded to WATCH
+                {"symbol": "NVDA", "qty": 5, "buy": 100.0, "current": 130.0, "stop": 90.0, "pnl_pct": 30.0, "s10": -4.0, "l60": -1.0, "status": "REDUCE", "shadow_verdict": "FLAG-FOR-REVIEW"}
             ]
         }
         
-        sells, holds = oracle.audit_oracle_portfolio(acct)
+        with mock.patch.object(oracle, "calculate_atr", return_value=5.0) as atr:
+            sells, holds = oracle.audit_oracle_portfolio(acct)
+        # ATR is read only for momentum SELLs that could be overridden (TSLA, META, NVDA), never for a stop breach.
+        self.assertEqual(sorted(c.args[0] for c in atr.call_args_list), ["META", "NVDA", "TSLA"])
         
-        # We expect AAPL, GOOG and META to be in holds, MSFT and TSLA to be in sells
-        self.assertEqual(len(holds), 3)
-        hold_syms = {h["symbol"] for h in holds}
-        self.assertIn("AAPL", hold_syms)
-        self.assertIn("GOOG", hold_syms)
-        self.assertIn("META", hold_syms)
+        # AAPL and NVDA hold; MSFT, TSLA, GOOG (stop breach despite the AI HOLD) and META (a loser) sell
+        self.assertEqual({h["symbol"] for h in holds}, {"AAPL", "NVDA"})
+
+        goog_pos = next(s for s in sells if s["symbol"] == "GOOG")
+        self.assertEqual(goog_pos["action"], "SELL")
+        self.assertIn("CRITICAL STOP BREACH", goog_pos["reason"])
+        self.assertNotIn("[AI EXIT OVERRIDE]", goog_pos["reason"])
         
-        # Verify the overridden actions and reasons
-        goog_pos = next(h for h in holds if h["symbol"] == "GOOG")
-        self.assertEqual(goog_pos["action"], "HOLD")
-        self.assertIn("[AI EXIT OVERRIDE]", goog_pos["reason"])
+        nvda_pos = next(h for h in holds if h["symbol"] == "NVDA")
+        self.assertEqual(nvda_pos["action"], "WATCH")
+        self.assertIn("[AI EXIT OVERRIDE]", nvda_pos["reason"])
+        meta_pos = next(s for s in sells if s["symbol"] == "META")
+        self.assertNotIn("[AI EXIT OVERRIDE]", meta_pos["reason"])
         
-        meta_pos = next(h for h in holds if h["symbol"] == "META")
-        self.assertEqual(meta_pos["action"], "WATCH")
-        self.assertIn("[AI EXIT OVERRIDE]", meta_pos["reason"])
-        
-        self.assertEqual(len(sells), 2)
-        sell_syms = {s["symbol"] for s in sells}
-        self.assertIn("MSFT", sell_syms)
-        self.assertIn("TSLA", sell_syms)
+        self.assertEqual({s["symbol"] for s in sells}, {"MSFT", "TSLA", "GOOG", "META"})
 
     def test_get_oracle_buy_candidates(self):
         """get_oracle_buy_candidates filters held positions, checks setups, and sorts by combined score descending."""

@@ -11,8 +11,9 @@ import datetime
 
 import ai_portfolio_game
 import data_api
+from aether import sell_rules
 from aether.config import CFG
-from aether.risk_utils import is_elite_breakout_candidate
+from aether.risk_utils import calculate_atr, is_elite_breakout_candidate
 from aether_logger import get_logger as _get_logger
 
 _oracle_log = _get_logger("oracle")
@@ -100,43 +101,16 @@ def audit_oracle_portfolio(acct):
             action = "SELL"
             reason = f"MOMENTUM COLLAPSE: Technical score is decaying heavily at {total:.1f} (Short10: {s10:.1f}, Long60: {l60:.1f})."
 
-        # AI Exit Override Gate
-        ai_override = False
-        override_verdict = ""
-        override_reason = ""
-
-        # 1. Check standard shadow_verdict / ai_verdict / verdict keys in the holding
-        for key in ["shadow_verdict", "ai_verdict", "verdict"]:
-            if key in h:
-                val = h[key]
-                if isinstance(val, dict):
-                    v = val.get("verdict", "").upper()
-                    note = val.get("note", "")
-                else:
-                    v = str(val).upper()
-                    note = ""
-                if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                    ai_override = True
-                    override_verdict = v
-                    override_reason = f"AI Second-Opinion ({key}) returned {v}" + (f": {note}" if note else "")
-                    break
-
-        # 2. Check verdicts dictionary inside the holding
-        if not ai_override:
-            pos_verdicts = h.get("verdicts", {})
-            if isinstance(pos_verdicts, dict):
-                for prov, v_info in pos_verdicts.items():
-                    v = v_info.get("verdict", "").upper() if isinstance(v_info, dict) else str(v_info).upper()
-                    if v in ("FLAG-FOR-REVIEW", "HOLD"):
-                        ai_override = True
-                        override_verdict = v
-                        override_reason = f"AI Second-Opinion verdicts ({prov}) returned {v}" + (f": {v_info.get('note', '')}" if isinstance(v_info, dict) and v_info.get('note') else "")
-                        break
-
-        # Apply AI Exit Override Gate to downgrade SELL decisions
-        if action == "SELL" and ai_override:
-            old_action = action
-            action = "HOLD" if override_verdict == "HOLD" else "WATCH"
+        # AI Exit Override Gate (R&D #14), the shared rule in sell_rules.ai_exit_override: a stop
+        # breach always sells; a momentum SELL is downgraded only when the holding is safely in profit.
+        # ATR is read only when a momentum SELL could be overridden (one OHLCV read, not one per holding).
+        atr = calculate_atr(sym) if action == "SELL" and not in_breach else None
+        old_action = action
+        action, override_reason, ignored_reason = sell_rules.ai_exit_override(
+            action, reason, price=current, cost=cost, atr=atr, holding=h, is_stop=in_breach)
+        if ignored_reason:
+            _oracle_log.info(f"🛑 [AI OVERRIDE] Real-account position {sym}: AI verdict not applied ({ignored_reason}).")
+        if override_reason:
             reason = f"⚠️ [AI EXIT OVERRIDE] {old_action} overridden! Downgraded to {action} due to {override_reason} (was {reason})"
             _oracle_log.info(f"🛡️ [AI OVERRIDE] Real-account position {sym} sell overridden! Downgraded to {action} due to: {override_reason}")
 
