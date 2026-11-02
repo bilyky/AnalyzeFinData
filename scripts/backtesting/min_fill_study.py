@@ -1,4 +1,4 @@
-"""R&D #63: should a buy that the 1% loss cap trims to a sliver be skipped?
+"""R&D #65: should a buy that the 1% loss cap trims to a sliver be skipped?
 
 PROD 2026-11-02 holds NCLH at $52 (3 shares) and MEDP at 1 share on $10.5K equity. Live has no
 minimum position size: the loss cap trims a buy to whatever keeps (entry - stop) * qty under 1% of
@@ -8,7 +8,7 @@ costs a slot, commissions and attention.
 Variants (portfolio_backtest.simulate, today's rules, 1% loss cap, 10 bps/side): no floor (live),
 and skipping a trimmed buy worth less than 1%, 2% or 4% of equity (min_fill_pct).
 
-Decision rule, fixed before the run:
+Decision rule (committed together with the first result):
 - Train 2023-01..2024-12, test 2025-01..end. Pick the floor with the best TRAIN Sharpe.
 - MIN_FILL_HELPS only if, on the TEST window, the pick's daily return minus no-floor's has HAC
   t >= 1.96 (lag 5, as R&D #58), mean > 0, and its max drawdown is no more than 2 points deeper.

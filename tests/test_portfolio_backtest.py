@@ -186,6 +186,17 @@ class TestSimulate(unittest.TestCase):
         self.assertAlmostEqual(pb.simulate(panel, bars, DAYS[:3], min_fill_pct=0.03, **kw)["curve"][1][2], 400.0)
         self.assertAlmostEqual(pb.simulate(panel, bars, DAYS[:3], **kw)["curve"][1][2], 400.0)
 
+    def test_min_fill_floor_is_a_share_of_current_equity_not_the_start(self):
+        # A's capped $400 buy (4% of 10,000) lifts equity to 12,000. B has ATR 2 (stop 5), so its
+        # buy is capped at 120 / 5 = 24 x $10 = $240: 2.0% of current equity, 2.4% of the start.
+        # A 2.2% floor must skip B (current equity), not buy it (starting equity). #226 review.
+        bars = {"A": _bars([10, 10, 60, 60, 60], closes=[10, 60, 60, 60, 60]),
+                "B": _bars([10, 10, 10, 10, 10], atr=2.0), "SPY": _bars([100] * 5)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}, "B": {DAYS[1]: [6.0, 0.0]}}
+        kw = dict(cost_bps=0.0, initial=10_000.0, max_trade_risk_pct=0.01)
+        self.assertIn("B", pb.simulate(panel, bars, DAYS[:5], **kw)["open_positions"])
+        self.assertNotIn("B", pb.simulate(panel, bars, DAYS[:5], min_fill_pct=0.022, **kw)["open_positions"])
+
     def test_rank_hook_decides_which_name_takes_the_last_slot(self):
         bars = {"A": _bars([10] * 3), "B": _bars([10] * 3), "SPY": _bars([100] * 3)}
         panel = {"A": {DAYS[0]: [6.0, 0.0]}, "B": {DAYS[0]: [5.5, 0.0]}}

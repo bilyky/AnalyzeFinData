@@ -304,7 +304,7 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
     rank: optional callable(sym, day, (s10, l60)) -> float, the entry ranking key (highest
     first); default S10 + L60, as the live game. The score threshold still uses S10 + L60.
     min_fill_pct: skip a buy worth less than this share of equity AFTER the loss-cap trim
-    (R&D #63; live has no such floor and holds $50 positions)."""
+    (R&D #65; live has no such floor and holds $50 positions)."""
     unknown = set(disable) - set(RULES)
     if unknown:
         raise ValueError(f"unknown rules: {sorted(unknown)}")
