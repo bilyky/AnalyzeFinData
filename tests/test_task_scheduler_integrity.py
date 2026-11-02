@@ -232,6 +232,25 @@ class TestRecoveryReportForLogErrors(unittest.TestCase):
         self.assertIsNotNone(self._run(["[aether.rapidapi] 3 symbol(s) failed this run"]))
         self.assertIsNone(self._run(["[aether.rapidapi] 41 symbol(s) failed this run"]))
 
+    def test_one_cause_logged_per_symbol_is_one_error(self):
+        # PROD 11-02: an OpenRouter 404 logged once per stock and per email subject; each line
+        # counted as new, so the email went out 5 times in two days.
+        url = "404 Client Error: Not Found for url: https://openrouter.ai/api/v1/chat/completions"
+        first = [f"[autonomous_run.log] [2026-11-02 04:33:1{i}] Warning: Live AI reasoning failed for {s}: {url}"
+                 for i, s in enumerate(("HESM", "EIX", "AMAT"))]
+        first += [f"[aether.external_intel] Extraction failed for {subj}: {url}"
+                  for subj in ("We marked it down. A lot.", "Monday Edition: MPLX yields 8.1% and goe")]
+        html = self._run(first)
+        self.assertIsNotNone(html)
+        self.assertIn("HESM", html)
+        self.assertIn("+2 more with the same error", html)      # EIX and AMAT folded into HESM
+        self.assertIn("+1 more with the same error", html)
+        self.assertNotIn("for EIX", html)
+        later = [f"[autonomous_run.log] [2026-11-02 07:00:0{i}] Warning: Live AI reasoning failed for {s}: {url}"
+                 for i, s in enumerate(("VLO", "RS"))]
+        self.assertIsNone(self._run(later), "the same 404 for other stocks re-sent the email")
+        self.assertIsNotNone(self._run(["[aether.chaikin] KeyError: 'session'"]), "a new cause must still send")
+
     def test_status_says_healed_only_after_an_action(self):
         cases = [
             (("SKIPPED", False, []), "SKIPPED (OFF-MARKET)"),
