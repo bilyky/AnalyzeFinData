@@ -12,8 +12,12 @@ import json
 import sys
 from pathlib import Path
 
-DATA = Path(__file__).resolve().parents[2] / "Data"   # docs/prod-notes/ -> <repo>/Data
-GAME, LOG, DNA = DATA / "ai_portfolio_game.json", DATA / "decision_log.jsonl", DATA / "trade_history_dna.json"
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # docs/prod-notes/ -> repo root
+from aether import decision_eval, ledgers, paths
+
+# The ledger paths have one home each (tests/test_ledger_hermetic.py).
+GAME = Path(paths.data_dir()) / "ai_portfolio_game.json"
+LOG, DNA = Path(decision_eval.LOG), Path(ledgers.TRADE_DNA_FILE)
 
 
 def _is_fixture_breaker(rec: dict) -> bool:
