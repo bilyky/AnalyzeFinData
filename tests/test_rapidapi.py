@@ -335,3 +335,12 @@ class TestHeldPositionsFirst(unittest.TestCase):
             json.dump({"positions": {"sedg": {"qty": 1}, "MNST": {"qty": 2}}}, f)
         self.assertEqual(rapidapi.held_symbols(game), {"SEDG", "MNST"})
         self.assertEqual(rapidapi.held_symbols(os.path.join(self.dir, "missing.json")), set())
+
+
+class TestRunSymbols(unittest.TestCase):
+    def test_held_names_off_the_sheet_are_added_once(self):
+        syms = rapidapi.run_symbols([], {"SEDG", "AAPL"}, sheet=lambda: ["AAPL", "MSFT"])
+        self.assertEqual(syms, ["AAPL", "MSFT", "SEDG"])
+
+    def test_explicit_symbols_are_used_as_given(self):
+        self.assertEqual(rapidapi.run_symbols(["sedg"], {"MNST"}, sheet=lambda: ["AAPL"]), ["SEDG"])

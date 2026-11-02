@@ -249,6 +249,15 @@ def held_symbols(game_path: str | None = None) -> set[str]:
         return set()
 
 
+def run_symbols(explicit: list[str], held: set[str], sheet=None) -> list[str]:
+    """The CLI's symbol list: the explicit symbols if given, else the Research sheet plus any
+    held position missing from it (a held name off the sheet still needs bars)."""
+    if explicit:
+        return [s.upper() for s in explicit]
+    syms = list((sheet or load_symbols)())
+    return syms + sorted(held - {s.upper() for s in syms})
+
+
 def repair_missing(symbols: list[str], today_str: str, force: bool = False,
                    max_fetches: int | None = None, priority: set[str] | None = None) -> dict:
     """
@@ -424,17 +433,9 @@ if __name__ == "__main__":
     cli = ap.parse_args()
     force, max_fetches = cli.force, cli.max_fetches
 
-    if cli.symbols:
-        # Explicit symbols passed on command line
-        syms = [s.upper() for s in cli.symbols]
-    else:
-        # Load all symbols from Research sheet
-        syms = load_symbols()
-
-    _log.console("[RapidAPI] Recovery pass — %d symbols, today=%s, force=%s",
-                 len(syms), today_str, force)
     held = held_symbols()
-    if not cli.symbols:
-        syms += sorted(held - {s.upper() for s in syms})   # a held name off the sheet still needs bars
+    syms = run_symbols(cli.symbols, held)
+    _log.console("[RapidAPI] Recovery pass — %d symbols (%d held), today=%s, force=%s",
+                 len(syms), len(held), today_str, force)
     result = repair_missing(syms, today_str, force=force, max_fetches=max_fetches, priority=held)
     log_run_summary(result)
