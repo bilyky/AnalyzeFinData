@@ -213,6 +213,20 @@ class TestScoring(unittest.TestCase):
         self.assertEqual(sc["selectors"]["rules"]["scored"], 3)
         self.assertAlmostEqual(sc["selectors"]["rules"]["hit_rate"], 66.7, places=1)
 
+    def test_split_by_action_and_means_per_sell(self):
+        # Two sells (one fell 20%, one rose 20%) and two holds of the same symbol (one rose).
+        entries = [_entry("A", "SELL", 100, 90), _entry("B", "SELL", 100, 120),
+                   _entry("C", "HOLD", 100, 90), _entry("C", "HOLD", 100, 90, date="2026-07-02")]
+        fwd = {"A": 80, "B": 120, "C": 110}
+        sc = de.score_log(entries, horizon_days=10,
+                          fwd_price_fn=lambda s, d, h: 90 if (s, d) == ("C", "2026-07-02") else fwd[s])
+        r = sc["selectors"]["rules"]
+        self.assertEqual((r["sells"], r["sell_hit_rate"]), (2, 50.0))
+        self.assertEqual((r["holds"], r["hold_hit_rate"]), (2, 50.0))
+        self.assertEqual(r["symbols"], 3)
+        # Means per SELL, not sums: one sell avoided a 20% loss, one missed a 20% gain.
+        self.assertEqual((r["avoided_loss_pct"], r["missed_upside_pct"]), (10.0, 10.0))
+
 
 class TestReflection(unittest.TestCase):
     def test_reflection_mentions_misses(self):
@@ -226,6 +240,13 @@ class TestReflection(unittest.TestCase):
         sc = de.score_log([_entry("A", "SELL", 100, 90)], horizon_days=10,
                           fwd_price_fn=lambda s, d, h: 80)
         self.assertIn("No winner-selling misses", de.reflection(sc))
+
+    def test_reflection_shows_the_sell_rate_and_symbol_count(self):
+        sc = de.score_log([_entry("A", "SELL", 100, 90)], horizon_days=10,
+                          fwd_price_fn=lambda s, d, h: 80)
+        text = de.reflection(sc)
+        self.assertIn("SELL 100.0% of 1", text)
+        self.assertIn("1 symbols", text)
 
 
 if __name__ == "__main__":

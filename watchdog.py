@@ -305,15 +305,35 @@ def _new_log_errors(errors: list[str], today: str) -> tuple[list[str], set]:
     except (OSError, ValueError):
         state = {}
     seen = set(state.get(today, []))
-    new = []
+    first, more = {}, {}
     for err in errors:
         if "[Scheduler Audit]" in err and _AUDIT_FAILED_RUN in err:
             continue
-        sig = re.sub(r"\d+", "#", err)[:200]
-        if sig not in seen:
-            seen.add(sig)
-            new.append(err)
+        sig = _error_signature(err)
+        if sig in seen:
+            continue
+        if sig in first:
+            more[sig] += 1
+        else:
+            first[sig], more[sig] = err, 0
+    seen |= set(first)
+    new = [e + (f"  (+{more[s]} more with the same error)" if more[s] else "") for s, e in first.items()]
     return new, seen
+
+
+# Where a line's cause starts: an HTTP client/server error or a Python exception name.
+_CAUSE_RE = re.compile(r"\b\d{3} (?:Client|Server) Error\b|\b[A-Z]\w*(?:Error|Exception)\b")
+
+
+def _error_signature(err: str) -> str:
+    """One signature per cause: the source tag plus the text from the error itself on, with
+    digits as '#'. PROD 11-01/11-02: one OpenRouter 404 logged once per email subject and per
+    stock, and each line counted as a new error, so the recovery email went out 5 times."""
+    m = _CAUSE_RE.search(err)
+    if m:
+        source = err.split("]", 1)[0] + "] " if err.startswith("[") else ""
+        err = source + err[m.start():]
+    return re.sub(r"\d+", "#", err)[:200]
 
 
 def _save_log_error_state(today: str, seen: set) -> None:
