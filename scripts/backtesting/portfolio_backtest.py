@@ -289,7 +289,8 @@ def _bar(bars, sym, day):
 
 def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
              initial=INITIAL_EQUITY, excluded=frozenset(), max_trade_risk_pct=None,
-             disable=frozenset(), hurst_filter=None, admit=None, rank=None) -> dict:
+             disable=frozenset(), hurst_filter=None, admit=None, rank=None,
+             min_fill_pct=None) -> dict:
     """Replay `panel` ({sym: {date: [s10, l60]}}) over `calendar` (sorted trading days).
 
     max_trade_risk_pct: when set (and risk_rules is on), each buy is trimmed so
@@ -301,7 +302,9 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
     admit: optional callable(sym, day) -> bool, an extra entry gate (the live Setup / Short10
     floor / R/R gates are not in this simulator; entry_gates_portfolio.py passes them here).
     rank: optional callable(sym, day, (s10, l60)) -> float, the entry ranking key (highest
-    first); default S10 + L60, as the live game. The score threshold still uses S10 + L60."""
+    first); default S10 + L60, as the live game. The score threshold still uses S10 + L60.
+    min_fill_pct: skip a buy worth less than this share of equity AFTER the loss-cap trim
+    (R&D #65; live has no such floor and holds $50 positions)."""
     unknown = set(disable) - set(RULES)
     if unknown:
         raise ValueError(f"unknown rules: {sorted(unknown)}")
@@ -348,6 +351,8 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
                 if cap is not None and usd > cap:
                     usd = cap
                     cap_trims += 1
+            if min_fill_pct and usd < min_fill_pct * (curve[-1][1] if curve else initial):
+                continue
             qty = usd / (o * (1 + c))
             if qty <= 0:
                 continue

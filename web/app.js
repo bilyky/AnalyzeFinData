@@ -1452,11 +1452,12 @@ async function loadScorecard() {
             <td class="font-semibold">${n}</td>
             <td>${s.scored}</td>
             <td class="${s.hit_rate >= 50 ? "pos" : "neg"}">${pct(s.hit_rate)}</td>
+            <td title="A HOLD counts as right whenever the stock rose, so the pooled rate tracks the market; the SELL rate is the decision signal.">${s.sells ? `${pct(s.sell_hit_rate)} (${s.sells})` : "—"}</td>
             <td class="${s.winner_sell_miss ? "neg" : "mut"}">${s.winner_sell_miss}</td>
             <td class="mut">${pct(s.missed_upside_pct)}</td>
             <td class="pos">${pct(s.avoided_loss_pct)}</td>
         </tr>`;
-    }).join("") : `<tr><td colspan="6" class="text-center text-slate-500 py-6">No scored decisions yet.</td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="text-center text-slate-500 py-6">No scored decisions yet.</td></tr>`;
 
     const misses = sc.winner_selling_misses || [];
     $("misses-body").innerHTML = misses.length ? misses.map((m) => {

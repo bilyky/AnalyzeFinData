@@ -299,3 +299,48 @@ class TestCrossProcessLock(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHeldPositionsFirst(unittest.TestCase):
+    """PROD 10-24..10-31: a held name's placeholder bar waited a week behind ~150 deferred
+    symbols. With the held positions as priority they are repaired first."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_dir = rapidapi.OHLCV_DIR
+        rapidapi.OHLCV_DIR = self.dir
+        self.addCleanup(lambda: setattr(rapidapi, "OHLCV_DIR", self._orig_dir))
+        # OLD: newest real bar 35 days ago (stale, not dormant: most starved). HELD: real yesterday, placeholder today.
+        _write(self.dir, "OLD", _cache({"2026-07-01": _real_bar(10, 11, 9, 10, 1000)}, "2026-07-01"))
+        _write(self.dir, "HELD", _cache({"2026-08-04": _real_bar(20, 21, 19, 20, 1000),
+                                         TODAY: _real_bar(20, 20, 20, 20, 0)}, TODAY))
+
+    def _fetched(self, priority):
+        with mock.patch.object(rapidapi, "_fetch_and_merge") as fetch, \
+             mock.patch("rapidapi.time.sleep"):
+            res = rapidapi.repair_missing(["OLD", "HELD"], TODAY, max_fetches=1, priority=priority)
+        return [c.args[0] for c in fetch.call_args_list], res["deferred"]
+
+    def test_held_symbol_is_repaired_before_the_most_starved(self):
+        self.assertEqual(self._fetched({"HELD"}), (["HELD"], 1))
+
+    def test_without_priority_the_most_starved_goes_first(self):
+        self.assertEqual(self._fetched(None), (["OLD"], 1))
+
+    def test_held_symbols_reads_the_game_positions(self):
+        game = os.path.join(self.dir, "ai_portfolio_game.json")
+        with open(game, "w") as f:
+            json.dump({"positions": {"sedg": {"qty": 1}, "MNST": {"qty": 2}}}, f)
+        self.assertEqual(rapidapi.held_symbols(game), {"SEDG", "MNST"})
+        self.assertEqual(rapidapi.held_symbols(os.path.join(self.dir, "missing.json")), set())
+
+
+class TestRunSymbols(unittest.TestCase):
+    def test_held_names_off_the_sheet_are_added_once(self):
+        syms = rapidapi.run_symbols([], {"SEDG", "AAPL"}, sheet=lambda: ["AAPL", "MSFT"])
+        self.assertEqual(syms, ["AAPL", "MSFT", "SEDG"])
+
+    def test_explicit_symbols_are_used_as_given(self):
+        self.assertEqual(rapidapi.run_symbols(["sedg"], {"MNST"}, sheet=lambda: ["AAPL"]), ["SEDG"])

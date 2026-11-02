@@ -12,6 +12,7 @@ PROD 2026-10-10 .. 10-12:
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -123,6 +124,24 @@ class TestRegistrar(unittest.TestCase):
         self.assertNotIn("powershell.exe", branch)
         self.assertIn('New-ScheduledTaskAction -Execute "cmd.exe"', ps1)
 
+    @unittest.skipUnless(sys.platform == "win32" and shutil.which("powershell.exe"), "needs Windows PowerShell")
+    def test_trigger_start_is_local_time_so_it_follows_dst(self):
+        # PROD 2026-11-02: New-ScheduledTaskTrigger saved "...T14:00:00Z"; after DST ended every
+        # task ran an hour early (the 07:00 trade run fired at 06:00 PT, market closed).
+        ps1 = _PS1.read_text(encoding="utf-8")
+        first = min(i for i in (ps1.find("function Set-LocalStart"), ps1.find("function New-AetherTrigger")) if i >= 0)
+        funcs = ps1[first:ps1.index("# MultipleInstances IgnoreNew")]
+        script = funcs + (
+            '\nforeach ($s in @(@{type="daily"; at="07:00"}, @{type="weekly"; at="10:00"; day="Saturday"}, '
+            '@{type="daily"; at="06:45"; repeat_every_min=30; repeat_for_hours=7})) '
+            '{ (New-AetherTrigger ([pscustomobject]$s)).StartBoundary }')
+        out = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                             capture_output=True, text=True, timeout=60)
+        starts = out.stdout.split()
+        self.assertEqual(len(starts), 3, out.stderr)
+        for start, hhmm in zip(starts, ("07:00", "10:00", "06:45")):
+            self.assertRegex(start, rf"^\d{{4}}-\d{{2}}-\d{{2}}T{hhmm}:00$")   # no Z, no +/-hh:mm
+
 
 class TestPreflightWatchdogResult(unittest.TestCase):
     def _health(self, last_result):
@@ -231,6 +250,25 @@ class TestRecoveryReportForLogErrors(unittest.TestCase):
     def test_same_error_with_another_count_is_the_same_error(self):
         self.assertIsNotNone(self._run(["[aether.rapidapi] 3 symbol(s) failed this run"]))
         self.assertIsNone(self._run(["[aether.rapidapi] 41 symbol(s) failed this run"]))
+
+    def test_one_cause_logged_per_symbol_is_one_error(self):
+        # PROD 11-02: an OpenRouter 404 logged once per stock and per email subject; each line
+        # counted as new, so the email went out 5 times in two days.
+        url = "404 Client Error: Not Found for url: https://openrouter.ai/api/v1/chat/completions"
+        first = [f"[autonomous_run.log] [2026-11-02 04:33:1{i}] Warning: Live AI reasoning failed for {s}: {url}"
+                 for i, s in enumerate(("HESM", "EIX", "AMAT"))]
+        first += [f"[aether.external_intel] Extraction failed for {subj}: {url}"
+                  for subj in ("We marked it down. A lot.", "Monday Edition: MPLX yields 8.1% and goe")]
+        html = self._run(first)
+        self.assertIsNotNone(html)
+        self.assertIn("HESM", html)
+        self.assertIn("+2 more with the same error", html)      # EIX and AMAT folded into HESM
+        self.assertIn("+1 more with the same error", html)
+        self.assertNotIn("for EIX", html)
+        later = [f"[autonomous_run.log] [2026-11-02 07:00:0{i}] Warning: Live AI reasoning failed for {s}: {url}"
+                 for i, s in enumerate(("VLO", "RS"))]
+        self.assertIsNone(self._run(later), "the same 404 for other stocks re-sent the email")
+        self.assertIsNotNone(self._run(["[aether.chaikin] KeyError: 'session'"]), "a new cause must still send")
 
     def test_status_says_healed_only_after_an_action(self):
         cases = [
