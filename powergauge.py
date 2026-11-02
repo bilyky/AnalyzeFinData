@@ -110,6 +110,7 @@ _session_valid_until = 0.0   # monotonic timestamp; avoids HTTP validation on ev
 
 _AUTH_BREAKER_COOLDOWN = 900  # seconds to suspend browser re-auth AND throttle alert email after a failure
 _auth_circuit_breaker_until = 0.0            # monotonic timestamp; 0.0 = breaker open (monotonic() is always >= 0)
+_breaker_warned_until       = 0.0            # the breaker window already warned about (one warning per window)
 _last_email_alert_time      = float("-inf")  # monotonic timestamp; -inf so the FIRST alert always sends
                                              # (monotonic() counts from boot, so 0.0 would suppress alerts in the first cooldown after a reboot)
 
@@ -147,7 +148,16 @@ def ensure_valid_session() -> dict:
         # also fail when Chaikin is unreachable.
         _pg_log.warning("Chaikin unreachable (network/proxy/5xx) — keeping existing session, skipping re-auth.")
         return session or {}
-        
+
+    # Breaker open: the JWT exchange and the browser re-auth both failed minutes ago. Fail at
+    # once, and warn once per window — a batch calls this per symbol (10-27: 550+ warnings).
+    global _auth_circuit_breaker_until, _breaker_warned_until
+    if time.monotonic() < _auth_circuit_breaker_until:
+        if _breaker_warned_until != _auth_circuit_breaker_until:
+            _breaker_warned_until = _auth_circuit_breaker_until
+            _pg_log.warning("Chaikin automated re-auth is currently suspended (Circuit Breaker active). Wait %d minutes before next attempt.", _AUTH_BREAKER_COOLDOWN // 60)
+        raise EnvironmentError("Chaikin automated re-auth suspended (Circuit Breaker).")
+
     # status == "invalid": genuinely expired/rejected — try the cheap refresh path first.
     # API-based JWT Token Refresh (Bypasses Browser/Turnstile completely in 0.2 seconds!)
     if session and session.get("jwttoken"):
@@ -183,12 +193,6 @@ def ensure_valid_session() -> dict:
                 if "jwtToken=" in err_msg:
                     err_msg = re.sub(r"jwtToken=[^&\s]+", "jwtToken=REDACTED", err_msg)
                 _pg_log.warning(f"Failed to refresh session using JWT token (will fall back to browser): {err_msg}")
-
-    # --- CIRCUIT BREAKER: Check if we are currently locked out of browser attempts ---
-    global _auth_circuit_breaker_until
-    if time.monotonic() < _auth_circuit_breaker_until:
-        _pg_log.warning("Chaikin automated re-auth is currently suspended (Circuit Breaker active). Wait %d minutes before next attempt.", _AUTH_BREAKER_COOLDOWN // 60)
-        raise EnvironmentError("Chaikin automated re-auth suspended (Circuit Breaker).")
 
     # Expired — delegate to the cross-process singleton (protected by try-except to send email outside of lock duration)
     try:
@@ -1230,6 +1234,13 @@ def check_from_file(prefer_cache: bool, date=None):
             done += 1
             try:
                 pg_results[sym] = future.result()
+            except requests.RequestException as e:
+                # One symbol's network error (requests' exceptions are OSErrors too, so this
+                # comes before the EnvironmentError branch, which means "no session").
+                _pg_log.error(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
+                sentinel = PowerGauge(sym, date)
+                sentinel.price = -1
+                pg_results[sym] = sentinel
             except EnvironmentError:
                 pool.shutdown(wait=False, cancel_futures=True)
                 raise
@@ -1611,6 +1622,13 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
             done += 1
             try:
                 pg_results[sym] = future.result()
+            except requests.RequestException as e:
+                # One symbol's network error (requests' exceptions are OSErrors too, so this
+                # comes before the EnvironmentError branch, which means "no session").
+                _pg_log.error(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
+                sentinel = PowerGauge(sym, date)
+                sentinel.price = -1
+                pg_results[sym] = sentinel
             except EnvironmentError:
                 pool.shutdown(wait=False, cancel_futures=True)
                 raise
