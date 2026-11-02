@@ -12,6 +12,7 @@ PROD 2026-10-10 .. 10-12:
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -122,6 +123,24 @@ class TestRegistrar(unittest.TestCase):
         branch = ps1[ps1.index("if ($T.script) {"):ps1.index("} else {", ps1.index("if ($T.script) {"))]
         self.assertNotIn("powershell.exe", branch)
         self.assertIn('New-ScheduledTaskAction -Execute "cmd.exe"', ps1)
+
+    @unittest.skipUnless(sys.platform == "win32" and shutil.which("powershell.exe"), "needs Windows PowerShell")
+    def test_trigger_start_is_local_time_so_it_follows_dst(self):
+        # PROD 2026-11-02: New-ScheduledTaskTrigger saved "...T14:00:00Z"; after DST ended every
+        # task ran an hour early (the 07:00 trade run fired at 06:00 PT, market closed).
+        ps1 = _PS1.read_text(encoding="utf-8")
+        first = min(i for i in (ps1.find("function Set-LocalStart"), ps1.find("function New-AetherTrigger")) if i >= 0)
+        funcs = ps1[first:ps1.index("# MultipleInstances IgnoreNew")]
+        script = funcs + (
+            '\nforeach ($s in @(@{type="daily"; at="07:00"}, @{type="weekly"; at="10:00"; day="Saturday"}, '
+            '@{type="daily"; at="06:45"; repeat_every_min=30; repeat_for_hours=7})) '
+            '{ (New-AetherTrigger ([pscustomobject]$s)).StartBoundary }')
+        out = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                             capture_output=True, text=True, timeout=60)
+        starts = out.stdout.split()
+        self.assertEqual(len(starts), 3, out.stderr)
+        for start, hhmm in zip(starts, ("07:00", "10:00", "06:45")):
+            self.assertRegex(start, rf"^\d{{4}}-\d{{2}}-\d{{2}}T{hhmm}:00$")   # no Z, no +/-hh:mm
 
 
 class TestPreflightWatchdogResult(unittest.TestCase):
