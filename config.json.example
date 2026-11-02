@@ -52,6 +52,7 @@
     "primary": "groq",
     "max_intel_emails": 20,
     "max_parallel_extractions": 1,
+    "intel_deadline_sec": 600,
     "tiers": {
       "_note": "Ordered provider names. 'cheap' = short, frequent calls (intraday stop note, intel extraction, sell eval, classification); about 35 calls/day, 56 at most (PROD, Sept-Oct 2026). 'strong' = rare, longer calls (stock compare, web chat, research Q&A, intel verification). Unknown or disabled names are skipped. Free providers only for now (owner decision 2026-10-13): Groq first, Gemini last.",
       "cheap": ["groq", "gemini_lite"],

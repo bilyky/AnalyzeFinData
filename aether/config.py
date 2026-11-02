@@ -162,6 +162,11 @@ class _Config:
         self.ai_max_parallel_extractions = max(1, int(
             os.environ.get("AI_MAX_PARALLEL_EXTRACTIONS", "") or ai.get("max_parallel_extractions", 1)
         ))
+        # Wall-clock cap on the morning intel extraction step: a dead AI chain must not hold up
+        # the workbook refresh (#226 review).
+        self.ai_intel_deadline_sec = float(
+            os.environ.get("AI_INTEL_DEADLINE_SEC", "") or ai.get("intel_deadline_sec", 600)
+        )
 
         # ── Real brokerage accounts (last-4 IDs; PII — never hardcode in source) ─
         # Ordered: [0] = top Short_Long table (T1), [1] = bottom table (T2).

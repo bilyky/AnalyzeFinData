@@ -8,6 +8,7 @@ import extract_email_intel
 import openpyxl
 import ai_client
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeout
 from pathlib import Path
 from config import CFG
 from aether_logger import get_logger as _get_logger
@@ -130,6 +131,12 @@ def _max_parallel_extractions() -> int:
         return max(1, int(CFG.ai_max_parallel_extractions))
     except Exception:
         return 1
+
+
+def _intel_deadline_sec() -> float:
+    """Wall-clock cap on the extraction step (ai.intel_deadline_sec, default 600)."""
+    v = getattr(CFG, "ai_intel_deadline_sec", None)
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else 600.0
 
 
 def dedup_rd_topics(raw_topics) -> list:
@@ -337,61 +344,75 @@ def fetch_idea_emails():
                 _log.error(f"Extraction failed for {cand['subject'][:40]}: {e}")
                 return None
 
-        # ai.max_parallel_extractions workers (default 1: free AI tiers answer 429 to bursts)
-        with ThreadPoolExecutor(max_workers=_max_parallel_extractions()) as pool:
-            futures = [pool.submit(run_extractions, c) for c in candidates]
-            for fut in as_completed(futures):
-                res = fut.result()
-                if not res or not isinstance(res, dict):
-                    last_scan["extraction_failures"] += 1
-                    continue
-                cand = res.get("cand")
-                if not isinstance(cand, dict):
-                    continue
-                parsed_ideas = res.get("parsed_ideas")
-                intel = res.get("intel")
-                
-                base = {
-                    "msg_id": cand.get("msg_id"),
-                    "from": cand.get("from"),
-                    "subject": cand.get("subject"),
-                    "folder": cand.get("folder"),
-                    "intel": intel
-                }
-                
-                tickers = []
-                if isinstance(intel, dict):
-                    tickers = intel.get("tickers_mentioned") or []
-                
-                # Fallback: if parsed_ideas is empty, populate from modern tickers_mentioned in intel
-                if not parsed_ideas and tickers:
-                    parsed_ideas = []
-                    for t in tickers:
-                        if isinstance(t, dict) and t.get("in_universe"):
-                            parsed_ideas.append({
-                                "symbol": t.get("symbol"),
-                                "sentiment": t.get("sentiment"),
-                                "thesis": t.get("thesis")
+        # ai.max_parallel_extractions workers (default 1: free AI tiers answer 429 to bursts).
+        # The step has a deadline (ai.intel_deadline_sec): with a dead AI chain each call waits
+        # out every provider's timeout, which could take the whole morning run before the
+        # workbook refresh (#226 review: ~90 min worst case). Unfinished emails are counted as
+        # failed. No `with`: its exit would wait for the call still running.
+        pool = ThreadPoolExecutor(max_workers=_max_parallel_extractions())
+        futures = [pool.submit(run_extractions, c) for c in candidates]
+        results = []
+        try:
+            for fut in as_completed(futures, timeout=_intel_deadline_sec()):
+                results.append(fut.result())
+        except FuturesTimeout:
+            left = sum(not f.done() for f in futures)
+            last_scan["extraction_failures"] += left
+            _log.warning(f"Intel extraction deadline ({_intel_deadline_sec():.0f}s) reached; "
+                         f"{left} of {len(candidates)} email(s) skipped this run.")
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        for res in results:
+            if not res or not isinstance(res, dict):
+                last_scan["extraction_failures"] += 1
+                continue
+            cand = res.get("cand")
+            if not isinstance(cand, dict):
+                continue
+            parsed_ideas = res.get("parsed_ideas")
+            intel = res.get("intel")
+            
+            base = {
+                "msg_id": cand.get("msg_id"),
+                "from": cand.get("from"),
+                "subject": cand.get("subject"),
+                "folder": cand.get("folder"),
+                "intel": intel
+            }
+            
+            tickers = []
+            if isinstance(intel, dict):
+                tickers = intel.get("tickers_mentioned") or []
+            
+            # Fallback: if parsed_ideas is empty, populate from modern tickers_mentioned in intel
+            if not parsed_ideas and tickers:
+                parsed_ideas = []
+                for t in tickers:
+                    if isinstance(t, dict) and t.get("in_universe"):
+                        parsed_ideas.append({
+                            "symbol": t.get("symbol"),
+                            "sentiment": t.get("sentiment"),
+                            "thesis": t.get("thesis")
+                        })
+            
+            if parsed_ideas:
+                if isinstance(parsed_ideas, dict):
+                    parsed_ideas = [parsed_ideas]
+                if isinstance(parsed_ideas, list):
+                    for idea in parsed_ideas:
+                        if isinstance(idea, dict):
+                            ideas.append({
+                                **base,
+                                "symbol": idea.get("symbol"),
+                                "sentiment": idea.get("sentiment"),
+                                "thesis": idea.get("thesis")
                             })
-                
-                if parsed_ideas:
-                    if isinstance(parsed_ideas, dict):
-                        parsed_ideas = [parsed_ideas]
-                    if isinstance(parsed_ideas, list):
-                        for idea in parsed_ideas:
-                            if isinstance(idea, dict):
-                                ideas.append({
-                                    **base,
-                                    "symbol": idea.get("symbol"),
-                                    "sentiment": idea.get("sentiment"),
-                                    "thesis": idea.get("thesis")
-                                })
-                            else:
-                                _log.warning(f"Unexpected idea format (not a dict): {idea}")
-                    else:
-                        _log.warning(f"Unexpected parsed_ideas format: {parsed_ideas}")
-                elif intel:
-                    ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
+                        else:
+                            _log.warning(f"Unexpected idea format (not a dict): {idea}")
+                else:
+                    _log.warning(f"Unexpected parsed_ideas format: {parsed_ideas}")
+            elif intel:
+                ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
 
     return ideas
 

@@ -4,6 +4,7 @@ Tests for external_intel.py — resilient email fetching and early disconnection
 import json
 import os
 import sys
+import time
 import unittest
 import imaplib
 from unittest import mock
@@ -291,9 +292,9 @@ class TestExtractionParallelism(unittest.TestCase):
     calls, against a free AI tier, and got bursts of HTTP 429. The worker count now comes
     from config (ai.max_parallel_extractions, default 1)."""
 
-    def _fetch(self, parallel):
+    def _fetch(self, parallel, analyze=None):
         real_pool = external_intel.ThreadPoolExecutor
-        with mock.patch("external_intel.CFG") as mock_cfg,              mock.patch("external_intel._log"),              mock.patch("imaplib.IMAP4_SSL") as mock_imap_cls,              mock.patch("external_intel.ThreadPoolExecutor", wraps=real_pool) as pool,              mock.patch("external_intel.email.message_from_bytes") as parse,              mock.patch("external_intel.analyze_email_content", return_value=[]),              mock.patch("extract_email_intel.extract", return_value={}):
+        with mock.patch("external_intel.CFG") as mock_cfg,              mock.patch("external_intel._log"),              mock.patch("imaplib.IMAP4_SSL") as mock_imap_cls,              mock.patch("external_intel.ThreadPoolExecutor", wraps=real_pool) as pool,              mock.patch("external_intel.email.message_from_bytes") as parse,              mock.patch("external_intel.analyze_email_content", return_value=[], side_effect=analyze),              mock.patch("extract_email_intel.extract", return_value={}):
             mock_cfg.mailboxes = [{"email": "test@example.org", "password_env": "TEST_ENV_PASS",
                                    "imap_server": "imap.example.org"}]
             mock_cfg.smtp_password = "dummy_password"
@@ -349,3 +350,29 @@ class TestDedupRdTopics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExtractionDeadline(TestExtractionParallelism):
+    """#226 review: with a dead AI chain each extraction waits out every provider's timeout, so
+    the step could take the whole morning run. It now stops at ai.intel_deadline_sec."""
+
+    def test_slow_extractions_stop_at_the_deadline(self):
+        import threading
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def slow(subject, body):
+            release.wait(5)
+            return []
+        with mock.patch("external_intel._intel_deadline_sec", return_value=0.2, create=True):
+            t0 = time.monotonic()
+            self._fetch(1, analyze=slow)
+            elapsed = time.monotonic() - t0
+        self.assertLess(elapsed, 3.0, "the step waited for the slow extraction")
+        self.assertEqual(external_intel.last_scan["extraction_failures"], 1)
+
+    def test_deadline_default_and_bad_values(self):
+        with mock.patch("external_intel.CFG") as cfg:
+            for v, want in ((120, 120.0), (0, 600.0), (True, 600.0), ("x", 600.0)):
+                cfg.ai_intel_deadline_sec = v
+                self.assertEqual(external_intel._intel_deadline_sec(), want)
