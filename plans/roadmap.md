@@ -96,6 +96,7 @@ The active experimental backlog, scoring studies, and structural risk-mitigation
     *   *Stop-out tail (R&D #54a gate, base path):* `aether_rules` P95 1.06%, worst 1.30%: PASS. Both trailing-stop variants fail the worst-loss gate (5.41% / 4.19%): on their path they held UNFI into a &minus;33% earnings gap on 2023-03-08, straight through the stop. That's real gap risk, not a bug.
     *   *Caveat:* the "trades beating SPY" share isn't comparable for `exit_hold_profit`. Its winners only close at a stop, so its closed trades are mostly losers (4% profitable; 11 positions still open at the end).
     *   *Next step, if any:* `exit_hold_profit` is the one exit worth re-testing, ideally combined with an entry-side finding from R&D #55/#56 and judged on the same draws. On its own it doesn't close the gap to SPY.
+    *   *How to read the win rates (#224 review):* the 50 draws overlap heavily (each keeps 80% of the same symbols and replays the same prices), so "76% of test draws" for `exit_hold_profit` measures how sensitive the result is to the universe and start date. It is not a 76% probability that the exit is better.
     Results: `Data/portfolio_backtest_exits_2026-10-30.json`.
 
 ## 🛡️ Stability & Hardening Backlog (Anti-Fragility Sprints):

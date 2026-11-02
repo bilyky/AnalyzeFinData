@@ -525,8 +525,19 @@ class TestExitVariants(unittest.TestCase):
         bars = {"A": _bars([10, 10, 14, 13, 12], lows=[10, 10, 14, 12, 11]), "SPY": _bars([100] * 5)}
         bars["A"]["atr"] = [1.0, 1.0, 1.0, 3.0, 3.0]
         panel = {"A": {DAYS[0]: [6.0, 0.0]}}
-        t = pb.simulate(panel, bars, DAYS[:5], cost_bps=0.0, exit_rules={"trail": True})["trades"][0]
-        self.assertEqual((t["exit_date"], t["exit"]), (DAYS[4], 11.5))
+        r = pb.simulate(panel, bars, DAYS[:5], cost_bps=0.0, exit_rules={"trail": True})
+        self.assertEqual(len(r["trades"]), 1, "a stop allowed to drop to 6.5 never sells here")
+        self.assertEqual((r["trades"][0]["exit_date"], r["trades"][0]["exit"]), (DAYS[4], 11.5))
+
+    def test_trailing_stop_follows_the_close_not_the_high(self):
+        # Pre-registered: the trail ratchets on the highest CLOSE. Day 2 closes at 14 but spikes
+        # to a high of 20. On the close the trail is 14 - 2.5 = 11.5, so day 3's low of 15 holds;
+        # on the high it would be 17.5 and sell.
+        bars = {"A": _bars([10, 10, 14, 15], highs=[10, 10, 20, 16], lows=[10, 10, 14, 15]),
+                "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        r = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, exit_rules={"trail": True})
+        self.assertEqual((r["trades"], r["open_positions"]), ([], ["A"]))
 
     def test_hold_profit_keeps_a_winner_and_still_sells_a_loser(self):
         panel = {"A": {DAYS[0]: [6.0, 0.0], DAYS[2]: [-1.0, -1.0]}}     # soft exit on day 2
