@@ -303,7 +303,8 @@ def _bar(bars, sym, day):
 
 def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
              initial=INITIAL_EQUITY, excluded=frozenset(), max_trade_risk_pct=None,
-             disable=frozenset(), hurst_filter=None, admit=None, rank=None, exit_rules=None) -> dict:
+             disable=frozenset(), hurst_filter=None, admit=None, rank=None,
+             min_fill_pct=None, exit_rules=None) -> dict:
     """Replay `panel` ({sym: {date: [s10, l60]}}) over `calendar` (sorted trading days).
 
     max_trade_risk_pct: when set (and risk_rules is on), each buy is trimmed so
@@ -316,6 +317,8 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
     floor / R/R gates are not in this simulator; entry_gates_portfolio.py passes them here).
     rank: optional callable(sym, day, (s10, l60)) -> float, the entry ranking key (highest
     first); default S10 + L60, as the live game. The score threshold still uses S10 + L60.
+    min_fill_pct: skip a buy worth less than this share of equity AFTER the loss-cap trim
+    (R&D #65; live has no such floor and holds $50 positions).
     exit_rules (risk_rules only, R&D #63): {"trail": True} ratchets the stop up to the highest
     close since entry minus the entry ATR multiple x today's ATR (never down); {"hold_profit":
     True} lets the soft exit fire only at a loss; {"stop_scale": x} puts the initial stop x times
@@ -372,6 +375,8 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
                 if cap is not None and usd > cap:
                     usd = cap
                     cap_trims += 1
+            if min_fill_pct and usd < min_fill_pct * (curve[-1][1] if curve else initial):
+                continue
             qty = usd / (o * (1 + c))
             if qty <= 0:
                 continue

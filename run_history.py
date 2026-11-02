@@ -151,6 +151,13 @@ def main():
                         skip += 1
                     else:
                         ok += 1
+                except powergauge.ChaikinSessionUnavailable as e:
+                    # No Chaikin session (re-auth failed or its breaker is open): every other
+                    # symbol and day would fail the same way, so stop the backfill. Any other
+                    # error, including OSErrors (network, a locked cache file), is per symbol.
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    _log.error(f"  {symbol}: {e} — stopping the backfill ({done}/{total} on {day}).")
+                    raise
                 except Exception as e:
                     _log.error(f"  {symbol}: ERROR {e}")
                     errors += 1

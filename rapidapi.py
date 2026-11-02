@@ -238,8 +238,28 @@ def _fetch_and_merge(symbol: str, path: str, outputsize: str = "compact") -> Non
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def held_symbols(game_path: str | None = None) -> set[str]:
+    """Symbols the paper game holds (Data/ai_portfolio_game.json), read-only; empty on any error.
+    Their stops and the pricing checks read these bars, so the recovery pass repairs them first."""
+    game_path = game_path or os.path.join(paths.data_dir(), "ai_portfolio_game.json")
+    try:
+        with open(game_path, encoding="utf-8") as f:
+            return {s.upper() for s in (json.load(f).get("positions") or {})}
+    except (OSError, ValueError, AttributeError):
+        return set()
+
+
+def run_symbols(explicit: list[str], held: set[str], sheet=None) -> list[str]:
+    """The CLI's symbol list: the explicit symbols if given, else the Research sheet plus any
+    held position missing from it (a held name off the sheet still needs bars)."""
+    if explicit:
+        return [s.upper() for s in explicit]
+    syms = list((sheet or load_symbols)())
+    return syms + sorted(held - {s.upper() for s in syms})
+
+
 def repair_missing(symbols: list[str], today_str: str, force: bool = False,
-                   max_fetches: int | None = None) -> dict:
+                   max_fetches: int | None = None, priority: set[str] | None = None) -> dict:
     """
     Scan Symbol_full/ and repair symbols with missing, corrupted, or stale files.
     Uses compact fetch (last 100 days) when file exists but has a gap; full fetch
@@ -258,6 +278,9 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
     same ~23 symbols 429'd daily and were never repaired); now whatever a run misses is
     first in line for the next. QUOTA_STOP_AFTER consecutive 429s end the run.
     Symbols left for the next run are counted in results["deferred"].
+
+    priority: symbols repaired before everything else (the CLI passes the held positions:
+    on PROD a held name's placeholder bar waited a week behind ~150 deferred symbols).
     """
     results = {"updated": 0, "skipped": 0, "errors": [], "deferred": 0, "quota_stopped": False}
     budget = CFG.rapidapi_max_fetches if max_fetches is None else max_fetches
@@ -305,7 +328,8 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
             if not needs and not force:
                 results["skipped"] += 1
                 continue
-            queue.append((_queue_rank(existing, today_str, path), order, sym, path, existing))
+            rank = (-1, "") if priority and sym.upper() in priority else _queue_rank(existing, today_str, path)
+            queue.append((rank, order, sym, path, existing))
         queue.sort(key=lambda q: (q[0], q[1]))          # most-starved first, stable
         results["deferred"] = max(0, len(queue) - budget)
         _log.info("  [RapidAPI] %d need repair, budget %d this run, %d deferred to the next run",
@@ -385,6 +409,17 @@ def get_quotes(time_frame, year=2022, month=1, day=1, symbol='MSFT'):
     return np.array(result)
 
 
+def log_run_summary(result: dict) -> None:
+    """One 'Done' line, plus ONE error line naming the failed symbols. Each failure was
+    already logged with its error when it happened, so this does not repeat them."""
+    _log.info("[RapidAPI] Done: %d fetched, %d already current, %d errors, %d deferred%s",
+              result["updated"], result["skipped"], len(result["errors"]), result["deferred"],
+              " (stopped: quota spent)" if result["quota_stopped"] else "")
+    if result["errors"]:
+        _log.error("  [RapidAPI] %d symbol(s) failed this run (errors logged above): %s",
+                   len(result["errors"]), ", ".join(sym for sym, _ in result["errors"]))
+
+
 # ── CLI entry point ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -398,18 +433,9 @@ if __name__ == "__main__":
     cli = ap.parse_args()
     force, max_fetches = cli.force, cli.max_fetches
 
-    if cli.symbols:
-        # Explicit symbols passed on command line
-        syms = [s.upper() for s in cli.symbols]
-    else:
-        # Load all symbols from Research sheet
-        syms = load_symbols()
-
-    _log.console("[RapidAPI] Recovery pass — %d symbols, today=%s, force=%s",
-                 len(syms), today_str, force)
-    result = repair_missing(syms, today_str, force=force, max_fetches=max_fetches)
-    _log.info("[RapidAPI] Done: %d fetched, %d already current, %d errors, %d deferred%s",
-                 result["updated"], result["skipped"], len(result["errors"]), result["deferred"],
-                 " (stopped: quota spent)" if result["quota_stopped"] else "")
-    for sym, err in result["errors"]:
-        _log.error("  ERROR %s: %s", sym, err)
+    held = held_symbols()
+    syms = run_symbols(cli.symbols, held)
+    _log.console("[RapidAPI] Recovery pass — %d symbols (%d held), today=%s, force=%s",
+                 len(syms), len(held), today_str, force)
+    result = repair_missing(syms, today_str, force=force, max_fetches=max_fetches, priority=held)
+    log_run_summary(result)
