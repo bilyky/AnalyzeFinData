@@ -208,7 +208,9 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
   the merged tree; a read-only smoke run of the changed entry point on a *copy* of real data, showing
   the old code fails where the new one passes; the PR body states the deploy steps (restart?
   task re-registration? new config keys and what their defaults change? data steps? or "pull only")
-  and how to roll back; and `mergeable_state=clean` with checks green on the pushed head.
+  and how to roll back; any steps longer than a few lines are a PROD note committed in the same PR
+  (`ship-pr.md` §2) and reviewed like code, including the public-repo PII check; and
+  `mergeable_state=clean` with checks green on the pushed head.
 
 ## 9. After merges: clean up, then audit docs
 

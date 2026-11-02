@@ -5,6 +5,9 @@ to back up, the exact commands, what to check after, and how to roll back. They 
 a later note or merged PR can supersede an earlier one (e.g. `patch_ai_models_2026_10_20.py` is
 superseded by `2026-10-12-ai-tiers-192-enable.md` once #192 is deployed).
 
+A note ships in the same PR as the change it deploys (`.claude/commands/ship-pr.md` §2), named
+`YYYY-MM-DD-prod-<topic>-<PR>.md`, and the PR body's deploy section points to it.
+
 Run the commands from the repo root on PROD. The `.py` helpers default to dry runs and back up before
 writing.
 
