@@ -31,7 +31,9 @@ Usage:
     python scripts/backtesting/factor_portfolio.py [--split 2025-01-01] [--robust 50]
 """
 import argparse
+import datetime
 import glob
+import hashlib
 import json
 import os
 import sys
@@ -194,10 +196,16 @@ def run(split="2025-01-01", robust=50, min_year=2023, cost_bps=10.0, pit=True) -
     cached = {d for d in os.listdir(_br.SYM_DIR) if os.path.isdir(os.path.join(_br.SYM_DIR, d))}
     symbols = sorted(ohlcv & cached)
     bars = {s: b for s in symbols if (ts := _br.load_ohlcv(s)) and (b := pb.bars_from_series(ts))}
-    panel = None
+    panel, panel_info = None, None
     if os.path.exists(pb.PANEL_PATH):
-        with open(pb.PANEL_PATH, encoding="utf-8") as f:
-            panel = json.load(f)["scores"]
+        with open(pb.PANEL_PATH, "rb") as f:
+            raw = f.read()
+        panel = json.loads(raw)["scores"]
+        # Which panel the run used: its join dates decide the point-in-time universe.
+        panel_info = {"path": pb.PANEL_PATH, "sha256": hashlib.sha256(raw).hexdigest(),
+                      "modified": datetime.datetime.fromtimestamp(os.path.getmtime(pb.PANEL_PATH)).isoformat(
+                          timespec="seconds"),
+                      "n_scored": sum(1 for v in panel.values() if v)}
     start = f"{min_year}-01-01"
     if panel:
         start = min(min(v) for v in panel.values() if v)
@@ -244,10 +252,12 @@ def run(split="2025-01-01", robust=50, min_year=2023, cost_bps=10.0, pit=True) -
                     f"{r['cagr_pct']['median']!s:>11}{r['max_drawdown_pct']['median']!s:>13}"
                     f"{'-' if name == 'spy_buy_hold' else r['win_rate']!s:>12}"
                     + (f"{'-' if wa is None else wa!s:>16}" if vs_aether else ""))
-    pb._out(f"\n  R&D #64: picked on train {v['picked']} -> beats SPY in {v['win_vs_spy_train']:.0%} (train) / "
-            f"{v['win_vs_spy_test']:.0%} (test) of draws -> "
+    pct = lambda x: "-" if x is None else f"{x:.0%}"           # None: no Sharpe in any draw
+    pb._out(f"\n  R&D #64: picked on train {v['picked']} -> beats SPY in {pct(v['win_vs_spy_train'])} (train) / "
+            f"{pct(v['win_vs_spy_test'])} (test) of draws -> "
             f"{'PASS' if v['passed'] else 'FAIL: not a golden mix'} (bar {PASS_RATE:.0%} on both)")
     payload = {"as_of": calendar[-1], "n_symbols": len(symbols), "split": split, "n_draws": robust, "pit": pit,
+               "panel": panel_info,
                "top_n": TOP_N, "verdict": v, "vs_spy": vs_spy, "vs_aether": vs_aether,
                "caveats": ["survivorship bias: universe is today's symbol list (flatters MOM and HIGH)",
                            "draws overlap heavily; win rates are sensitivity, not probability (R&D #62)"]}

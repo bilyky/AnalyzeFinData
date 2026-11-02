@@ -3,9 +3,13 @@
 Pins the factor maths (no look-ahead), the cross-sectional ranks, the monthly rebalance
 (top-N equal weight at the next open, costs), the SPY trend filter and the pre-registered verdict.
 """
+import datetime
+import json
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -140,6 +144,60 @@ class TestPortfolio(unittest.TestCase):
         self.assertEqual(r["open_positions"], [])
         self.assertTrue(all(inv == 0.0 for _d, _e, inv in r["curve"]))
         self.assertTrue(fp.spy_above_trend(_bar_series(list(np.linspace(100, 200, 300)), days), days[-1]))
+
+
+class TestRunPointInTime(unittest.TestCase):
+    """run() end to end on a tiny fake cache: --pit must keep a late joiner out of both the factor
+    portfolios and the equal-weight hold (#225 review: the wiring had no test)."""
+
+    @staticmethod
+    def _series(n, start, growth, wiggle):
+        days, d = [], datetime.date(2024, 1, 2)
+        while len(days) < n:
+            if d.weekday() < 5:
+                days.append(d.isoformat())
+            d += datetime.timedelta(days=1)
+        px = [start * (1 + growth) ** k * (1 + wiggle * np.sin(k / 3.0)) for k in range(n)]
+        ts = {day: {"1. open": p, "2. high": p * 1.01, "3. low": p * 0.99, "4. close": p,
+                    "5. volume": 1000} for day, p in zip(days, px, strict=True)}
+        return days, ts
+
+    def _run(self, pit):
+        days, spy = self._series(420, 100.0, 0.0005, 0.01)
+        _d, old = self._series(420, 50.0, 0.0002, 0.02)          # joined from the start, weak
+        _d, new = self._series(420, 20.0, 0.004, 0.03)           # joins late, strongest momentum
+        series = {"SPY": spy, "OLD": old, "NEW": new}
+        start = days[300]
+        panel = {"SPY": {d: [0.0, 0.0] for d in days[300:]}, "OLD": {d: [0.0, 0.0] for d in days[300:]},
+                 "NEW": {d: [0.0, 0.0] for d in days[380:]}}     # NEW enters our universe on day 380
+        with tempfile.TemporaryDirectory() as tmp:
+            ohlcv_dir, sym_dir = os.path.join(tmp, "ohlcv"), os.path.join(tmp, "sym")
+            os.makedirs(ohlcv_dir)
+            for s in series:
+                open(os.path.join(ohlcv_dir, f"{s}_daily.json"), "w").close()
+                os.makedirs(os.path.join(sym_dir, s))
+            panel_path = os.path.join(tmp, "panel.json")
+            with open(panel_path, "w", encoding="utf-8") as f:
+                json.dump({"scores": panel}, f)
+            with (mock.patch.object(fp._br, "OHLCV_DIR", ohlcv_dir),
+                  mock.patch.object(fp._br, "SYM_DIR", sym_dir),
+                  mock.patch.object(fp._br, "load_ohlcv", side_effect=lambda s: series[s]),
+                  mock.patch.object(fp.pb, "PANEL_PATH", panel_path),
+                  mock.patch.object(fp, "OUT_PATH", os.path.join(tmp, "out.json")),
+                  mock.patch.object(fp.pb, "_out")):
+                return fp.run(split=days[360], robust=1, min_year=2024, pit=pit), start
+
+    def test_pit_changes_the_factor_portfolio_and_the_equal_weight_hold(self):
+        pit, start = self._run(True)
+        raw, _ = self._run(False)
+        full = lambda p, v: p["vs_spy"]["periods"]["full"][v]["cagr_pct"]["median"]
+        # With look-ahead, NEW (the strongest stock) is held from the start; point-in-time it isn't.
+        self.assertNotEqual(full(pit, "fac_mom"), full(raw, "fac_mom"))
+        self.assertNotEqual(full(pit, "ew_buy_hold"), full(raw, "ew_buy_hold"))
+        self.assertLess(full(pit, "ew_buy_hold"), full(raw, "ew_buy_hold"))
+        self.assertTrue(pit["pit"])
+        self.assertEqual(pit["panel"]["n_scored"], 3)
+        self.assertEqual(len(pit["panel"]["sha256"]), 64)
 
 
 class TestVerdict(unittest.TestCase):
