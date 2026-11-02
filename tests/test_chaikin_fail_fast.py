@@ -35,12 +35,20 @@ class TestBreakerFailsFast(unittest.TestCase):
              mock.patch("powergauge._chaikin_renewer") as renewer, \
              mock.patch.object(powergauge._pg_log, "warning") as warn:
             for _ in range(5):
-                with self.assertRaises(EnvironmentError):
+                with self.assertRaises(powergauge.ChaikinSessionUnavailable):
                     powergauge.ensure_valid_session()
             jwt.assert_not_called()
             renewer.ensure.assert_not_called()
             breaker_warnings = [c for c in warn.call_args_list if "Circuit Breaker" in str(c)]
             self.assertEqual(len(breaker_warnings), 1)
+
+    def test_failed_reauth_is_a_session_error_and_opens_the_breaker(self):
+        session = {"jsessionid": "old"}
+        with mock.patch("powergauge._session_valid_until", 0.0),              mock.patch("powergauge._auth_circuit_breaker_until", 0.0),              mock.patch("powergauge._load_session_from_file", return_value=session),              _invalid_probe(),              mock.patch("powergauge._chaikin_renewer") as renewer,              mock.patch("powergauge.send_email"):
+            renewer.ensure.side_effect = EnvironmentError("Chaikin browser login failed: Timeout")
+            with self.assertRaises(powergauge.ChaikinSessionUnavailable):
+                powergauge.ensure_valid_session()
+            self.assertGreater(powergauge._auth_circuit_breaker_until, time.monotonic())
 
     def test_closed_breaker_still_tries_the_jwt_exchange(self):
         session = {"jsessionid": "old", "jwttoken": "jwt"}
@@ -80,22 +88,24 @@ class TestRunHistoryStops(unittest.TestCase):
 
     def test_session_error_stops_the_backfill(self):
         def boom(sym):
-            raise EnvironmentError("Chaikin automated re-auth suspended (Circuit Breaker).")
+            raise powergauge.ChaikinSessionUnavailable("Chaikin automated re-auth suspended (Circuit Breaker).")
         calls, err = self._run(boom)
         self.assertIsNotNone(err)
         self.assertEqual(len({d for _, d in calls}), 1)   # never starts the second day
         self.assertLess(len(calls), 4 * 2)
 
-    def test_network_error_is_per_symbol(self):
+    def test_other_errors_are_per_symbol(self):
+        # requests' exceptions and a locked cache file are OSErrors too (#226 review).
         ok = mock.MagicMock(price=10.0)
-
-        def flaky(sym):
-            if sym == "B":
-                raise requests.ConnectionError("Max retries exceeded")
-            return ok
-        calls, err = self._run(flaky)
-        self.assertIsNone(err)
-        self.assertEqual(len(calls), 8)                    # every symbol, both days
+        for exc in (requests.ConnectionError("Max retries exceeded"), PermissionError("file in use")):
+            def flaky(sym, exc=exc):
+                if sym == "B":
+                    raise exc
+                return ok
+            with self.subTest(exc=type(exc).__name__):
+                calls, err = self._run(flaky)
+                self.assertIsNone(err)
+                self.assertEqual(len(calls), 8)            # every symbol, both days
 
 
 class TestScreenKeepsGoingPastNetworkErrors(unittest.TestCase):
@@ -108,7 +118,7 @@ class TestScreenKeepsGoingPastNetworkErrors(unittest.TestCase):
 
             def fetch(sym, d, prefer):
                 if sym == "BBB":
-                    raise requests.ConnectionError("Max retries exceeded")
+                    raise PermissionError("cache file in use")   # an OSError, not a session error
                 return good
             real_join = os.path.join
 
@@ -125,8 +135,8 @@ class TestScreenKeepsGoingPastNetworkErrors(unittest.TestCase):
                  mock.patch("powergauge.compute_pg_row", create=True, return_value=None):
                 try:
                     powergauge.check_from_file(prefer_cache=False, date=datetime.date(2026, 10, 27))
-                except requests.RequestException:
-                    self.fail("one symbol's network error aborted the whole screen")
+                except OSError:
+                    self.fail("one symbol's OSError aborted the whole screen")
 
 
 if __name__ == "__main__":

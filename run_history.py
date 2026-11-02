@@ -23,7 +23,6 @@ import datetime
 import os
 import sys
 import pytz
-import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -152,14 +151,10 @@ def main():
                         skip += 1
                     else:
                         ok += 1
-                except requests.RequestException as e:
-                    # A network error is per symbol (requests' exceptions are OSErrors too,
-                    # so this must come before the EnvironmentError branch).
-                    _log.error(f"  {symbol}: ERROR {e}")
-                    errors += 1
-                except EnvironmentError as e:
+                except powergauge.ChaikinSessionUnavailable as e:
                     # No Chaikin session (re-auth failed or its breaker is open): every other
-                    # symbol and day would fail the same way, so stop the backfill.
+                    # symbol and day would fail the same way, so stop the backfill. Any other
+                    # error, including OSErrors (network, a locked cache file), is per symbol.
                     pool.shutdown(wait=False, cancel_futures=True)
                     _log.error(f"  {symbol}: {e} — stopping the backfill ({done}/{total} on {day}).")
                     raise

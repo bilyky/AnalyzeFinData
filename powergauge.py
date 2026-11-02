@@ -114,6 +114,12 @@ _breaker_warned_until       = 0.0            # the breaker window already warned
 _last_email_alert_time      = float("-inf")  # monotonic timestamp; -inf so the FIRST alert always sends
                                              # (monotonic() counts from boot, so 0.0 would suppress alerts in the first cooldown after a reboot)
 
+class ChaikinSessionUnavailable(EnvironmentError):
+    """No usable Chaikin session: the re-auth failed, its breaker is open, or the API rejected
+    the session. Every other symbol would fail the same way, so batch loops stop on it; any
+    other OSError (a network error, a locked cache file) is one symbol's failure."""
+
+
 _chaikin_renewer = _TokenRenewer(
     lock_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "chaikin_reauth.lock"),
     renew_fn=lambda: login(interactive=False),
@@ -156,7 +162,7 @@ def ensure_valid_session() -> dict:
         if _breaker_warned_until != _auth_circuit_breaker_until:
             _breaker_warned_until = _auth_circuit_breaker_until
             _pg_log.warning("Chaikin automated re-auth is currently suspended (Circuit Breaker active). Wait %d minutes before next attempt.", _AUTH_BREAKER_COOLDOWN // 60)
-        raise EnvironmentError("Chaikin automated re-auth suspended (Circuit Breaker).")
+        raise ChaikinSessionUnavailable("Chaikin automated re-auth suspended (Circuit Breaker).")
 
     # status == "invalid": genuinely expired/rejected — try the cheap refresh path first.
     # API-based JWT Token Refresh (Bypasses Browser/Turnstile completely in 0.2 seconds!)
@@ -215,7 +221,9 @@ def ensure_valid_session() -> dict:
                 _last_email_alert_time = time.monotonic()
             except Exception as mail_err:
                 _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
-        raise
+        if isinstance(e, ChaikinSessionUnavailable):
+            raise
+        raise ChaikinSessionUnavailable(str(e)) from e
 
 
 # Pre-built index of symbol → sorted list of cached JSON paths.
@@ -1168,7 +1176,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
                 if fresh and fresh.get("jsessionid"):
                     return get_symbol_data(symbol, date, prefer_cache=False, session_id=fresh, _allow_reauth=False)
             _pg_log.console(SESSION_INSTRUCTIONS.format(session_file=SESSION_FILE))
-            raise EnvironmentError(f"Session rejected (HTTP {response.status_code}). Update {SESSION_FILE}.")
+            raise ChaikinSessionUnavailable(f"Session rejected (HTTP {response.status_code}). Update {SESSION_FILE}.")
         else:
             _pg_log.warning(f"Warning: API error for {symbol} (HTTP {response.status_code}) — row will be skipped")
             pg.price = -1
@@ -1234,14 +1242,9 @@ def check_from_file(prefer_cache: bool, date=None):
             done += 1
             try:
                 pg_results[sym] = future.result()
-            except requests.RequestException as e:
-                # One symbol's network error (requests' exceptions are OSErrors too, so this
-                # comes before the EnvironmentError branch, which means "no session").
-                _pg_log.error(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
-                sentinel = PowerGauge(sym, date)
-                sentinel.price = -1
-                pg_results[sym] = sentinel
-            except EnvironmentError:
+            except ChaikinSessionUnavailable:
+                # No session: every other symbol would fail the same way. Any other error,
+                # including OSErrors such as a network error, is this symbol's alone (below).
                 pool.shutdown(wait=False, cancel_futures=True)
                 raise
             except Exception as e:
@@ -1622,14 +1625,9 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
             done += 1
             try:
                 pg_results[sym] = future.result()
-            except requests.RequestException as e:
-                # One symbol's network error (requests' exceptions are OSErrors too, so this
-                # comes before the EnvironmentError branch, which means "no session").
-                _pg_log.error(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
-                sentinel = PowerGauge(sym, date)
-                sentinel.price = -1
-                pg_results[sym] = sentinel
-            except EnvironmentError:
+            except ChaikinSessionUnavailable:
+                # No session: every other symbol would fail the same way. Any other error,
+                # including OSErrors such as a network error, is this symbol's alone (below).
                 pool.shutdown(wait=False, cancel_futures=True)
                 raise
             except Exception as e:
