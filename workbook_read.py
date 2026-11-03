@@ -17,6 +17,7 @@ from pathlib import Path
 import openpyxl
 
 import risk_utils
+from aether import pick_lists
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("workbook_read")
@@ -27,74 +28,58 @@ GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
 ACCOUNT_RISK_USD = 500  # Dollars to lose if a stop is hit (position-sizing basis).
 
 
-def get_top_5_picks():
+def research_rows(ws) -> list:
+    """The Research sheet as aether.pick_lists rows (first row per symbol)."""
+    rows, seen = [], set()
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        sym = str(row[3] or "").strip().upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        rows.append({
+            "symbol": sym, "industry": str(row[4] or ""), "pgr": str(row[6] or ""),
+            "stop": row[9] or 0.0, "price": row[10] or 0.0, "target": row[11] or 0.0,
+            "setup": str(row[20] or ""), "br": row[21] or 0.0, "win_pct": row[23] or 0.0,
+            "s10": row[24] or 0.0, "l60": row[25] or 0.0,
+            "patterns": str(row[26] or "").strip() if len(row) > 26 else "",
+        })
+    return rows
+
+
+def _pick_dict(r) -> dict:
+    """The fields the morning report shows for one pick."""
+    price, stop = r["price"], r["stop"]
+    atr = risk_utils.calculate_atr(r["symbol"])
+    return {
+        "Symbol": r["symbol"], "PGR": r["pgr"], "Price": price, "Stop": stop, "Target": r["target"],
+        "S10": r["s10"], "L60": r["l60"], "WinPct": r["win_pct"], "Total": pick_lists.total(r),
+        "Risk_Reward": round(pick_lists.rr_ratio(r), 2), "Elite": pick_lists.is_elite(r),
+        "ATR": atr, "Shares_ATR": risk_utils.get_atr_position_size(price, atr, ACCOUNT_RISK_USD),
+        "Shares_Stop": risk_utils.get_position_size(price, stop, ACCOUNT_RISK_USD),
+        "Patterns": r["patterns"], "Industry": r["industry"],
+    }
+
+
+def _morning_list(plist, skip=0) -> list:
+    wb = None
     try:
         wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
-        ws = wb["Research"]
-
-        candidates = []
-        seen_symbols = set()
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            sym = row[3]
-            if not sym: continue
-
-            # De-duplicate: Ensure each symbol is only processed once
-            sym_clean = str(sym).strip().upper()
-            if sym_clean in seen_symbols:
-                continue
-            seen_symbols.add(sym_clean)
-
-            pgr = str(row[6] or "")
-            price = row[10] or 0.0
-            stop = row[9] or 0.0
-            target = row[11] or 0.0
-            setup = str(row[20] or "")
-
-            is_setup_ok = (setup == "1" or setup == "OK" or setup == 1)
-
-            win_pct = row[23] or 0.0
-            s10 = row[24] or 0.0
-            l60 = row[25] or 0.0
-            pattern_text = str(row[26] or "").strip() if len(row) > 26 else ""
-            industry = str(row[4] or "")
-
-            if is_setup_ok:
-                # Enforce strict Risk/Reward filter (Reward must be >= 1.5x of the Risk)
-                risk = price - stop
-                reward = target - price
-                rr_ratio = (reward / risk) if risk > 0 else 0.0
-
-                if rr_ratio < 1.5:
-                    continue  # Fail-safe R:R check: reject unfavorable narrow-upside setups
-
-                atr = risk_utils.calculate_atr(sym)
-                shares_atr = risk_utils.get_atr_position_size(price, atr, ACCOUNT_RISK_USD)
-                shares_stop = risk_utils.get_position_size(price, stop, ACCOUNT_RISK_USD)
-
-                candidates.append({
-                    "Symbol": sym,
-                    "PGR": pgr,
-                    "Price": price,
-                    "Stop": stop,
-                    "Target": target,
-                    "S10": s10,
-                    "L60": l60,
-                    "WinPct": win_pct,
-                    "Total": s10 + l60,
-                    "Risk_Reward": round(rr_ratio, 2),
-                    "ATR": atr,
-                    "Shares_ATR": shares_atr,
-                    "Shares_Stop": shares_stop,
-                    "Patterns": pattern_text,
-                    "Industry": industry
-                })
-
-        candidates.sort(key=lambda x: x["Total"], reverse=True)
-        return candidates[:5]
+        return [_pick_dict(r) for r in plist.pick(research_rows(wb["Research"]), n=5, skip=skip)]
     except Exception as e:
-        _log.error("Error computing picks", extra={"error": str(e)})
+        _log.error("Error computing picks", extra={"list": plist.key, "error": str(e)})
         traceback.print_exc()
         return []
+    finally:
+        if wb:
+            wb.close()
+
+
+def get_top_5_picks():
+    """The 05:30 shortlist: criteria in aether.pick_lists.MORNING_TOP5 (shown in the email).
+    The R:R floor used to have no elite-breakout waiver, so leaders at new highs (reward/risk
+    near 0 to their own resistance) never qualified and the list kept laggards (PROD 11-02:
+    one pick, HESM, S10 -2.7)."""
+    return _morning_list(pick_lists.MORNING_TOP5)
 
 
 def get_replacement_pairs():
@@ -122,38 +107,10 @@ def get_replacement_pairs():
 
 
 def get_reserves_data():
-    """Extract today's scores for our dynamic A-Reserves (Backup Players) list loaded from the central JSON."""
-    reserves_syms = ['EIX', 'AMAT', 'URI', 'VLO', 'RS'] # Standard Fallback
-    try:
-        if GAME_FILE.exists():
-            with open(GAME_FILE, "r", encoding="utf-8") as f:
-                state = json.load(f)
-                reserves_syms = state.get("reserves", reserves_syms)
-    except Exception as e:
-        _log.warning("Could not load dynamic reserves from JSON (using fallback)",
-                     extra={"error": str(e)})
-
-    reserves_data = []
-    try:
-        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
-        ws = wb["Research"]
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            sym = row[3]
-            if sym in reserves_syms:
-                reserves_data.append({
-                    "Symbol": sym,
-                    "Industry": row[4],
-                    "PGR": row[6],
-                    "S10": row[24] or 0,
-                    "L60": row[25] or 0,
-                    "Total": (row[24] or 0) + (row[25] or 0),
-                    "Price": row[10] or 0
-                })
-        # Sort to preserve priority order
-        reserves_data.sort(key=lambda x: reserves_syms.index(x["Symbol"]))
-    except Exception as e:
-        _log.error("Error loading reserves data", extra={"error": str(e)})
-    return reserves_data
+    """The next five on the morning ranking (ranks 6-10; aether.pick_lists.MORNING_RESERVES).
+    This was a hard-coded EIX, AMAT, URI, VLO, RS fallback: nothing ever wrote the game state's
+    "reserves" key, so the same five names were audited every day since 2026-06-26."""
+    return _morning_list(pick_lists.MORNING_RESERVES, skip=5)
 
 
 def get_market_regime():

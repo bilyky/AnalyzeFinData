@@ -14,7 +14,8 @@ import aether.ledgers as ledgers
 
 _REPO = Path(__file__).resolve().parent.parent
 _REPO_DATA = (_REPO / "Data").resolve()
-_LEDGER_NAMES = ("trade_history_dna.json", "failure_dna_rules.json", "retrospective_report.txt")
+_LEDGER_NAMES = ("trade_history_dna.json", "failure_dna_rules.json", "retrospective_report.txt",
+                 "pick_lists_log.jsonl")
 
 
 class TestLedgerPathsRedirected(unittest.TestCase):
@@ -22,7 +23,8 @@ class TestLedgerPathsRedirected(unittest.TestCase):
         for name, path in [("decision_eval.LOG", decision_eval.LOG),
                            ("ledgers.TRADE_DNA_FILE", ledgers.TRADE_DNA_FILE),
                            ("ledgers.FAILURE_RULES_FILE", ledgers.FAILURE_RULES_FILE),
-                           ("ledgers.RETRO_REPORT_FILE", ledgers.RETRO_REPORT_FILE)]:
+                           ("ledgers.RETRO_REPORT_FILE", ledgers.RETRO_REPORT_FILE),
+                           ("ledgers.PICK_LOG_FILE", ledgers.PICK_LOG_FILE)]:
             with self.subTest(name=name):
                 self.assertNotEqual(Path(path).resolve().parent, _REPO_DATA, f"{name} -> {path}")
 

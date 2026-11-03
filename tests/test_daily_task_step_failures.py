@@ -64,7 +64,7 @@ class TestMainReportsStepFailures(unittest.TestCase):
     def setUp(self):
         self.emails = []
         self.timeouts = {}
-        self.fail = set()
+        self.fail_steps = set()
         patches = [
             mock.patch.object(daily_task.os, "chdir"),
             mock.patch.object(daily_task.subprocess, "run", side_effect=self._run),
@@ -87,7 +87,7 @@ class TestMainReportsStepFailures(unittest.TestCase):
         script = os.path.basename(args[1]) if len(args) > 1 else ""
         if script.endswith(".py"):
             self.timeouts[script] = kwargs.get("timeout")
-        if script in self.fail:
+        if script in self.fail_steps:
             raise subprocess.TimeoutExpired(args, kwargs.get("timeout"))
         return _ok(args)
 
@@ -101,7 +101,7 @@ class TestMainReportsStepFailures(unittest.TestCase):
         self.assertNotIn("STEP FAILURE", self.emails[0][0])
 
     def test_timed_out_history_step_returns_one_and_is_in_the_report(self):
-        self.fail = {"run_history.py"}
+        self.fail_steps = {"run_history.py"}
         rc = daily_task.main()
         self.assertEqual(rc, 1)
         self.assertNotIn("Automation completed successfully.", self._info_lines())
@@ -110,7 +110,7 @@ class TestMainReportsStepFailures(unittest.TestCase):
         self.assertIn("run_history.py", body)
 
     def test_failed_recovery_pass_alone_still_returns_one(self):
-        self.fail = {"rapidapi.py"}
+        self.fail_steps = {"rapidapi.py"}
         self.assertEqual(daily_task.main(), 1)
 
     def test_history_and_main_get_their_own_longer_timeouts(self):

@@ -422,7 +422,7 @@ def read_replacements() -> dict:
 
 
 def read_reserves() -> dict:
-    """Cached 60s — reads A-Reserves from game state + Research sheet scores."""
+    """Cached 60s — the A-Reserves: ranks 6-10 of the morning ranking (aether.pick_lists)."""
     def _load():
         try:
             data = _ap_reserves()
