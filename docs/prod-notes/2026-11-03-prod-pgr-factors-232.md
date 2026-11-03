@@ -23,6 +23,10 @@ sessions to 2026-08-31 show factors for every stock.
 
 Merge #232, then pull on PROD. No config change. No backup needed for the code itself.
 
+New folder: `Data\Symbol_raw\` gets the untouched Chaikin response for each stock, gzipped
+(~5 KB each, ~3 MB a day, ~750 MB a year). Check the disk has room. If `AETHER_CACHE_DIR`
+is set on PROD, it goes there with `Symbol\`.
+
 ## 3. After the next evening run: confirm it's fixed
 
 ```powershell

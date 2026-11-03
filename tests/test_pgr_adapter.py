@@ -8,12 +8,16 @@ ratings/prices. No network calls — the samples mirror verified live responses.
 
   python -m unittest discover -s tests -v
 """
+import datetime
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import powergauge
 from powergauge import (
     _PGR_FACTOR_MAP,
     _pgr_rating_old5,
@@ -208,6 +212,44 @@ class TestSchemaWarnsOnEmptyFactors(unittest.TestCase):
             with self.subTest(etf=d["isEtf"]):
                 with self.assertNoLogs(_pg_log.name, level="WARNING"):
                     PowerGauge("X").init_from_json(_adapt_suggestions_to_legacy(d, "X"))
+
+
+# ── The raw response is kept next to the adapted snapshot ──────────────────────
+
+class TestRawCache(unittest.TestCase):
+    def _fetch(self, payload, market_open=False):
+        resp = mock.MagicMock(ok=True, status_code=200)
+        resp.json.return_value = payload
+        http = mock.MagicMock()
+        http.get.return_value = resp
+        with mock.patch.object(powergauge.paths, "symbol_dir", return_value=self.snap),                 mock.patch.object(powergauge.paths, "symbol_raw_dir", return_value=self.raw),                 mock.patch.object(powergauge, "OHLCV_DIR", self.snap),                 mock.patch.object(powergauge, "ensure_valid_session", return_value={"jsessionid": "x"}),                 mock.patch.object(powergauge, "_get_http_session", return_value=http),                 mock.patch.object(powergauge, "is_nyse_market_open", return_value=market_open),                 mock.patch.object(PowerGauge, "find_prev_pf", lambda self: None):
+            powergauge.get_symbol_data("INTC", self.day, False)
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.snap, self.raw = os.path.join(self._tmp.name, "Symbol"), os.path.join(self._tmp.name, "Symbol_raw")
+        self.day = datetime.date.today()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_ok_fetch_keeps_the_untouched_response(self):
+        payload = {"data": _live_like_intc(), "extra": "kept"}
+        with mock.patch.object(powergauge.paths, "symbol_raw_dir", return_value=self.raw):
+            self._fetch(payload)
+            self.assertEqual(powergauge.load_raw("INTC", self.day), payload)
+        self.assertTrue(os.path.exists(os.path.join(self.snap, "INTC", f"INTC_{self.day}.json")))
+
+    def test_nothing_saved_while_open_or_when_invalid(self):
+        self._fetch({"data": _live_like_intc()}, market_open=True)
+        self._fetch({"data": {}})
+        self.assertFalse(os.path.exists(self.raw))
+
+    def test_a_failed_raw_write_does_not_fail_the_fetch(self):
+        with mock.patch.object(powergauge.gzip, "open", side_effect=OSError("disk full")),                 self.assertLogs(_pg_log.name, level="WARNING") as cm:
+            self._fetch({"data": _live_like_intc()})
+        self.assertTrue(any("could not save the raw response" in m for m in cm.output))
+        self.assertTrue(os.path.exists(os.path.join(self.snap, "INTC", f"INTC_{self.day}.json")))
 
 
 # ── Round-trip: adapter output feeds PowerGauge.init_from_json correctly ───────

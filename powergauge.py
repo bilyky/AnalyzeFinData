@@ -1,4 +1,5 @@
 import datetime
+import gzip
 import sys
 import re
 import requests
@@ -1127,6 +1128,28 @@ def _adapt_suggestions_to_legacy(data: dict, symbol: str) -> dict:
 # @doc-sync-end: chaikin_api
 
 
+def _save_raw(symbol: str, cache_date, raw_jsn) -> None:
+    """Keep the untouched /api/suggestions response next to the adapted snapshot, so a field
+    the adapter drops can be rebuilt later (the 20 PGR factors were lost 2026-09-01 .. #232
+    because only the adapted bundle was kept). ~5 KB gzipped per stock."""
+    try:
+        d = os.path.join(paths.symbol_raw_dir(), symbol)
+        os.makedirs(d, exist_ok=True)
+        with gzip.open(os.path.join(d, f"{symbol}_{cache_date}.json.gz"), "wt", encoding="utf-8") as f:
+            json.dump(raw_jsn, f)
+    except OSError as e:  # the raw copy is a safety net; never fail the fetch over it
+        _pg_log.warning(f"[Raw Cache] {symbol}: could not save the raw response ({e})")
+
+
+def load_raw(symbol: str, cache_date):
+    """The saved raw response for a symbol/date, or None."""
+    p = os.path.join(paths.symbol_raw_dir(), symbol, f"{symbol}_{cache_date}.json.gz")
+    if not os.path.exists(p):
+        return None
+    with gzip.open(p, "rt", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _allow_reauth: bool = True) -> PowerGauge:
     if not _SYMBOL_RE.match(symbol):
         raise ValueError(f"Invalid symbol format: {symbol!r}")
@@ -1207,6 +1230,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
             else:
                 with open(os.path.join(symbol_dir, f"{symbol}_{cache_date}.json"), "w") as fw:
                     json.dump(data_jsn, fw)
+                _save_raw(symbol, cache_date, raw_jsn)
 
         elif response.status_code in (401, 403):
             if _allow_reauth:

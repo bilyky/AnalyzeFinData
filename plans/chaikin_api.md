@@ -141,6 +141,14 @@ lists them in `Data/pgr_factor_gap.json` (treat as missing, not zero), and `--ch
 fails when the latest session's factor coverage drops below 90%. `_check_schema` also
 warns per stock when all four lists are empty.
 
+### Raw response copy
+
+Next to each adapted snapshot, `get_symbol_data` keeps the untouched response, gzipped:
+`Data/Symbol_raw/<SYM>/<SYM>_<date>.json.gz` (~5 KB per stock, ~3 MB a day). Same guards
+as the snapshot (only `ok`, never while NYSE is open). A failed raw write only logs a
+warning. `powergauge.load_raw(symbol, date)` reads it back, so a field the adapter misses
+can be rebuilt from history instead of being lost.
+
 ### Invalid symbol
 
 An unknown ticker still returns HTTP 200 but with an empty `checklistData` and null
