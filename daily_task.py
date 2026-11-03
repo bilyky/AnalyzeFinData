@@ -11,7 +11,7 @@ from pathlib import Path
 import openpyxl
 
 import notify
-from aether import oceanview_context, paths, pick_eval, pick_lists
+from aether import data_completeness, oceanview_context, paths, pick_eval, pick_lists
 import powergauge
 import rapidapi
 import watchdog
@@ -121,6 +121,16 @@ def _step_failure_banner(failed: list[str]) -> str:
     return ('<div style="border:2px solid #c62828;background:#ffebee;padding:10px;margin:10px 0;">'
             f"<b>STEP FAILURES in this run:</b><ul>{items}</ul>"
             "The data in this report may be incomplete.</div>")
+
+
+def _data_completeness_banner(today) -> str:
+    """The day-over-day completeness check of the Chaikin download, as an email banner ("" when
+    clean). Never raises: a broken check must not stop the evening report."""
+    try:
+        return data_completeness.html_banner(data_completeness.check(str(today)))
+    except Exception as e:
+        _log.warning(f"Data completeness check failed: {e}")
+        return ""
 
 
 def get_symbols_from_xls():
@@ -419,6 +429,10 @@ def main():
         if _failed_steps:
             subject_line = f"[STEP FAILURE] {subject_line}"
             html = html.replace("<body>", f"<body>{_step_failure_banner(_failed_steps)}", 1)
+        data_banner = _data_completeness_banner(today)
+        if data_banner:
+            subject_line = f"[DATA] {subject_line}"
+            html = html.replace("<body>", f"<body>{data_banner}", 1)
 
         _log.info("Generating rich HTML report...")
         notify.send_email(subject_line, html, is_html=True)
