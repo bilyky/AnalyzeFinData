@@ -105,7 +105,9 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
     production's real config (#144); and the environment facts the change relies on — scheduled-task
     names, time windows (token expiry, market close), data present on that machine. Production logs are
     evidence: quote them, with timestamps (e.g. PROD's tasks had been renamed, so the watchdog audited
-    names that no longer existed — #176).
+    names that no longer existed — #176). A finding is "covered by another path" only once that path
+    is shown live in production (its config, input files, schedule); a path the owner has retired
+    covers nothing.
 - **Failure paths** for code that calls an external system, holds a lock or handle, or runs in the
   background: what happens when the call fails or times out, or the process is stopped half-way?
   What do callers and alerts see then — stale data treated as fresh, success reported after a
@@ -135,6 +137,9 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
     Assert the calls that prove the path ran (counts, arguments), and patch the module's own
     reference — never a shared library global (`datetime.datetime`, `time.time`) that unrelated code
     also reads.
+  - **A guard retired or replaced?** When a PR deletes a test, check or alert, or plans to rely on a
+    new one later, measure what is left: run the mutants against the remaining guards alone and state
+    what only the removed one caught.
   - **Combinable?** Same contract at different inputs → one table-driven test; don't merge different
     contracts just to cut lines.
   - **Run it.** Report the real `Ran N … OK (skipped=k)` from the branch (merged with today's `main`
@@ -179,7 +184,8 @@ FYI last.
 
 **Prove findings with a probe.** For a suspected bug, run the real function with only the boundary
 mocked (subprocess, HTTP, clock, email) and quote the output in the finding — a reproduced bug isn't
-argued with. What you could not reproduce is labelled a suspicion, not a fact.
+argued with. What you could not reproduce is labelled a suspicion, not a fact. A probe that passes
+needs a negative control: break what it checks and show it then fails.
 
 ## 5. Post as a PR comment — one PR at a time
 
@@ -188,7 +194,9 @@ gh pr comment <n> --repo <owner>/<repo> --body-file reviews/PR-<n>-<slug>.md
 ```
 A comment works on any PR, including your own (a `--request-changes` review does not). Post one PR at
 a time so the §6 scrub runs on every body. **Before posting, re-check every factual sentence** —
-counts, dates, "already on `main`", "CI runs X", "the logs end before Y" — against a command run now.
+counts, dates, "already on `main`", "CI runs X", "the logs end before Y" — against a command run now,
+including causal and time words ("caused", "since", "yesterday") and anything a helper agent's summary
+adds that its written review doesn't hold.
 A correction after posting is public; if you find one, edit the comment and say what changed. A
 comment does not block a merge: say "must fix before merge" in the verdict line, where it's seen. If `gh` cannot reach the API, POST the same body to
 `repos/<owner>/<repo>/issues/<n>/comments` with any HTTP client using the token from `gh auth token`
@@ -205,11 +213,7 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
 
 ## 7. Network & auth
 
-- Don't trust one client's "unreachable": TLS stacks differ behind corporate proxies (reference §D) —
-  try `git ls-remote`, `gh`, and an HTTP client given the proxy **explicitly** (`$HTTPS_PROXY`)
-  before concluding the API is down.
-- Auth: `gh auth login` (the user runs it; it is interactive), a `GH_TOKEN` they supply, or
-  `gh auth token` to reuse gh's stored credential (PATH and push details: reference §D).
+- One client's "unreachable" isn't proof the API is down; auth options and proxy/TLS fixes: reference §D.
 - ⚠️ **Never** extract a token embedded in a remote URL (`git remote -v`) — advise rotating it instead.
 
 ## 8. Bring a PR current with `main` — merge in, never rebase
@@ -217,7 +221,9 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
 - **`git merge --no-ff origin/main`** on the PR branch, re-run the suite, then a plain fast-forward
   `git push`. A rebase needs a force-push, which agent runtimes typically (and rightly) gate as
   destructive. If you already rebased locally, `git checkout -B <branch> <pushed-sha>` and merge
-  instead. Verify `behind=0` and a clean merge state afterwards.
+  instead. Verify `behind=0` and a clean merge state afterwards. Then compare the PR's own changed
+  lines before and after (`+`/`-` lines of `git diff <old-base> <old-head>` vs `git diff origin/main
+  HEAD`): they match unless a conflict forced a change you can name.
 - **Parent was squash-merged (stacked PR retargeted to `main`)?** Every shared line conflicts; follow
   reference §I (prove `main` holds the parent's final content, then `-X ours` from the child).
 - **Whole-file conflict resolution (`--ours`/`--theirs`) also drops that file's non-conflicting
@@ -251,8 +257,8 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
 - §3 every perspective; docs re-verified for each changed behavior; tests red-green or mutation-checked
   and actually run; architecture fit; failure paths; production evidence; every consumer of a changed
   output traced; prod-readiness on both gates.
-- §4–§6 findings proven by a probe (or labelled suspicions), each with severity and confidence; verdict
-  rule applied; every factual sentence re-checked before posting; PII masked.
-- §8 merge-in, never force-push; whole-file conflict resolutions re-checked hunk by hunk.
+- §4–§6 findings proven by a probe with a negative control (or labelled suspicions), each with severity
+  and confidence; verdict rule applied; every factual sentence re-checked before posting; PII masked.
+- §8 merge-in, never force-push; the PR's own lines unchanged by the merge, or the change named.
 - Cleanup per reference §F: merged-ness from the API (all pages), lossless deletions only, logged, no
   `--force`, worktrees scanned for links first.
