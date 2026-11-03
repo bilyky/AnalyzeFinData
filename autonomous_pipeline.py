@@ -112,7 +112,7 @@ def cleanup_orphaned_processes():
     except:
         pass
 
-def format_html_report(status_msg, picks, replacements, intel_ideas):
+def format_html_report(status_msg, picks, replacements, intel_ideas, reserves=None):
     today = datetime.date.today()
     regime, color = get_market_regime()
     
@@ -269,7 +269,7 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
         """
 
     # 0.5. Format A-Reserves Audit
-    reserves_data = get_reserves_data()
+    reserves_data = get_reserves_data() if reserves is None else reserves
     reserves_rows = ""
     for r in reserves_data:
         reasoning = get_reasoning(r['Symbol'], r['PGR'], r['S10'], r['L60'], r['Industry'])
@@ -599,13 +599,14 @@ def main():
     if picks:
         log("Logging picks for performance tracking...")
         performance_tracker.log_picks(picks)
+    reserves = get_reserves_data()
     pick_eval.log_picks(pick_lists.MORNING_TOP5, picks)
-    pick_eval.log_picks(pick_lists.MORNING_RESERVES, get_reserves_data())
+    pick_eval.log_picks(pick_lists.MORNING_RESERVES, reserves)
 
     # 7. Send report
     if not no_email:
         log("Drafting and sending HTML report...")
-        html = format_html_report(msg, picks, replacements, intel_ideas)
+        html = format_html_report(msg, picks, replacements, intel_ideas, reserves)
         notify.send_email(f"AETHER Daily Autopilot Trading & Intelligence Report: {datetime.date.today()}", html, is_html=True)
     else:
         log("Drafting HTML report (email disabled via --no-email)...")

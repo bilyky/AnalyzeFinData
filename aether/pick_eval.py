@@ -11,6 +11,10 @@ Per list and horizon the scorecard gives: picks and dates scored, the mean retur
 excess over SPY (each date's picks averaged first, then the dates, since picks on one date
 share one market move), and the share of dates that beat SPY. It is a running record of what
 each list did, not a significance test: lists, rules and the market regime all change.
+
+Limit: risk_utils.split_adjust_ohlcv treats a one-day close ratio <= 0.55 (or >= 1.8) whose open
+agrees as a split, so a real 45%+ gap-down that opens and closes there would be adjusted away and
+drop out of a list's record.
 """
 import datetime
 import json

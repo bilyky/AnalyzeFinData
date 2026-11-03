@@ -169,9 +169,6 @@ class TestLog(unittest.TestCase):
         self.assertIn("No logged pick", pick_eval.render_html({}))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestEveningReport(unittest.TestCase):
     """daily_task.main() end to end (subprocess, data and email mocked, as test_daily_task_step_failures)."""
@@ -215,3 +212,73 @@ class TestMorningEmail(unittest.TestCase):
         self.assertIn(_html.escape(pick_lists.criteria(pick_lists.MORNING_TOP5)), html)
         self.assertIn(_html.escape(pick_lists.criteria(pick_lists.MORNING_RESERVES)), html)
         self.assertIn("No reserves qualified today.", html)
+
+
+class TestReviewGaps(unittest.TestCase):
+    """#231 review: mutants that survived the first round."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.dir = Path(self._td.name)
+        (self.dir / "Symbol_full").mkdir()
+        p = mock.patch.dict(os.environ, {"AETHER_CACHE_DIR": str(self.dir)})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _write(self, sym, series):
+        with open(self.dir / "Symbol_full" / f"{sym}_daily.json", "w") as f:
+            json.dump({"Time Series (Daily)": series}, f)
+
+    def test_excess_is_over_spy_not_the_raw_return(self):
+        self._write("SPY", _series([100] + [104] * 29))          # SPY +4% over the window
+        self._write("AAA", _series([100] + [110] * 29))          # +10%
+        self._write("BBB", _series([100] + [100] * 29))          # 0%
+        rows = [{"date": "2026-09-02", "list": "L", "symbol": s, "entry": "prior_close"} for s in ("AAA", "BBB")]
+        m = pick_eval.scorecard(rows, horizons=(5,))["L"][5]
+        self.assertAlmostEqual(m["mean_ret"], 5.0)
+        self.assertAlmostEqual(m["mean_excess"], 1.0)             # mean(10 - 4, 0 - 4)
+
+    def test_a_placeholder_bar_never_prices_an_entry(self):
+        series = _series([100] * 30)
+        days = sorted(series)
+        series[days[0]].update({"1. open": "50", "2. high": "50", "3. low": "50", "4. close": "50",
+                                "5. volume": "0"})                 # Chaikin close-only placeholder
+        self._write("SPY", _series([100] * 30))
+        self._write("AAA", series)
+        rows = [{"date": days[1], "list": "L", "symbol": "AAA", "entry": "prior_close"}]
+        self.assertEqual(pick_eval.scorecard(rows, horizons=(5,)), {})   # no real prior close
+
+    def test_log_picks_never_raises(self):
+        with mock.patch("builtins.open", side_effect=PermissionError("locked")),              mock.patch.object(pick_eval, "_log") as log:
+            pick_eval.log_picks(pick_lists.MORNING_TOP5, [_row("AAA", 1, 1)], path=os.path.join(self._td.name, "x.jsonl"))
+        self.assertTrue(log.warning.called)
+
+    def test_evening_filter_is_bu_or_better_not_neutral(self):
+        rows = [_row("NEU", 9, 9, setup=True, pgr="N"), _row("BUL", 1, 1, setup=True, pgr="Bu")]
+        self.assertEqual([r["symbol"] for r in pick_lists.EVENING_S10.pick(rows)], ["BUL"])
+
+    def test_morning_rr_floor_is_one_and_a_half(self):
+        # Not elite (S10 1, total 2); R:R 1.4 is out, 1.6 is in.
+        out, inn = _row("OUT", 1, 1, price=100, stop=90, target=114), _row("IN", 1, 1, price=100, stop=90, target=116)
+        self.assertEqual([r["symbol"] for r in pick_lists.MORNING_TOP5.pick([out, inn])], ["IN"])
+
+    def test_oracle_logs_the_three_it_shows(self):
+        import aether_oracle as ao
+        buys = [{"symbol": s, "s10": 5, "l60": 5} for s in ("A", "B", "C", "D")]
+        with mock.patch.object(ao, "get_oracle_account", return_value={"holdings": []}),              mock.patch.object(ao, "audit_oracle_portfolio", return_value=([], [])),              mock.patch.object(ao, "get_oracle_buy_candidates", return_value=buys),              mock.patch.object(ao, "generate_oracle_html", return_value="<html/>"),              mock.patch.object(ao.pick_eval, "log_picks") as log:
+            ao.run_oracle_advisory()
+        plist, logged = log.call_args.args
+        self.assertIs(plist, pick_lists.ORACLE_BUYS)
+        self.assertEqual([b["symbol"] for b in logged], ["A", "B", "C"])
+
+    def test_reserves_are_read_once_and_the_logged_list_is_the_emailed_one(self):
+        import autonomous_pipeline as ap
+        res = [{"Symbol": "R1", "S10": 1, "L60": 1, "PGR": "Bu", "Industry": "", "Total": 2}]
+        with mock.patch.object(ap, "get_reasoning", return_value=""),              mock.patch.object(ap, "get_reserves_data", side_effect=AssertionError("read again")):
+            html = ap.format_html_report("ok", [], [], [], res)
+        self.assertIn("R1", html)
+
+
+if __name__ == "__main__":
+    unittest.main()
