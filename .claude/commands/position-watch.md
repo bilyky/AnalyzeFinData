@@ -67,8 +67,13 @@ python scripts/monitoring/position_watch.py --symbol INTC --lesson "<one sentenc
 3. Every ~20 calls, review the hit rate and the lessons with the user. Propose rule changes
    only with evidence, as a new `RULES_VERSION`, and say what changed.
 
-## The rules (v1, heuristics, tuned by the RETRO)
+## The rules (v2, heuristics, tuned by the RETRO)
 
+- **Never act when not sure.** A TRIM becomes WAIT when any input is in doubt: the price
+  history ends before the last completed session, a peer or replacement is missing or behind,
+  the account snapshot is `failed`, or a requested live quote failed. The report lists them.
+- **After a big drop, wait a day.** The crash-day check looks at the last *completed* session,
+  so the day after a big drop is a WAIT too (the user's choice, 2026-11-03).
 - **TRIM** a tranche (`tranche_pct` of the position, default 5%, never past the floor) only
   when **all** hold:
   - the symbol is below its 50-day average;

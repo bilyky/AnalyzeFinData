@@ -133,6 +133,44 @@ class TestDecide(unittest.TestCase):
         self.assertEqual(d["action"], "WAIT")
 
 
+class TestDoubts(unittest.TestCase):
+    TUE = datetime.date(2026, 11, 3)
+
+    def _doubts(self, bar="2026-11-02", peers=None, repl=None, health="ok", live=True, live_ok=True, today=TUE):
+        return pw.data_doubts(bar, peers or {"AMD": "2026-11-02"}, repl or {"SPY": "2026-11-02"}, health,
+                              live, live_ok, today)
+
+    def test_fresh_data_has_no_doubts(self):
+        self.assertEqual(self._doubts(), [])
+        self.assertEqual(self._doubts(bar="2026-11-03", peers={"AMD": "2026-11-03"},
+                                      repl={"SPY": "2026-11-03"}), [])            # after the close
+        self.assertEqual(self._doubts(bar="2026-10-30", today=datetime.date(2026, 11, 2)), [])  # Monday
+
+    def test_stale_history_is_a_doubt(self):
+        self.assertIn("2026-10-30", self._doubts(bar="2026-10-30")[0])
+        self.assertEqual(self._doubts(bar="2026-11-25", peers={"AMD": "2026-11-25"}, repl={"SPY": "2026-11-25"},
+                                      today=datetime.date(2026, 11, 27)), [])      # after Thanksgiving
+
+    def test_behind_or_missing_inputs(self):
+        d = self._doubts(peers={"AMD": "2026-10-30", "ON": None}, repl={"SPY": None})
+        self.assertEqual(len(d), 2)
+        self.assertIn("AMD, ON", d[0])
+        self.assertIn("SPY", d[1])
+
+    def test_failed_pack_and_failed_quote(self):
+        self.assertEqual(len(self._doubts(health="failed", live_ok=False)), 2)
+        self.assertEqual(self._doubts(live=False, live_ok=False), [])              # no quote asked for
+
+    def test_trim_with_a_doubt_becomes_wait(self):
+        trim = {"action": "TRIM", "reasons": ["weak"], "tranche_usd": 5000.0, "replacement": "SPY"}
+        w = pw.apply_doubts(trim, ["account snapshot failed"])
+        self.assertEqual((w["action"], w["tranche_usd"], w["replacement"]), ("WAIT", 0.0, None))
+        self.assertIn("not sure: account snapshot failed", w["reasons"])
+        self.assertIs(pw.apply_doubts(trim, []), trim)
+        hold = {"action": "HOLD", "reasons": [], "tranche_usd": 0.0, "replacement": None}
+        self.assertIs(pw.apply_doubts(hold, ["x"]), hold)
+
+
 class TestLots(unittest.TestCase):
     lots = [{"acquired": "2018-01-02", "qty": 100, "price": 20.0},      # LT, big gain
             {"acquired": "2024-01-02", "qty": 100, "price": 50.0},      # LT, small gain

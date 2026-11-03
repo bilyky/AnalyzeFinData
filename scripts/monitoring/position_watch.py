@@ -40,7 +40,7 @@ sys.path.insert(0, BASE_DIR)
 
 import numpy as np
 
-from aether import patterns, paths
+from aether import market_calendar, patterns, paths
 from aether.etrade.client import ETradeClient
 from aether.logger import get_logger
 from aether.oceanview_context import build_oceanview_context
@@ -48,7 +48,7 @@ from aether.risk_utils import split_adjust_ohlcv
 
 _log = get_logger("position_watch")
 
-RULES_VERSION = "v1"
+RULES_VERSION = "v2"
 BETA_WINDOW = 120
 WEAK_Z = -1.0               # 20-day residual z below this = weak on its own
 FLOOR_BUFFER = 0.02         # stop trimming 2 points above the floor
@@ -167,7 +167,7 @@ def replacement_timing(b: dict, i: int) -> dict:
     stretch = b["c"][i] / s50 - 1 if s50 else None
     r = rsi(b["c"], i)
     ok = stretch is not None and stretch <= STRETCH_MAX and (r is None or r < RSI_MAX)
-    return {"close": b["c"][i], "stretch_50": stretch, "rsi14": r,
+    return {"date": b["days"][i], "close": b["c"][i], "stretch_50": stretch, "rsi14": r,
             "ret_20": b["c"][i] / b["c"][i - 20] - 1 if i >= 20 else None, "entry_ok": ok}
 
 
@@ -215,6 +215,32 @@ def decide(m: dict, rb: dict | None, rbr_tags: list, repl: dict, conc: dict, cfg
     tranche = min(cfg["tranche_pct"] * conc["value"], conc["headroom_usd"])
     return {"action": "TRIM", "reasons": reasons + [f"{best} entry OK (stretch {repl[best]['stretch_50']:+.1%})"],
             "tranche_usd": tranche, "replacement": best}
+
+
+def data_doubts(bar: str, peer_dates: dict, repl_dates: dict, pack_health, live: bool, live_ok: bool,
+                today: datetime.date) -> list:
+    """Reasons not to trust today's numbers enough to act. Missing inputs are listed as None."""
+    doubts = []
+    last = market_calendar.last_session_on_or_before(today - datetime.timedelta(days=1)).isoformat()
+    if bar < last:
+        doubts.append(f"price history ends {bar}, the last session was {last}")
+    for kind, dates in (("peer", peer_dates), ("replacement", repl_dates)):
+        behind = sorted(s for s, d in dates.items() if d is None or d < bar)
+        if behind:
+            doubts.append(f"{kind} data missing or behind {bar}: {', '.join(behind)}")
+    if pack_health == "failed":
+        doubts.append("account snapshot failed: the share of the total is uncertain")
+    if live and not live_ok:
+        doubts.append("live quote unavailable: using the last close")
+    return doubts
+
+
+def apply_doubts(call: dict, doubts: list) -> dict:
+    """Never act when not sure: a TRIM with any doubt becomes WAIT. HOLD and WAIT stay as they are."""
+    if call["action"] != "TRIM" or not doubts:
+        return call
+    return {"action": "WAIT", "reasons": call["reasons"] + [f"not sure: {d}" for d in doubts], "tranche_usd": 0.0,
+            "replacement": None}
 
 
 def in_wash_window(day: datetime.date, acquisition_dates: list) -> bool:
@@ -328,7 +354,8 @@ def run(symbol=None, live=False, journal=True, config_path=None) -> dict:
         raise SystemExit(f"no OHLCV for {symbol}")
     i = len(b["days"]) - 1
     m = symbol_metrics(b, i)
-    peers = [p for p in (load_bars(s) for s in cfg["peers"]) if p]
+    peer_bars = {s: load_bars(s) for s in cfg["peers"]}
+    peers = [p for p in peer_bars.values() if p]
     window = b["days"][max(0, i - BETA_WINDOW - 25):]
     sym_rets = [math.log(b["c"][b["idx"][y]] / b["c"][b["idx"][x]]) for x, y in zip(window, window[1:])]
     rb = beta_residual(sym_rets, basket_returns(peers, window)) if peers else None
@@ -348,8 +375,11 @@ def run(symbol=None, live=False, journal=True, config_path=None) -> dict:
     sym_value = (shares + cfg["stock_plan_shares"] + cfg["outside_symbol_shares"]) * price
     total = acct_other + (shares + cfg["stock_plan_shares"]) * price + cfg["outside_assets_usd"]
     conc = concentration(sym_value, total, cfg["floor_pct"])
-    call = decide(m, rb, tags, repl, conc, cfg)
     today = datetime.date.today()
+    doubts = data_doubts(m["date"], {s: p["days"][-1] if p else None for s, p in peer_bars.items()},
+                         {s: repl[s]["date"] if s in repl else None for s in cfg["replacements"]},
+                         meta.get("health"), live, bool(live_px), today)
+    call = apply_doubts(decide(m, rb, tags, repl, conc, cfg), doubts)
     lots_path = os.path.join(watch_dir(), f"{symbol}_lots.json")
     lots = None
     if call["action"] == "TRIM" and os.path.exists(lots_path):
@@ -361,7 +391,7 @@ def run(symbol=None, live=False, journal=True, config_path=None) -> dict:
     report = {"symbol": symbol, "rules": RULES_VERSION, "as_of_bar": m["date"], "price": price,
               "price_source": "live quote" if live_px else f"close {m['date']}", "pack_health": meta.get("health"),
               "metrics": m, "rbr": {"score": score, "tags": tags}, "vs_peers": rb, "replacements": repl,
-              "concentration": conc, "call": call, "lots": lots, "retro": r,
+              "concentration": conc, "doubts": doubts, "call": call, "lots": lots, "retro": r,
               "wash_window_today": in_wash_window(today, cfg["acquisition_dates"])}
     if journal:
         append_journal(jpath, {"date": today.isoformat(), "bar": m["date"], "price": price, "action": call["action"],
@@ -390,6 +420,8 @@ def print_report(rep: dict) -> None:
     _out(f"\n  CALL: {k['action']}" + (f" ~${k['tranche_usd']:,.0f} into {k['replacement']}" if k["action"] == "TRIM" else ""))
     for reason in k["reasons"]:
         _out(f"    - {reason}")
+    if rep["doubts"] and not any(x.startswith("not sure:") for x in k["reasons"]):
+        _out("  data doubts (a TRIM would be held back): " + "; ".join(rep["doubts"]))
     if rep["lots"]:
         lt = rep["lots"]
         _out(f"  lots ({lt['shares']} sh, est. tax ${lt['est_tax']:,.0f}, wash window {lt['wash_window']}):")
