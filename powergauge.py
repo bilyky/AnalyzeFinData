@@ -511,6 +511,9 @@ class PowerGauge:
                 warnings.append("pgr[0] missing 'PGR Value'")
             if 'Corrected PGR Value' not in pgr_list[5]:
                 warnings.append("pgr[5] missing 'Corrected PGR Value'")
+            is_etf = len(pgr_list) > 6 and bool(pgr_list[6].get('is_etf_symbol'))
+            if not is_etf and not any(next(iter(e.values()), None) for e in pgr_list[1:5]):
+                warnings.append("no PGR factors (Financials/Earnings/Technicals/Experts all empty)")
         metainfo = data_json.get('metaInfo') or []
         if not metainfo:
             warnings.append("'metaInfo' list missing or empty")
@@ -1010,6 +1013,42 @@ _SIGNAL_KEYS = ("overBoughtSell", "overSoldBuy", "breakdownSell", "breakoutBuy",
                 "relStrengthBreakdown")
 
 
+# pgrData (new) -> the legacy factor lists, in the legacy order: (legacy name, new key).
+# Financials and Earnings were matched on 26 symbols (legacy 2026-08-31 vs live 2026-11-03,
+# 77-100% exact agreement per factor). Technicals and Experts move too fast to match two
+# months apart; they are mapped by name. In every group the first new key is the group
+# score ("Value"). Source of the mapping: plans/chaikin_api.md.
+_PGR_FACTOR_MAP = (
+    ("Financials", "financials", (
+        ("Value", "financialStrength"), ("LT Debt to Equity", "debtEquityRatio"),
+        ("Price to Book", "priceToBookValue"), ("Return on Equity", "returnOnInvestment"),
+        ("Price to Sales", "priceToSalesRatio"), ("Free Cash Flow", "businessValue"))),
+    ("Earnings", "earnings", (
+        ("Value", "earningsPerformance"), ("Earnings Growth", "earningsStability"),
+        ("Earnings Surprise", "epsSurprise"), ("Earnings Trend", "earningsTrend"),
+        ("Projected P/E", "projectedPeRatio"), ("Earnings Consistency", "earningsConsistency"))),
+    ("Technicals", "technicals", (
+        ("Value", "priceVolumeActivity"), ("Rel Strength vs Market", "relativeStrengthVsMarket"),
+        ("Chaikin Money Flow", "chaikinVolumeAccumulation"), ("Price Strength", "priceTrend"),
+        ("Price Trend ROC", "priceTrendRoc"), ("Volume Trend", "volumeTrend"))),
+    ("Experts", "experts", (
+        ("Value", "investorSentiment"), ("Estimate Trend", "earningEstimatesRevision"),
+        ("Short Interest", "shortInterest"), ("Insider Activity", "insiderActivity"),
+        ("Analyst Rating Trend", "analystOptions"), ("Industry Rel Strength", "relativeStrengthVsIndustry"))),
+)
+
+
+def _legacy_factor_lists(pgr_data) -> dict:
+    """{"Financials": [{"Value": 2}, {"LT Debt to Equity": 3}, ...], ...} from new pgrData.
+    A factor the API leaves out (or sends as null) is left out, so an ETF gets empty lists."""
+    pd = pgr_data if isinstance(pgr_data, dict) else {}
+    out = {}
+    for legacy, new, pairs in _PGR_FACTOR_MAP:
+        grp = pd.get(new) if isinstance(pd.get(new), dict) else {}
+        out[legacy] = [{name: grp[key]} for name, key in pairs if grp.get(key) is not None]
+    return out
+
+
 def _pgr_rating_old5(int_rating, name) -> int:
     """Resolve the legacy 1-5 PGR rating from the new integer (1-7) or rating name."""
     if isinstance(int_rating, int) and int_rating > 0:
@@ -1046,12 +1085,13 @@ def _adapt_suggestions_to_legacy(data: dict, symbol: str) -> dict:
     industry_name = data.get("industry") or data.get("sector") or data.get("name") or ""
     is_etf = bool(data.get("isEtf"))
 
+    factors = _legacy_factor_lists(data.get("pgrData"))
     pgr_list = [
         {"PGR Value": raw5},
-        {"Financials": []},
-        {"Earnings": []},
-        {"Technicals": []},
-        {"Experts": []},
+        {"Financials": factors["Financials"]},
+        {"Earnings": factors["Earnings"]},
+        {"Technicals": factors["Technicals"]},
+        {"Experts": factors["Experts"]},
         {"Corrected PGR Value": corr5},
         {"is_etf_symbol": is_etf, "technical_rank": data.get("technicalRank") or 0},
     ]

@@ -115,6 +115,32 @@ the Neutral −/·/+ band to old `3`; `0` = unrated (e.g. leveraged/inverse ETFs
 PGR). `_pgr_rating_old5(int_rating, name)` resolves int first, then falls back to the
 name.
 
+### The 20 PGR factors (`pgrData` → `pgr[1..4]`)
+
+`data.pgrData` holds four groups of six: the group score plus five factors.
+`_PGR_FACTOR_MAP` writes them into the legacy lists in the legacy order and names
+(`backtest.py` and the relative-strength fallback in `init_from_json` read them).
+
+| Legacy group | Legacy name ← new key |
+| --- | --- |
+| Financials | Value ← `financialStrength`, LT Debt to Equity ← `debtEquityRatio`, Price to Book ← `priceToBookValue`, Return on Equity ← `returnOnInvestment`, Price to Sales ← `priceToSalesRatio`, Free Cash Flow ← `businessValue` |
+| Earnings | Value ← `earningsPerformance`, Earnings Growth ← `earningsStability`, Earnings Surprise ← `epsSurprise`, Earnings Trend ← `earningsTrend`, Projected P/E ← `projectedPeRatio`, Earnings Consistency ← `earningsConsistency` |
+| Technicals | Value ← `priceVolumeActivity`, Rel Strength vs Market ← `relativeStrengthVsMarket`, Chaikin Money Flow ← `chaikinVolumeAccumulation`, Price Strength ← `priceTrend`, Price Trend ROC ← `priceTrendRoc`, Volume Trend ← `volumeTrend` |
+| Experts | Value ← `investorSentiment`, Estimate Trend ← `earningEstimatesRevision`, Short Interest ← `shortInterest`, Insider Activity ← `insiderActivity`, Analyst Rating Trend ← `analystOptions`, Industry Rel Strength ← `relativeStrengthVsIndustry` |
+
+How it was matched: 26 symbols, legacy snapshot 2026-08-31 vs live 2026-11-03. Every
+Financials and Earnings factor matched one legacy name 77–100% of the time
+(`earningsStability` = Earnings Growth at 100%, `earningsPerformance` = Value at 85%).
+Technicals and Experts move too fast to match two months apart, so they are mapped by
+name; in every group the first new key is the group score. ETFs get empty lists.
+
+**Gap:** from 2026-09-01 until this mapping shipped, the adapter wrote the four lists
+empty, so the cached snapshots for those sessions have no factors. The API only serves
+current values, so they can't be refilled. `scripts/utils/pgr_factor_repair.py --mark`
+lists them in `Data/pgr_factor_gap.json` (treat as missing, not zero), and `--check`
+fails when the latest session's factor coverage drops below 90%. `_check_schema` also
+warns per stock when all four lists are empty.
+
 ### Invalid symbol
 
 An unknown ticker still returns HTTP 200 but with an empty `checklistData` and null
@@ -127,6 +153,9 @@ later cache-preferred reads.
 ## Tests
 
 - `tests/test_pgr_adapter.py` — pins the new→old mapping (rating buckets, checklist
-  vocab, signals string, invalid symbol, round-trip through `init_from_json`).
+  vocab, signals string, invalid symbol, round-trip through `init_from_json`, and the 20
+  factors with live INTC values).
+- `tests/test_pgr_factor_repair.py` — the coverage audit, gap marker, `--check` exit code
+  and the today-only re-fetch.
 - `tests/test_doc_sync.py` — the doc-sync guard and registry-consistency checks that
   keep this surface tied to the `chaikin_api` anchor.

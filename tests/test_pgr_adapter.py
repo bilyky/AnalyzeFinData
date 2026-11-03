@@ -15,8 +15,10 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from powergauge import (
+    _PGR_FACTOR_MAP,
     _pgr_rating_old5,
     _adapt_suggestions_to_legacy,
+    _pg_log,
     PowerGauge,
 )
 
@@ -37,6 +39,23 @@ def _live_like_intc():
             "status": "Hold",
         },
         "signalInfo": {"moneyFlowSell": 1, "breakdownSell": 1},
+        "pgrData": _live_pgr_data(),
+    }
+
+
+def _live_pgr_data():
+    """pgrData from a live /api/suggestions/INTC response (2026-11-03)."""
+    return {
+        "pgrValue": 50, "correctedPgr": 50, "pgrRating": 4, "symbol": "INTC",
+        "financials": {"financialStrength": 2, "debtEquityRatio": 3, "priceToBookValue": 3,
+                       "returnOnInvestment": 4, "priceToSalesRatio": 3, "businessValue": 1},
+        "earnings": {"earningsPerformance": 3, "epsSurprise": 5, "projectedPeRatio": 1,
+                     "earningsTrend": 1, "earningsStability": 3, "earningsConsistency": 3},
+        "technicals": {"priceVolumeActivity": 4, "priceTrend": 1, "priceTrendRoc": 1,
+                       "relativeStrengthVsMarket": 2, "chaikinVolumeAccumulation": 4, "volumeTrend": 4},
+        "experts": {"investorSentiment": 3, "earningEstimatesRevision": 1, "shortInterest": 5,
+                    "insiderActivity": 5, "analystOptions": 1, "relativeStrengthVsIndustry": 3},
+        "topFactors": [{"key": "moneyFlow", "value": "Strong", "rank": 1, "type": "Technicals"}],
     }
 
 
@@ -109,6 +128,86 @@ class TestAdaptSuggestions(unittest.TestCase):
         meta = _adapt_suggestions_to_legacy(d, "INTC")["metaInfo"][0]
         self.assertIsNone(meta["Last"])
         self.assertIsNone(meta["Percentage "])
+
+
+# ── The 20 PGR factors: pgrData -> legacy Financials/Earnings/Technicals/Experts ──
+
+def _factors(out):
+    return {k: dict(kv for e in v for kv in e.items()) for d in out["pgr"][1:5] for k, v in d.items()}
+
+
+class TestPgrFactors(unittest.TestCase):
+    # The legacy order and names, as cached up to 2026-08-31 (backtest.py reads these).
+    LEGACY = {
+        "Financials": ["Value", "LT Debt to Equity", "Price to Book", "Return on Equity", "Price to Sales",
+                       "Free Cash Flow"],
+        "Earnings": ["Value", "Earnings Growth", "Earnings Surprise", "Earnings Trend", "Projected P/E",
+                     "Earnings Consistency"],
+        "Technicals": ["Value", "Rel Strength vs Market", "Chaikin Money Flow", "Price Strength",
+                       "Price Trend ROC", "Volume Trend"],
+        "Experts": ["Value", "Estimate Trend", "Short Interest", "Insider Activity", "Analyst Rating Trend",
+                    "Industry Rel Strength"],
+    }
+
+    def test_all_24_entries_in_legacy_order(self):
+        out = _adapt_suggestions_to_legacy(_live_like_intc(), "INTC")
+        for slot, (group, names) in zip(out["pgr"][1:5], self.LEGACY.items(), strict=True):
+            with self.subTest(group=group):
+                self.assertEqual([next(iter(e)) for e in slot[group]], names)
+                self.assertTrue(all(1 <= next(iter(e.values())) <= 5 for e in slot[group]))
+
+    def test_matched_factors_take_the_right_new_key(self):
+        f = _factors(_adapt_suggestions_to_legacy(_live_like_intc(), "INTC"))
+        self.assertEqual(f["Financials"]["Free Cash Flow"], 1)          # businessValue
+        self.assertEqual(f["Financials"]["Return on Equity"], 4)        # returnOnInvestment
+        self.assertEqual(f["Earnings"]["Value"], 3)                     # earningsPerformance
+        self.assertEqual(f["Earnings"]["Earnings Surprise"], 5)         # epsSurprise
+        self.assertEqual(f["Earnings"]["Projected P/E"], 1)             # projectedPeRatio
+        self.assertEqual(f["Technicals"]["Rel Strength vs Market"], 2)  # relativeStrengthVsMarket
+        self.assertEqual(f["Technicals"]["Value"], 4)                   # priceVolumeActivity
+        self.assertEqual(f["Experts"]["Estimate Trend"], 1)             # earningEstimatesRevision
+        self.assertEqual(f["Experts"]["Short Interest"], 5)
+
+    def test_earnings_growth_is_stability_not_performance(self):
+        # Matched on 26 symbols: earningsStability = legacy "Earnings Growth" (100%),
+        # earningsPerformance = the group "Value" (85%). INTC has 3 in both, so set them apart.
+        d = _live_like_intc(); d["pgrData"]["earnings"].update(earningsStability=2, earningsPerformance=4)
+        f = _factors(_adapt_suggestions_to_legacy(d, "INTC"))["Earnings"]
+        self.assertEqual((f["Earnings Growth"], f["Value"]), (2, 4))
+
+    def test_every_new_key_is_used_once(self):
+        keys = [k for _, new, pairs in _PGR_FACTOR_MAP for _, k in pairs]
+        self.assertEqual(len(keys), len(set(keys)))
+        for _, new, pairs in _PGR_FACTOR_MAP:
+            self.assertEqual({k for _, k in pairs}, set(_live_pgr_data()[new]))
+
+    def test_missing_pgr_data_gives_empty_lists(self):
+        d = _live_like_intc(); d.pop("pgrData")
+        self.assertEqual(_factors(_adapt_suggestions_to_legacy(d, "INTC")),
+                         {"Financials": {}, "Earnings": {}, "Technicals": {}, "Experts": {}})
+        d["pgrData"] = {"financials": {"businessValue": None, "debtEquityRatio": 2}}
+        self.assertEqual(_factors(_adapt_suggestions_to_legacy(d, "INTC"))["Financials"], {"LT Debt to Equity": 2})
+
+    def test_rs_fallback_reads_the_mapped_technicals(self):
+        d = _live_like_intc(); d["checklistData"].pop("relativeStrength")
+        pg = PowerGauge("INTC")
+        pg.init_from_json(_adapt_suggestions_to_legacy(d, "INTC"), check_schema=False)
+        self.assertEqual(pg.relative_strength, "2")
+
+
+class TestSchemaWarnsOnEmptyFactors(unittest.TestCase):
+    def test_stock_without_factors_warns(self):
+        d = _live_like_intc(); d.pop("pgrData")
+        with self.assertLogs(_pg_log.name, level="WARNING") as cm:
+            PowerGauge("INTC").init_from_json(_adapt_suggestions_to_legacy(d, "INTC"))
+        self.assertTrue(any("no PGR factors" in m for m in cm.output))
+
+    def test_stock_with_factors_and_etf_without_do_not_warn(self):
+        etf = _live_like_intc(); etf.pop("pgrData"); etf["isEtf"] = True
+        for d in (_live_like_intc(), etf):
+            with self.subTest(etf=d["isEtf"]):
+                with self.assertNoLogs(_pg_log.name, level="WARNING"):
+                    PowerGauge("X").init_from_json(_adapt_suggestions_to_legacy(d, "X"))
 
 
 # ── Round-trip: adapter output feeds PowerGauge.init_from_json correctly ───────
