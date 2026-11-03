@@ -10,6 +10,13 @@ The missed sessions (2026-09-01 to the deploy day) **can't be refilled**: the AP
 serves today's values. Copying older values forward would put fake data in the backtests, so
 the script marks the gap instead.
 
+**Live trading changes after this deploy.** The same adapter bug dropped the checklist's
+`strengthCount`/`timingCount`. The R&D #32 guard reads them (default 1), so since 2026-09-01
+its -1.5 score penalty for "strength 0 and timing 0" never fired. After the deploy it fires
+again: buy candidates with 0/0 (INTC and NVDA on 2026-11-03) get -1.5, so expect a few
+names to drop out of the buy list compared with the last two months. This restores the
+pre-September behaviour; it isn't a new rule.
+
 ## 1. Before deploying: see the gap (read-only)
 
 ```powershell
