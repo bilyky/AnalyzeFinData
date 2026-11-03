@@ -386,7 +386,7 @@
       "Target: Double the configured real account by its target date (config oracle.start_equity / oracle.target_date).",
       "Execution: Runs daily at 7:00 AM PST immediately following ai_portfolio_game.py.",
       "Auditing: Flags CRITICAL BREACHES when current price <= technical stop loss.",
-      "Override: Seamlessly integrates the AI Second-Opinion Exit Override Gate, auditing shadow verdicts to downgrade a momentum collapse to HOLD or WATCH (sell_rules.ai_exit_override). A stop-loss breach is never downgraded.",
+      "Override: Seamlessly integrates the AI Second-Opinion Exit Override Gate, auditing shadow verdicts to downgrade a momentum collapse to HOLD or WATCH (sell_rules.ai_exit_override), only for a holding more than 1 ATR in profit. A stop-loss breach or a losing position is never downgraded.",
       "Rotations: Chooses the single highest-scoring, non-overlapping bullish setup (s10 >= 2.5).",
       "Zero-Risk: Operational read-only advisory (no automated orders are placed on your brokerage)."
     ]

@@ -1,18 +1,39 @@
 """
-Configurable multi-provider AI client for ADVISORY evaluations.
+Configurable, provider-agnostic AI client for ADVISORY evaluations.
 
-Providers are defined in config.json `ai.providers` (each independently
-enable/disable-able) with one marked `primary`. Every provider has a `type`
-that selects the transport:
-    openai_compatible  — POST {endpoint} (GitHub Models / OpenAI / any compatible)
+Config (`config.json` -> `ai`):
+    providers  — named provider blocks, each independently enabled. Every block has a
+                 `type` (the wire format, a key of TRANSPORTS), a `model`, and for HTTP
+                 types an `endpoint` and `api_key_source` (`env:VAR` or a literal key).
+                 Optional `extra_body` adds provider-specific request fields; the core
+                 fields (model, messages, max_tokens, ...) always win.
+    tiers      — named, ordered lists of provider names, e.g.
+                 {"cheap": ["groq", "gemini_lite"], "strong": ["groq", "gemini_oai"]}.
+    primary    — the default chain head when a call names no tier (legacy).
+
+Transports (TRANSPORTS):
+    openai_compatible  — POST {endpoint}, Bearer key (OpenRouter, Groq, Together, Fireworks,
+                         Mistral, Azure OpenAI v1, Bedrock's OpenAI endpoint, Gemini ...)
     anthropic          — POST https://api.anthropic.com/v1/messages
     gemini_cli         — shell out to the `gemini` CLI
 
-Advisory only: `evaluate()` RAISES when every provider tried fails (missing key,
-disabled provider, HTTP error, empty answer). Callers MUST catch that and degrade
-to deterministic behavior. This module never gates a trade.
+Routing (provider_chain): an explicit provider= is the whole chain. Otherwise the chain is
+the tier's providers, then the "strong" tier's (escalation), then primary, then every other
+enabled provider — deduped, and only providers that are enabled and have a key. A call with
+no tier keeps the old order (primary, then the other enabled providers).
+
+Advisory only: evaluate()/chat() RAISE when every provider in the chain fails (missing key,
+disabled provider, HTTP error, empty answer). Callers MUST catch that and degrade to
+deterministic behavior. This module never gates a trade.
+
+Every success is logged ("AI call ok", with tier, provider, model, ms, in/out chars) and
+every failure as a warning, so an outage shows in aether.jsonl the same day.
+AETHER_AI_CAPTURE=<file> appends each request (system, messages, tier, limits) to a JSONL
+file for scripts/diagnostics/ai_provider_bakeoff.py. Off unless the variable is set.
 """
 
+import datetime
+import json
 import os
 import subprocess
 import sys
@@ -30,6 +51,9 @@ _TIMEOUT = 180  # generous for chat; context build can take ~9s on cold Research
 # Retry-After when it is sent, but never longer than this.
 _RETRY_429_DEFAULT_WAIT_S = 3.0
 _RETRY_429_MAX_WAIT_S = 10.0
+# The tier a cheaper tier escalates to when all of its providers fail.
+_ESCALATION_TIER = "strong"
+_CAPTURE_ENV = "AETHER_AI_CAPTURE"
 
 
 # ── Key resolution ─────────────────────────────────────────────────────────────
@@ -63,6 +87,23 @@ def _providers() -> dict:
     return CFG.ai_providers or {}
 
 
+def _tiers() -> dict:
+    """Tier lists from config. `_note`-style keys and non-list values are not tiers."""
+    raw = getattr(CFG, "ai_tiers", None) or {}
+    return {t: names for t, names in raw.items()
+            if not str(t).startswith("_") and isinstance(names, list)}
+
+
+def configured_providers() -> dict:
+    """The provider blocks from config, by name (read-only view for diagnostics)."""
+    return dict(_providers())
+
+
+def configured_tiers() -> dict:
+    """The tier lists from config, by tier name (read-only view for diagnostics)."""
+    return {t: list(names) for t, names in _tiers().items()}
+
+
 def _has_key(pcfg: dict) -> bool:
     # gemini_cli authenticates via the CLI's own login, not an api_key_source.
     if pcfg.get("type") == "gemini_cli":
@@ -77,12 +118,29 @@ def enabled_providers() -> list:
 
 
 def primary() -> str | None:
-    """The provider that drives the surfaced verdict: the configured `primary` if
-    it's usable, else the first enabled provider, else None."""
+    """The default chain head: the configured `primary` if it's usable, else the first
+    enabled provider, else None."""
     enabled = enabled_providers()
     if CFG.ai_primary and CFG.ai_primary in enabled:
         return CFG.ai_primary
     return enabled[0] if enabled else None
+
+
+def provider_chain(provider: str | None = None, tier: str | None = None) -> list:
+    """The ordered provider names a call will try (see the module docstring)."""
+    if provider:
+        return [provider]
+    usable = enabled_providers()
+    tiers = _tiers()
+    order = []
+    if tier:
+        for t in (tier, _ESCALATION_TIER):
+            order += [n for n in tiers.get(t, []) if n in usable]
+    head = primary()
+    if head:
+        order.append(head)
+    order += usable
+    return list(dict.fromkeys(order))
 
 
 def _parse_openai_response(resp) -> str:
@@ -144,9 +202,11 @@ def _parse_anthropic_response(resp) -> str:
     return "".join(texts).strip()
 
 
-# ── Per-type transports ────────────────────────────────────────────────────────
-# Each takes a pre-built `messages` list so evaluate() (single system+user turn)
-# and chat() (full history) share ONE wire path per provider — no duplicated POST.
+# ── Transports ─────────────────────────────────────────────────────────────────
+# One function per wire format, all with the same signature:
+#     transport(pcfg, name, system, messages, max_tokens, temperature) -> str
+# `messages` is [{role: user|assistant, content}]; a single user message is an
+# evaluate() call, a longer list is chat(). Add a wire format by adding an entry.
 
 def _require_key(pcfg, name) -> str:
     key = _resolve_key(pcfg.get("api_key_source", ""))
@@ -155,13 +215,22 @@ def _require_key(pcfg, name) -> str:
     return key
 
 
-def _call_openai_compatible(pcfg, key, messages, max_tokens, temperature) -> str:
+def _require_model(pcfg, name) -> str:
+    model = pcfg.get("model", "")
+    if not model:
+        raise RuntimeError(f"Provider '{name}' has no model configured (set its 'model' in config.json).")
+    return model
+
+
+def _t_openai_compatible(pcfg, name, system, messages, max_tokens, temperature) -> str:
+    model = _require_model(pcfg, name)
+    key = _require_key(pcfg, name)
     # extra_body: provider-specific request fields from config (e.g. OpenRouter's
     # {"reasoning": {"enabled": false}}). The core fields below always win.
     payload = dict(pcfg.get("extra_body") or {})
     payload.update({
-        "model": pcfg.get("model", ""),
-        "messages": messages,
+        "model": model,
+        "messages": ([{"role": "system", "content": system}] if system else []) + messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
     })
@@ -184,20 +253,20 @@ def _call_openai_compatible(pcfg, key, messages, max_tokens, temperature) -> str
         return _parse_openai_response(resp)
 
 
-def _call_anthropic(pcfg, key, system, messages, max_tokens) -> str:
-    # Note: temperature is intentionally omitted — recent Claude models (Opus 4.7+)
-    # reject it. If the anthropic SDK is later added, swap this raw call for it.
+def _t_anthropic(pcfg, name, system, messages, max_tokens, temperature) -> str:
+    # temperature is intentionally omitted: recent Claude models reject it.
     # `system` is sent out-of-band (Anthropic has no system role in `messages`).
+    model = _require_model(pcfg, name)
+    key = _require_key(pcfg, name)
+    payload = dict(pcfg.get("extra_body") or {})
+    payload.update({"model": model, "max_tokens": max_tokens, "messages": messages})
+    if system:
+        payload["system"] = system
     resp = requests.post(
         _ANTHROPIC_URL,
         headers={"x-api-key": key, "anthropic-version": "2023-06-01",
                  "content-type": "application/json"},
-        json={
-            "model": pcfg.get("model", "claude-opus-4-8"),
-            "max_tokens": max_tokens,
-            **({"system": system} if system else {}),
-            "messages": messages,
-        },
+        json=payload,
         timeout=_TIMEOUT,
     )
     resp.raise_for_status()
@@ -205,14 +274,14 @@ def _call_anthropic(pcfg, key, system, messages, max_tokens) -> str:
 
 
 def _run_gemini(model: str, context: str, instruction: str) -> str:
-    """Single invocation path for the gemini CLI, shared by evaluate() and chat().
+    """Single invocation path for the gemini CLI.
 
     Bulk `context` is fed on stdin (gemini prepends stdin to the -p text), which
     keeps large financial payloads off the Windows command line; `instruction` is
     the trailing -p directive. Workspace-trust is scoped to the child env rather
-    than mutating this process's os.environ. Not exercisable where the gemini CLI
-    is absent — advisory callers must degrade to deterministic behavior on any
-    RuntimeError raised here."""
+    than mutating this process's os.environ. `--allowed-tools none` is what keeps
+    the CLI from running tools under `--approval-mode yolo`; keep it until it is
+    replaced by an equivalent policy setting."""
     # Suppress true color terminal warnings in headless environments
     env = os.environ.copy()
     env["COLORTERM"] = "truecolor"
@@ -244,123 +313,106 @@ def _run_gemini(model: str, context: str, instruction: str) -> str:
     return out.stdout.strip()
 
 
-def _call_gemini_cli(pcfg, system, user, max_tokens, temperature) -> str:
-    return _run_gemini(pcfg.get("model", "gemini-2.5-flash"),
-                       f"{system}\n\n{user}",
-                       "Please analyze the following data and respond. Do NOT use any tools. Rely ONLY on the text below:")
+def _t_gemini_cli(pcfg, name, system, messages, max_tokens, temperature) -> str:
+    model = pcfg.get("model", "gemini-2.5-flash")
+    if len(messages) == 1 and messages[0].get("role") == "user":
+        return _run_gemini(model, f"{system}\n\n{messages[0]['content']}",
+                           "Please analyze the following data and respond. Do NOT use any tools. Rely ONLY on the text below:")
+    # Chat: flatten history into a single stdin payload.
+    turns = "\n\n".join(f"[{m['role'].upper()}]: {m['content']}" for m in messages)
+    context = (f"{system}\n\n{turns}" if system else turns)
+    return _run_gemini(model, context,
+                       "Please analyze the following conversation history and respond. Do NOT use any tools. Rely ONLY on the text below:")
 
 
-# ── Public entry point ─────────────────────────────────────────────────────────
-
-def chat(messages: list, system: str = "", provider: str | None = None,
-         max_tokens: int = 1000, temperature: float = 0.5) -> str:
-    """Multi-turn chat: `messages` is [{role: user|assistant, content: str}].
-    The last message must be role=user. Returns the assistant reply. Raises on failure."""
-    if provider:
-        return _chat_one(messages, system, provider, max_tokens, temperature)
-
-    primary_name = primary()
-    if not primary_name:
-        raise RuntimeError("No primary AI provider configured.")
-
-    providers_to_try = [primary_name] + [name for name in enabled_providers() if name != primary_name]
-
-    last_err = None
-    for name in providers_to_try:
-        try:
-            return _chat_one(messages, system, name, max_tokens, temperature)
-        except Exception as e:
-            try:
-                _ai_client_log = _get_logger("ai_client")
-                _ai_client_log.warning(
-                    f"AI chat failed for provider '{name}'; attempting fallback...",
-                    extra={"provider": name, "error": str(e)}
-                )
-            except Exception:
-                pass
-            last_err = e
-
-    if last_err:
-        raise last_err
-    raise RuntimeError("No AI providers were successful.")
+TRANSPORTS = {
+    "openai_compatible": _t_openai_compatible,
+    "anthropic": _t_anthropic,
+    "gemini_cli": _t_gemini_cli,
+}
 
 
-def _chat_one(messages: list, system: str, name: str, max_tokens: int, temperature: float) -> str:
+# ── Dispatch ───────────────────────────────────────────────────────────────────
+
+def _call_one(name, system, messages, max_tokens, temperature) -> str:
     pcfg = _providers().get(name)
     if not pcfg or not pcfg.get("enabled"):
         raise RuntimeError(f"AI provider '{name}' is disabled or not found.")
-    ptype = pcfg.get("type")
-
-    if ptype == "openai_compatible":
-        payload_msgs = ([{"role": "system", "content": system}] if system else []) + messages
-        return _call_openai_compatible(pcfg, _require_key(pcfg, name),
-                                       payload_msgs, max_tokens, temperature)
-    elif ptype == "anthropic":
-        return _call_anthropic(pcfg, _require_key(pcfg, name), system, messages, max_tokens)
-    elif ptype == "gemini_cli":
-        # Gemini CLI: flatten history into a single stdin payload.
-        turns = "\n\n".join(f"[{m['role'].upper()}]: {m['content']}" for m in messages)
-        context = (f"{system}\n\n{turns}" if system else turns)
-        return _run_gemini(pcfg.get("model", "gemini-2.5-flash"),
-                           context,
-                           "Please analyze the following conversation history and respond. Do NOT use any tools. Rely ONLY on the text below:")
-    else:
-        raise NotImplementedError(f"Unsupported AI provider type: {ptype}")
+    transport = TRANSPORTS.get(pcfg.get("type"))
+    if transport is None:
+        raise NotImplementedError(f"Unsupported AI provider type: {pcfg.get('type')}")
+    text = transport(pcfg, name, system, messages, max_tokens, temperature)
+    if not (text or "").strip():
+        raise ValueError(f"AI provider '{name}' returned an empty answer.")
+    return text
 
 
-def evaluate(system: str, user: str, provider: str | None = None,
-             max_tokens: int = 200, temperature: float = 0.3) -> str:
-    """Run one advisory evaluation on `provider` (defaults to primary(), then the other enabled
-    providers). Returns the model's text. Raises on failure."""
-    return evaluate_with_provider(system, user, provider, max_tokens, temperature)[0]
+def _capture(system, messages, tier, max_tokens, temperature):
+    path = os.environ.get(_CAPTURE_ENV)
+    if not path:
+        return
+    row = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), "tier": tier,
+           "system": system, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError as e:
+        _get_logger("ai_client").warning(f"AI prompt capture to {path} failed: {e}")
+
+
+def _run(kind, system, messages, provider, tier, max_tokens, temperature) -> tuple[str, str]:
+    """Try each provider in the chain; return (text, name of the provider that answered)."""
+    chain = provider_chain(provider, tier)
+    if not chain:
+        raise RuntimeError("No primary AI provider configured.")
+    _capture(system, messages, tier, max_tokens, temperature)
+    log = _get_logger("ai_client")
+    in_chars = len(system or "") + sum(len(m.get("content") or "") for m in messages)
+    last_err = None
+    for name in chain:
+        start = time.monotonic()
+        try:
+            text = _call_one(name, system, messages, max_tokens, temperature)
+        except Exception as e:
+            log.warning(f"AI {kind} failed for provider '{name}'; attempting fallback...",
+                        extra={"provider": name, "ai_tier": tier, "error": str(e)})
+            last_err = e
+            continue
+        log.info(f"AI call ok: {name}",
+                 extra={"ai_kind": kind, "ai_tier": tier, "ai_provider": name,
+                        "ai_model": (_providers().get(name) or {}).get("model", ""),
+                        "ms": int((time.monotonic() - start) * 1000),
+                        "in_chars": in_chars, "out_chars": len(text)})
+        return text, name
+    raise last_err
+
+
+# ── Public entry points ────────────────────────────────────────────────────────
+
+def chat_with_provider(messages: list, system: str = "", provider: str | None = None,
+                       max_tokens: int = 1000, temperature: float = 0.5,
+                       tier: str | None = None) -> tuple[str, str]:
+    """Multi-turn chat: `messages` is [{role: user|assistant, content: str}], the last one
+    role=user. Returns (reply, name of the provider that answered). Raises on failure."""
+    return _run("chat", system, messages, provider, tier, max_tokens, temperature)
+
+
+def chat(messages: list, system: str = "", provider: str | None = None,
+         max_tokens: int = 1000, temperature: float = 0.5, tier: str | None = None) -> str:
+    """Like chat_with_provider(), returning only the reply."""
+    return chat_with_provider(messages, system, provider, max_tokens, temperature, tier)[0]
 
 
 def evaluate_with_provider(system: str, user: str, provider: str | None = None,
-                           max_tokens: int = 200, temperature: float = 0.3) -> tuple[str, str]:
-    """Like evaluate(), but returns (text, name of the provider that answered)."""
-    if provider:
-        return _evaluate_one(system, user, provider, max_tokens, temperature), provider
-
-    primary_name = primary()
-    if not primary_name:
-        raise RuntimeError("No primary AI provider configured.")
-
-    providers_to_try = [primary_name] + [name for name in enabled_providers() if name != primary_name]
-
-    last_err = None
-    for name in providers_to_try:
-        try:
-            return _evaluate_one(system, user, name, max_tokens, temperature), name
-        except Exception as e:
-            try:
-                _ai_client_log = _get_logger("ai_client")
-                _ai_client_log.warning(
-                    f"AI evaluation failed for provider '{name}'; attempting fallback...",
-                    extra={"provider": name, "error": str(e)}
-                )
-            except Exception:
-                pass
-            last_err = e
-
-    if last_err:
-        raise last_err
-    raise RuntimeError("No AI providers were successful.")
+                           max_tokens: int = 200, temperature: float = 0.3,
+                           tier: str | None = None) -> tuple[str, str]:
+    """One advisory evaluation. Returns (text, name of the provider that answered).
+    Raises on failure."""
+    return _run("evaluation", system, [{"role": "user", "content": user}],
+                provider, tier, max_tokens, temperature)
 
 
-def _evaluate_one(system: str, user: str, name: str, max_tokens: int, temperature: float) -> str:
-    pcfg = _providers().get(name)
-    if not pcfg or not pcfg.get("enabled"):
-        raise RuntimeError(f"AI provider '{name}' is disabled or not found.")
-    ptype = pcfg.get("type")
-
-    if ptype == "openai_compatible":
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        return _call_openai_compatible(pcfg, _require_key(pcfg, name),
-                                       messages, max_tokens, temperature)
-    elif ptype == "anthropic":
-        return _call_anthropic(pcfg, _require_key(pcfg, name), system,
-                               [{"role": "user", "content": user}], max_tokens)
-    elif ptype == "gemini_cli":
-        return _call_gemini_cli(pcfg, system, user, max_tokens, temperature)
-    else:
-        raise NotImplementedError(f"Unsupported AI provider type: {ptype}")
+def evaluate(system: str, user: str, provider: str | None = None,
+             max_tokens: int = 200, temperature: float = 0.3, tier: str | None = None) -> str:
+    """Like evaluate_with_provider(), returning only the text."""
+    return evaluate_with_provider(system, user, provider, max_tokens, temperature, tier)[0]

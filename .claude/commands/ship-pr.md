@@ -68,6 +68,14 @@ git add <paths> && git commit -m "<type>: <summary>" && git push -u origin HEAD
   git auto-merged a file both edited, check that both sides' content survived before re-running tests.
   A text-clean merge can still fail the suite, so test the merged tree. Re-check `behind` just before
   saying "ready": `main` often moves while the suite runs.
+- **PROD notes ship with their PR.** When a deploy needs steps beyond "pull" (a backup, a re-register,
+  a config patch, a data script, checks to run after), write them as a note in the repo's PROD-notes
+  folder (here `docs/prod-notes/YYYY-MM-DD-prod-<topic>-<PR>.md`, helper scripts beside it) and commit
+  it **in the same PR**, so the steps are reviewed and versioned with the code they deploy. A note in an
+  ignored folder (`Data/`) is invisible to the review and drifts. Cite the note from the PR body's
+  deploy section; when a later PR supersedes a step, say so in both notes. **Public repo:** a note
+  holds no account digits, balances, keys, tokens, emails, internal IPs or share paths; anything that
+  needs them stays private, and the README in the folder names what was left out.
 - **CI:** a bot-opened PR may not trigger `pull_request` runs; the push-triggered run is the gate.
   Read the check-runs for the head SHA, not the PR badge. A failed job that ran **zero steps** never
   checked the code: `gh run rerun <run-id>`, don't debug it.

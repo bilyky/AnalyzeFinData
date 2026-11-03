@@ -59,7 +59,20 @@ if (-not $DryRun) {
     Write-Host "----------------------------------------------------------"
 }
 
+# New-ScheduledTaskTrigger saves StartBoundary as UTC ("...T15:00:00Z"). Task Scheduler then runs
+# it at that fixed UTC time, so every task ran an hour early after DST ended (PROD 2026-11-02:
+# the 07:00 trade run fired at 06:00 PT = 09:00 ET and aborted, market closed). A StartBoundary
+# with no offset is local time and follows DST.
+function Set-LocalStart($t) {
+    $t.StartBoundary = ([datetime]$t.StartBoundary).ToLocalTime().ToString("yyyy-MM-dd'T'HH:mm:ss")
+    return $t
+}
+
 function New-AetherTrigger($s) {
+    return Set-LocalStart (New-AetherTriggerUtc $s)
+}
+
+function New-AetherTriggerUtc($s) {
     switch ($s.type) {
         "hourly" {
             # Starts in the past so the hourly repetition is active immediately, for 9999 days.

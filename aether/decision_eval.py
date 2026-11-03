@@ -166,11 +166,14 @@ def score_log(entries, horizon_days=10, fwd_price_fn=ohlcv_forward_close):
     def bump(name, **kw):
         s = selectors.setdefault(name, {"scored": 0, "correct": 0,
                                         "winner_sell_miss": 0,
-                                        "missed_upside": 0.0, "avoided_loss": 0.0})
+                                        "missed_upside": 0.0, "avoided_loss": 0.0,
+                                        "sells": 0, "sells_correct": 0,
+                                        "holds": 0, "holds_correct": 0})
         for k, v in kw.items():
             s[k] += v
 
     misses = []  # notable winner-selling misses across all selectors (rules)
+    rules_symbols = set()
 
     # Collapse intraday/manual re-runs: the pipeline can log a symbol several times
     # on the same day (scheduled run + a manual "Run Pipeline"), so keep only the
@@ -197,7 +200,10 @@ def score_log(entries, horizon_days=10, fwd_price_fn=ohlcv_forward_close):
         if rc is not None:
             # Check if this specific decision has been officially addressed and patched
             is_addressed = (e.get("symbol"), e.get("date")) in _ADDRESSED_MISSES
-            
+            rules_symbols.add(e.get("symbol"))
+            kind = "sells" if action in _SELL_ACTIONS else "holds"
+            bump("rules", **{kind: 1, kind + "_correct": 1 if (rc or is_addressed) else 0})
+
             if is_addressed:
                 # If addressed, override rules correctness to True and skip miss penalties
                 bump("rules", scored=1, correct=1)
@@ -227,16 +233,29 @@ def score_log(entries, horizon_days=10, fwd_price_fn=ohlcv_forward_close):
                      (verdict == "AGREE" and rc)
             bump(prov, scored=1, correct=1 if useful else 0)
 
-    # finalize hit rates
+    # finalize hit rates. missed_upside_pct / avoided_loss_pct are the MEAN 10-day move per
+    # SELL (they were sums, which grew with the window: "avoided-loss=100.4%" meant 24 sells).
+    def rate(c, n):
+        return round(c / n * 100, 1) if n else None
+
     out = {}
     for name, s in selectors.items():
-        hit = round(s["correct"] / s["scored"] * 100, 1) if s["scored"] else 0.0
         out[name] = {
-            "scored": s["scored"], "correct": s["correct"], "hit_rate": hit,
+            "scored": s["scored"], "correct": s["correct"],
+            "hit_rate": rate(s["correct"], s["scored"]) or 0.0,
             "winner_sell_miss": s["winner_sell_miss"],
-            "missed_upside_pct": round(s["missed_upside"] * 100, 1),
-            "avoided_loss_pct": round(s["avoided_loss"] * 100, 1),
+            "missed_upside_pct": round(s["missed_upside"] / s["sells"] * 100, 1) if s["sells"] else 0.0,
+            "avoided_loss_pct": round(s["avoided_loss"] / s["sells"] * 100, 1) if s["sells"] else 0.0,
         }
+        if name == "rules":
+            # A HOLD counts as right whenever the stock rose, so the pooled hit rate mostly tracks
+            # the market; the SELL rate is the decision signal. Rows repeat a symbol daily, so
+            # the distinct-symbol count is the honest sample size.
+            out[name].update({
+                "sells": s["sells"], "sell_hit_rate": rate(s["sells_correct"], s["sells"]),
+                "holds": s["holds"], "hold_hit_rate": rate(s["holds_correct"], s["holds"]),
+                "symbols": len(rules_symbols),
+            })
     return {"selectors": out,
             "winner_selling_misses": sorted(misses, key=lambda m: m["fwd_return_pct"], reverse=True)}
 
@@ -245,10 +264,14 @@ def reflection(scorecard) -> str:
     """Human-readable reflection over every close (gains included)."""
     lines = ["=== Decision Scorecard (backtracked) ==="]
     for name, s in scorecard["selectors"].items():
-        lines.append(
-            f"  {name:12} scored={s['scored']:>4} hit={s['hit_rate']:>5}%  "
-            f"winner-sell misses={s['winner_sell_miss']}  "
-            f"missed-upside={s['missed_upside_pct']}%  avoided-loss={s['avoided_loss_pct']}%")
+        line = f"  {name:12} scored={s['scored']:>4} hit={s['hit_rate']:>5}%  "
+        if "sells" in s:
+            line += (f"(SELL {s['sell_hit_rate']}% of {s['sells']}, HOLD/REVIEW {s['hold_hit_rate']}% "
+                     f"of {s['holds']}; {s['symbols']} symbols)  winner-sell misses={s['winner_sell_miss']}  "
+                     f"per sell: missed-upside={s['missed_upside_pct']}%  avoided-loss={s['avoided_loss_pct']}%")
+        else:
+            line += "(agreement with the rules outcome)"
+        lines.append(line)
     misses = scorecard["winner_selling_misses"]
     if misses:
         lines.append("  Top winner-selling misses (sold in profit, then rose):")

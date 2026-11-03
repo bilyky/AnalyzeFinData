@@ -175,14 +175,16 @@ def summarize_comparison(data: dict) -> tuple[str | None, str | None]:
     except FileNotFoundError:
         _log.warning("compare rubric missing at %s — skipping AI summary.", RUBRIC_PATH)
         return None, "the comparison rubric is missing on the server"
-    provider = ai_client.primary()
-    if not provider:
+    if not ai_client.primary():
         _log.warning("No AI provider configured — skipping AI summary.")
         return None, "no AI provider is configured"
+    # No pinned provider: the strong tier's chain falls back past a rate-limited provider.
+    tried = ", ".join(ai_client.provider_chain(tier="strong"))
     try:
-        return ai_client.evaluate(rubric, render_for_summary(data),
-                                  provider=provider, max_tokens=1200), None
+        text, _name = ai_client.evaluate_with_provider(rubric, render_for_summary(data),
+                                                       max_tokens=1200, tier="strong")
+        return text, None
     except Exception as e:
-        _log.warning("AI summary failed (%s): %s", provider, e)
-        return None, (f"the AI provider '{provider}' didn't respond "
+        _log.warning("AI summary failed (%s): %s", tried, e)
+        return None, (f"the AI provider '{tried}' didn't respond "
                       f"({type(e).__name__}) — usually a transient rate limit, try again")

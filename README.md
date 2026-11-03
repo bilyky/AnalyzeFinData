@@ -545,7 +545,10 @@ Set to `""` to disable (all symbols treated as Neutral).
 ## Backtest Summary
 
 - **Dataset:** 336k observations, ~485 symbols, Jan 2023 – Dec 2025
-- **Method:** Walk-forward, no look-ahead. OHLCV from Alpha Vantage daily files.
+- **Method:** Walk-forward. OHLCV from Alpha Vantage daily files. Exception found 2026-10-30: the replay's
+  seasonality input averaged every year in the file, including the replayed date's own future; it now uses
+  only outcomes known before each date (`backtest_ratings.SeasonalitySlots`). Results built on the old replay
+  overstate the scores' skill.
 - **Entry filter (t+d3):** Price > SMA(20) AND Price > Close[3d ago]
   - Lifts 10-day win rate by ~16 percentage points vs no filter
   - Validated on 51/51 test symbols

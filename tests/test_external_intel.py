@@ -4,6 +4,7 @@ Tests for external_intel.py — resilient email fetching and early disconnection
 import json
 import os
 import sys
+import time
 import unittest
 import imaplib
 from unittest import mock
@@ -94,7 +95,7 @@ class TestExternalIntelResilience(unittest.TestCase):
         pcfg = {"type": "gemini_cli", "model": "gemini-2.5-flash"}
         system = "system instruction"
         user = "B" * 20000
-        ai_client._call_gemini_cli(pcfg, system, user, 200, 0.3)
+        ai_client._t_gemini_cli(pcfg, "gem", system, [{"role": "user", "content": user}], 200, 0.3)
         
         # Verify that subprocess.run was called, and the prompt was passed inside the input keyword argument
         args = mock_run.call_args[0][0]
@@ -286,6 +287,37 @@ class TestZeroIdeasReason(unittest.TestCase):
                          {"mailbox_errors": 1, "candidates": 0, "extraction_failures": 0})
         self.assertIn("mailbox scan failed for 1", external_intel.zero_ideas_reason())
 
+class TestExtractionParallelism(unittest.TestCase):
+    """PROD 2026-10-06 .. 10-09: the 05:30 batch ran 5 extraction threads, each making 2+ AI
+    calls, against a free AI tier, and got bursts of HTTP 429. The worker count now comes
+    from config (ai.max_parallel_extractions, default 1)."""
+
+    def _fetch(self, parallel, analyze=None):
+        real_pool = external_intel.ThreadPoolExecutor
+        with mock.patch("external_intel.CFG") as mock_cfg,              mock.patch("external_intel._log") as self.fetch_log,              mock.patch("imaplib.IMAP4_SSL") as mock_imap_cls,              mock.patch("external_intel.ThreadPoolExecutor", wraps=real_pool) as pool,              mock.patch("external_intel.email.message_from_bytes") as parse,              mock.patch("external_intel.analyze_email_content", return_value=[], side_effect=analyze),              mock.patch("extract_email_intel.extract", return_value={}):
+            mock_cfg.mailboxes = [{"email": "test@example.org", "password_env": "TEST_ENV_PASS",
+                                   "imap_server": "imap.example.org"}]
+            mock_cfg.smtp_password = "dummy_password"
+            mock_cfg.ai_max_intel_emails = 20
+            mock_cfg.ai_max_parallel_extractions = parallel
+            mail = mock.MagicMock()
+            mock_imap_cls.return_value = mail
+            mail.select.return_value = ("OK", b"1")
+            mail.search.return_value = ("OK", [b"1"])
+            mail.fetch.return_value = ("OK", [(None, b"Subject: S\n\nbuy $AAPL")])
+            msg = mock.MagicMock()
+            msg.get.return_value = f"msg-{parallel}"
+            msg.__getitem__.return_value = "sender"
+            msg.is_multipart.return_value = False
+            msg.get_payload.return_value = b"Stock alert: buy $AAPL now!"
+            parse.return_value = msg
+            external_intel.fetch_idea_emails()
+        return pool.call_args.kwargs.get("max_workers")
+
+    def test_worker_count_follows_config(self):
+        self.assertEqual(self._fetch(1), 1)
+        self.assertEqual(self._fetch(3), 3)
+
 
 class TestDedupRdTopics(unittest.TestCase):
     """The single-source R&D dedup shared by /api/intel-ideas and the email report."""
@@ -318,3 +350,65 @@ class TestDedupRdTopics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExtractionDeadline(TestExtractionParallelism):
+    """#226 review: with a dead AI chain each extraction waits out every provider's timeout, so
+    the step could take the whole morning run. It now stops at ai.intel_deadline_sec."""
+
+    def test_slow_extractions_stop_at_the_deadline(self):
+        import threading
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def slow(subject, body):
+            release.wait(5)
+            return []
+        with mock.patch("external_intel._intel_deadline_sec", return_value=0.2, create=True):
+            t0 = time.monotonic()
+            self._fetch(1, analyze=slow)
+            elapsed = time.monotonic() - t0
+        self.assertLess(elapsed, 3.0, "the step waited for the slow extraction")
+        self.assertEqual(external_intel.last_scan["extraction_failures"], 1)
+
+    def test_deadline_default_and_bad_values(self):
+        with mock.patch("external_intel.CFG") as cfg:
+            for v, want in ((120, 120.0), (0, 600.0), (True, 600.0), ("x", 600.0)):
+                cfg.ai_intel_deadline_sec = v
+                self.assertEqual(external_intel._intel_deadline_sec(), want)
+
+
+class TestExtractionFailureIsAWarning(TestExtractionParallelism):
+    """A single email's failed extraction is a WARNING; "every extraction failed" reaches the
+    recovery email once, as the pipeline's 0-ideas line (zero_ideas_reason)."""
+
+    def test_failed_extraction_logs_a_warning(self):
+        def boom(subject, body):
+            raise RuntimeError("404 Client Error: Not Found")
+        self._fetch(1, analyze=boom)
+        log = self.fetch_log
+        self.assertFalse([c for c in log.error.call_args_list if "Extraction failed" in str(c)])
+        self.assertTrue([c for c in log.warning.call_args_list if "Extraction failed" in str(c)])
+        self.assertIn("every AI extraction failed", external_intel.zero_ideas_reason())
+
+
+class TestZeroIdeasLevel(unittest.TestCase):
+    """#227 review: when every extraction fails the AI is down; that must be an ERROR in
+    aether.jsonl, not depend on the word FAILED in autonomous_run.log."""
+
+    def _level(self, scan):
+        import autonomous_pipeline as ap
+        with mock.patch.dict(external_intel.last_scan, scan), \
+             mock.patch.object(ap, "_pipeline_log") as plog, mock.patch.object(ap, "log"):
+            ap._log_zero_ideas()
+        return "error" if plog.error.called else "warning" if plog.warning.called else None
+
+    def test_every_extraction_failed_is_an_error_else_a_warning(self):
+        cases = [
+            ({"mailbox_errors": 0, "candidates": 5, "extraction_failures": 5}, "error"),
+            ({"mailbox_errors": 0, "candidates": 5, "extraction_failures": 2}, "warning"),
+            ({"mailbox_errors": 0, "candidates": 0, "extraction_failures": 0}, "warning"),
+        ]
+        for scan, want in cases:
+            with self.subTest(scan=scan):
+                self.assertEqual(self._level(scan), want)

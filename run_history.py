@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import powergauge
 from aether import paths
+from aether.batch_failures import log_batch_failures
 from aether.logger import get_logger
 
 _log = get_logger("run_history")
@@ -125,6 +126,7 @@ def main():
         ok = 0
         skip = 0
         errors = 0
+        failed = []
         
         workers = int(os.environ.get("CHAIKIN_WORKERS", "10"))
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -151,11 +153,20 @@ def main():
                         skip += 1
                     else:
                         ok += 1
+                except powergauge.ChaikinSessionUnavailable as e:
+                    # No Chaikin session (re-auth failed or its breaker is open): every other
+                    # symbol and day would fail the same way, so stop the backfill. Any other
+                    # error, including OSErrors (network, a locked cache file), is per symbol.
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    _log.error(f"  {symbol}: {e} — stopping the backfill ({done}/{total} on {day}).")
+                    raise
                 except Exception as e:
-                    _log.error(f"  {symbol}: ERROR {e}")
+                    _log.warning(f"  {symbol}: fetch failed - {e}")
+                    failed.append(symbol)
                     errors += 1
 
         _log.console(f"  done: {ok} fetched, {skip} no-data, {errors} errors")
+        log_batch_failures(_log, f"[run_history] {day}", failed, total)
 
     _log.console("History backfill complete.")
     _log.console("Run check_from_xls to update the Research sheet with today's data.")

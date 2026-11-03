@@ -13,11 +13,13 @@ import json
 import re
 import os
 import smtplib
+import socket
 import subprocess
 import sys
 import time
 import zoneinfo
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 # Insert project root to import our local modules cleanly
@@ -27,6 +29,7 @@ sys.path.insert(0, str(BASE_DIR))
 import notify
 import powergauge
 import watchdog
+from aether import ai_client
 from aether import etrade
 from aether import trash
 from aether.config import CFG
@@ -558,6 +561,65 @@ def check_pipeline_smoke_test(base_dir: Path = BASE_DIR) -> tuple[bool, list[str
     return True, []
 
 
+def check_ai_providers() -> tuple[bool, list[str]]:
+    """Config check for the advisory AI providers, without spending a model request.
+
+    Every tier needs at least one provider that is enabled and has a key, and every
+    HTTP endpoint the call chains can reach must be an https URL whose host resolves.
+    A misspelled host (PROD 2026-09-24..10-05: `openrpouter.ai`) fails DNS here.
+    Advisory: the caller reports this as WARN and it never blocks the run."""
+    _log.console("  Checking AI provider config (advisory)...")
+    issues = []
+    usable = ai_client.enabled_providers()
+    if not usable:
+        issues.append("no AI provider is enabled with a key")
+    tiers = ai_client.configured_tiers()
+    for tier, names in tiers.items():
+        if not any(n in usable for n in names):
+            issues.append(f"tier '{tier}': none of {names} is enabled with a key")
+
+    reachable = set(ai_client.provider_chain())
+    for tier in tiers:
+        reachable.update(ai_client.provider_chain(tier=tier))
+    providers = ai_client.configured_providers()
+    for name in sorted(reachable):
+        pcfg = providers.get(name) or {}
+        if pcfg.get("type") != "openai_compatible":
+            continue  # anthropic uses a fixed URL; gemini_cli has no endpoint
+        url = urlparse(pcfg.get("endpoint", ""))
+        if url.scheme != "https" or not url.hostname:
+            issues.append(f"provider '{name}': endpoint {pcfg.get('endpoint')!r} is not an https URL")
+            continue
+        try:
+            socket.getaddrinfo(url.hostname, 443)
+        except OSError as e:
+            issues.append(f"provider '{name}': host {url.hostname} does not resolve ({e})")
+
+    if issues:
+        for issue in issues:
+            _log.console(f"  ⚠️ AI PROVIDERS: {issue}")
+        return False, issues
+    _log.console(f"  ✅ AI PROVIDERS: {len(reachable)} provider(s) reachable by config; tiers: "
+                 f"{', '.join(tiers) or 'none (primary chain only)'}.")
+    return True, []
+
+
+def status_word(ok, kind: str) -> str:
+    """Console/email label for one roster entry. "advisory" checks show WARN, never FAIL."""
+    if ok == "WAIVED":
+        return "WAIVED"
+    if kind == "lock":
+        return "CLEAN" if ok else "LOCKED"
+    if kind == "advisory":
+        return "PASS" if ok else "WARN"
+    return "PASS" if ok else "FAIL"
+
+
+def overall_ok(checks) -> bool:
+    """The run's verdict: every non-advisory check passed (WAIVED counts as passed)."""
+    return all(ok for _, ok, kind in checks if kind != "advisory")
+
+
 def send_preflight_email(checks, missing_items, active_locks, duration, all_ok, watchdog_issues=None):
     """Compile and dispatch an HTML status briefing email to the user.
 
@@ -570,16 +632,13 @@ def send_preflight_email(checks, missing_items, active_locks, duration, all_ok, 
         today = datetime.date.today().strftime("%Y-%m-%d")
         subject = f"🔔 AETHER Pre-Flight Status Briefing: {today}"
 
-        def _badge(ok):
-            if ok == "WAIVED":
-                return '<span style="color: #db6d28; font-weight: bold;">[WAIVED]</span>'
-            return '<span style="color: #2ea043; font-weight: bold;">[PASS]</span>' if ok else '<span style="color: #f85149; font-weight: bold;">[FAIL]</span>'
-        def _lock_badge(ok):
-            return '<span style="color: #2ea043; font-weight: bold;">[CLEAN]</span>' if ok else '<span style="color: #db6d28; font-weight: bold;">[LOCKED]</span>'
+        _colors = {"PASS": "#2ea043", "CLEAN": "#2ea043", "FAIL": "#f85149",
+                   "LOCKED": "#db6d28", "WAIVED": "#db6d28", "WARN": "#db6d28"}
 
         rows = ""
         for i, (label, ok, kind) in enumerate(checks, 1):
-            badge = _lock_badge(ok) if kind == "lock" else _badge(ok)
+            word = status_word(ok, kind)
+            badge = f'<span style="color: {_colors[word]}; font-weight: bold;">[{word}]</span>'
             rows += (
                 '<tr style="border-bottom: 1px solid #21262d;">'
                 f'<td style="padding: 10px 0; color: #8b949e;">[{i}] {label}</td>'
@@ -674,12 +733,14 @@ def run_preflight_diagnostics() -> bool:
     watchdog_ok, watchdog_issues = check_watchdog_health()
     tasks_ok, task_issues = check_scheduled_tasks_integrity()
     smoke_ok, smoke_issues = check_pipeline_smoke_test()
-    
+    ai_ok, ai_issues = check_ai_providers()
+
     duration = time.time() - start_time
 
     # Single source of truth for the check roster: (label, result, kind). "lock"
-    # renders CLEAN/LOCKED, everything else PASS/FAIL. Both the console summary
-    # below and the email table render from this one list, so they cannot drift.
+    # renders CLEAN/LOCKED, "advisory" PASS/WARN (never blocks the run), everything
+    # else PASS/FAIL (status_word). Both the console summary below and the email table
+    # render from this one list, so they cannot drift.
     checks = [
         ("Gmail IMAP",                  imap_ok,      "conn"),
         ("Gmail SMTP Dispatch",         smtp_ok,      "conn"),
@@ -690,24 +751,21 @@ def run_preflight_diagnostics() -> bool:
         ("AETHER Watchdog Health",      watchdog_ok,  "conn"),
         ("Scheduled Tasks Integrity",   tasks_ok,     "conn"),
         ("Pipeline Smoke Test",         smoke_ok,     "conn"),
+        ("AI Providers (advisory)",     ai_ok,        "advisory"),
     ]
 
     _log.console("=" * 70)
     _log.console(f"PRE-FLIGHT DIAGNOSTIC SUMMARY (Duration: {duration:.2f}s)")
     _log.console("-" * 70)
     for i, (label, ok, kind) in enumerate(checks, 1):
-        if ok == "WAIVED":
-            word = "WAIVED"
-        else:
-            word = ("CLEAN" if ok else "LOCKED") if kind == "lock" else ("PASS" if ok else "FAIL")
-        _log.console(f"  [{i}] {label:<28}: {word}")
+        _log.console(f"  [{i}] {label:<28}: {status_word(ok, kind)}")
     _log.console("=" * 70)
 
-    all_ok = all(ok for _, ok, _ in checks)
+    all_ok = overall_ok(checks)
 
     # Send email status if the --email flag is set
     if "--email" in sys.argv:
-        combined_warnings = watchdog_issues + task_issues + smoke_issues
+        combined_warnings = watchdog_issues + task_issues + smoke_issues + [f"AI: {x}" for x in ai_issues]
         send_preflight_email(checks, missing_items, active_locks, duration, all_ok, combined_warnings)
         
     if all_ok:

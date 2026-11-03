@@ -1,0 +1,143 @@
+AETHER / AnalyzeFinData - Operations Runbook (E*TRADE auth + maintenance)
+Last updated: 2026-10-06. Every command below was checked against origin/main on that date.
+Run all commands from the repo root. On PROD use the repo's venv:  venv_new\Scripts\python.exe
+No secrets in this file. Never paste tokens, the TOTP secret, or config.json anywhere public.
+
+=====================================================================
+1. FIRST THING TO DO ON PROD (one time, after pulling main)
+=====================================================================
+These fixes are merged and must be pulled on the PROD PC before they help:
+  #125  preflight + goal_sentry use the headless re-auth path; no E*TRADE login on an
+        ET weekend; preflight waits for a login another process already has running
+  #140  yesterday's renewed token is checked with E*TRADE before it is trusted
+  #144  the E*TRADE "DB backend" is opt-in only (AETHER_ETRADE_STORE=db), so the app's own
+        Postgres URL in config.json no longer breaks E*TRADE; an idle token is reactivated
+        with one renew instead of being treated as dead
+  #132  login-breaker state goes through the same store (safe now that #144 is in)
+
+Steps:
+  1) git pull                                   (on the PROD PC)
+  2) venv_new\Scripts\python.exe scripts\etrade_reauth.py --env production
+       Prints a JSON result. Success = "ok": true  (exit code 0; anything else exits 1).
+       "reason" tells you what happened: renewed | reauthed | sms_required | unseeded |
+       breaker | blocked | in_progress | failed.
+       This is the first proof that the headless login works ON PROD
+       (so far it has only been proven on the dev PC).
+  3) Next 9:30 PM briefing email and next 5:30 AM pipeline: E*TRADE line should be PASS.
+     If not, collect the logs (section 7) and send them for diagnosis.
+
+=====================================================================
+2. HOW THE DAILY E*TRADE TOKEN WORKS (why it breaks)
+=====================================================================
+- E*TRADE tokens expire at midnight US Eastern (9 PM Pacific). Renew can NOT save an
+  expired token; a new login (TOTP, headless browser) is required once per ET day.
+- A token that gets no requests for 2 hours goes INACTIVE (returns 401). One renew call
+  reactivates it. Since #144 the code does that automatically before giving up.
+- The automated login is protected by a circuit breaker: each failed attempt adds a
+  cooldown (15 -> 30 -> 60 ... min) and after 3 consecutive failures it hard-blocks and
+  emails you. A human must clear it (section 5).
+
+Scheduled jobs that touch E*TRADE (Windows Task Scheduler on PROD):
+  AETHER_PreFlight_Audit        daily 9:30 PM   preflight_validator.py --email (briefing email)
+  AnalyzeFinData_ETrade_Reauth  daily 5:15 AM   server.py etrade-reauth --scheduled
+                                                (defined in watchdog.py; check it is installed)
+  AnalyzeFinData_Morning        daily 5:30 AM   autonomous_pipeline.py (runs preflight first;
+                                                aborts the day if preflight fails on a weekday)
+  Project_AETHER_Watchdog       hourly          watchdog.py (calls the same re-auth path)
+
+=====================================================================
+3. E*TRADE COMMAND REFERENCE
+=====================================================================
+Check status (read-only):
+  venv_new\Scripts\python.exe server.py etrade-status
+  venv_new\Scripts\python.exe server.py etrade-status --no-probe   (instant, local files only)
+  Web: /api/health -> "etrade" block: needs_manual_auth, can_auto_reauth,
+       consecutive_failures, blocked
+
+Unattended re-auth (renew first; at most ONE headless login, breaker-gated):
+  venv_new\Scripts\python.exe scripts\etrade_reauth.py --env production
+  venv_new\Scripts\python.exe server.py etrade-reauth --scheduled
+  Web UI: the "Auto Re-auth" button (lightning icon, admin only) in the web app
+
+Manual / human re-auth (only when automation is blocked or device trust lapsed):
+  venv_new\Scripts\python.exe scripts\diagnostics\test_etrade.py production
+  venv_new\Scripts\python.exe server.py etrade-login --bootstrap   (headed, one-time OTP re-seed)
+  Run these in a REAL interactive terminal, not via an automation/agent shell: a
+  non-interactive prompt can fail and count as a failed attempt on the breaker.
+
+Full preflight by hand:
+  venv_new\Scripts\python.exe scripts\diagnostics\preflight_validator.py
+  add --email to send the briefing email, --smoke to also run the pipeline smoke test
+
+=====================================================================
+4. SWITCHES (environment variables; config.json "etrade" section in brackets)
+=====================================================================
+  AETHER_ETRADE_STORE=db                 Use the E*TRADE DB backend. DO NOT SET: it is a stub
+                                         (Phase 5, not implemented). Unset = file backend.
+                                         A database URL alone (DATABASE_URL / database.url)
+                                         no longer selects it.
+  AETHER_ETRADE_SCHEDULED_HEADLESS=0     Make the automated login run headful (visible).
+                                         Default = headless. Only the env var works
+                                         (there is no config.json key for it).
+  ETRADE_REAUTH_WAIT_TIMEOUT_SEC         [reauth_wait_timeout_sec, default 10] how long a
+                                         second caller waits for a login already in flight.
+  ETRADE_REAUTH_ALERT_THRESHOLD          [reauth_alert_threshold, default 3] failed logins
+                                         before the hard block + email.
+  ETRADE_TOTP_SECRET                     [totp_secret] software TOTP seed. Secret - never share.
+
+=====================================================================
+5. STATE FILES (Data\) AND CLEARING THE BREAKER
+=====================================================================
+  Data\etrade_tokens.json          token + issued_date_et (ET date) + saved_at. issued_date_et
+                                   must be today's ET date for the token to be usable.
+  Data\etrade_reauth_state.json    breaker: consecutive_failures, last_attempt, cooldown_until
+  Data\etrade_reauth.lock          present only while a login is running (a lock older than
+                                   5 min is stale and is reclaimed automatically)
+  Data\etrade_profile_trusted.json device-trust marker (trusted / sms_required / unseeded)
+
+Clear the breaker (YOU decide when; back up Data\ state first per the backup policy):
+  venv_new\Scripts\python.exe -c "from aether import etrade; etrade.reset_reauth_circuit_breaker('production')"
+  A successful login also clears it automatically.
+
+=====================================================================
+6. READING THE LOGS - WHAT A LINE MEANS
+=====================================================================
+  "Cached tokens are from a previous trading day"      -> normal after midnight ET; a login follows
+  "Renew failed: HTTP 401"                             -> token expired or idle; see next lines
+  "idle same-day token reactivated by renew"           -> good: no login needed (since #144)
+  "previous-day token renewed but the broker rejected it" -> expired; falls through to login (#140)
+  "[TOTP] Opening E*TRADE login" ... "Verifier captured" ... "token saved" -> login succeeded
+  "automated re-auth attempt #N - breaker armed"        -> a login started (counts until it succeeds)
+  "suppressed by circuit breaker"                       -> cooling down; wait or clear (section 5)
+  "E*TRADE DB backend is not implemented yet"           -> AETHER_ETRADE_STORE=db is set (unset it),
+                                                           or PROD is running code older than #144
+  Preflight E*TRADE "WAIVED"                            -> ET weekend: no login on purpose (#125)
+
+=====================================================================
+7. COLLECTING LOGS FROM PROD FOR DIAGNOSIS
+=====================================================================
+  Zip the folder Data\logs\ (aether.log, aether.jsonl, agent_runs\*.log) and copy it as
+  Data\logs.zip to the dev PC. Most useful: agent_runs\preflight_audit.log (9:30 PM),
+  agent_runs\morning_pipeline.log (5:30 AM), aether.log (all modules).
+  Note: the agent_runs\*.log files are UTF-16; plain grep may show nothing.
+  Do NOT include config.json or Data\etrade_tokens.json.
+
+=====================================================================
+8. DEV-PC MAINTENANCE
+=====================================================================
+Remove worktrees/branches of merged or closed PRs:
+  python scripts\utils\prune_merged_worktrees.py              (dry run - shows the plan)
+  python scripts\utils\prune_merged_worktrees.py --apply      (do it)
+  options: --merged-only | --closed-only | --repo owner/repo
+  Never removes a worktree with uncommitted changes. If gh cannot reach GitHub it exits 2
+  with "Nothing was changed"; set HTTPS_PROXY / HTTP_PROXY and retry.
+  Run "git pull" first so you use the latest version of the tool.
+
+=====================================================================
+9. OPEN QUESTIONS (not blocking)
+=====================================================================
+  - The hourly watchdog logged only once overnight on PROD (22:00 on 2026-09-30). Check that
+    Project_AETHER_Watchdog actually runs hourly on PROD.
+  - On 2026-09-30 the 9:30 PM login attempt did not use TOTP and failed, while one at 9:38 PM
+    did and succeeded. Cause unknown (that run used pre-#125 code).
+  - Optional cleanup: the 300-second login-lock timeout is written in 4 places in the code.

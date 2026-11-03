@@ -12,6 +12,7 @@ PROD 2026-10-10 .. 10-12:
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -123,6 +124,24 @@ class TestRegistrar(unittest.TestCase):
         self.assertNotIn("powershell.exe", branch)
         self.assertIn('New-ScheduledTaskAction -Execute "cmd.exe"', ps1)
 
+    @unittest.skipUnless(sys.platform == "win32" and shutil.which("powershell.exe"), "needs Windows PowerShell")
+    def test_trigger_start_is_local_time_so_it_follows_dst(self):
+        # PROD 2026-11-02: New-ScheduledTaskTrigger saved "...T14:00:00Z"; after DST ended every
+        # task ran an hour early (the 07:00 trade run fired at 06:00 PT, market closed).
+        ps1 = _PS1.read_text(encoding="utf-8")
+        first = min(i for i in (ps1.find("function Set-LocalStart"), ps1.find("function New-AetherTrigger")) if i >= 0)
+        funcs = ps1[first:ps1.index("# MultipleInstances IgnoreNew")]
+        script = funcs + (
+            '\nforeach ($s in @(@{type="daily"; at="07:00"}, @{type="weekly"; at="10:00"; day="Saturday"}, '
+            '@{type="daily"; at="06:45"; repeat_every_min=30; repeat_for_hours=7})) '
+            '{ (New-AetherTrigger ([pscustomobject]$s)).StartBoundary }')
+        out = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                             capture_output=True, text=True, timeout=60)
+        starts = out.stdout.split()
+        self.assertEqual(len(starts), 3, out.stderr)
+        for start, hhmm in zip(starts, ("07:00", "10:00", "06:45")):
+            self.assertRegex(start, rf"^\d{{4}}-\d{{2}}-\d{{2}}T{hhmm}:00$")   # no Z, no +/-hh:mm
+
 
 class TestPreflightWatchdogResult(unittest.TestCase):
     def _health(self, last_result):
@@ -170,3 +189,96 @@ class TestRecoveryReportWording(unittest.TestCase):
         self.assertNotIn("Healed missing tasks", html)
         self.assertIn("AETHER_AI_Summary", html)
         self.assertIn("register_agent_tasks.ps1", html)
+
+
+class TestRecoveryReportForLogErrors(unittest.TestCase):
+    """PROD 10-16..10-20: 78 recovery emails, many sent only because some module logged an ERROR.
+    The email named none of them and read "NOMINAL (HEALED)". Now it lists new errors, sends each
+    one once a day, says ATTENTION, and ignores the watchdog's own scheduler-audit lines."""
+
+    def _run(self, errors, send_error=None):
+        with mock.patch("watchdog.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
+             mock.patch("watchdog.notify.send_email", side_effect=send_error) as email, \
+             mock.patch("watchdog.is_pid_running", return_value=False), \
+             mock.patch("watchdog.check_data_freshness", return_value=None), \
+             mock.patch("watchdog.check_logs", return_value=errors), \
+             mock.patch("watchdog.extract_latest_traceback", return_value=""), \
+             mock.patch("watchdog.powergauge.ensure_valid_session", return_value={"jsessionid": "x"}), \
+             mock.patch("watchdog.etrade.scheduled_reauth", return_value={"ok": True, "reason": "renewed"}), \
+             mock.patch("watchdog.check_task_scheduler", return_value=([], [])), \
+             mock.patch("watchdog._log"):
+            watchdog.run_watchdog()
+        reports = [c for c in email.call_args_list if "Recovery Report" in c.args[0]]
+        return reports[-1].args[1] if reports else None
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        p = mock.patch.object(watchdog, "LOG_ERROR_STATE", Path(self._tmp.name) / "state.json")
+        p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_new_error_is_listed_once_and_not_called_healed(self):
+        err = "[aether.rapidapi] ERROR GMED: Alpha Vantage error for GMED: {}"
+        html = self._run([err])
+        self.assertIsNotNone(html)
+        self.assertIn("Alpha Vantage error for GMED", html)
+        self.assertNotIn("HEALED", html)
+        self.assertIsNone(self._run([err]), "the same error was emailed twice in one day")
+
+    def test_scheduler_audit_lines_alone_send_nothing(self):
+        # The real per-task line (check_task_scheduler); that failure is reported once per failed run.
+        line = ("[aether.watchdog] 🛑 [Scheduler Audit] Task '\\AETHER_Agents\\AETHER_DailyDriver' "
+                "failed on its last execution (Exit Code: 1).")
+        self.assertIsNone(self._run([line]))
+
+    def test_broken_manifest_still_reaches_the_email(self):
+        # #187: an unreadable manifest audits nothing, so this log error is its only route to the email.
+        line = "[aether.watchdog] 🛑 [Scheduler Audit] Task manifest is unreadable or invalid: Expecting value"
+        html = self._run([line])
+        self.assertIsNotNone(html, "a broken task manifest sent no recovery email")
+        self.assertIn("Task manifest is unreadable", html)
+
+    def test_failed_send_does_not_mark_errors_sent(self):
+        err = "[aether.chaikin] Chaikin login timed out"
+        with self.assertRaises(RuntimeError):
+            self._run([err], send_error=RuntimeError("SMTP email dispatch failed"))
+        html = self._run([err])
+        self.assertIsNotNone(html, "an error lost to a failed send was never emailed")
+        self.assertIn("Chaikin login timed out", html)
+
+    def test_same_error_with_another_count_is_the_same_error(self):
+        self.assertIsNotNone(self._run(["[aether.rapidapi] 3 symbol(s) failed this run"]))
+        self.assertIsNone(self._run(["[aether.rapidapi] 41 symbol(s) failed this run"]))
+
+    def test_one_cause_logged_per_symbol_is_one_error(self):
+        # PROD 11-02: an OpenRouter 404 logged once per stock and per email subject; each line
+        # counted as new, so the email went out 5 times in two days.
+        url = "404 Client Error: Not Found for url: https://openrouter.ai/api/v1/chat/completions"
+        first = [f"[autonomous_run.log] [2026-11-02 04:33:1{i}] Warning: Live AI reasoning failed for {s}: {url}"
+                 for i, s in enumerate(("HESM", "EIX", "AMAT"))]
+        first += [f"[aether.external_intel] Extraction failed for {subj}: {url}"
+                  for subj in ("We marked it down. A lot.", "Monday Edition: MPLX yields 8.1% and goe")]
+        html = self._run(first)
+        self.assertIsNotNone(html)
+        self.assertIn("HESM", html)
+        self.assertIn("+2 more with the same error", html)      # EIX and AMAT folded into HESM
+        self.assertIn("+1 more with the same error", html)
+        self.assertNotIn("for EIX", html)
+        later = [f"[autonomous_run.log] [2026-11-02 07:00:0{i}] Warning: Live AI reasoning failed for {s}: {url}"
+                 for i, s in enumerate(("VLO", "RS"))]
+        self.assertIsNone(self._run(later), "the same 404 for other stocks re-sent the email")
+        self.assertIsNotNone(self._run(["[aether.chaikin] KeyError: 'session'"]), "a new cause must still send")
+
+    def test_status_says_healed_only_after_an_action(self):
+        cases = [
+            (("SKIPPED", False, []), "SKIPPED (OFF-MARKET)"),
+            ((False, False, []), "MANUAL INTERVENTION REQUIRED"),
+            ((True, True, []), "NOMINAL (HEALED)"),
+            ((True, False, ["Killed ghost processes to resolve resource lock."]), "NOMINAL (HEALED)"),
+            ((True, False, ["⚠️ Tasks failed their last execution: X"]), "ATTENTION: SEE FINDINGS BELOW"),
+            ((True, False, []), "ATTENTION: SEE FINDINGS BELOW"),
+        ]
+        for args, text in cases:
+            with self.subTest(args=args):
+                self.assertEqual(watchdog._report_status(*args)[1], text)

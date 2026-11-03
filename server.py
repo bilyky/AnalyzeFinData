@@ -365,7 +365,7 @@ def create_app():
                 user_prompt   = data_api.build_requalify_prompt(symbol, factors, cost, regime)
                 raw = await loop.run_in_executor(
                     None,
-                    lambda: ai_client.evaluate(system_prompt, user_prompt, max_tokens=_RQ_P1_TOKENS)
+                    lambda: ai_client.evaluate(system_prompt, user_prompt, max_tokens=_RQ_P1_TOKENS, tier="strong")
                 )
                 m = re.search(r'\{.*\}', raw, re.DOTALL)
                 if m:
@@ -439,7 +439,7 @@ def create_app():
                         prompt_path2 = _DIR / "prompts" / "requalify.md"
                         sys2 = prompt_path2.read_text(encoding="utf-8") if prompt_path2.exists() else ""
                         usr2 = data_api.build_requalify_prompt(symbol, factors, cost, regime, news=news)
-                        raw2 = ai_client.evaluate(sys2, usr2, max_tokens=_RQ_P2_TOKENS)
+                        raw2 = ai_client.evaluate(sys2, usr2, max_tokens=_RQ_P2_TOKENS, tier="strong")
                         m2 = re.search(r'\{.*\}', raw2, re.DOTALL)
                         if m2:
                             p2 = json.loads(m2.group())
@@ -764,14 +764,19 @@ def create_app():
         # first ticker-bearing message per minute pays the OHLCV load cost.
         loop = asyncio.get_running_loop()
         system = await loop.run_in_executor(None, _build_context)
-        reply = await loop.run_in_executor(
-            None, lambda: ai_client.chat(messages, system=system, max_tokens=800)
-        )
-        if not reply:
-            _log.warning("ai_client.chat() returned empty reply",
-                         extra={"provider": ai_client.primary(), "msg_count": len(messages)})
-            return {"reply": "AI provider returned no response. Check your API key and provider config.", "provider": ai_client.primary()}
-        return {"reply": reply, "provider": ai_client.primary()}
+        try:
+            reply, answered = await loop.run_in_executor(
+                None, lambda: ai_client.chat_with_provider(messages, system=system, max_tokens=800,
+                                                           tier="strong")
+            )
+        except Exception as e:
+            tried = ", ".join(ai_client.provider_chain(tier="strong"))
+            _log.warning("ai_client.chat() failed on every provider",
+                         extra={"providers": tried, "msg_count": len(messages), "error": str(e)})
+            return {"reply": f"No AI provider answered (tried: {tried or 'none configured'}; "
+                             f"last error: {type(e).__name__}). Check the provider keys and config.",
+                    "provider": None}
+        return {"reply": reply, "provider": answered}
 
     # ── Selector scorecard (backtracked) ──────────────────────────────────────
 

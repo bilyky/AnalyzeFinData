@@ -71,7 +71,7 @@ _VERIFY_SYSTEM = (
 )
 
 
-def _verify(intel: dict, provider: str) -> dict:
+def _verify(intel: dict, provider: str | None) -> dict:
     """Adversarial second-pass: ask the AI to rate each extracted claim."""
     dated_catalysts = intel.get("dated_catalysts", [])
     if isinstance(dated_catalysts, dict):
@@ -101,7 +101,8 @@ def _verify(intel: dict, provider: str) -> dict:
     if not any(claims.values()):
         return {}
     prompt = f"Claims to verify:\n{json.dumps(claims, indent=2)}"
-    raw = ai_client.evaluate(_VERIFY_SYSTEM, prompt, provider=provider, max_tokens=600, temperature=0.1)
+    raw = ai_client.evaluate(_VERIFY_SYSTEM, prompt, provider=provider, max_tokens=600, temperature=0.1,
+                             tier="strong")
     return _parse(raw) or {}
 
 
@@ -116,22 +117,23 @@ def extract(subject: str, body: str, provider: str | None = None, verify: bool =
     rubric = _rubric()
     if not rubric:
         return {}
-    name = provider or ai_client.primary()
-    if not name:
+    if not (provider or ai_client.primary()):
         return {}
     # Enforce a clean 5,000-character body limit for safety and timeout prevention
     body_display = body[:5000]
     if len(body) > 5000:
         body_display += "\n\n[... content truncated for safety ...]"
     prompt = f"Subject: {subject}\n\nBody:\n{body_display}"
-    raw = ai_client.evaluate(rubric, prompt, provider=name, max_tokens=800, temperature=0.1)
+    # provider=None walks the cheap tier's fallback chain; label with whoever answered.
+    raw, name = ai_client.evaluate_with_provider(rubric, prompt, provider=provider, max_tokens=800,
+                                                 temperature=0.1, tier="cheap")
     result = _parse(raw)
     if not result:
         return {}
     result["_provider"] = name
     # Adversarial verification pass
     if verify:
-        result["_verification"] = _verify(result, name)
+        result["_verification"] = _verify(result, provider)
     # Symbol cross-reference
     result = verify_symbols(result)
     return result
