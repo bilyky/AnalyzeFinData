@@ -167,6 +167,25 @@ class TestRetroAndJournal(unittest.TestCase):
         self.assertEqual([s["good"] for s in r["scored"]], [True, False])
         self.assertEqual(r["hit_rate"], 0.5)
 
+    def test_retro_skips_todays_call(self):
+        j = [{"date": "2026-11-02", "price": 60.0, "action": "HOLD", "replacement": None,
+              "replacements": {"SPY": 700.0}},
+             {"date": "2026-11-03", "price": 57.0, "action": "WAIT", "replacement": None,
+              "replacements": {"SPY": 707.0}}]
+        r = pw.retro(j, 57.0, {"SPY": 707.0}, "2026-11-03")
+        self.assertEqual([s["date"] for s in r["scored"]], ["2026-11-02"])
+
+    def test_same_day_run_replaces_entry_and_keeps_lessons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "INTC_journal.jsonl")
+            pw.append_journal(p, {"date": "d1", "action": "HOLD"})
+            pw.append_journal(p, {"date": "d2", "action": "WAIT"})
+            pw.add_lesson(p, "stale bars")
+            pw.append_journal(p, {"date": "d2", "action": "TRIM"})
+            rows = pw.read_journal(p)
+            self.assertEqual([(x["date"], x["action"]) for x in rows], [("d1", "HOLD"), ("d2", "TRIM")])
+            self.assertEqual(rows[-1]["lessons"], ["stale bars"])
+
     def test_journal_append_and_lesson(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = os.path.join(tmp, "x", "INTC_journal.jsonl")
@@ -185,6 +204,17 @@ class TestLivePriceFallback(unittest.TestCase):
         with mock.patch.object(pw, "ETradeClient", side_effect=RuntimeError("Missing config")):
             with self.assertLogs(pw._log.name, level="WARNING"):
                 self.assertIsNone(pw._live_price("INTC"))
+
+
+class TestPackHoldings(unittest.TestCase):
+    def test_symbol_value_is_taken_out_of_the_snapshot_net(self):
+        pack = {"meta": {"health": "degraded"},
+                "state": {"accounts": [{"net_value": 1000.0}, {"net_value": 500.0}],
+                          "positions": [{"symbol": "INTC", "qty": 10, "mval": 300.0},
+                                        {"symbol": "SPY", "qty": 1, "mval": 200.0}]}}
+        with mock.patch.object(pw, "build_oceanview_context", return_value=pack):
+            shares, other, meta = pw._pack_holdings("INTC")
+        self.assertEqual((shares, other, meta["health"]), (10, 1200.0, "degraded"))
 
 
 class TestConfig(unittest.TestCase):

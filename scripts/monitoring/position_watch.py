@@ -252,11 +252,14 @@ def read_journal(path: str) -> list:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def retro(journal: list, price_now: float, repl_now: dict) -> dict:
+def retro(journal: list, price_now: float, repl_now: dict, today: str | None = None) -> dict:
     """Score each past call: TRIM was right if the symbol lagged the replacement since;
-    HOLD/WAIT were right if it kept up. Replacement = the one the call named, else the average."""
+    HOLD/WAIT were right if it kept up. Replacement = the one the call named, else the average.
+    Calls made on ``today`` (ISO date) are skipped: there is nothing to score yet."""
     scored = []
     for e in journal:
+        if today and e["date"] >= today:
+            continue
         keys = [e["replacement"]] if e.get("replacement") else list(e["replacements"])
         rr = [repl_now[k] / e["replacements"][k] - 1 for k in keys if k in repl_now and k in e["replacements"]]
         if not rr:
@@ -270,9 +273,17 @@ def retro(journal: list, price_now: float, repl_now: dict) -> dict:
 
 
 def append_journal(path: str, entry: dict) -> None:
+    """Record the day's call. A second run on the same date replaces that day's entry
+    (keeping its lessons), so the RETRO scores one call per day."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
+    rows = read_journal(path)
+    if rows and rows[-1].get("date") == entry.get("date"):
+        lessons = rows.pop().get("lessons")
+        if lessons:
+            entry = {**entry, "lessons": lessons}
+    rows.append(entry)
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(json.dumps(r) + "\n" for r in rows)
 
 
 def add_lesson(path: str, text: str) -> bool:
@@ -289,12 +300,14 @@ def add_lesson(path: str, text: str) -> bool:
 # ── Driver ────────────────────────────────────────────────────────────────────
 
 def _pack_holdings(symbol: str):
-    """Brokerage shares of the symbol and the accounts' net value, from the OceanView pack
-    (offline read: never touches the broker, writes nothing)."""
+    """Brokerage shares of the symbol and the accounts' net value without them, from the
+    OceanView pack (offline read: never touches the broker, writes nothing). The symbol's
+    snapshot value is taken out so the caller reprices those shares at today's price."""
     pack = build_oceanview_context(live=False)
-    shares = sum(p["qty"] for p in pack["state"]["positions"] if p["symbol"] == symbol)
+    held = [p for p in pack["state"]["positions"] if p["symbol"] == symbol]
+    shares = sum(p["qty"] for p in held)
     net = sum(a.get("net_value") or 0 for a in pack["state"]["accounts"])
-    return shares, net, pack["meta"]
+    return shares, net - sum(p.get("mval") or 0 for p in held), pack["meta"]
 
 
 def _live_price(symbol: str):
@@ -331,9 +344,9 @@ def run(symbol=None, live=False, journal=True, config_path=None) -> dict:
     live_px = _live_price(symbol) if live else None
     if live_px:
         price = live_px
-    shares, acct_net, meta = _pack_holdings(symbol)
+    shares, acct_other, meta = _pack_holdings(symbol)
     sym_value = (shares + cfg["stock_plan_shares"] + cfg["outside_symbol_shares"]) * price
-    total = acct_net + cfg["stock_plan_shares"] * price + cfg["outside_assets_usd"]
+    total = acct_other + (shares + cfg["stock_plan_shares"]) * price + cfg["outside_assets_usd"]
     conc = concentration(sym_value, total, cfg["floor_pct"])
     call = decide(m, rb, tags, repl, conc, cfg)
     today = datetime.date.today()
@@ -344,7 +357,7 @@ def run(symbol=None, live=False, journal=True, config_path=None) -> dict:
             lots = pick_lots(json.load(f), call["tranche_usd"], price, today, cfg)
     jpath = os.path.join(watch_dir(), f"{symbol}_journal.jsonl")
     past = read_journal(jpath)
-    r = retro(past, price, {k: v["close"] for k, v in repl.items()})
+    r = retro(past, price, {k: v["close"] for k, v in repl.items()}, today.isoformat())
     report = {"symbol": symbol, "rules": RULES_VERSION, "as_of_bar": m["date"], "price": price,
               "price_source": "live quote" if live_px else f"close {m['date']}", "pack_health": meta.get("health"),
               "metrics": m, "rbr": {"score": score, "tags": tags}, "vs_peers": rb, "replacements": repl,
