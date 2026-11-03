@@ -43,6 +43,11 @@ CAGR and max drawdown, and each variant's win rate against aether_rules (share o
 where its Sharpe is higher on the same path). Robustly better = win rate >= ROBUST_WIN on
 both halves; robustly worse = <= ROBUST_LOSE on both; else inconclusive.
 
+--exits adds the R&D #63 exit variants (EXIT_VARIANTS: trailing stop, hold while in profit,
+wider stop, minimum hold, trail + hold). With --robust they are judged on the same draws:
+pass = win rate >= ROBUST_WIN on both halves and median test max drawdown no more than
+EXIT_MAX_DD_WORSE points deeper than aether_rules.
+
 --split DATE (implies --attribution) is an out-of-sample check: every variant runs again
 from fresh cash on the days before DATE (train) and on DATE onward (test). The rule
 variant with the best train Sharpe is the one "picked"; its test result and rank among
@@ -70,7 +75,7 @@ Usage:
                                                      [--cost-bps 10] [--max-symbols N]
                                                      [--rebuild] [--attribution]
                                                      [--split 2025-01-01] [--hurst]
-                                                     [--robust 50]
+                                                     [--robust 50] [--exits]
 """
 import argparse
 import datetime
@@ -125,6 +130,15 @@ ROBUST_FRAC = 0.8
 ROBUST_MAX_OFFSET = 60
 ROBUST_WIN = 0.8
 ROBUST_LOSE = 0.2
+# R&D #63 exit variants (pre-registered 2026-10-30): aether_rules with one exit change each.
+EXIT_VARIANTS = {
+    "exit_trail": {"trail": True},
+    "exit_hold_profit": {"hold_profit": True},
+    "exit_wide_stop": {"stop_scale": 1.5},
+    "exit_min_hold": {"min_hold": 10},
+    "exit_trail_hold": {"trail": True, "hold_profit": True},
+}
+EXIT_MAX_DD_WORSE = 3.0      # points of median test max drawdown
 HURST_WINDOW = 120
 HURST_LAGS = (1, 2, 4, 8, 16)
 HURST_VARIANTS = {
@@ -290,7 +304,7 @@ def _bar(bars, sym, day):
 def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
              initial=INITIAL_EQUITY, excluded=frozenset(), max_trade_risk_pct=None,
              disable=frozenset(), hurst_filter=None, admit=None, rank=None,
-             min_fill_pct=None) -> dict:
+             min_fill_pct=None, exit_rules=None) -> dict:
     """Replay `panel` ({sym: {date: [s10, l60]}}) over `calendar` (sorted trading days).
 
     max_trade_risk_pct: when set (and risk_rules is on), each buy is trimmed so
@@ -304,12 +318,19 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
     rank: optional callable(sym, day, (s10, l60)) -> float, the entry ranking key (highest
     first); default S10 + L60, as the live game. The score threshold still uses S10 + L60.
     min_fill_pct: skip a buy worth less than this share of equity AFTER the loss-cap trim
-    (R&D #65; live has no such floor and holds $50 positions)."""
+    (R&D #65; live has no such floor and holds $50 positions).
+    exit_rules (risk_rules only, R&D #63): {"trail": True} ratchets the stop up to the highest
+    close since entry minus the entry ATR multiple x today's ATR (never down); {"hold_profit":
+    True} lets the soft exit fire only at a loss; {"stop_scale": x} puts the initial stop x times
+    as far away; {"min_hold": n} blocks the soft exit for the first n trading days."""
     unknown = set(disable) - set(RULES)
     if unknown:
         raise ValueError(f"unknown rules: {sorted(unknown)}")
     if "loss_cap" in disable:
         max_trade_risk_pct = None
+    ex = exit_rules or {}
+    stop_scale = ex.get("stop_scale", 1.0)
+    now = 0                                   # calendar index of the day being replayed
     c = cost_bps / 10_000.0
     cash = initial
     pos = {}                                  # sym -> {qty, entry, stop, entry_date, last}
@@ -330,9 +351,11 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
                        "ret_pct": round((px * (1 - c) / (p["entry"] * (1 + c)) - 1) * 100, 3),
                        "stop": round(p["stop"], 4) if p["stop"] else None,
                        # P&L as % of the equity the buy was sized on (the loss cap's basis).
-                       "pnl_pct_equity": round(pnl / p["equity_basis"] * 100, 4)})
+                       "pnl_pct_equity": round(pnl / p["equity_basis"] * 100, 4),
+                       "hold_days": now - p["t0"]})
 
     for t, day in enumerate(calendar):
+        now = t
         # 1. Orders queued at yesterday's close fill at today's open (sells first).
         for sym, reason in pending_sells.items():
             b, i = _bar(bars, sym, day)
@@ -344,6 +367,7 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
                 continue
             o = b["o"][i]
             atr_prev = b["atr"][i - 1] if i > 0 else 0.0
+            mult *= stop_scale
             stop = o - mult * atr_prev if (risk_rules and atr_prev > 0) else None
             usd = min(usd, cash)
             if risk_rules and max_trade_risk_pct and stop is not None and curve:
@@ -359,7 +383,8 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
             cash -= usd
             traded_usd += qty * o
             pos[sym] = {"qty": qty, "entry": o, "stop": stop, "entry_date": day, "last": o,
-                        "equity_basis": curve[-1][1] if curve else initial}
+                        "equity_basis": curve[-1][1] if curve else initial,
+                        "t0": t, "mult": mult, "peak": o}
         pending_buys = []
 
         # 2. Intraday hard stop; 3. mark to the close.
@@ -372,6 +397,10 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
                 close_position(sym, min(b["o"][i], p["stop"]), day, "stop")
                 continue
             p["last"] = b["c"][i]
+            if risk_rules and ex.get("trail") and p["stop"]:
+                # Chandelier: known at today's close, used from tomorrow's open on.
+                p["peak"] = max(p["peak"], b["c"][i])
+                p["stop"] = max(p["stop"], p["peak"] - p["mult"] * b["atr"][i])
         invested = sum(p["qty"] * p["last"] for p in pos.values())
         equity = cash + invested
         curve.append((day, equity, invested))
@@ -398,6 +427,10 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
                 if action == "SELL":
                     pending_sells[sym] = "momentum decay"
                     continue
+            if ex.get("hold_profit") and p["last"] > p["entry"]:
+                continue
+            if t - p["t0"] < ex.get("min_hold", 0):
+                continue
             if "soft_exit" not in disable and soft_exit(s10, l60) and (
                     "winner_protection" in disable
                     or not winner_protected(p["last"] > p["entry"], p["last"], sma50)):
@@ -534,7 +567,8 @@ def metrics(result: dict) -> dict:
 
 # ── Driver ────────────────────────────────────────────────────────────────────
 
-def run_variants(panel, bars, calendar, cost_bps, excluded, eligible, attribution, hurst=False) -> dict:
+def run_variants(panel, bars, calendar, cost_bps, excluded, eligible, attribution, hurst=False,
+                 exits=False) -> dict:
     cap = CFG.system_max_trade_risk_pct
     return {
         "aether_rules": simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded,
@@ -546,6 +580,9 @@ def run_variants(panel, bars, calendar, cost_bps, excluded, eligible, attributio
         **({name: simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded,
                            max_trade_risk_pct=cap, hurst_filter=hf)
             for name, hf in HURST_VARIANTS.items()} if hurst else {}),
+        **({name: simulate(panel, bars, calendar, risk_rules=True, cost_bps=cost_bps, excluded=excluded,
+                           max_trade_risk_pct=cap, exit_rules=er)
+            for name, er in EXIT_VARIANTS.items()} if exits else {}),
         "signal_only": simulate(panel, bars, calendar, risk_rules=False, cost_bps=cost_bps, excluded=excluded),
         "spy_buy_hold": buy_and_hold(bars, calendar, ["SPY"], cost_bps),
         "ew_buy_hold": buy_and_hold(bars, calendar, eligible, cost_bps),
@@ -564,6 +601,37 @@ def hurst_verdict(train: dict, test: dict) -> dict:
             "test_sharpe": t.get("sharpe"), "test_max_dd": t.get("max_drawdown_pct"),
             "base_test_sharpe": base.get("sharpe"), "base_test_max_dd": base.get("max_drawdown_pct"),
             "passed": bool(sharpe_ok and dd_ok)}
+
+
+def exit_verdicts(summary: dict) -> dict:
+    """R&D #63: an exit variant passes only if it is robustly better than aether_rules (win rate
+    >= ROBUST_WIN on both halves) and its median test max drawdown is no more than
+    EXIT_MAX_DD_WORSE points deeper."""
+    test = summary["periods"]["test"]
+    base_dd = test["aether_rules"]["max_drawdown_pct"]["median"]
+    out = {}
+    for v in EXIT_VARIANTS:
+        if v not in test:
+            continue
+        dd = test[v]["max_drawdown_pct"]["median"]
+        dd_ok = dd is not None and base_dd is not None and dd >= base_dd - EXIT_MAX_DD_WORSE
+        robust = summary["verdicts"].get(v)
+        out[v] = "PASS" if robust == "robustly better" and dd_ok else (
+            "FAIL: drawdown" if robust == "robustly better" else robust or "inconclusive")
+    return out
+
+
+def hold_stats(trades: list, spy_bars) -> dict:
+    """Median hold and the share of trades beating SPY (open to close) over the same days."""
+    if not trades:
+        return {"median_hold_days": None, "share_beating_spy": None}
+    beat = []
+    for t in trades:
+        ia, ib = spy_bars["idx"].get(t["entry_date"]), spy_bars["idx"].get(t["exit_date"])
+        if ia is not None and ib is not None:
+            beat.append(t["ret_pct"] / 100 > spy_bars["c"][ib] / spy_bars["o"][ia] - 1)
+    return {"median_hold_days": float(np.median([t["hold_days"] for t in trades])),
+            "share_beating_spy": round(float(np.mean(beat)), 3) if beat else None}
 
 
 def rank_by_sharpe(table: dict) -> list:
@@ -609,9 +677,9 @@ def _pct(vals, q):
     return round(float(np.percentile(vals, q)), 2) if vals else None
 
 
-def robustness_summary(per_draw: list) -> dict:
+def robustness_summary(per_draw: list, base: str = "aether_rules") -> dict:
     """per_draw: [{period: {variant: metrics}}]. Per period and variant: median and 10th-90th
-    percentile Sharpe / CAGR / max drawdown, and the win rate against aether_rules (share of
+    percentile Sharpe / CAGR / max drawdown, and the win rate against `base` (share of
     draws where its Sharpe is higher on the same path). Then the pre-registered verdicts."""
     periods = list(per_draw[0]) if per_draw else []
     out = {}
@@ -622,7 +690,7 @@ def robustness_summary(per_draw: list) -> dict:
             for key in ("sharpe", "cagr_pct", "max_drawdown_pct"):
                 vals = [d[period][v].get(key) for d in per_draw if d[period][v].get(key) is not None]
                 row[key] = {"median": _pct(vals, 50), "p10": _pct(vals, 10), "p90": _pct(vals, 90)}
-            pairs = [(d[period][v].get("sharpe"), d[period]["aether_rules"].get("sharpe")) for d in per_draw]
+            pairs = [(d[period][v].get("sharpe"), d[period][base].get("sharpe")) for d in per_draw]
             pairs = [(a, b) for a, b in pairs if a is not None and b is not None]
             row["win_rate"] = round(sum(a > b for a, b in pairs) / len(pairs), 3) if pairs else None
             row["n"] = len(pairs)
@@ -631,7 +699,7 @@ def robustness_summary(per_draw: list) -> dict:
     halves = [p for p in ("train", "test") if p in out]
     if len(halves) == 2:
         for v in out["test"]:
-            if v == "aether_rules":
+            if v == base:
                 continue
             w = [out[h][v]["win_rate"] for h in halves]
             if None in w:
@@ -701,7 +769,7 @@ def _print_table(calendar, table) -> None:
 
 
 def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=False,
-        attribution=False, split=None, hurst=False, robust=0) -> dict:
+        attribution=False, split=None, hurst=False, robust=0, exits=False) -> dict:
     ohlcv = {os.path.basename(f)[:-len("_daily.json")]
              for f in glob.glob(os.path.join(_br.OHLCV_DIR, "*_daily.json"))}
     cached = {d for d in os.listdir(_br.SYM_DIR) if os.path.isdir(os.path.join(_br.SYM_DIR, d))}
@@ -721,12 +789,17 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
     eligible = [s for s in symbols if s not in excluded]
 
     attribution = attribution or bool(split)
-    results = run_variants(panel, bars, calendar, cost_bps, excluded, eligible, attribution, hurst)
+    results = run_variants(panel, bars, calendar, cost_bps, excluded, eligible, attribution, hurst, exits)
     table = {k: metrics(v) for k, v in results.items()}
     _print_table(calendar, table)
     cap = CFG.system_max_trade_risk_pct
     tails = {k: stop_tail(v["trades"], None if k == "aether_no_cap" else cap) for k, v in results.items()}
     _print_stop_tail(tails)
+    holds = {k: hold_stats(v["trades"], bars["SPY"]) for k, v in results.items() if v["trades"]}
+    if exits:
+        _out("\n  Hold length and trades beating SPY over the same days (R&D #63)")
+        for k, h in holds.items():
+            _out(f"  {k:<22}median hold {h['median_hold_days']!s:>6} days   beat SPY {h['share_beating_spy']}")
     gate = tails["aether_rules"]
     if gate.get("n_stop_exits"):
         _out(f"  gate (aether_rules): P95 {gate['loss_p95_pct']}% vs {STOP_TAIL_P95_GATE}%, worst "
@@ -761,10 +834,16 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
         def run_table(syms, days):
             sub, elig = path_universe(panel, eligible, syms)
             return {k: metrics(v) for k, v in
-                    run_variants(sub, bars, days, cost_bps, excluded, elig, True).items()}
+                    run_variants(sub, bars, days, cost_bps, excluded, elig, True, exits=exits).items()}
 
         robust_out = run_robustness(draw_paths(symbols, calendar, robust, split=split_iso), calendar, split_iso, run_table)
         _print_robustness(robust_out)
+        if exits:
+            robust_out["exit_verdicts"] = exit_verdicts(robust_out)
+            _out("\n  R&D #63 exit verdicts (robustly better on both halves AND median test MaxDD "
+                 f"no more than {EXIT_MAX_DD_WORSE} pts deeper):")
+            for v, verdict in robust_out["exit_verdicts"].items():
+                _out(f"  {v:<22}{verdict}")
 
     payload = {
         "as_of": calendar[-1], "min_year": min_year, "cost_bps": cost_bps,
@@ -782,6 +861,7 @@ def run(min_year=2023, workers=None, cost_bps=10.0, max_symbols=None, rebuild=Fa
         "split": split_out,
         "robustness": robust_out,
         "stop_tail": tails,
+        "hold_stats": holds,
         "curves": {k: [[d, round(e, 2)] for d, e, _i in v["curve"]] for k, v in results.items()},
         "trades": {k: v["trades"] for k, v in results.items() if v["trades"]},
         "open_positions": {k: v["open_positions"] for k, v in results.items()},
@@ -809,6 +889,8 @@ if __name__ == "__main__":
                          "test it on the days from it (implies --attribution)")
     ap.add_argument("--robust", type=int, default=0, metavar="N",
                     help="R&D #62: re-run the rule variants on N perturbed paths (needs --split)")
+    ap.add_argument("--exits", action="store_true",
+                    help="add the R&D #63 exit variants (verdict needs --robust and --split)")
     a = ap.parse_args()
     run(a.min_year, a.workers, a.cost_bps, a.max_symbols, a.rebuild, a.attribution, a.split, a.hurst,
-        a.robust)
+        a.robust, a.exits)
