@@ -294,7 +294,7 @@ class TestExtractionParallelism(unittest.TestCase):
 
     def _fetch(self, parallel, analyze=None):
         real_pool = external_intel.ThreadPoolExecutor
-        with mock.patch("external_intel.CFG") as mock_cfg,              mock.patch("external_intel._log"),              mock.patch("imaplib.IMAP4_SSL") as mock_imap_cls,              mock.patch("external_intel.ThreadPoolExecutor", wraps=real_pool) as pool,              mock.patch("external_intel.email.message_from_bytes") as parse,              mock.patch("external_intel.analyze_email_content", return_value=[], side_effect=analyze),              mock.patch("extract_email_intel.extract", return_value={}):
+        with mock.patch("external_intel.CFG") as mock_cfg,              mock.patch("external_intel._log") as self.fetch_log,              mock.patch("imaplib.IMAP4_SSL") as mock_imap_cls,              mock.patch("external_intel.ThreadPoolExecutor", wraps=real_pool) as pool,              mock.patch("external_intel.email.message_from_bytes") as parse,              mock.patch("external_intel.analyze_email_content", return_value=[], side_effect=analyze),              mock.patch("extract_email_intel.extract", return_value={}):
             mock_cfg.mailboxes = [{"email": "test@example.org", "password_env": "TEST_ENV_PASS",
                                    "imap_server": "imap.example.org"}]
             mock_cfg.smtp_password = "dummy_password"
@@ -376,3 +376,17 @@ class TestExtractionDeadline(TestExtractionParallelism):
             for v, want in ((120, 120.0), (0, 600.0), (True, 600.0), ("x", 600.0)):
                 cfg.ai_intel_deadline_sec = v
                 self.assertEqual(external_intel._intel_deadline_sec(), want)
+
+
+class TestExtractionFailureIsAWarning(TestExtractionParallelism):
+    """A single email's failed extraction is a WARNING; "every extraction failed" reaches the
+    recovery email once, as the pipeline's 0-ideas line (zero_ideas_reason)."""
+
+    def test_failed_extraction_logs_a_warning(self):
+        def boom(subject, body):
+            raise RuntimeError("404 Client Error: Not Found")
+        self._fetch(1, analyze=boom)
+        log = self.fetch_log
+        self.assertFalse([c for c in log.error.call_args_list if "Extraction failed" in str(c)])
+        self.assertTrue([c for c in log.warning.call_args_list if "Extraction failed" in str(c)])
+        self.assertIn("every AI extraction failed", external_intel.zero_ideas_reason())
