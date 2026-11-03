@@ -9,7 +9,7 @@ import openpyxl
 import notify
 from watchdog import is_market_hours
 import html
-from aether import trash
+from aether import pick_eval, pick_lists, trash
 from aether.run_guard import DailyRunGuard, RunSkipped
 from config import CFG
 from pathlib import Path
@@ -310,6 +310,7 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
             </div>
             
             <h3 style="color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 5px;">Top High-Probability Setups</h3>
+            <p style="margin:-5px 0 10px 0;font-size:11px;color:#7f8c8d;"><i>Criteria: {_e(pick_lists.criteria(pick_lists.MORNING_TOP5))}</i></p>
             <table style="border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 40px;">
                 <thead>
                     <tr style="background-color: #34495e; color: white; text-align: left;">
@@ -332,6 +333,7 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
             </table>
 
             <h3 style="color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 5px; margin-top: 45px;">🛡️ A-Reserves Sentinel & AI Risk Audit</h3>
+            <p style="margin:-5px 0 10px 0;font-size:11px;color:#7f8c8d;"><i>Criteria: {_e(pick_lists.criteria(pick_lists.MORNING_RESERVES))}</i></p>
             <table style="border-collapse: collapse; width: 100%; font-size: 13px;">
                 <thead>
                     <tr style="background-color: #2c3e50; color: white; text-align: left;">
@@ -339,7 +341,7 @@ def format_html_report(status_msg, picks, replacements, intel_ideas):
                         <th style="padding: 10px;">S10/L60</th><th style="padding: 10px;">Total Score</th><th style="padding: 10px;">AI Ruthless Audit & Strategic Catalyst</th>
                     </tr>
                 </thead>
-                <tbody>{reserves_rows}</tbody>
+                <tbody>{reserves_rows or '<tr><td colspan="6">No reserves qualified today.</td></tr>'}</tbody>
             </table>
             
             <div style="margin-top: 40px; border-top: 1px solid #eee; padding-top: 20px; font-size: 11px; color: #95a5a6; text-align: center;">
@@ -592,10 +594,13 @@ def main():
     picks = get_top_5_picks()
     replacements = get_replacement_pairs()
 
-    # 6. Log for performance tracking
+    # 6. Log for performance tracking: the legacy log, and the pick-list log the evening
+    #    report's "How past picks did" scorecard reads (aether/pick_eval.py).
     if picks:
         log("Logging picks for performance tracking...")
         performance_tracker.log_picks(picks)
+    pick_eval.log_picks(pick_lists.MORNING_TOP5, picks)
+    pick_eval.log_picks(pick_lists.MORNING_RESERVES, get_reserves_data())
 
     # 7. Send report
     if not no_email:
