@@ -11,7 +11,7 @@ from pathlib import Path
 import openpyxl
 
 import notify
-from aether import oceanview_context, paths
+from aether import oceanview_context, paths, pick_eval, pick_lists
 import powergauge
 import rapidapi
 import watchdog
@@ -316,21 +316,19 @@ def main():
 
         # 4. Generate Tables (Same logic as Excel Picks sheet)
         p_map = {'Bu+': 5, 'Bu': 4, 'N': 3, 'Be': 2, 'Be-': 1}
-        bullish = [r for r in all_symbols_data if p_map.get(r['pgr'], 0) >= 4 and r['setup'] == 1]
-        if not bullish:
-            bullish = [r for r in all_symbols_data if p_map.get(r['pgr'], 0) >= 4]
-
         bearish = [r for r in all_symbols_data if p_map.get(r['pgr'], 0) < 4]
         if not bearish:
             bearish = all_symbols_data
 
-        top_combined = sorted(bullish, key=lambda x: x['s10'] + x['br'], reverse=True)[:5]
-        top_s10 = sorted(bullish, key=lambda x: x['s10'], reverse=True)[:5]
-        top_l60 = sorted(bullish, key=lambda x: x['l60'], reverse=True)[:5]
-
-        # Aggressive (Unfiltered)
-        agg_s10 = sorted(all_symbols_data, key=lambda x: x['s10'], reverse=True)[:5]
-        agg_l60 = sorted(all_symbols_data, key=lambda x: x['l60'], reverse=True)[:5]
+        # Each list's criteria live in aether.pick_lists and are printed under its table. The
+        # PGR-bullish lists no longer drop Setup when nothing passes both: an empty list says so,
+        # instead of silently showing PGR-only names under the same heading.
+        lists = [(pick_lists.EVENING_COMBINED, "buy", True), (pick_lists.EVENING_S10, "buy", False),
+                 (pick_lists.EVENING_L60, "buy", False), (pick_lists.RAW_S10, "agg", False),
+                 (pick_lists.RAW_L60, "agg", False)]
+        picked = {pl.key: pl.pick(all_symbols_data) for pl, _c, _u in lists}
+        for pl, _c, _u in lists:
+            pick_eval.log_picks(pl, picked[pl.key])
 
         top_sell = sorted(all_symbols_data, key=lambda x: x['s10'], reverse=False)[:5]
 
@@ -359,11 +357,6 @@ def main():
             
             <h3>SECTION 1: CONSERVATIVE (Bullish + Setup OK)</h3>
             <p><i>Confirmed quality setups with fundamental and technical alignment.</i></p>
-
-            <b>TOP 5 BUY -- Combined (S10 + BR)</b>
-            <table>
-                <thead><tr><th>Rank</th><th>Symbol</th><th>PGR</th><th>S10</th><th>BR</th><th>Total</th><th>Rationale</th></tr></thead>
-                <tbody>
         """
 
         def add_rows(rows, row_class, use_combined=False):
@@ -385,36 +378,32 @@ def main():
                 """
             return res
 
-        html += add_rows(top_combined, "buy", use_combined=True)
-        html += "</tbody></table>"
+        def list_table(pl, row_class, use_combined):
+            last = "Total" if use_combined else "L60"
+            rows = add_rows(picked[pl.key], row_class, use_combined=use_combined)
+            return (f"<b>{pl.title}</b><p><small><i>Criteria: {pick_lists.criteria(pl)}</i></small></p>"
+                    f"<table><thead><tr><th>Rank</th><th>Symbol</th><th>PGR</th><th>S10</th><th>BR</th>"
+                    f"<th>{last}</th><th>Rationale</th></tr></thead><tbody>"
+                    f"{rows or '<tr><td colspan=7>None qualified today.</td></tr>'}</tbody></table>")
 
-        html += "<b>TOP 5 BUY -- Short10 (Safe 10)</b>"
-        html += "<table><thead><tr><th>Rank</th><th>Symbol</th><th>PGR</th><th>S10</th><th>BR</th><th>L60</th><th>Rationale</th></tr></thead><tbody>"
-        html += add_rows(top_s10, "buy")
-        html += "</tbody></table>"
-
-        html += "<b>TOP 5 BUY -- Long60 (Safe 60)</b>"
-        html += "<table><thead><tr><th>Rank</th><th>Symbol</th><th>PGR</th><th>S10</th><th>BR</th><th>L60</th><th>Rationale</th></tr></thead><tbody>"
-        html += add_rows(top_l60, "buy")
-        html += "</tbody></table>"
-
-        html += "<h3>SECTION 2: AGGRESSIVE (Raw Momentum - Unfiltered)</h3>"
-        html += "<p><i>Highest technical scores regardless of PGR rating. Watch for reversals.</i></p>"
-
-        html += "<b>TOP 5 MOMENTUM -- Raw Short10</b>"
-        html += "<table><thead><tr><th>Rank</th><th>Symbol</th><th>PGR</th><th>S10</th><th>BR</th><th>L60</th><th>Rationale</th></tr></thead><tbody>"
-        html += add_rows(agg_s10, "agg")
-        html += "</tbody></table>"
-
-        html += "<b>TOP 5 MOMENTUM -- Raw Long60</b>"
-        html += "<table><thead><tr><th>Rank</th><th>Symbol</th><th>PGR</th><th>S10</th><th>BR</th><th>L60</th><th>Rationale</th></tr></thead><tbody>"
-        html += add_rows(agg_l60, "agg")
-        html += "</tbody></table>"
+        for pl, row_class, use_combined in lists:
+            if pl is pick_lists.RAW_S10:
+                html += "<h3>SECTION 2: AGGRESSIVE (Raw Momentum - Unfiltered)</h3>"
+                html += "<p><i>Highest technical scores regardless of PGR rating. Watch for reversals.</i></p>"
+            html += list_table(pl, row_class, use_combined)
 
         html += "<h3>SECTION 3: WEAKNESS</h3>"
         html += "<table><thead><tr><th>Rank</th><th>Symbol</th><th>PGR</th><th>S10</th><th>BR</th><th>L60</th><th>Rationale</th></tr></thead><tbody>"
         html += add_rows(top_sell, "sell")
         html += "</tbody></table>"
+
+        # How every logged list did since it was picked (scored from the price cache).
+        try:
+            titles = {pl.key: pl.title for pl in pick_lists.ALL}
+            titles["morning_top5_legacy"] = "Top High-Probability Setups (before the pick log)"
+            html += pick_eval.render_html(pick_eval.scorecard(pick_eval.read_logged()), titles)
+        except Exception as e:
+            _log.warning(f"Pick scorecard skipped: {e}")
 
         html += """
             <p><small>S10: 10-day entry score | BR: Buying Ratio | L60: 60-day position score</small></p>
