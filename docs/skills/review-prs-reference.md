@@ -189,3 +189,10 @@ so the file stays the record.
 **Is reviewing worth it?** When a PR merges, note in its review file which findings were fixed and
 which were declined. Over many PRs, fixed ÷ posted shows whether the reviews earn their length; a low
 ratio means too many findings nobody acts on.
+
+## K. This repo's CI
+
+CI byte-compiles, runs `scripts/utils/pre_commit_validator.py` on the PR's diff (`quality-gate`) and
+ruff (`lint`). It does not run the unit tests. A red `quality-gate` is usually an inline import or a
+silent `except`; reproduce it locally (the validator stops at the first hit per file and exempts
+`test_*.py`).

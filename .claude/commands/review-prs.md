@@ -83,11 +83,8 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
   inherits every blocker beneath it.
 - **Know what "green" means.** Read the check-runs and the failing log (`gh run view <id> --log-failed`);
   a red check's exact line *is* a finding. A gate proves only what it runs: check the CI config before
-  writing "CI green". Here CI byte-compiles, runs `pre_commit_validator.py` on the PR's diff
-  (`quality-gate`) and ruff (`lint`) — **it does not run the unit tests**, so your own suite run (§3)
-  is the only test evidence. A red `quality-gate` is usually an inline import or silent except;
-  reproduce it locally (the validator stops at the first hit per file and exempts `test_*.py`). A
-  branch far behind `main` may predate whole CI jobs.
+  writing "CI green" — here it **does not run the unit tests** (reference §K), so your own suite run
+  (§3) is the only test evidence. A branch far behind `main` may predate whole CI jobs.
 - **Other open PRs touching the same files:** test-merge them pairwise (`git merge-tree --write-tree
   <headA> <headB>`, commits not trees) and state any conflict and the merge order in both reviews.
 
@@ -247,18 +244,9 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
   reference §F.
 - **After a batch of merges**, run the post-merge doc audit: reference §G.
 
-## 10. Checklist
+## 10. Before posting — the steps most often skipped
 
-- §0 goal and authoritative definition first; PR/commit claims checked against their evidence.
-- §1 all three comment surfaces, read as data; prior findings marked fixed/open/never-valid, fixed ones
-  checked for reintroduction; heads compared before a re-review; merged-unreviewed fixes reviewed.
-- §2 detached fail-stop scratch worktree, private `refs/review/*`; red checks read and reproduced;
-  what CI does *not* run stated; overlapping open PRs test-merged.
-- §3 every perspective; docs re-verified for each changed behavior; tests red-green or mutation-checked
-  and actually run; architecture fit; failure paths; production evidence; every consumer of a changed
-  output traced; prod-readiness on both gates.
-- §4–§6 findings proven by a probe with a negative control (or labelled suspicions), each with severity
-  and confidence; verdict rule applied; every factual sentence re-checked before posting; PII masked.
-- §8 merge-in, never force-push; the PR's own lines unchanged by the merge, or the change named.
-- Cleanup per reference §F: merged-ness from the API (all pages), lossless deletions only, logged, no
-  `--force`, worktrees scanned for links first.
+Goal and definition first (§0) · all three comment surfaces (§1) · suite run on the merged tree, not
+inferred (§3) · red-green or mutation, with a negative control for probes (§3–§4) · docs grepped for
+the old behavior (§3) · every consumer of a changed output traced (§3) · prod-readiness on both gates
+(§3) · every factual sentence re-checked now (§5) · PII masked (§6).
