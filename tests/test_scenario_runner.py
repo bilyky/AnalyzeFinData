@@ -193,10 +193,22 @@ def _golden():
     return json.loads(_GOLDEN_FILE.read_text(encoding="utf-8"))
 
 
+def _cases():
+    return {n for n in dir(TestRunnerMatchesRoot) if n.startswith("test_")}
+
+
 def tearDownModule():
-    if _UPDATE_GOLDEN and _RECORDED:
-        _GOLDEN_FILE.write_text(json.dumps(_RECORDED, indent=1, sort_keys=True, ensure_ascii=False) + "\n",
-                                encoding="utf-8", newline="\n")
+    if not _UPDATE_GOLDEN:
+        return
+    # Only a full run that matched in every case may rewrite the file: a partial run
+    # (one test selected) or a mismatching case would otherwise replace or poison it.
+    missing = _cases() - set(_RECORDED)
+    if missing:
+        sys.stderr.write(f"\nGolden file NOT written: {len(missing)} case(s) not recorded "
+                         f"({', '.join(sorted(missing))}). Run the whole module and fix any mismatch.\n")
+        return
+    _GOLDEN_FILE.write_text(json.dumps(_RECORDED, indent=1, sort_keys=True, ensure_ascii=False) + "\n",
+                            encoding="utf-8", newline="\n")
 
 
 class TestRunnerMatchesRoot(unittest.TestCase):
@@ -208,7 +220,8 @@ class TestRunnerMatchesRoot(unittest.TestCase):
                 self.assertEqual(mine[key], root[key])
         case = self._testMethodName
         if _UPDATE_GOLDEN:
-            _RECORDED[case] = root
+            if mine == root:  # never record a case the runner doesn't match
+                _RECORDED[case] = root
         else:
             golden = _golden()
             self.assertIn(case, golden, f"no golden entry for {case}; regenerate on purpose")
@@ -313,8 +326,7 @@ class TestRunnerMatchesRoot(unittest.TestCase):
 
 class TestGoldenFile(unittest.TestCase):
     def test_golden_has_exactly_the_cases(self):
-        cases = {n for n in dir(TestRunnerMatchesRoot) if n.startswith("test_")}
-        self.assertEqual(set(_golden()), cases)
+        self.assertEqual(set(_golden()), _cases())
 
 
 class TestPackageExport(unittest.TestCase):
