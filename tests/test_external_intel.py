@@ -390,3 +390,25 @@ class TestExtractionFailureIsAWarning(TestExtractionParallelism):
         self.assertFalse([c for c in log.error.call_args_list if "Extraction failed" in str(c)])
         self.assertTrue([c for c in log.warning.call_args_list if "Extraction failed" in str(c)])
         self.assertIn("every AI extraction failed", external_intel.zero_ideas_reason())
+
+
+class TestZeroIdeasLevel(unittest.TestCase):
+    """#227 review: when every extraction fails the AI is down; that must be an ERROR in
+    aether.jsonl, not depend on the word FAILED in autonomous_run.log."""
+
+    def _level(self, scan):
+        import autonomous_pipeline as ap
+        with mock.patch.dict(external_intel.last_scan, scan), \
+             mock.patch.object(ap, "_pipeline_log") as plog, mock.patch.object(ap, "log"):
+            ap._log_zero_ideas()
+        return "error" if plog.error.called else "warning" if plog.warning.called else None
+
+    def test_every_extraction_failed_is_an_error_else_a_warning(self):
+        cases = [
+            ({"mailbox_errors": 0, "candidates": 5, "extraction_failures": 5}, "error"),
+            ({"mailbox_errors": 0, "candidates": 5, "extraction_failures": 2}, "warning"),
+            ({"mailbox_errors": 0, "candidates": 0, "extraction_failures": 0}, "warning"),
+        ]
+        for scan, want in cases:
+            with self.subTest(scan=scan):
+                self.assertEqual(self._level(scan), want)

@@ -419,6 +419,12 @@ def fetch_idea_emails():
     return ideas
 
 
+def all_extractions_failed() -> bool:
+    """True when the last scan read emails and every AI extraction failed (the AI is down)."""
+    s = last_scan
+    return s.get("candidates", 0) > 0 and s.get("extraction_failures", 0) >= s["candidates"]
+
+
 def zero_ideas_reason() -> str:
     """Why the last fetch_idea_emails() call returned no ideas, from last_scan."""
     s = last_scan

@@ -98,5 +98,43 @@ class TestScreen(unittest.TestCase):
         self.assertIn("[Chaikin fetch]: 3 of 4 failed", log.error.call_args.args[0])
 
 
+class TestXlsScreen(unittest.TestCase):
+    """check_from_xls is the screen PROD uses (symbols_to_check.txt is retired); #227 review 🟠."""
+
+    def _screen(self, fail):
+        import openpyxl
+        with tempfile.TemporaryDirectory() as td:
+            book = os.path.join(td, "state_of_the_day.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Research"
+            ws.append(["#", "", "", "Symbol"])
+            for i, sym in enumerate(("AAA", "BBB", "CCC", "DDD"), 1):
+                ws.append([i, None, None, sym])
+            wb.save(book)
+
+            def fetch(sym, d, prefer):
+                if sym in fail:
+                    raise requests.ConnectionError("Max retries exceeded")
+                pg = powergauge.PowerGauge(sym, d)
+                pg.price = -1                      # "no data": the write phase skips the row
+                return pg
+            with mock.patch.object(powergauge, "XLSX_FILE", book),                  mock.patch.object(powergauge, "SRC_XLSX", book),                  mock.patch("powergauge._backup_xlsx", return_value=None),                  mock.patch("powergauge._build_cache_index"),                  mock.patch("powergauge.login", return_value={"jsessionid": "x"}),                  mock.patch("powergauge.get_symbol_data", side_effect=fetch),                  mock.patch.object(powergauge, "_pg_log") as log:
+                try:
+                    powergauge.check_from_xls(prefer_cache=False, date=datetime.date(2026, 10, 27))
+                except Exception:
+                    pass   # only the fetch phase and its batch line are under test
+        return log
+
+    def test_one_failed_symbol_is_a_warning_most_failing_is_one_error(self):
+        log = self._screen({"BBB"})
+        self.assertFalse([c for c in log.error.call_args_list if "[Chaikin fetch]" in str(c)])
+        self.assertTrue([c for c in log.warning.call_args_list if "[Chaikin fetch]: 1 of 4 failed" in str(c)])
+        log = self._screen({"AAA", "BBB", "CCC"})
+        lines = [str(c) for c in log.error.call_args_list if "[Chaikin fetch]" in str(c)]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("3 of 4 failed (most of the batch)", lines[0])
+
+
 if __name__ == "__main__":
     unittest.main()

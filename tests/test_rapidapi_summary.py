@@ -41,6 +41,8 @@ class TestRunSummary(unittest.TestCase):
         two = [("ILMN", "Burst pattern detected"), ("BSY", "Read timed out")]
         cases = [
             ("a few failed, retried next run", dict(errors=two, updated=398), "warning"),
+            # 5 of 400: above MIN_ATTEMPTS, so the share (not the count) decides (#227 review)
+            ("5 of 400 failed", dict(errors=two * 2 + two[:1], updated=395), "warning"),
             ("a held position failed", dict(errors=two, updated=398, held=["BSY"]), "error"),
             ("the quota stopped the pass", dict(errors=two, updated=398, quota=True), "error"),
             ("most of the pass failed", dict(errors=two * 3, updated=2), "error"),
