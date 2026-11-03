@@ -17,11 +17,14 @@ signal days in the last year, and every EPS field was empty.
 Checked against the cache on INTC (798 days): the chart's dailyPgr for D-1 equals the
 snapshot's corrected PGR for D 82% of the time (7->5 level map). A good record, not exact.
 
+The full response (every field, unchanged) is also kept gzipped in
+Data/Symbol_chart/raw/<SYM>_<date>.json.gz, so nothing is lost to the field choice above.
+
 Writes Data/Symbol_chart/<SYM>_chart.json ({"rows": {date: {...}}}, merged with earlier
 runs) and Data/Symbol_chart/_report.json with a content check per symbol: row count, PGR
 values in range, and the median close difference vs RapidAPI over the last 60 shared days.
 
-One GET per symbol, ~1 s apart (the daily screen makes ~535 of these calls a day). Stops on
+One GET per symbol, 2 s apart by default (--delay) (the daily screen makes ~535 of these calls a day). Stops on
 the first auth error (401/403) or 3 errors in a row. Symbols fetched today are skipped
 unless --force, so a stopped run can be restarted.
 
@@ -32,6 +35,7 @@ Usage (repo root, on PROD):
 """
 import argparse
 import datetime
+import gzip
 import json
 import os
 import statistics
@@ -46,7 +50,7 @@ from aether import paths  # noqa: E402
 URL = "https://members-backend.chaikinanalytics.com/api/v2/chart/{symbol}?timeFrame=5Y&chartType=daily"
 KEEP = ("dailyPgr", "weeklyPgr", "cmf", "relativeStrength", "cycle", "chaikinTrend20001", "upperBand",
         "lowerBand", "close")
-SLEEP = 1.0
+SLEEP = 2.0                 # seconds between calls (--delay)
 MAX_ERRORS = 3
 
 
@@ -109,12 +113,20 @@ def _headers(session: dict) -> dict:
             "accept": "application/json, text/plain, */*"}
 
 
-def fetch(symbol: str, session: dict) -> list:
+def fetch(symbol: str, session: dict) -> dict:
     r = powergauge._get_http_session().get(URL.format(symbol=symbol), headers=_headers(session), timeout=(5, 60))
     if r.status_code in (401, 403):
         raise AuthError(f"HTTP {r.status_code}")
     r.raise_for_status()
-    return (r.json() or {}).get("data") or []
+    return r.json() or {}
+
+
+def save_raw(symbol: str, payload) -> None:
+    d = os.path.join(chart_dir(), "raw")
+    os.makedirs(d, exist_ok=True)
+    with gzip.open(os.path.join(d, f"{symbol}_{datetime.date.today().isoformat()}.json.gz"), "wt",
+                   encoding="utf-8") as f:
+        json.dump(payload, f)
 
 
 def _load(path: str) -> dict:
@@ -149,7 +161,8 @@ def run(symbols: list, force=False, fetch_fn=None, sleep=SLEEP) -> dict:
             res["skipped"].append(s)
             continue
         try:
-            rows = slim(fetch_fn(s))
+            payload = fetch_fn(s)
+            rows = slim(payload.get("data") or [] if isinstance(payload, dict) else payload)
         except AuthError as e:
             res["stopped"] = f"auth error on {s} ({e}): renew the Chaikin session, then re-run"
             break
@@ -163,6 +176,7 @@ def run(symbols: list, force=False, fetch_fn=None, sleep=SLEEP) -> dict:
             continue
         errors = 0
         if rows:
+            save_raw(s, payload)
             save(s, rows)
             res["fetched"].append(s)
         else:
@@ -189,13 +203,14 @@ def main(argv=None) -> int:
     ap.add_argument("--symbols", nargs="*", help="default: every symbol folder in Data/Symbol")
     ap.add_argument("--force", action="store_true", help="re-fetch symbols already fetched today")
     ap.add_argument("--report", action="store_true", help="only re-check the saved files")
+    ap.add_argument("--delay", type=float, default=SLEEP, help=f"seconds between calls (default {SLEEP})")
     a = ap.parse_args(argv)
     base = paths.symbol_dir()
     symbols = [s.upper() for s in a.symbols] if a.symbols else sorted(
         d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d)))
     stopped = False
     if not a.report:
-        r = run(symbols, a.force)
+        r = run(symbols, a.force, sleep=a.delay)
         stopped = bool(r["stopped"])
         _out(f"fetched {len(r['fetched'])}, skipped (already today) {len(r['skipped'])}, failed {len(r['failed'])}")
         if r["failed"]:

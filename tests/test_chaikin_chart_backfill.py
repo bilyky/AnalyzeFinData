@@ -1,6 +1,7 @@
 """Tests for scripts/utils/chaikin_chart_backfill.py: field selection, merge, the content
 check, resume/stop behaviour of the run loop (fake fetch, no network) and the report."""
 import datetime
+import gzip
 import json
 import os
 import sys
@@ -75,6 +76,21 @@ class TestRun(unittest.TestCase):
         self.assertEqual((r2["skipped"], len(calls)), (["AAA", "BBB"], 2))
         bf.run(["AAA"], force=True, fetch_fn=fake, sleep=0)
         self.assertEqual(len(calls), 3)
+
+    def test_full_response_is_kept_raw(self):
+        payload = {"code": "SUCCESS", "data": [_row("2026-11-02")], "extra": {"kept": True}}
+        r = bf.run(["AAA"], fetch_fn=lambda s: payload, sleep=0)
+        self.assertEqual(r["fetched"], ["AAA"])
+        raw = os.path.join(self._tmp.name, "raw", f"AAA_{datetime.date.today().isoformat()}.json.gz")
+        with gzip.open(raw, "rt", encoding="utf-8") as f:
+            self.assertEqual(json.load(f), payload)
+        self.assertEqual(list(self._saved("AAA")["rows"]), ["2026-11-02"])
+
+    def test_delay_is_passed_through(self):
+        with mock.patch.object(bf, "run", return_value={"fetched": [], "skipped": [], "failed": [],
+                                                       "stopped": None}) as run,                 mock.patch.object(bf, "report", return_value={}):
+            bf.main(["--symbols", "AAA", "--delay", "5"])
+        self.assertEqual(run.call_args.kwargs["sleep"], 5.0)
 
     def test_auth_error_stops_at_once(self):
         def fake(sym):
