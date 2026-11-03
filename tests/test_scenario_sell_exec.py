@@ -19,7 +19,7 @@ the behaviours it carries over from the root, unchanged:
 
 Every collaborator is patched on the live module — no network or disk. The
 package re-export is pinned once, in ``test_scenario_steps.TestPackageReexports``,
-and root parity in ``test_scenario_parity``.
+and the composed run in ``test_scenario_runner``.
 """
 import os
 import sys
