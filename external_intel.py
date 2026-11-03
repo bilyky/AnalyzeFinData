@@ -341,7 +341,9 @@ def fetch_idea_emails():
                     "intel": intel
                 }
             except Exception as e:
-                _log.error(f"Extraction failed for {cand['subject'][:40]}: {e}")
+                # WARNING per email; "every AI extraction failed" reaches the email once, as the
+                # pipeline's 0-ideas line (zero_ideas_reason).
+                _log.warning(f"Extraction failed for {cand['subject'][:40]}: {e}")
                 return None
 
         # ai.max_parallel_extractions workers (default 1: free AI tiers answer 429 to bursts).
@@ -415,6 +417,12 @@ def fetch_idea_emails():
                 ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
 
     return ideas
+
+
+def all_extractions_failed() -> bool:
+    """True when the last scan read emails and every AI extraction failed (the AI is down)."""
+    s = last_scan
+    return s.get("candidates", 0) > 0 and s.get("extraction_failures", 0) >= s["candidates"]
 
 
 def zero_ideas_reason() -> str:

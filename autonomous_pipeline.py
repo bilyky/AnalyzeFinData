@@ -385,6 +385,16 @@ def _refresh_workbook(no_email: bool) -> bool:
         return False
 
 
+def _log_zero_ideas():
+    """Log why the email scan found no ideas. Every extraction failing means the AI is down, so
+    that is an ERROR (the watchdog's recovery email) on its own, not only through the keyword
+    scan of autonomous_run.log (#227 review); per-email failures are WARNINGs."""
+    reason = external_intel.zero_ideas_reason()
+    level = _pipeline_log.error if external_intel.all_extractions_failed() else _pipeline_log.warning
+    level(f"External intel fetch returned 0 ideas: {reason}. Check aether.jsonl for details.")
+    log(f"Warning: 0 ideas from email scan ({reason}).")
+
+
 def main():
     cleanup_orphaned_processes()
     
@@ -520,9 +530,7 @@ def main():
                 except Exception as e:
                     log(f"Warning: Failed to cache email ideas: {e}")
             else:
-                reason = external_intel.zero_ideas_reason()
-                _pipeline_log.warning(f"External intel fetch returned 0 ideas: {reason}. Check aether.jsonl for details.")
-                log(f"Warning: 0 ideas from email scan ({reason}).")
+                _log_zero_ideas()
         except Exception as e:
             _pipeline_log.error(f"Could not fetch external intel: {e}")
             log(f"ERROR: Could not fetch external intel: {e}")

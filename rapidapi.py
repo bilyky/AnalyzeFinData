@@ -32,6 +32,7 @@ import numpy as np
 import requests
 
 from aether import paths, trash
+from aether.batch_failures import most_failed
 from aether.logger import get_logger as _get_logger
 from bar_provenance import is_provisional, real_dates
 from config import CFG
@@ -282,7 +283,8 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
     priority: symbols repaired before everything else (the CLI passes the held positions:
     on PROD a held name's placeholder bar waited a week behind ~150 deferred symbols).
     """
-    results = {"updated": 0, "skipped": 0, "errors": [], "deferred": 0, "quota_stopped": False}
+    results = {"updated": 0, "skipped": 0, "errors": [], "deferred": 0, "quota_stopped": False,
+               "failed_priority": []}
     budget = CFG.rapidapi_max_fetches if max_fetches is None else max_fetches
 
     # Cross-process file lock to prevent multiple processes from running recovery simultaneously
@@ -347,7 +349,11 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
                 time.sleep(SLEEP_SEC)
             except Exception as e:
                 results["errors"].append((sym, str(e)))
-                _log.error("  [RapidAPI] %s: ERROR - %s", sym, e)
+                if priority and sym.upper() in priority:
+                    results["failed_priority"].append(sym)
+                # WARNING: the next pass retries it (most-starved first). log_run_summary raises
+                # the run to ERROR (the recovery email) only when it matters.
+                _log.warning("  [RapidAPI] %s: fetch failed - %s", sym, e)
                 quota_hits = quota_hits + 1 if _is_quota_error(e) else 0
                 if quota_hits >= QUOTA_STOP_AFTER:
                     left = min(len(queue), budget) - i
@@ -409,15 +415,29 @@ def get_quotes(time_frame, year=2022, month=1, day=1, symbol='MSFT'):
     return np.array(result)
 
 
+def run_needs_attention(result: dict) -> bool:
+    """True when the pass's failures need a person: a held position failed, the quota stopped
+    the pass, or more than half of the fetches it attempted failed. A few symbols failing
+    (a timeout, Alpha Vantage's burst guard) is retried by the next pass and is not an alert."""
+    failed = len(result.get("errors") or [])
+    return bool(result.get("failed_priority") or result.get("quota_stopped")
+                or most_failed(failed, result.get("updated", 0) + failed))
+
+
 def log_run_summary(result: dict) -> None:
-    """One 'Done' line, plus ONE error line naming the failed symbols. Each failure was
-    already logged with its error when it happened, so this does not repeat them."""
+    """One 'Done' line, plus ONE line naming the failed symbols: ERROR (the watchdog's recovery
+    email) only when run_needs_attention, else WARNING. Each failure was logged when it
+    happened, so this does not repeat the errors."""
     _log.info("[RapidAPI] Done: %d fetched, %d already current, %d errors, %d deferred%s",
               result["updated"], result["skipped"], len(result["errors"]), result["deferred"],
               " (stopped: quota spent)" if result["quota_stopped"] else "")
-    if result["errors"]:
-        _log.error("  [RapidAPI] %d symbol(s) failed this run (errors logged above): %s",
-                   len(result["errors"]), ", ".join(sym for sym, _ in result["errors"]))
+    if not result["errors"]:
+        return
+    held = result.get("failed_priority") or []
+    msg = ("  [RapidAPI] %d symbol(s) failed this run (retried next run): %s%s"
+           % (len(result["errors"]), ", ".join(sym for sym, _ in result["errors"]),
+              f"; held positions among them: {', '.join(held)}" if held else ""))
+    (_log.error if run_needs_attention(result) else _log.warning)(msg)
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────
