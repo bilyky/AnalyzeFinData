@@ -236,13 +236,13 @@ class TestEvaluateReportsAnsweringProvider(unittest.TestCase):
     """Review of #175: after a fallback the verdict was labeled with the primary's name."""
 
     def test_fallback_answer_is_attributed_to_the_provider_that_answered(self):
-        def one(system, user, name, max_tokens, temperature):
+        def one(name, system, messages, max_tokens, temperature):
             if name == "primaryA":
                 raise RuntimeError("429 Too Many Requests")
             return f"answer from {name}"
         with mock.patch.object(ai_client, "primary", return_value="primaryA"), \
              mock.patch.object(ai_client, "enabled_providers", return_value=["primaryA", "backupB"]), \
-             mock.patch.object(ai_client, "_evaluate_one", side_effect=one):
+             mock.patch.object(ai_client, "_call_one", side_effect=one):
             text, name = ai_client.evaluate_with_provider("SYS", "USR")
             self.assertEqual(ai_client.evaluate("SYS", "USR"), "answer from backupB")
         self.assertEqual((text, name), ("answer from backupB", "backupB"))

@@ -1,0 +1,2801 @@
+{
+ "test_adaptive_profile": {
+  "calls": 1,
+  "decisions": [
+   [
+    {
+     "cost": 100.0,
+     "date": "2026-10-30",
+     "l60": 5.0,
+     "pnl_pct": 20.0,
+     "price": 120.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 4.0,
+     "symbol": "WIN",
+     "verdicts": {}
+    },
+    {
+     "cost": 90.0,
+     "date": "2026-10-30",
+     "l60": -4.0,
+     "pnl_pct": -13.333333333333334,
+     "price": 78.0,
+     "rules_action": "SELL",
+     "rules_reason": "stop breached (price 78.0 <= stop 80.0)",
+     "s10": -3.0,
+     "symbol": "LOSE",
+     "verdicts": {}
+    },
+    {
+     "cost": 50.0,
+     "date": "2026-10-30",
+     "l60": 0.5,
+     "pnl_pct": 10.0,
+     "price": 55.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 0.5,
+     "symbol": "OLD",
+     "verdicts": {}
+    },
+    {
+     "cost": 40.0,
+     "date": "2026-10-30",
+     "l60": 3.0,
+     "pnl_pct": 0.0,
+     "price": 40.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 3.0,
+     "symbol": "QUEUED",
+     "verdicts": {}
+    }
+   ]
+  ],
+  "dna": [
+   [
+    "LOSE",
+    78.0,
+    "2026-10-30"
+   ]
+  ],
+  "emails": [],
+  "log": [
+   [
+    "info",
+    [
+     "🤖 AI ACTIVE STRATEGY: BALANCED (Adaptive)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position WIN as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position LOSE as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position OLD as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI EXECUTING QUEUED STRATEGIC ORDERS..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI QUEUED BUY EXECUTED: 196 shares of QUEUED at $40.0 (ATR-based Stop: $35.0 (2.5 * ATR))"
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] WIN stop ratcheted: $95.00 -> $116.00 (peak close $121.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] WIN stop ratcheted upwards: $95.00 ➡️ $116.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🏦 [Scale-Out] WIN: banked 12 sh at $120.00 — bank 25% (test); 38 sh left trailing"
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] OLD stop ratcheted: $50.00 -> $51.00 (peak close $56.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] OLD stop ratcheted upwards: $50.00 ➡️ $51.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [STP LMT] LOSE stop $80.00 triggered; limit at market $78.00, filled at $78.00."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE SELL: LOSE at $78.0 (Time: 10:15:00)"
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Momentum Floor): LOSE - Short10 score -3.0 is below required 2.0 floor (cash_pct=70.0%)."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (CNXC Trap): GAP - Gap-Down -10.0% with no confirmed bottom."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Risk-Reward Gate): LOWRR - Reward-to-Risk ratio of 0.8:1 is less than the required 2.0:1 minimum (Upside: $4.0, Downside: $5.0)."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Momentum Floor): FLOOR - Short10 score 0.1 is below required 2.0 floor (cash_pct=70.0%)."
+    ]
+   ],
+   [
+    "debug",
+    [
+     "[Buckets] Scarcity $%.2f / $%.2f  Standard $%.2f / $%.2f",
+     0,
+     10484.0,
+     15700.0,
+     41936.0
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Capping NEW1 from 262 to 157 shares to fit the 15% per-position ceiling."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Risk-capping NEW1 from 157 to 104 shares: a stop-out at $45.0 may lose at most $524.20 (1.0% of equity)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE BUY: 104 shares of NEW1 at $50.0 (ATR-based Stop: $45.0, Scarcity=False)"
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Capping NEW2 from 701 to 262 shares to fit the 15% per-position ceiling."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Risk-capping NEW2 from 262 to 104 shares: a stop-out at $25.0 may lose at most $524.20 (1.0% of equity)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE BUY: 104 shares of NEW2 at $30.0 (ATR-based Stop: $25.0, Scarcity=False)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash (54.2%)..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] WIN: sold earlier today; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Scale-In] Added 82 shares to OLD @ $55.00 (Blended Cost: $52.89)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Scale-In] Added 82 shares to OLD @ $55.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] QUEUED: stop $35.00 is below cost $40.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] NEW1: stop $45.00 is below cost $50.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] NEW2: stop $25.00 is below cost $30.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🚀 [Options Pass] Checking active holdings to write weekly Covered Calls..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI Portfolio Value: $52420.0 (Cash: $23890.0)"
+    ]
+   ]
+  ],
+  "raised": null,
+  "save_calls": 1,
+  "saved": {
+   "balance": 23890.0,
+   "equity": 52420.0,
+   "history": [
+    {
+     "date": "2026-10-30",
+     "details": "Queued Buy: operator (ATR-based Stop: $35.0 (2.5 * ATR))",
+     "price": 40.0,
+     "qty": 196,
+     "symbol": "QUEUED",
+     "time": "10:15:00",
+     "type": "BUY"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Scale-out (Bank-As-You-Go): bank 25% (test)",
+     "pnl": 240.0,
+     "price": 120.0,
+     "qty": 12,
+     "symbol": "WIN",
+     "time": "10:15:00",
+     "type": "SELL"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Exit: stop breached (price 78.0 <= stop 80.0) [STP LMT @ market, stop 80.00]",
+     "pnl": -480.0,
+     "price": 78.0,
+     "qty": 40,
+     "stop_loss": 80.0,
+     "symbol": "LOSE",
+     "time": "10:15:00",
+     "type": "SELL"
+    },
+    {
+     "date": "2026-10-30",
+     "price": 50.0,
+     "qty": 104,
+     "symbol": "NEW1",
+     "time": "10:15:00",
+     "type": "BUY"
+    },
+    {
+     "date": "2026-10-30",
+     "price": 30.0,
+     "qty": 104,
+     "symbol": "NEW2",
+     "time": "10:15:00",
+     "type": "BUY"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Pyramiding Scale-In (Breakout Peak, s10=0.5)",
+     "price": 55.0,
+     "qty": 82,
+     "symbol": "OLD",
+     "time": "10:15:00",
+     "type": "BUY_SCALE_IN"
+    }
+   ],
+   "positions": {
+    "NEW1": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 6.0,
+      "pgr": "Bullish",
+      "s10": 5.0,
+      "score": 11.0,
+      "z_score": null
+     },
+     "cost": 50.0,
+     "is_scarcity": false,
+     "qty": 104,
+     "stop_loss": 45.0
+    },
+    "NEW2": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 4.0,
+      "pgr": "Bullish",
+      "s10": 4.5,
+      "score": 8.5,
+      "z_score": null
+     },
+     "cost": 30.0,
+     "is_scarcity": false,
+     "qty": 104,
+     "stop_loss": 25.0
+    },
+    "OLD": {
+     "cost": 52.89,
+     "highest_close_since_acq": 56.0,
+     "is_scarcity": false,
+     "qty": 142,
+     "stop_loss": 51.0
+    },
+    "QUEUED": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 3.0,
+      "pgr": "Bullish",
+      "s10": 3.0,
+      "score": 6.0,
+      "z_score": 0.0
+     },
+     "cost": 40.0,
+     "highest_close_since_acq": 40.0,
+     "qty": 196,
+     "stop_loss": 35.0
+    },
+    "WIN": {
+     "banked_pct": 0.25,
+     "cost": 100.0,
+     "highest_close_since_acq": 121.0,
+     "is_scarcity": false,
+     "qty": 38,
+     "stop_loss": 116.0
+    }
+   },
+   "profile": "BALANCED",
+   "profile_mode": "ADAPTIVE",
+   "queued_orders": [],
+   "start_date": "2026-01-02"
+  },
+  "txs": [
+   {
+    "date": "2026-10-30",
+    "details": "Queued Buy: operator (ATR-based Stop: $35.0 (2.5 * ATR))",
+    "price": 40.0,
+    "qty": 196,
+    "symbol": "QUEUED",
+    "time": "10:15:00",
+    "type": "BUY"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Scale-out (Bank-As-You-Go): bank 25% (test)",
+    "pnl": 240.0,
+    "price": 120.0,
+    "qty": 12,
+    "symbol": "WIN",
+    "time": "10:15:00",
+    "type": "SELL"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Exit: stop breached (price 78.0 <= stop 80.0) [STP LMT @ market, stop 80.00]",
+    "pnl": -480.0,
+    "price": 78.0,
+    "qty": 40,
+    "stop_loss": 80.0,
+    "symbol": "LOSE",
+    "time": "10:15:00",
+    "type": "SELL"
+   },
+   {
+    "date": "2026-10-30",
+    "price": 50.0,
+    "qty": 104,
+    "symbol": "NEW1",
+    "time": "10:15:00",
+    "type": "BUY"
+   },
+   {
+    "date": "2026-10-30",
+    "price": 30.0,
+    "qty": 104,
+    "symbol": "NEW2",
+    "time": "10:15:00",
+    "type": "BUY"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Pyramiding Scale-In (Breakout Peak, s10=0.5)",
+    "price": 55.0,
+    "qty": 82,
+    "symbol": "OLD",
+    "time": "10:15:00",
+    "type": "BUY_SCALE_IN"
+   }
+  ]
+ },
+ "test_aggressive_run_rotates": {
+  "calls": 1,
+  "decisions": [
+   [
+    {
+     "cost": 100.0,
+     "date": "2026-10-30",
+     "l60": 5.0,
+     "pnl_pct": 20.0,
+     "price": 120.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 4.0,
+     "symbol": "WIN",
+     "verdicts": {}
+    },
+    {
+     "cost": 90.0,
+     "date": "2026-10-30",
+     "l60": -4.0,
+     "pnl_pct": -13.333333333333334,
+     "price": 78.0,
+     "rules_action": "SELL",
+     "rules_reason": "stop breached (price 78.0 <= stop 80.0)",
+     "s10": -3.0,
+     "symbol": "LOSE",
+     "verdicts": {}
+    },
+    {
+     "cost": 50.0,
+     "date": "2026-10-30",
+     "l60": 0.5,
+     "pnl_pct": 10.0,
+     "price": 55.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 0.5,
+     "symbol": "OLD",
+     "verdicts": {}
+    },
+    {
+     "cost": 40.0,
+     "date": "2026-10-30",
+     "l60": 3.0,
+     "pnl_pct": 0.0,
+     "price": 40.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 3.0,
+     "symbol": "QUEUED",
+     "verdicts": {}
+    }
+   ]
+  ],
+  "dna": [
+   [
+    "LOSE",
+    78.0,
+    "2026-10-30"
+   ],
+   [
+    "OLD",
+    55.0,
+    "2026-10-30"
+   ]
+  ],
+  "emails": [],
+  "log": [
+   [
+    "info",
+    [
+     "🤖 AI ACTIVE STRATEGY: AGGRESSIVE (Manual Override - Locked)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position WIN as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position LOSE as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position OLD as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI EXECUTING QUEUED STRATEGIC ORDERS..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI QUEUED BUY EXECUTED: 196 shares of QUEUED at $40.0 (ATR-based Stop: $33.0 (3.5 * ATR))"
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] WIN stop ratcheted: $95.00 -> $114.00 (peak close $121.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] WIN stop ratcheted upwards: $95.00 ➡️ $114.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🏦 [Scale-Out] WIN: banked 12 sh at $120.00 — bank 25% (test); 38 sh left trailing"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [STP LMT] LOSE stop $80.00 triggered; limit at market $78.00, filled at $78.00."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE SELL: LOSE at $78.0 (Time: 10:15:00)"
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Momentum Floor): LOSE - Short10 score -3.0 is below required 2.0 floor (cash_pct=70.0%)."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (CNXC Trap): GAP - Gap-Down -10.0% with no confirmed bottom."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Risk-Reward Gate): LOWRR - Reward-to-Risk ratio of 0.8:1 is less than the required 2.0:1 minimum (Upside: $4.0, Downside: $5.0)."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Momentum Floor): FLOOR - Short10 score 0.1 is below required 2.0 floor (cash_pct=70.0%)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🔄 [MOMENTUM ROTATION] Sold mature position OLD (Score: 1.0) @ $55.0 to open slot."
+    ]
+   ],
+   [
+    "debug",
+    [
+     "[Buckets] Scarcity $%.2f / $%.2f  Standard $%.2f / $%.2f",
+     0,
+     10484.0,
+     12400.0,
+     41936.0
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Capping NEW1 from 173 to 157 shares to fit the 15% per-position ceiling."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Risk-capping NEW1 from 157 to 74 shares: a stop-out at $43.0 may lose at most $524.20 (1.0% of equity)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE BUY: 74 shares of NEW1 at $50.0 (ATR-based Stop: $43.0, Scarcity=False)"
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Capping NEW2 from 345 to 262 shares to fit the 15% per-position ceiling."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Risk-capping NEW2 from 262 to 74 shares: a stop-out at $23.0 may lose at most $524.20 (1.0% of equity)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE BUY: 74 shares of NEW2 at $30.0 (ATR-based Stop: $23.0, Scarcity=False)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash (65.1%)..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] WIN: sold earlier today; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] QUEUED: stop $33.00 is below cost $40.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] NEW1: stop $43.00 is below cost $50.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] NEW2: stop $23.00 is below cost $30.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🚀 [Options Pass] Checking active holdings to write weekly Covered Calls..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI Portfolio Value: $52420.0 (Cash: $34100.0)"
+    ]
+   ]
+  ],
+  "raised": null,
+  "save_calls": 1,
+  "saved": {
+   "balance": 34100.0,
+   "equity": 52420.0,
+   "history": [
+    {
+     "date": "2026-10-30",
+     "details": "Queued Buy: operator (ATR-based Stop: $33.0 (3.5 * ATR))",
+     "price": 40.0,
+     "qty": 196,
+     "symbol": "QUEUED",
+     "time": "10:15:00",
+     "type": "BUY"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Scale-out (Bank-As-You-Go): bank 25% (test)",
+     "pnl": 240.0,
+     "price": 120.0,
+     "qty": 12,
+     "symbol": "WIN",
+     "time": "10:15:00",
+     "type": "SELL"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Exit: stop breached (price 78.0 <= stop 80.0) [STP LMT @ market, stop 80.00]",
+     "pnl": -480.0,
+     "price": 78.0,
+     "qty": 40,
+     "stop_loss": 80.0,
+     "symbol": "LOSE",
+     "time": "10:15:00",
+     "type": "SELL"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "🔄 [MOMENTUM ROTATION] Sold mature position OLD (Score: 1.0) to free slot.",
+     "pnl": 300.0,
+     "price": 55.0,
+     "qty": 60,
+     "symbol": "OLD",
+     "time": "10:15:00",
+     "type": "SELL"
+    },
+    {
+     "date": "2026-10-30",
+     "price": 50.0,
+     "qty": 74,
+     "symbol": "NEW1",
+     "time": "10:15:00",
+     "type": "BUY"
+    },
+    {
+     "date": "2026-10-30",
+     "price": 30.0,
+     "qty": 74,
+     "symbol": "NEW2",
+     "time": "10:15:00",
+     "type": "BUY"
+    }
+   ],
+   "positions": {
+    "NEW1": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 6.0,
+      "pgr": "Bullish",
+      "s10": 5.0,
+      "score": 11.0,
+      "z_score": null
+     },
+     "cost": 50.0,
+     "is_scarcity": false,
+     "qty": 74,
+     "stop_loss": 43.0
+    },
+    "NEW2": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 4.0,
+      "pgr": "Bullish",
+      "s10": 4.5,
+      "score": 8.5,
+      "z_score": null
+     },
+     "cost": 30.0,
+     "is_scarcity": false,
+     "qty": 74,
+     "stop_loss": 23.0
+    },
+    "QUEUED": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 3.0,
+      "pgr": "Bullish",
+      "s10": 3.0,
+      "score": 6.0,
+      "z_score": 0.0
+     },
+     "cost": 40.0,
+     "highest_close_since_acq": 40.0,
+     "qty": 196,
+     "stop_loss": 33.0
+    },
+    "WIN": {
+     "banked_pct": 0.25,
+     "cost": 100.0,
+     "highest_close_since_acq": 121.0,
+     "is_scarcity": false,
+     "qty": 38,
+     "stop_loss": 114.0
+    }
+   },
+   "profile": "AGGRESSIVE",
+   "profile_mode": "MANUAL",
+   "queued_orders": [],
+   "start_date": "2026-01-02"
+  },
+  "txs": [
+   {
+    "date": "2026-10-30",
+    "details": "Queued Buy: operator (ATR-based Stop: $33.0 (3.5 * ATR))",
+    "price": 40.0,
+    "qty": 196,
+    "symbol": "QUEUED",
+    "time": "10:15:00",
+    "type": "BUY"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Scale-out (Bank-As-You-Go): bank 25% (test)",
+    "pnl": 240.0,
+    "price": 120.0,
+    "qty": 12,
+    "symbol": "WIN",
+    "time": "10:15:00",
+    "type": "SELL"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Exit: stop breached (price 78.0 <= stop 80.0) [STP LMT @ market, stop 80.00]",
+    "pnl": -480.0,
+    "price": 78.0,
+    "qty": 40,
+    "stop_loss": 80.0,
+    "symbol": "LOSE",
+    "time": "10:15:00",
+    "type": "SELL"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "🔄 [MOMENTUM ROTATION] Sold mature position OLD (Score: 1.0) to free slot.",
+    "pnl": 300.0,
+    "price": 55.0,
+    "qty": 60,
+    "symbol": "OLD",
+    "time": "10:15:00",
+    "type": "SELL"
+   },
+   {
+    "date": "2026-10-30",
+    "price": 50.0,
+    "qty": 74,
+    "symbol": "NEW1",
+    "time": "10:15:00",
+    "type": "BUY"
+   },
+   {
+    "date": "2026-10-30",
+    "price": 30.0,
+    "qty": 74,
+    "symbol": "NEW2",
+    "time": "10:15:00",
+    "type": "BUY"
+   }
+  ]
+ },
+ "test_ai_override_on_exits": {
+  "calls": 1,
+  "decisions": [
+   [
+    {
+     "cost": 100.0,
+     "date": "2026-10-30",
+     "l60": 5.0,
+     "pnl_pct": 20.0,
+     "price": 120.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 4.0,
+     "symbol": "WIN",
+     "verdicts": {}
+    },
+    {
+     "cost": 90.0,
+     "date": "2026-10-30",
+     "l60": -4.0,
+     "pnl_pct": -13.333333333333334,
+     "price": 78.0,
+     "rules_action": "SELL",
+     "rules_reason": "stop breached (price 78.0 <= stop 80.0)",
+     "s10": -3.0,
+     "symbol": "LOSE",
+     "verdicts": {}
+    },
+    {
+     "cost": 50.0,
+     "date": "2026-10-30",
+     "l60": 0.5,
+     "pnl_pct": 10.0,
+     "price": 55.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 0.5,
+     "symbol": "OLD",
+     "verdicts": {}
+    },
+    {
+     "cost": 90.0,
+     "date": "2026-10-30",
+     "l60": -1.0,
+     "pnl_pct": 16.666666666666664,
+     "price": 105.0,
+     "rules_action": "HOLD",
+     "rules_reason": "AI Override: Stored position shadow_verdict returned HOLD (was momentum decay (S10+L60=-3.0))",
+     "s10": -2.0,
+     "symbol": "FADE",
+     "verdicts": {}
+    },
+    {
+     "cost": 90.0,
+     "date": "2026-10-30",
+     "l60": -1.0,
+     "pnl_pct": 16.666666666666664,
+     "price": 105.0,
+     "rules_action": "WATCH",
+     "rules_reason": "AI Override: Stored position verdicts (gemini) returned FLAG-FOR-REVIEW (was momentum decay (S10+L60=-3.0))",
+     "s10": -2.0,
+     "symbol": "FLAG",
+     "verdicts": {}
+    },
+    {
+     "cost": 90.0,
+     "date": "2026-10-30",
+     "l60": -1.0,
+     "pnl_pct": -6.666666666666667,
+     "price": 84.0,
+     "rules_action": "SELL",
+     "rules_reason": "stop breached (price 84.0 <= stop 85.0)",
+     "s10": -2.0,
+     "symbol": "SLIP",
+     "verdicts": {}
+    }
+   ]
+  ],
+  "dna": [
+   [
+    "LOSE",
+    78.0,
+    "2026-10-30"
+   ],
+   [
+    "SLIP",
+    84.0,
+    "2026-10-30"
+   ]
+  ],
+  "emails": [],
+  "log": [
+   [
+    "info",
+    [
+     "🤖 AI ACTIVE STRATEGY: BALANCED (Manual Override - Locked)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position WIN as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position LOSE as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position OLD as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position FADE as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position FLAG as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position SLIP as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI EXECUTING QUEUED STRATEGIC ORDERS..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] WIN stop ratcheted: $95.00 -> $116.00 (peak close $121.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] WIN stop ratcheted upwards: $95.00 ➡️ $116.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🏦 [Scale-Out] WIN: banked 12 sh at $120.00 — bank 25% (test); 38 sh left trailing"
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] OLD stop ratcheted: $50.00 -> $51.00 (peak close $56.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] OLD stop ratcheted upwards: $50.00 ➡️ $51.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] FADE stop ratcheted: $80.00 -> $101.00 (peak close $106.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] FADE stop ratcheted upwards: $80.00 ➡️ $101.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [AI EXIT OVERRIDE] FADE sell overridden! Decision downgraded from SELL to HOLD. Reason: Stored position shadow_verdict returned HOLD"
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] FLAG stop ratcheted: $80.00 -> $101.00 (peak close $106.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] FLAG stop ratcheted upwards: $80.00 ➡️ $101.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [AI EXIT OVERRIDE] FLAG sell overridden! Decision downgraded from SELL to WATCH. Reason: Stored position verdicts (gemini) returned FLAG-FOR-REVIEW"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛑 [AI Override] SLIP: AI verdict not applied (Stored position ai_verdict returned HOLD; ignored, stop exits are never overridden)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [STP LMT] LOSE stop $80.00 triggered; limit at market $78.00, filled at $78.00."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE SELL: LOSE at $78.0 (Time: 10:15:00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [STP LMT] SLIP stop $85.00 triggered; limit at market $84.00, filled at $84.00."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE SELL: SLIP at $84.0 (Time: 10:15:00)"
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Momentum Floor): LOSE - Short10 score -3.0 is below required 2.0 floor (cash_pct=79.3%)."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (CNXC Trap): GAP - Gap-Down -10.0% with no confirmed bottom."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Risk-Reward Gate): LOWRR - Reward-to-Risk ratio of 0.8:1 is less than the required 2.0:1 minimum (Upside: $4.0, Downside: $5.0)."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Momentum Floor): FLOOR - Short10 score 0.1 is below required 2.0 floor (cash_pct=79.3%)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Synthesized Risk Thesis] QUEUED @ $40.0: stop $36.8 (pct) / target $43.2 (pct) — workbook stop=None/target=None incomplete; live ATR stop applied at execution."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Momentum Floor): SLIP - Short10 score -2.0 is below required 2.0 floor (cash_pct=79.3%)."
+    ]
+   ],
+   [
+    "debug",
+    [
+     "[Buckets] Scarcity $%.2f / $%.2f  Standard $%.2f / $%.2f",
+     0,
+     11660.0,
+     12060.0,
+     46640.0
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Capping NEW1 from 691 to 174 shares to fit the 15% per-position ceiling."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Risk-capping NEW1 from 174 to 116 shares: a stop-out at $45.0 may lose at most $583.00 (1.0% of equity)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE BUY: 116 shares of NEW1 at $50.0 (ATR-based Stop: $45.0, Scarcity=False)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash (69.4%)..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] WIN: sold earlier today; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Scale-In] Added 99 shares to OLD @ $55.00 (Blended Cost: $53.11)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Scale-In] Added 99 shares to OLD @ $55.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] NEW1: stop $45.00 is below cost $50.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🚀 [Options Pass] Checking active holdings to write weekly Covered Calls..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI Portfolio Value: $58300.0 (Cash: $34995.0)"
+    ]
+   ]
+  ],
+  "raised": null,
+  "save_calls": 1,
+  "saved": {
+   "balance": 34995.0,
+   "equity": 58300.0,
+   "history": [
+    {
+     "date": "2026-10-30",
+     "details": "Scale-out (Bank-As-You-Go): bank 25% (test)",
+     "pnl": 240.0,
+     "price": 120.0,
+     "qty": 12,
+     "symbol": "WIN",
+     "time": "10:15:00",
+     "type": "SELL"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Exit: stop breached (price 78.0 <= stop 80.0) [STP LMT @ market, stop 80.00]",
+     "pnl": -480.0,
+     "price": 78.0,
+     "qty": 40,
+     "stop_loss": 80.0,
+     "symbol": "LOSE",
+     "time": "10:15:00",
+     "type": "SELL"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Exit: stop breached (price 84.0 <= stop 85.0) [STP LMT @ market, stop 85.00]",
+     "pnl": -120.0,
+     "price": 84.0,
+     "qty": 20,
+     "stop_loss": 85.0,
+     "symbol": "SLIP",
+     "time": "10:15:00",
+     "type": "SELL"
+    },
+    {
+     "date": "2026-10-30",
+     "price": 50.0,
+     "qty": 116,
+     "symbol": "NEW1",
+     "time": "10:15:00",
+     "type": "BUY"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Pyramiding Scale-In (Breakout Peak, s10=0.5)",
+     "price": 55.0,
+     "qty": 99,
+     "symbol": "OLD",
+     "time": "10:15:00",
+     "type": "BUY_SCALE_IN"
+    }
+   ],
+   "positions": {
+    "FADE": {
+     "cost": 90.0,
+     "highest_close_since_acq": 106.0,
+     "is_scarcity": false,
+     "qty": 20,
+     "shadow_verdict": "HOLD",
+     "stop_loss": 101.0
+    },
+    "FLAG": {
+     "cost": 90.0,
+     "highest_close_since_acq": 106.0,
+     "is_scarcity": false,
+     "qty": 20,
+     "stop_loss": 101.0,
+     "verdicts": {
+      "gemini": "FLAG-FOR-REVIEW"
+     }
+    },
+    "NEW1": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 6.0,
+      "pgr": "Bullish",
+      "s10": 5.0,
+      "score": 11.0,
+      "z_score": null
+     },
+     "cost": 50.0,
+     "is_scarcity": false,
+     "qty": 116,
+     "stop_loss": 45.0
+    },
+    "OLD": {
+     "cost": 53.11,
+     "highest_close_since_acq": 56.0,
+     "is_scarcity": false,
+     "qty": 159,
+     "stop_loss": 51.0
+    },
+    "WIN": {
+     "banked_pct": 0.25,
+     "cost": 100.0,
+     "highest_close_since_acq": 121.0,
+     "is_scarcity": false,
+     "qty": 38,
+     "stop_loss": 116.0
+    }
+   },
+   "profile": "BALANCED",
+   "profile_mode": "MANUAL",
+   "queued_orders": [],
+   "start_date": "2026-01-02"
+  },
+  "txs": [
+   {
+    "date": "2026-10-30",
+    "details": "Scale-out (Bank-As-You-Go): bank 25% (test)",
+    "pnl": 240.0,
+    "price": 120.0,
+    "qty": 12,
+    "symbol": "WIN",
+    "time": "10:15:00",
+    "type": "SELL"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Exit: stop breached (price 78.0 <= stop 80.0) [STP LMT @ market, stop 80.00]",
+    "pnl": -480.0,
+    "price": 78.0,
+    "qty": 40,
+    "stop_loss": 80.0,
+    "symbol": "LOSE",
+    "time": "10:15:00",
+    "type": "SELL"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Exit: stop breached (price 84.0 <= stop 85.0) [STP LMT @ market, stop 85.00]",
+    "pnl": -120.0,
+    "price": 84.0,
+    "qty": 20,
+    "stop_loss": 85.0,
+    "symbol": "SLIP",
+    "time": "10:15:00",
+    "type": "SELL"
+   },
+   {
+    "date": "2026-10-30",
+    "price": 50.0,
+    "qty": 116,
+    "symbol": "NEW1",
+    "time": "10:15:00",
+    "type": "BUY"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Pyramiding Scale-In (Breakout Peak, s10=0.5)",
+    "price": 55.0,
+    "qty": 99,
+    "symbol": "OLD",
+    "time": "10:15:00",
+    "type": "BUY_SCALE_IN"
+   }
+  ]
+ },
+ "test_full_run_after_hours": {
+  "calls": 0,
+  "decisions": [
+   [
+    {
+     "cost": 100.0,
+     "date": "2026-10-30",
+     "l60": 5.0,
+     "pnl_pct": 20.0,
+     "price": 120.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 4.0,
+     "symbol": "WIN",
+     "verdicts": {}
+    },
+    {
+     "cost": 90.0,
+     "date": "2026-10-30",
+     "l60": -4.0,
+     "pnl_pct": -13.333333333333334,
+     "price": 78.0,
+     "rules_action": "SELL",
+     "rules_reason": "stop breached (price 78.0 <= stop 80.0)",
+     "s10": -3.0,
+     "symbol": "LOSE",
+     "verdicts": {}
+    },
+    {
+     "cost": 50.0,
+     "date": "2026-10-30",
+     "l60": 0.5,
+     "pnl_pct": 10.0,
+     "price": 55.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 0.5,
+     "symbol": "OLD",
+     "verdicts": {}
+    },
+    {
+     "cost": 40.0,
+     "date": "2026-10-30",
+     "l60": 3.0,
+     "pnl_pct": 0.0,
+     "price": 40.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 3.0,
+     "symbol": "QUEUED",
+     "verdicts": {}
+    }
+   ]
+  ],
+  "dna": [],
+  "emails": [],
+  "log": [
+   [
+    "info",
+    [
+     "🤖 AI ACTIVE STRATEGY: BALANCED (Manual Override - Locked)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position WIN as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position LOSE as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position OLD as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI EXECUTING QUEUED STRATEGIC ORDERS..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI QUEUED BUY EXECUTED: 196 shares of QUEUED at $40.0 (ATR-based Stop: $35.0 (2.5 * ATR))"
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] WIN stop ratcheted: $95.00 -> $116.00 (peak close $121.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] WIN stop ratcheted upwards: $95.00 ➡️ $116.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "📝 [Queued] After-hours SELL queued for LOSE: stop breached (price 78.0 <= stop 80.0)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] OLD stop ratcheted: $50.00 -> $51.00 (peak close $56.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] OLD stop ratcheted upwards: $50.00 ➡️ $51.00"
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (CNXC Trap): GAP - Gap-Down -10.0% with no confirmed bottom."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Risk-Reward Gate): LOWRR - Reward-to-Risk ratio of 0.8:1 is less than the required 2.0:1 minimum (Upside: $4.0, Downside: $5.0)."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Momentum Floor): FLOOR - Short10 score 0.1 is below required 2.0 floor (cash_pct=61.4%)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "📝 [Queued] After-hours BUY queued for NEW1"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI Portfolio Value: $52420.0 (Cash: $32160.0)"
+    ]
+   ]
+  ],
+  "raised": null,
+  "save_calls": 1,
+  "saved": {
+   "balance": 32160.0,
+   "equity": 52420.0,
+   "history": [
+    {
+     "date": "2026-10-30",
+     "details": "Queued Buy: operator (ATR-based Stop: $35.0 (2.5 * ATR))",
+     "price": 40.0,
+     "qty": 196,
+     "symbol": "QUEUED",
+     "time": "10:15:00",
+     "type": "BUY"
+    }
+   ],
+   "positions": {
+    "LOSE": {
+     "cost": 90.0,
+     "highest_close_since_acq": 92.0,
+     "is_scarcity": false,
+     "qty": 40,
+     "stop_loss": 80.0
+    },
+    "OLD": {
+     "cost": 50.0,
+     "highest_close_since_acq": 56.0,
+     "is_scarcity": false,
+     "qty": 60,
+     "stop_loss": 51.0
+    },
+    "QUEUED": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 3.0,
+      "pgr": "Bullish",
+      "s10": 3.0,
+      "score": 6.0,
+      "z_score": 0.0
+     },
+     "cost": 40.0,
+     "highest_close_since_acq": 40.0,
+     "qty": 196,
+     "stop_loss": 35.0
+    },
+    "WIN": {
+     "cost": 100.0,
+     "highest_close_since_acq": 121.0,
+     "is_scarcity": false,
+     "qty": 50,
+     "stop_loss": 116.0
+    }
+   },
+   "profile": "BALANCED",
+   "profile_mode": "MANUAL",
+   "queued_orders": [
+    {
+     "reason": "Exit triggered: stop breached (price 78.0 <= stop 80.0)",
+     "symbol": "LOSE",
+     "type": "SELL"
+    },
+    {
+     "reason": "Top-ranked quantitative pick (After-Hours)",
+     "symbol": "NEW1",
+     "type": "BUY"
+    }
+   ],
+   "start_date": "2026-01-02"
+  },
+  "txs": [
+   {
+    "date": "2026-10-30",
+    "details": "Queued Buy: operator (ATR-based Stop: $35.0 (2.5 * ATR))",
+    "price": 40.0,
+    "qty": 196,
+    "symbol": "QUEUED",
+    "time": "10:15:00",
+    "type": "BUY"
+   }
+  ]
+ },
+ "test_full_run_in_market_hours": {
+  "calls": 1,
+  "decisions": [
+   [
+    {
+     "cost": 100.0,
+     "date": "2026-10-30",
+     "l60": 5.0,
+     "pnl_pct": 20.0,
+     "price": 120.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 4.0,
+     "symbol": "WIN",
+     "verdicts": {}
+    },
+    {
+     "cost": 90.0,
+     "date": "2026-10-30",
+     "l60": -4.0,
+     "pnl_pct": -13.333333333333334,
+     "price": 78.0,
+     "rules_action": "SELL",
+     "rules_reason": "stop breached (price 78.0 <= stop 80.0)",
+     "s10": -3.0,
+     "symbol": "LOSE",
+     "verdicts": {}
+    },
+    {
+     "cost": 50.0,
+     "date": "2026-10-30",
+     "l60": 0.5,
+     "pnl_pct": 10.0,
+     "price": 55.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 0.5,
+     "symbol": "OLD",
+     "verdicts": {}
+    },
+    {
+     "cost": 40.0,
+     "date": "2026-10-30",
+     "l60": 3.0,
+     "pnl_pct": 0.0,
+     "price": 40.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 3.0,
+     "symbol": "QUEUED",
+     "verdicts": {}
+    }
+   ]
+  ],
+  "dna": [
+   [
+    "LOSE",
+    78.0,
+    "2026-10-30"
+   ]
+  ],
+  "emails": [],
+  "log": [
+   [
+    "info",
+    [
+     "🤖 AI ACTIVE STRATEGY: BALANCED (Manual Override - Locked)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position WIN as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position LOSE as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position OLD as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI EXECUTING QUEUED STRATEGIC ORDERS..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI QUEUED BUY EXECUTED: 196 shares of QUEUED at $40.0 (ATR-based Stop: $35.0 (2.5 * ATR))"
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] WIN stop ratcheted: $95.00 -> $116.00 (peak close $121.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] WIN stop ratcheted upwards: $95.00 ➡️ $116.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🏦 [Scale-Out] WIN: banked 12 sh at $120.00 — bank 25% (test); 38 sh left trailing"
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] OLD stop ratcheted: $50.00 -> $51.00 (peak close $56.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] OLD stop ratcheted upwards: $50.00 ➡️ $51.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [STP LMT] LOSE stop $80.00 triggered; limit at market $78.00, filled at $78.00."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE SELL: LOSE at $78.0 (Time: 10:15:00)"
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Momentum Floor): LOSE - Short10 score -3.0 is below required 2.0 floor (cash_pct=70.0%)."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (CNXC Trap): GAP - Gap-Down -10.0% with no confirmed bottom."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Risk-Reward Gate): LOWRR - Reward-to-Risk ratio of 0.8:1 is less than the required 2.0:1 minimum (Upside: $4.0, Downside: $5.0)."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Momentum Floor): FLOOR - Short10 score 0.1 is below required 2.0 floor (cash_pct=70.0%)."
+    ]
+   ],
+   [
+    "debug",
+    [
+     "[Buckets] Scarcity $%.2f / $%.2f  Standard $%.2f / $%.2f",
+     0,
+     10484.0,
+     15700.0,
+     41936.0
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Capping NEW1 from 262 to 157 shares to fit the 15% per-position ceiling."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Risk-capping NEW1 from 157 to 104 shares: a stop-out at $45.0 may lose at most $524.20 (1.0% of equity)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE BUY: 104 shares of NEW1 at $50.0 (ATR-based Stop: $45.0, Scarcity=False)"
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Capping NEW2 from 701 to 262 shares to fit the 15% per-position ceiling."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Risk-capping NEW2 from 262 to 104 shares: a stop-out at $25.0 may lose at most $524.20 (1.0% of equity)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE BUY: 104 shares of NEW2 at $30.0 (ATR-based Stop: $25.0, Scarcity=False)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash (54.2%)..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] WIN: sold earlier today; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Scale-In] Added 82 shares to OLD @ $55.00 (Blended Cost: $52.89)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Scale-In] Added 82 shares to OLD @ $55.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] QUEUED: stop $35.00 is below cost $40.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] NEW1: stop $45.00 is below cost $50.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] NEW2: stop $25.00 is below cost $30.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🚀 [Options Pass] Checking active holdings to write weekly Covered Calls..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI Portfolio Value: $52420.0 (Cash: $23890.0)"
+    ]
+   ]
+  ],
+  "raised": null,
+  "save_calls": 1,
+  "saved": {
+   "balance": 23890.0,
+   "equity": 52420.0,
+   "history": [
+    {
+     "date": "2026-10-30",
+     "details": "Queued Buy: operator (ATR-based Stop: $35.0 (2.5 * ATR))",
+     "price": 40.0,
+     "qty": 196,
+     "symbol": "QUEUED",
+     "time": "10:15:00",
+     "type": "BUY"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Scale-out (Bank-As-You-Go): bank 25% (test)",
+     "pnl": 240.0,
+     "price": 120.0,
+     "qty": 12,
+     "symbol": "WIN",
+     "time": "10:15:00",
+     "type": "SELL"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Exit: stop breached (price 78.0 <= stop 80.0) [STP LMT @ market, stop 80.00]",
+     "pnl": -480.0,
+     "price": 78.0,
+     "qty": 40,
+     "stop_loss": 80.0,
+     "symbol": "LOSE",
+     "time": "10:15:00",
+     "type": "SELL"
+    },
+    {
+     "date": "2026-10-30",
+     "price": 50.0,
+     "qty": 104,
+     "symbol": "NEW1",
+     "time": "10:15:00",
+     "type": "BUY"
+    },
+    {
+     "date": "2026-10-30",
+     "price": 30.0,
+     "qty": 104,
+     "symbol": "NEW2",
+     "time": "10:15:00",
+     "type": "BUY"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Pyramiding Scale-In (Breakout Peak, s10=0.5)",
+     "price": 55.0,
+     "qty": 82,
+     "symbol": "OLD",
+     "time": "10:15:00",
+     "type": "BUY_SCALE_IN"
+    }
+   ],
+   "positions": {
+    "NEW1": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 6.0,
+      "pgr": "Bullish",
+      "s10": 5.0,
+      "score": 11.0,
+      "z_score": null
+     },
+     "cost": 50.0,
+     "is_scarcity": false,
+     "qty": 104,
+     "stop_loss": 45.0
+    },
+    "NEW2": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 4.0,
+      "pgr": "Bullish",
+      "s10": 4.5,
+      "score": 8.5,
+      "z_score": null
+     },
+     "cost": 30.0,
+     "is_scarcity": false,
+     "qty": 104,
+     "stop_loss": 25.0
+    },
+    "OLD": {
+     "cost": 52.89,
+     "highest_close_since_acq": 56.0,
+     "is_scarcity": false,
+     "qty": 142,
+     "stop_loss": 51.0
+    },
+    "QUEUED": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 3.0,
+      "pgr": "Bullish",
+      "s10": 3.0,
+      "score": 6.0,
+      "z_score": 0.0
+     },
+     "cost": 40.0,
+     "highest_close_since_acq": 40.0,
+     "qty": 196,
+     "stop_loss": 35.0
+    },
+    "WIN": {
+     "banked_pct": 0.25,
+     "cost": 100.0,
+     "highest_close_since_acq": 121.0,
+     "is_scarcity": false,
+     "qty": 38,
+     "stop_loss": 116.0
+    }
+   },
+   "profile": "BALANCED",
+   "profile_mode": "MANUAL",
+   "queued_orders": [],
+   "start_date": "2026-01-02"
+  },
+  "txs": [
+   {
+    "date": "2026-10-30",
+    "details": "Queued Buy: operator (ATR-based Stop: $35.0 (2.5 * ATR))",
+    "price": 40.0,
+    "qty": 196,
+    "symbol": "QUEUED",
+    "time": "10:15:00",
+    "type": "BUY"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Scale-out (Bank-As-You-Go): bank 25% (test)",
+    "pnl": 240.0,
+    "price": 120.0,
+    "qty": 12,
+    "symbol": "WIN",
+    "time": "10:15:00",
+    "type": "SELL"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Exit: stop breached (price 78.0 <= stop 80.0) [STP LMT @ market, stop 80.00]",
+    "pnl": -480.0,
+    "price": 78.0,
+    "qty": 40,
+    "stop_loss": 80.0,
+    "symbol": "LOSE",
+    "time": "10:15:00",
+    "type": "SELL"
+   },
+   {
+    "date": "2026-10-30",
+    "price": 50.0,
+    "qty": 104,
+    "symbol": "NEW1",
+    "time": "10:15:00",
+    "type": "BUY"
+   },
+   {
+    "date": "2026-10-30",
+    "price": 30.0,
+    "qty": 104,
+    "symbol": "NEW2",
+    "time": "10:15:00",
+    "type": "BUY"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Pyramiding Scale-In (Breakout Peak, s10=0.5)",
+    "price": 55.0,
+    "qty": 82,
+    "symbol": "OLD",
+    "time": "10:15:00",
+    "type": "BUY_SCALE_IN"
+   }
+  ]
+ },
+ "test_market_closed": {
+  "calls": 0,
+  "decisions": [],
+  "dna": [],
+  "emails": [],
+  "log": [
+   [
+    "info",
+    [
+     "Aborting AI Move: closed (test)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI Management aborted before state initialization. Game state preserved."
+    ]
+   ]
+  ],
+  "raised": null,
+  "save_calls": 0,
+  "saved": null,
+  "txs": null
+ },
+ "test_market_closed_but_forced_still_runs": {
+  "calls": 1,
+  "decisions": [
+   [
+    {
+     "cost": 100.0,
+     "date": "2026-10-30",
+     "l60": 5.0,
+     "pnl_pct": 20.0,
+     "price": 120.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 4.0,
+     "symbol": "WIN",
+     "verdicts": {}
+    },
+    {
+     "cost": 90.0,
+     "date": "2026-10-30",
+     "l60": -4.0,
+     "pnl_pct": -13.333333333333334,
+     "price": 78.0,
+     "rules_action": "SELL",
+     "rules_reason": "stop breached (price 78.0 <= stop 80.0)",
+     "s10": -3.0,
+     "symbol": "LOSE",
+     "verdicts": {}
+    },
+    {
+     "cost": 50.0,
+     "date": "2026-10-30",
+     "l60": 0.5,
+     "pnl_pct": 10.0,
+     "price": 55.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 0.5,
+     "symbol": "OLD",
+     "verdicts": {}
+    },
+    {
+     "cost": 40.0,
+     "date": "2026-10-30",
+     "l60": 3.0,
+     "pnl_pct": 0.0,
+     "price": 40.0,
+     "rules_action": "HOLD",
+     "rules_reason": "",
+     "s10": 3.0,
+     "symbol": "QUEUED",
+     "verdicts": {}
+    }
+   ]
+  ],
+  "dna": [
+   [
+    "LOSE",
+    78.0,
+    "2026-10-30"
+   ]
+  ],
+  "emails": [],
+  "log": [
+   [
+    "info",
+    [
+     "🤖 AI ACTIVE STRATEGY: BALANCED (Manual Override - Locked)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position WIN as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position LOSE as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position OLD as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI EXECUTING QUEUED STRATEGIC ORDERS..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI QUEUED BUY EXECUTED: 196 shares of QUEUED at $40.0 (ATR-based Stop: $35.0 (2.5 * ATR))"
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] WIN stop ratcheted: $95.00 -> $116.00 (peak close $121.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] WIN stop ratcheted upwards: $95.00 ➡️ $116.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🏦 [Scale-Out] WIN: banked 12 sh at $120.00 — bank 25% (test); 38 sh left trailing"
+    ]
+   ],
+   [
+    "info",
+    [
+     "[Profit-Lock] OLD stop ratcheted: $50.00 -> $51.00 (peak close $56.00)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Profit-Lock] OLD stop ratcheted upwards: $50.00 ➡️ $51.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [STP LMT] LOSE stop $80.00 triggered; limit at market $78.00, filled at $78.00."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE SELL: LOSE at $78.0 (Time: 10:15:00)"
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Momentum Floor): LOSE - Short10 score -3.0 is below required 2.0 floor (cash_pct=70.0%)."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (CNXC Trap): GAP - Gap-Down -10.0% with no confirmed bottom."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Risk-Reward Gate): LOWRR - Reward-to-Risk ratio of 0.8:1 is less than the required 2.0:1 minimum (Upside: $4.0, Downside: $5.0)."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "🛑 AI BUY REJECTED (Momentum Floor): FLOOR - Short10 score 0.1 is below required 2.0 floor (cash_pct=70.0%)."
+    ]
+   ],
+   [
+    "debug",
+    [
+     "[Buckets] Scarcity $%.2f / $%.2f  Standard $%.2f / $%.2f",
+     0,
+     10484.0,
+     15700.0,
+     41936.0
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Capping NEW1 from 262 to 157 shares to fit the 15% per-position ceiling."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Risk-capping NEW1 from 157 to 104 shares: a stop-out at $45.0 may lose at most $524.20 (1.0% of equity)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE BUY: 104 shares of NEW1 at $50.0 (ATR-based Stop: $45.0, Scarcity=False)"
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Capping NEW2 from 701 to 262 shares to fit the 15% per-position ceiling."
+    ]
+   ],
+   [
+    "warning",
+    [
+     "⚠️ Risk-capping NEW2 from 262 to 104 shares: a stop-out at $25.0 may lose at most $524.20 (1.0% of equity)."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI LIVE BUY: 104 shares of NEW2 at $30.0 (ATR-based Stop: $25.0, Scarcity=False)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash (54.2%)..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] WIN: sold earlier today; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Scale-In] Added 82 shares to OLD @ $55.00 (Blended Cost: $52.89)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Scale-In] Added 82 shares to OLD @ $55.00"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] QUEUED: stop $35.00 is below cost $40.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] NEW1: stop $45.00 is below cost $50.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🛡️ [Pyramiding Pass] NEW2: stop $25.00 is below cost $30.00; no scale-in."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🚀 [Options Pass] Checking active holdings to write weekly Covered Calls..."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI Portfolio Value: $52420.0 (Cash: $23890.0)"
+    ]
+   ]
+  ],
+  "raised": null,
+  "save_calls": 1,
+  "saved": {
+   "balance": 23890.0,
+   "equity": 52420.0,
+   "history": [
+    {
+     "date": "2026-10-30",
+     "details": "Queued Buy: operator (ATR-based Stop: $35.0 (2.5 * ATR))",
+     "price": 40.0,
+     "qty": 196,
+     "symbol": "QUEUED",
+     "time": "10:15:00",
+     "type": "BUY"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Scale-out (Bank-As-You-Go): bank 25% (test)",
+     "pnl": 240.0,
+     "price": 120.0,
+     "qty": 12,
+     "symbol": "WIN",
+     "time": "10:15:00",
+     "type": "SELL"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Exit: stop breached (price 78.0 <= stop 80.0) [STP LMT @ market, stop 80.00]",
+     "pnl": -480.0,
+     "price": 78.0,
+     "qty": 40,
+     "stop_loss": 80.0,
+     "symbol": "LOSE",
+     "time": "10:15:00",
+     "type": "SELL"
+    },
+    {
+     "date": "2026-10-30",
+     "price": 50.0,
+     "qty": 104,
+     "symbol": "NEW1",
+     "time": "10:15:00",
+     "type": "BUY"
+    },
+    {
+     "date": "2026-10-30",
+     "price": 30.0,
+     "qty": 104,
+     "symbol": "NEW2",
+     "time": "10:15:00",
+     "type": "BUY"
+    },
+    {
+     "date": "2026-10-30",
+     "details": "Pyramiding Scale-In (Breakout Peak, s10=0.5)",
+     "price": 55.0,
+     "qty": 82,
+     "symbol": "OLD",
+     "time": "10:15:00",
+     "type": "BUY_SCALE_IN"
+    }
+   ],
+   "positions": {
+    "NEW1": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 6.0,
+      "pgr": "Bullish",
+      "s10": 5.0,
+      "score": 11.0,
+      "z_score": null
+     },
+     "cost": 50.0,
+     "is_scarcity": false,
+     "qty": 104,
+     "stop_loss": 45.0
+    },
+    "NEW2": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 4.0,
+      "pgr": "Bullish",
+      "s10": 4.5,
+      "score": 8.5,
+      "z_score": null
+     },
+     "cost": 30.0,
+     "is_scarcity": false,
+     "qty": 104,
+     "stop_loss": 25.0
+    },
+    "OLD": {
+     "cost": 52.89,
+     "highest_close_since_acq": 56.0,
+     "is_scarcity": false,
+     "qty": 142,
+     "stop_loss": 51.0
+    },
+    "QUEUED": {
+     "buy_dna": {
+      "buy_date": "2026-10-30",
+      "industry": "Tech",
+      "l60": 3.0,
+      "pgr": "Bullish",
+      "s10": 3.0,
+      "score": 6.0,
+      "z_score": 0.0
+     },
+     "cost": 40.0,
+     "highest_close_since_acq": 40.0,
+     "qty": 196,
+     "stop_loss": 35.0
+    },
+    "WIN": {
+     "banked_pct": 0.25,
+     "cost": 100.0,
+     "highest_close_since_acq": 121.0,
+     "is_scarcity": false,
+     "qty": 38,
+     "stop_loss": 116.0
+    }
+   },
+   "profile": "BALANCED",
+   "profile_mode": "MANUAL",
+   "queued_orders": [],
+   "start_date": "2026-01-02"
+  },
+  "txs": [
+   {
+    "date": "2026-10-30",
+    "details": "Queued Buy: operator (ATR-based Stop: $35.0 (2.5 * ATR))",
+    "price": 40.0,
+    "qty": 196,
+    "symbol": "QUEUED",
+    "time": "10:15:00",
+    "type": "BUY"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Scale-out (Bank-As-You-Go): bank 25% (test)",
+    "pnl": 240.0,
+    "price": 120.0,
+    "qty": 12,
+    "symbol": "WIN",
+    "time": "10:15:00",
+    "type": "SELL"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Exit: stop breached (price 78.0 <= stop 80.0) [STP LMT @ market, stop 80.00]",
+    "pnl": -480.0,
+    "price": 78.0,
+    "qty": 40,
+    "stop_loss": 80.0,
+    "symbol": "LOSE",
+    "time": "10:15:00",
+    "type": "SELL"
+   },
+   {
+    "date": "2026-10-30",
+    "price": 50.0,
+    "qty": 104,
+    "symbol": "NEW1",
+    "time": "10:15:00",
+    "type": "BUY"
+   },
+   {
+    "date": "2026-10-30",
+    "price": 30.0,
+    "qty": 104,
+    "symbol": "NEW2",
+    "time": "10:15:00",
+    "type": "BUY"
+   },
+   {
+    "date": "2026-10-30",
+    "details": "Pyramiding Scale-In (Breakout Peak, s10=0.5)",
+    "price": 55.0,
+    "qty": 82,
+    "symbol": "OLD",
+    "time": "10:15:00",
+    "type": "BUY_SCALE_IN"
+   }
+  ]
+ },
+ "test_missing_workbook": {
+  "calls": 0,
+  "decisions": [],
+  "dna": [],
+  "emails": [],
+  "log": [
+   [
+    "info",
+    [
+     "🤖 AI ACTIVE STRATEGY: BALANCED (Manual Override - Locked)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "Workbook not found. AI Management deferred."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI Portfolio Value: $60000.0 (Cash: $40000.0)"
+    ]
+   ]
+  ],
+  "raised": null,
+  "save_calls": 1,
+  "saved": {
+   "balance": 40000.0,
+   "equity": 60000.0,
+   "history": [],
+   "positions": {
+    "LOSE": {
+     "cost": 90.0,
+     "highest_close_since_acq": 92.0,
+     "qty": 40,
+     "stop_loss": 80.0
+    },
+    "OLD": {
+     "cost": 50.0,
+     "highest_close_since_acq": 56.0,
+     "qty": 60,
+     "stop_loss": 50.0
+    },
+    "WIN": {
+     "cost": 100.0,
+     "highest_close_since_acq": 121.0,
+     "qty": 50,
+     "stop_loss": 95.0
+    }
+   },
+   "profile": "BALANCED",
+   "profile_mode": "MANUAL",
+   "queued_orders": [
+    {
+     "reason": "operator",
+     "symbol": "QUEUED",
+     "type": "BUY"
+    }
+   ],
+   "start_date": "2026-01-02"
+  },
+  "txs": []
+ },
+ "test_no_prices_raises_after_saving": {
+  "calls": 0,
+  "decisions": [],
+  "dna": [],
+  "emails": [],
+  "log": [
+   [
+    "info",
+    [
+     "🤖 AI ACTIVE STRATEGY: BALANCED (Manual Override - Locked)"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position WIN as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position LOSE as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "  [AETHER State Healer] Classified existing position OLD as scarcity=False"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI Portfolio Value: $60000.0 (Cash: $40000.0)"
+    ]
+   ]
+  ],
+  "raised": [
+   "RuntimeError",
+   "Critical Data Failure: Both E*TRADE and Google Finance fallback returned no prices. No live source of truth available!"
+  ],
+  "save_calls": 1,
+  "saved": {
+   "balance": 40000.0,
+   "equity": 60000.0,
+   "history": [],
+   "positions": {
+    "LOSE": {
+     "cost": 90.0,
+     "highest_close_since_acq": 92.0,
+     "is_scarcity": false,
+     "qty": 40,
+     "stop_loss": 80.0
+    },
+    "OLD": {
+     "cost": 50.0,
+     "highest_close_since_acq": 56.0,
+     "is_scarcity": false,
+     "qty": 60,
+     "stop_loss": 50.0
+    },
+    "WIN": {
+     "cost": 100.0,
+     "highest_close_since_acq": 121.0,
+     "is_scarcity": false,
+     "qty": 50,
+     "stop_loss": 95.0
+    }
+   },
+   "profile": "BALANCED",
+   "profile_mode": "MANUAL",
+   "queued_orders": [
+    {
+     "reason": "operator",
+     "symbol": "QUEUED",
+     "type": "BUY"
+    }
+   ],
+   "start_date": "2026-01-02"
+  },
+  "txs": []
+ },
+ "test_stale_workbook": {
+  "calls": 0,
+  "decisions": [],
+  "dna": [],
+  "emails": [
+   [
+    "ALERT: AI trades skipped - stale workbook (2026-10-30)",
+    "The trade run did not act because the workbook is from yesterday.\n\nCheck the evening daily_task and morning pipeline logs, refresh the workbook (python main.py), then rerun: python ai_portfolio_game.py --run --force"
+   ]
+  ],
+  "log": [
+   [
+    "info",
+    [
+     "🤖 AI ACTIVE STRATEGY: BALANCED (Manual Override - Locked)"
+    ]
+   ],
+   [
+    "error",
+    [
+     "🛑 Refusing to trade on a stale workbook: workbook is from yesterday."
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI Portfolio Value: $60000.0 (Cash: $40000.0)"
+    ]
+   ]
+  ],
+  "raised": null,
+  "save_calls": 1,
+  "saved": {
+   "balance": 40000.0,
+   "equity": 60000.0,
+   "history": [],
+   "positions": {
+    "LOSE": {
+     "cost": 90.0,
+     "highest_close_since_acq": 92.0,
+     "qty": 40,
+     "stop_loss": 80.0
+    },
+    "OLD": {
+     "cost": 50.0,
+     "highest_close_since_acq": 56.0,
+     "qty": 60,
+     "stop_loss": 50.0
+    },
+    "WIN": {
+     "cost": 100.0,
+     "highest_close_since_acq": 121.0,
+     "qty": 50,
+     "stop_loss": 95.0
+    }
+   },
+   "profile": "BALANCED",
+   "profile_mode": "MANUAL",
+   "queued_orders": [
+    {
+     "reason": "operator",
+     "symbol": "QUEUED",
+     "type": "BUY"
+    }
+   ],
+   "start_date": "2026-01-02"
+  },
+  "txs": []
+ },
+ "test_unexpected_error_is_logged_not_raised": {
+  "calls": 0,
+  "decisions": [],
+  "dna": [],
+  "emails": [],
+  "log": [
+   [
+    "exception",
+    [
+     "run_daily_ai_management failed: corrupt game file"
+    ]
+   ],
+   [
+    "info",
+    [
+     "🤖 AI Management aborted before state initialization. Game state preserved."
+    ]
+   ]
+  ],
+  "raised": null,
+  "save_calls": 0,
+  "saved": null,
+  "txs": null
+ }
+}

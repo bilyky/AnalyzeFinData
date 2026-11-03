@@ -8,6 +8,7 @@ import extract_email_intel
 import openpyxl
 import ai_client
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeout
 from pathlib import Path
 from config import CFG
 from aether_logger import get_logger as _get_logger
@@ -32,7 +33,7 @@ def get_ai_reasoning(symbol, industry, pgr, s10, l60):
     Sentence 2: (Strategic Catalyst) Identify the 'Strategic Requirement' or 'AI Force Multiplier' if it exists, or the primary momentum driver.
     Keep the output extremely tight, professional, and under 50 words. Do not use prefixes like 'Devil's Advocate:'.
     """
-    content = ai_client.evaluate(system, user, max_tokens=100, temperature=0.3)
+    content = ai_client.evaluate(system, user, max_tokens=100, temperature=0.3, tier="cheap")
     if not content:
         return f"<b>Standard Audit:</b> Technicals and Fundamentals aligned ({pgr})."
     sentences = content.split(". ")
@@ -108,7 +109,7 @@ def analyze_email_content(subject, body):
         {{"symbol": "AAPL", "sentiment": "BUY", "thesis": "Strong iPhone sales in China driving immediate momentum."}}
     ]
     """
-    content = ai_client.evaluate(system, user, max_tokens=300, temperature=0.1)
+    content = ai_client.evaluate(system, user, max_tokens=300, temperature=0.1, tier="cheap")
     if not content:
         return []
     try:
@@ -123,6 +124,19 @@ def _max_intel_emails() -> int:
         return CFG.ai_max_intel_emails
     except Exception:
         return 20
+
+
+def _max_parallel_extractions() -> int:
+    try:
+        return max(1, int(CFG.ai_max_parallel_extractions))
+    except Exception:
+        return 1
+
+
+def _intel_deadline_sec() -> float:
+    """Wall-clock cap on the extraction step (ai.intel_deadline_sec, default 600)."""
+    v = getattr(CFG, "ai_intel_deadline_sec", None)
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else 600.0
 
 
 def dedup_rd_topics(raw_topics) -> list:
@@ -327,66 +341,88 @@ def fetch_idea_emails():
                     "intel": intel
                 }
             except Exception as e:
-                _log.error(f"Extraction failed for {cand['subject'][:40]}: {e}")
+                # WARNING per email; "every AI extraction failed" reaches the email once, as the
+                # pipeline's 0-ideas line (zero_ideas_reason).
+                _log.warning(f"Extraction failed for {cand['subject'][:40]}: {e}")
                 return None
 
-        # Execute concurrently with up to 5 parallel threads
-        with ThreadPoolExecutor(max_workers=5) as pool:
-            futures = [pool.submit(run_extractions, c) for c in candidates]
-            for fut in as_completed(futures):
-                res = fut.result()
-                if not res or not isinstance(res, dict):
-                    last_scan["extraction_failures"] += 1
-                    continue
-                cand = res.get("cand")
-                if not isinstance(cand, dict):
-                    continue
-                parsed_ideas = res.get("parsed_ideas")
-                intel = res.get("intel")
-                
-                base = {
-                    "msg_id": cand.get("msg_id"),
-                    "from": cand.get("from"),
-                    "subject": cand.get("subject"),
-                    "folder": cand.get("folder"),
-                    "intel": intel
-                }
-                
-                tickers = []
-                if isinstance(intel, dict):
-                    tickers = intel.get("tickers_mentioned") or []
-                
-                # Fallback: if parsed_ideas is empty, populate from modern tickers_mentioned in intel
-                if not parsed_ideas and tickers:
-                    parsed_ideas = []
-                    for t in tickers:
-                        if isinstance(t, dict) and t.get("in_universe"):
-                            parsed_ideas.append({
-                                "symbol": t.get("symbol"),
-                                "sentiment": t.get("sentiment"),
-                                "thesis": t.get("thesis")
+        # ai.max_parallel_extractions workers (default 1: free AI tiers answer 429 to bursts).
+        # The step has a deadline (ai.intel_deadline_sec): with a dead AI chain each call waits
+        # out every provider's timeout, which could take the whole morning run before the
+        # workbook refresh (#226 review: ~90 min worst case). Unfinished emails are counted as
+        # failed. No `with`: its exit would wait for the call still running.
+        pool = ThreadPoolExecutor(max_workers=_max_parallel_extractions())
+        futures = [pool.submit(run_extractions, c) for c in candidates]
+        results = []
+        try:
+            for fut in as_completed(futures, timeout=_intel_deadline_sec()):
+                results.append(fut.result())
+        except FuturesTimeout:
+            left = sum(not f.done() for f in futures)
+            last_scan["extraction_failures"] += left
+            _log.warning(f"Intel extraction deadline ({_intel_deadline_sec():.0f}s) reached; "
+                         f"{left} of {len(candidates)} email(s) skipped this run.")
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        for res in results:
+            if not res or not isinstance(res, dict):
+                last_scan["extraction_failures"] += 1
+                continue
+            cand = res.get("cand")
+            if not isinstance(cand, dict):
+                continue
+            parsed_ideas = res.get("parsed_ideas")
+            intel = res.get("intel")
+            
+            base = {
+                "msg_id": cand.get("msg_id"),
+                "from": cand.get("from"),
+                "subject": cand.get("subject"),
+                "folder": cand.get("folder"),
+                "intel": intel
+            }
+            
+            tickers = []
+            if isinstance(intel, dict):
+                tickers = intel.get("tickers_mentioned") or []
+            
+            # Fallback: if parsed_ideas is empty, populate from modern tickers_mentioned in intel
+            if not parsed_ideas and tickers:
+                parsed_ideas = []
+                for t in tickers:
+                    if isinstance(t, dict) and t.get("in_universe"):
+                        parsed_ideas.append({
+                            "symbol": t.get("symbol"),
+                            "sentiment": t.get("sentiment"),
+                            "thesis": t.get("thesis")
+                        })
+            
+            if parsed_ideas:
+                if isinstance(parsed_ideas, dict):
+                    parsed_ideas = [parsed_ideas]
+                if isinstance(parsed_ideas, list):
+                    for idea in parsed_ideas:
+                        if isinstance(idea, dict):
+                            ideas.append({
+                                **base,
+                                "symbol": idea.get("symbol"),
+                                "sentiment": idea.get("sentiment"),
+                                "thesis": idea.get("thesis")
                             })
-                
-                if parsed_ideas:
-                    if isinstance(parsed_ideas, dict):
-                        parsed_ideas = [parsed_ideas]
-                    if isinstance(parsed_ideas, list):
-                        for idea in parsed_ideas:
-                            if isinstance(idea, dict):
-                                ideas.append({
-                                    **base,
-                                    "symbol": idea.get("symbol"),
-                                    "sentiment": idea.get("sentiment"),
-                                    "thesis": idea.get("thesis")
-                                })
-                            else:
-                                _log.warning(f"Unexpected idea format (not a dict): {idea}")
-                    else:
-                        _log.warning(f"Unexpected parsed_ideas format: {parsed_ideas}")
-                elif intel:
-                    ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
+                        else:
+                            _log.warning(f"Unexpected idea format (not a dict): {idea}")
+                else:
+                    _log.warning(f"Unexpected parsed_ideas format: {parsed_ideas}")
+            elif intel:
+                ideas.append({**base, "symbol": None, "sentiment": None, "thesis": None})
 
     return ideas
+
+
+def all_extractions_failed() -> bool:
+    """True when the last scan read emails and every AI extraction failed (the AI is down)."""
+    s = last_scan
+    return s.get("candidates", 0) > 0 and s.get("extraction_failures", 0) >= s["candidates"]
 
 
 def zero_ideas_reason() -> str:

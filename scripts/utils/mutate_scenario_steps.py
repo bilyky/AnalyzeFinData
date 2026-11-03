@@ -28,7 +28,7 @@ STEPS = ROOT / "aether" / "scenario" / "steps.py"
 MODULES = ["tests.test_scenario_steps", "tests.test_scenario_assemble", "tests.test_scenario_settle",
            "tests.test_scenario_queued", "tests.test_scenario_exits",
            "tests.test_scenario_sell_exec", "tests.test_scenario_buy_screen", "tests.test_scenario_rotation",
-           "tests.test_scenario_deploy"]
+           "tests.test_scenario_deploy", "tests.test_scenario_finalize", "tests.test_scenario_workbook_gate"]
 
 # (label, exact text in steps.py, replacement). Each anchor must occur exactly once.
 MUTANTS = [
@@ -60,15 +60,19 @@ MUTANTS = [
     ("exits: row[8]->row[10]", 'prev_close = float(row[8]', 'prev_close = float(row[10]'),
     # The override rule itself lives in sell_rules.ai_exit_override (tests/test_ai_exit_override.py);
     # these check the stage hands it the right inputs and applies its result.
-    ("exits: ai override not applied", 'entry["rules_action"], override_reason = game.sell_rules.ai_exit_override(',
-     '_unused, override_reason = game.sell_rules.ai_exit_override('),
+    ("exits: ai override not applied", 'entry["rules_action"], override_reason, ignored_reason = game.sell_rules.ai_exit_override(',
+     '_unused, override_reason, ignored_reason = game.sell_rules.ai_exit_override('),
+    ("exits: ignored verdict not logged", 'elif ignored_reason:', 'elif False:'),
     ("exits: live verdicts not passed", 'live_verdicts=entry.get("verdicts"), holding=pos)',
      'live_verdicts=None, holding=pos)'),
     ("exits: stored verdicts not passed", 'live_verdicts=entry.get("verdicts"), holding=pos)',
      'live_verdicts=entry.get("verdicts"), holding={})'),
     ("exits: override reason dropped", 'entry["rules_reason"] = f"AI Override: {override_reason} (was',
      'entry["rules_reason"] = entry["rules_reason"] or f"AI Override: {override_reason} (was'),
-    ("exits: ratchet 1.0x->0.5x", '> (1.0 * atr):', '> (0.5 * atr):'),
+    ("exits: ratchet 1.0x->0.5x", 'if game.sell_rules.safely_in_profit(price, pos.get("cost", 0.0), atr):',
+     'if (price - pos.get("cost", 0.0)) > (0.5 * atr):'),
+    ("exits: override ignores profit", 'old_action, entry["rules_reason"], price=price, cost=pos.get("cost"), atr=atr,',
+     'old_action, entry["rules_reason"], price=1e9, cost=0.0, atr=1.0,'),
     ("exits: breakeven 1.5x->2.0x", '> (1.5 * atr):', '> (2.0 * atr):'),
     ("exits: keep-1-share off", 'sell_qty = max(0, min(sell_qty, pos["qty"] - 1))', 'sell_qty = max(0, min(sell_qty, pos["qty"]))'),
     ("exits: gap frozen keeps stop", 'stop_loss=None if is_gap_frozen else pos.get("stop_loss")', 'stop_loss=pos.get("stop_loss")'),
@@ -235,6 +239,31 @@ MUTANTS += [  # deploy_capital (BUY execution / queue, pyramiding, covered calls
     ("dep: calls always", '            if game.is_market_hours():\n                game._log.info("🚀',
      '            if True:\n                game._log.info("🚀'),
     ("dep: no covered calls", 'game.options.execute_weekly_covered_call_pass(state, today, prices, ws)', 'pass'),
+]
+
+MUTANTS += [  # finalize_run (the finally: block)
+    ("fin: no close", '            wb.close()\n        except Exception:', '            pass\n        except Exception:'),
+    ("fin: close error escapes", '            wb.close()\n        except Exception:\n            pass',
+     '            wb.close()\n        except KeyError:\n            pass'),
+    ("fin: no save", 'game.save_game(state)', 'pass'),
+    ("fin: no excel log", 'game.update_excel_log(state, new_transactions)', 'pass'),
+    ("fin: excel log drops txs", 'game.update_excel_log(state, new_transactions)', 'game.update_excel_log(state, [])'),
+    ("fin: save without state", '    if state is not None:\n        game.save_game(state)', '    if True:\n        game.save_game(state)'),
+    ("fin: no abort log", 'game._log.info("🤖 AI Management aborted', 'game._log.debug("🤖 AI Management aborted'),
+]
+
+MUTANTS += [  # open_research_workbook (workbook gate)
+    ("wbg: missing file not deferred", 'Management deferred.")\n        return', 'Management deferred.")\n        pass'),
+    ("wbg: staleness ignored", '    if stale:\n        game._log.error', '    if False:\n        game._log.error'),
+    ("wbg: stale not refused", 'stale-workbook alert: {e}")\n        return', 'stale-workbook alert: {e}")\n        pass'),
+    ("wbg: no alert", 'game.notify.send_email(f"ALERT: AI trades skipped', 'str(f"ALERT: AI trades skipped'),
+    ("wbg: email error escapes", '        except Exception as e:\n            game._log.error(f"Could not send the stale-workbook',
+     '        except KeyError as e:\n            game._log.error(f"Could not send the stale-workbook'),
+    ("wbg: writable workbook", 'read_only=True, data_only=True)\n    ws = wb["Research"]',
+     'read_only=False, data_only=True)\n    ws = wb["Research"]'),
+    ("wbg: formulas not values", 'read_only=True, data_only=True)\n    ws = wb["Research"]',
+     'read_only=True, data_only=False)\n    ws = wb["Research"]'),
+    ("wbg: wrong sheet", 'ws = wb["Research"]\n    return wb, ws', 'ws = wb["Short_Long"]\n    return wb, ws'),
 ]
 
 

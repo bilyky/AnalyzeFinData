@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import numpy as np
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "backtesting"))
 import ai_portfolio_game as game
@@ -163,6 +165,49 @@ class TestSimulate(unittest.TestCase):
         uncapped = pb.simulate(panel, bars, DAYS[:4], risk_rules=True, cost_bps=0.0, initial=10_000.0)
         self.assertAlmostEqual(uncapped["curve"][-1][1], 10_000.0 - 375.0)
         self.assertEqual(uncapped["cap_trims"], 0)
+
+    def test_admit_hook_blocks_a_buy_the_score_allows(self):
+        bars = {"A": _bars([10] * 3), "SPY": _bars([100] * 3)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        seen = []
+        blocked = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0,
+                              admit=lambda sym, day: seen.append((sym, day)) or False)
+        self.assertEqual(blocked["curve"][1][2], 0.0)          # nothing bought
+        self.assertIn(("A", DAYS[0]), seen)
+        allowed = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0, admit=lambda s, d: True)
+        self.assertGreater(allowed["curve"][1][2], 0.0)
+
+    def test_min_fill_skips_a_buy_the_loss_cap_trimmed_below_the_floor(self):
+        # The 1% cap trims the buy to $400 = 4% of 10k (see test_loss_cap_trims_buy_to_pct_of_equity).
+        bars = {"A": _bars([10] * 3), "SPY": _bars([100] * 3)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        kw = dict(cost_bps=0.0, initial=10_000.0, max_trade_risk_pct=0.01)
+        self.assertEqual(pb.simulate(panel, bars, DAYS[:3], min_fill_pct=0.05, **kw)["curve"][1][2], 0.0)
+        self.assertAlmostEqual(pb.simulate(panel, bars, DAYS[:3], min_fill_pct=0.03, **kw)["curve"][1][2], 400.0)
+        self.assertAlmostEqual(pb.simulate(panel, bars, DAYS[:3], **kw)["curve"][1][2], 400.0)
+
+    def test_min_fill_floor_is_a_share_of_current_equity_not_the_start(self):
+        # A's capped $400 buy (4% of 10,000) lifts equity to 12,000. B has ATR 2 (stop 5), so its
+        # buy is capped at 120 / 5 = 24 x $10 = $240: 2.0% of current equity, 2.4% of the start.
+        # A 2.2% floor must skip B (current equity), not buy it (starting equity). #226 review.
+        bars = {"A": _bars([10, 10, 60, 60, 60], closes=[10, 60, 60, 60, 60]),
+                "B": _bars([10, 10, 10, 10, 10], atr=2.0), "SPY": _bars([100] * 5)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}, "B": {DAYS[1]: [6.0, 0.0]}}
+        kw = dict(cost_bps=0.0, initial=10_000.0, max_trade_risk_pct=0.01)
+        self.assertIn("B", pb.simulate(panel, bars, DAYS[:5], **kw)["open_positions"])
+        self.assertNotIn("B", pb.simulate(panel, bars, DAYS[:5], min_fill_pct=0.022, **kw)["open_positions"])
+
+    def test_rank_hook_decides_which_name_takes_the_last_slot(self):
+        bars = {"A": _bars([10] * 3), "B": _bars([10] * 3), "SPY": _bars([100] * 3)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}, "B": {DAYS[0]: [5.5, 0.0]}}
+        one_slot = {k: dict(v, max_positions=1) for k, v in pb.PROFILE_RULES.items()}
+        with mock.patch.object(pb, "PROFILE_RULES", one_slot), \
+             mock.patch.object(pb, "expanded_max_positions", side_effect=lambda c, n, base: base):
+            default = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0)
+            flipped = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0,
+                                  rank=lambda sym, day, sc: -sc[0])
+        self.assertEqual(default["open_positions"], ["A"])     # higher S10 + L60 first
+        self.assertEqual(flipped["open_positions"], ["B"])
 
     def test_loss_cap_not_binding_keeps_allocation(self):
         # Stop gap 2.5 on a $1,500 buy risks $375 <= 5% of 10k: no trim.
@@ -362,6 +407,16 @@ class TestRunWiring(unittest.TestCase):
         self.assertIn("aether_rules", out["stop_tail"])
         self.assertIn("n_stop_exits", out["stop_tail"]["aether_rules"])
 
+    def test_robust_run_end_to_end(self):
+        out = self._run(split="2026-02-10", robust=3)["robustness"]
+        self.assertEqual(out["n_draws"], 3)
+        self.assertEqual(set(out["periods"]), {"full", "train", "test"})
+        self.assertIn("no_regime", out["verdicts"])
+
+    def test_robust_needs_split(self):
+        with self.assertRaises(SystemExit):
+            self._run(robust=2)
+
     def test_split_runs_attribution_on_both_halves(self):
         # --split implies --attribution, and train and test both carry every no_* row.
         out = self._run(split="2026-02-10")
@@ -371,6 +426,289 @@ class TestRunWiring(unittest.TestCase):
         self.assertTrue(rows <= set(out["split"]["test"]))
         self.assertEqual(out["split"]["train"]["spy_buy_hold"]["end"], "2026-02-09")
         self.assertEqual(out["split"]["test"]["spy_buy_hold"]["start"], "2026-02-10")
+
+
+class TestHurst(unittest.TestCase):
+    """R&D #54b: the rolling Hurst estimator, the entry filter and the pre-registered verdict."""
+
+    @staticmethod
+    def _median_h(x):
+        vals = [h for h in pb.rolling_hurst(x) if h is not None]
+        return sorted(vals)[len(vals) // 2]
+
+    def test_random_walk_is_about_one_half(self):
+        rng = np.random.default_rng(7)
+        self.assertAlmostEqual(self._median_h(rng.standard_normal(3000)), 0.5, delta=0.08)
+
+    def test_random_walk_null_distribution_on_one_window(self):
+        # The gate depends on this noise (#210 review): on a single 120-return window, a pure
+        # random walk reads H ~ 0.46 +/- 0.08, so a "skip H < 0.50" filter drops most
+        # memoryless stocks. Any future threshold should sit below the null's P5 (~0.33).
+        rng = np.random.default_rng(0)
+        h = np.array([pb.rolling_hurst(rng.standard_normal(pb.HURST_WINDOW))[-1] for _ in range(1000)])
+        self.assertAlmostEqual(float(h.mean()), 0.46, delta=0.02)
+        self.assertAlmostEqual(float(h.std()), 0.078, delta=0.015)
+        self.assertGreater(float((h < 0.50).mean()), 0.6)
+        self.assertAlmostEqual(float(np.percentile(h, 5)), 0.33, delta=0.03)
+
+    def test_mean_reverting_is_below_and_persistent_above(self):
+        rng = np.random.default_rng(7)
+        e = rng.standard_normal(3000)
+        reverting = e[1:] - 0.9 * e[:-1]                    # MA(1), negative autocorrelation
+        persistent = np.zeros(3000)
+        for t in range(1, 3000):
+            persistent[t] = 0.5 * persistent[t - 1] + e[t]  # AR(1), positive autocorrelation
+        self.assertLess(self._median_h(reverting), 0.35)
+        self.assertGreater(self._median_h(persistent), 0.6)
+
+    def test_no_value_before_the_window_and_no_look_ahead(self):
+        rng = np.random.default_rng(3)
+        x = rng.standard_normal(300)
+        h = pb.rolling_hurst(x)
+        self.assertIsNone(h[pb.HURST_WINDOW - 2])
+        self.assertIsNotNone(h[pb.HURST_WINDOW - 1])
+        y = x.copy()
+        y[200:] = 50.0 * rng.standard_normal(100)          # change only the future
+        self.assertEqual(pb.rolling_hurst(y)[199], h[199])
+        self.assertNotEqual(pb.rolling_hurst(y)[200], h[200])
+
+    def test_filter_skips_low_h_and_allows_unknown(self):
+        bars = {s: _bars([10] * 3) for s in ("A", "B", "C")} | {"SPY": _bars([100] * 3)}
+        bars["A"]["hurst"] = [0.40] * 3                     # below 0.5: skipped
+        bars["B"]["hurst"] = [0.60] * 3                     # above: bought
+        bars["C"]["hurst"] = [None] * 3                     # not enough history: allowed
+        panel = {s: {DAYS[0]: [6.0, 0.0]} for s in ("A", "B", "C")}
+        r = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, hurst_filter=("hurst", 0.5))
+        self.assertEqual(r["open_positions"], ["B", "C"])
+        self.assertEqual(pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0)["open_positions"], ["A", "B", "C"])
+
+    def test_bars_carry_both_hurst_series(self):
+        days = [f"2025-{m:02d}-{d:02d}" for m in range(1, 13) for d in range(1, 28)][:200]
+        rng = np.random.default_rng(1)
+        px = 100 * np.exp(np.cumsum(0.01 * rng.standard_normal(200)))
+        ts = {d: {"1. open": p, "2. high": p * 1.01, "3. low": p * 0.99, "4. close": p, "5. volume": 1}
+              for d, p in zip(days, px, strict=True)}
+        b = pb.bars_from_series(ts)
+        self.assertEqual(len(b["hurst"]), 200)
+        self.assertIsNone(b["hurst"][pb.HURST_WINDOW - 1])  # needs WINDOW returns = WINDOW + 1 bars
+        self.assertIsNotNone(b["hurst"][pb.HURST_WINDOW])
+        self.assertIsNotNone(b["hurst_abs"][-1])
+
+    def test_run_variants_adds_the_five_hurst_variants(self):
+        bars = {"A": _bars([10] * 3), "SPY": _bars([100] * 3)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        out = pb.run_variants(panel, bars, DAYS[:3], 0.0, frozenset(), ["A"], False, hurst=True)
+        self.assertTrue(set(pb.HURST_VARIANTS) <= set(out))
+        base = pb.run_variants(panel, bars, DAYS[:3], 0.0, frozenset(), ["A"], False)
+        self.assertFalse(set(pb.HURST_VARIANTS) & set(base))
+
+    def _tables(self, train_sharpes, test_picked, base=(1.0, -10.0)):
+        train = {k: {"sharpe": s} for k, s in zip(pb.HURST_VARIANTS, train_sharpes, strict=True)}
+        test = {k: {"sharpe": 0.0, "max_drawdown_pct": -50.0} for k in pb.HURST_VARIANTS}
+        best = max(train, key=lambda k: train[k]["sharpe"])
+        test[best] = {"sharpe": test_picked[0], "max_drawdown_pct": test_picked[1]}
+        test["aether_rules"] = {"sharpe": base[0], "max_drawdown_pct": base[1]}
+        return train, test
+
+    def test_verdict_picks_on_train_and_needs_both_conditions(self):
+        train, test = self._tables([0.1, 0.9, 0.2, 0.3, 0.4], (1.2, -8.0))
+        v = pb.hurst_verdict(train, test)
+        self.assertEqual(v["picked"], "aether_hurst_r50")
+        self.assertTrue(v["passed"])
+        self.assertFalse(pb.hurst_verdict(*self._tables([0.1, 0.9, 0.2, 0.3, 0.4], (0.9, -8.0)))["passed"])
+        self.assertFalse(pb.hurst_verdict(*self._tables([0.1, 0.9, 0.2, 0.3, 0.4], (1.2, -12.0)))["passed"])
+
+    def test_verdict_ignores_test_when_picking(self):
+        # The best TEST Sharpe belongs to a variant that was poor on train: it must not be picked.
+        train, test = self._tables([0.9, 0.1, 0.2, 0.3, 0.4], (0.5, -8.0))
+        test["aether_hurst_r50"] = {"sharpe": 3.0, "max_drawdown_pct": -1.0}
+        self.assertEqual(pb.hurst_verdict(train, test)["picked"], "aether_hurst_r45")
+
+
+class TestExitVariants(unittest.TestCase):
+    """R&D #63: each exit rule, the hold stats and the pre-registered verdict."""
+
+    def test_trailing_stop_ratchets_up_and_exits(self):
+        # Entry 10 (day 1), stop 7.5. Day-2 close 14 lifts the trail to 14 - 2.5 x 1 = 11.5;
+        # day 3 trades down to 11, so the trail sells at 11.5. The fixed stop never triggers.
+        bars = {"A": _bars([10, 10, 14, 12], lows=[10, 10, 14, 11]), "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        base = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0)
+        self.assertEqual((base["trades"], base["open_positions"]), ([], ["A"]))
+        t = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, exit_rules={"trail": True})["trades"][0]
+        self.assertEqual((t["reason"], t["exit_date"], t["exit"], t["stop"]), ("stop", DAYS[3], 11.5, 11.5))
+
+    def test_trailing_stop_never_moves_down(self):
+        # Day-2 close 14 sets the trail to 11.5. On day 3 ATR jumps to 3, so peak - 2.5 x 3 = 6.5:
+        # the stop must stay at 11.5, and day 4's low of 11 sells there (a stop allowed to drop
+        # to 6.5 would keep holding).
+        bars = {"A": _bars([10, 10, 14, 13, 12], lows=[10, 10, 14, 12, 11]), "SPY": _bars([100] * 5)}
+        bars["A"]["atr"] = [1.0, 1.0, 1.0, 3.0, 3.0]
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        r = pb.simulate(panel, bars, DAYS[:5], cost_bps=0.0, exit_rules={"trail": True})
+        self.assertEqual(len(r["trades"]), 1, "a stop allowed to drop to 6.5 never sells here")
+        self.assertEqual((r["trades"][0]["exit_date"], r["trades"][0]["exit"]), (DAYS[4], 11.5))
+
+    def test_trailing_stop_follows_the_close_not_the_high(self):
+        # Pre-registered: the trail ratchets on the highest CLOSE. Day 2 closes at 14 but spikes
+        # to a high of 20. On the close the trail is 14 - 2.5 = 11.5, so day 3's low of 15 holds;
+        # on the high it would be 17.5 and sell.
+        bars = {"A": _bars([10, 10, 14, 15], highs=[10, 10, 20, 16], lows=[10, 10, 14, 15]),
+                "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        r = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, exit_rules={"trail": True})
+        self.assertEqual((r["trades"], r["open_positions"]), ([], ["A"]))
+
+    def test_hold_profit_keeps_a_winner_and_still_sells_a_loser(self):
+        panel = {"A": {DAYS[0]: [6.0, 0.0], DAYS[2]: [-1.0, -1.0]}}     # soft exit on day 2
+        win = {"A": _bars([10, 10, 11, 11]), "SPY": _bars([100] * 4)}  # day-2 close 11 > entry 10
+        self.assertEqual(len(pb.simulate(panel, win, DAYS[:4], cost_bps=0.0)["trades"]), 1)
+        held = pb.simulate(panel, win, DAYS[:4], cost_bps=0.0, exit_rules={"hold_profit": True})
+        self.assertEqual((held["trades"], held["open_positions"]), ([], ["A"]))
+        lose = {"A": _bars([10, 10, 9, 9]), "SPY": _bars([100] * 4)}
+        sold = pb.simulate(panel, lose, DAYS[:4], cost_bps=0.0, exit_rules={"hold_profit": True})
+        self.assertEqual(sold["trades"][0]["reason"], "momentum decay")
+
+    def test_wide_stop_is_farther_and_the_cap_sizes_smaller(self):
+        bars = {"A": _bars([10] * 3), "SPY": _bars([100] * 3)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        base = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0, max_trade_risk_pct=0.01)
+        wide = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0, max_trade_risk_pct=0.01,
+                           exit_rules={"stop_scale": 1.5})
+        self.assertAlmostEqual(base["curve"][1][2], 400.0)              # 100 / 2.5 x 10
+        self.assertAlmostEqual(wide["curve"][1][2], 100 / 3.75 * 10)    # stop 6.25
+
+    def test_min_hold_blocks_an_early_soft_exit(self):
+        bars = {"A": _bars([10, 10, 9, 9]), "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0], DAYS[1]: [-1.0, -1.0]}}     # soft exit on entry day
+        self.assertEqual(len(pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0)["trades"]), 1)
+        r = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, exit_rules={"min_hold": 10})
+        self.assertEqual((r["trades"], r["open_positions"]), ([], ["A"]))
+        r2 = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, exit_rules={"min_hold": 1})
+        self.assertEqual(r2["open_positions"], ["A"])                  # 0 days held < 1: blocked
+
+    def test_trades_record_hold_days(self):
+        bars = {"A": _bars([10, 10, 9, 8]), "SPY": _bars([100] * 4)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0], DAYS[1]: [-1.0, -1.0]}}
+        t = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0)["trades"][0]
+        self.assertEqual((t["entry_date"], t["exit_date"], t["hold_days"]), (DAYS[1], DAYS[2], 1))
+
+    def test_hold_stats(self):
+        spy = _bars([100, 100, 110, 110])
+        trades = [{"entry_date": DAYS[0], "exit_date": DAYS[2], "ret_pct": 20.0, "hold_days": 2},
+                  {"entry_date": DAYS[0], "exit_date": DAYS[2], "ret_pct": 15.0, "hold_days": 3},
+                  {"entry_date": DAYS[0], "exit_date": DAYS[2], "ret_pct": 5.0, "hold_days": 4}]
+        h = pb.hold_stats(trades, spy)                                  # SPY +10% over those days
+        self.assertEqual((h["median_hold_days"], h["share_beating_spy"]), (3.0, 0.667))
+        self.assertEqual(pb.hold_stats([], spy)["median_hold_days"], None)
+
+    def test_run_variants_adds_the_five_exit_variants(self):
+        bars = {"A": _bars([10] * 3), "SPY": _bars([100] * 3)}
+        panel = {"A": {DAYS[0]: [6.0, 0.0]}}
+        out = pb.run_variants(panel, bars, DAYS[:3], 0.0, frozenset(), ["A"], False, exits=True)
+        self.assertTrue(set(pb.EXIT_VARIANTS) <= set(out))
+        self.assertFalse(set(pb.EXIT_VARIANTS) & set(pb.run_variants(panel, bars, DAYS[:3], 0.0,
+                                                                     frozenset(), ["A"], False)))
+
+    @staticmethod
+    def _summary(verdict, dd, base_dd=-10.0):
+        test = {"aether_rules": {"max_drawdown_pct": {"median": base_dd}}}
+        test.update({v: {"max_drawdown_pct": {"median": -10.0}} for v in pb.EXIT_VARIANTS})
+        test["exit_trail"] = {"max_drawdown_pct": {"median": dd}}
+        verdicts = {v: "inconclusive" for v in pb.EXIT_VARIANTS}
+        verdicts["exit_trail"] = verdict
+        return {"periods": {"test": test}, "verdicts": verdicts}
+
+    def test_exit_verdicts(self):
+        self.assertEqual(pb.exit_verdicts(self._summary("robustly better", -12.9))["exit_trail"], "PASS")
+        self.assertEqual(pb.exit_verdicts(self._summary("robustly better", -13.0))["exit_trail"], "PASS")
+        self.assertEqual(pb.exit_verdicts(self._summary("robustly better", -13.1))["exit_trail"], "FAIL: drawdown")
+        self.assertEqual(pb.exit_verdicts(self._summary("inconclusive", -5.0))["exit_trail"], "inconclusive")
+        self.assertEqual(pb.exit_verdicts(self._summary("robustly worse", -5.0))["exit_trail"], "robustly worse")
+
+
+class TestRobustness(unittest.TestCase):
+    """R&D #62: perturbed paths, the summary and the pre-registered verdicts."""
+
+    SYMS = ["SPY"] + [f"S{k:02d}" for k in range(20)]
+    CAL = [f"2024-01-{d:02d}" for d in range(1, 29)] + [f"2025-02-{d:02d}" for d in range(1, 29)]
+
+    def test_paths_are_reproducible_and_keep_spy(self):
+        a = pb.draw_paths(self.SYMS, self.CAL, 10, seed=62)
+        self.assertEqual(a, pb.draw_paths(self.SYMS, self.CAL, 10, seed=62))
+        self.assertNotEqual(a, pb.draw_paths(self.SYMS, self.CAL, 10, seed=63))
+        for path in a:
+            self.assertIn("SPY", path["symbols"])
+            self.assertEqual(len(path["symbols"]), 1 + 16)          # 80% of 20 others, plus SPY
+            self.assertLessEqual(self.CAL.index(path["start"]), pb.ROBUST_MAX_OFFSET)
+        self.assertGreater(len({p["symbols"] for p in a}), 1)
+
+    def test_path_universe_cuts_panel_and_eligible(self):
+        panel = {"SPY": {}, "A": {}, "B": {}, "C": {}}
+        sub, elig = pb.path_universe(panel, ["A", "B", "C"], frozenset({"SPY", "B", "Z"}))
+        self.assertEqual(set(sub), {"SPY", "B"})
+        self.assertEqual(elig, ["B"])
+
+    def test_offset_cap_keeps_two_days_before_the_split(self):
+        cal = [f"2025-01-{d:02d}" for d in range(1, 11)] + [f"2025-03-{d:02d}" for d in range(1, 11)]
+        for path in pb.draw_paths(self.SYMS, cal, 30, split="2025-03-01"):
+            self.assertGreaterEqual(sum(path["start"] <= d < "2025-03-01" for d in cal), 2)
+        # A long first half leaves the pre-registered 0..60 range untouched.
+        long_cal = [f"d{i:04d}" for i in range(600)]
+        offs = {long_cal.index(p["start"]) for p in pb.draw_paths(self.SYMS, long_cal, 200, split="d0500")}
+        self.assertEqual((min(offs), max(offs)), (0, pb.ROBUST_MAX_OFFSET))
+
+    @staticmethod
+    def _draw(base, other, spy):
+        tbl = lambda b, o, s: {"aether_rules": {"sharpe": b, "cagr_pct": 1.0, "max_drawdown_pct": -5.0},
+                               "no_regime": {"sharpe": o, "cagr_pct": 2.0, "max_drawdown_pct": -6.0},
+                               "spy_buy_hold": {"sharpe": s, "cagr_pct": 3.0, "max_drawdown_pct": -7.0}}
+        return {"full": tbl(base, other, spy), "train": tbl(base, other, spy), "test": tbl(base, other, spy)}
+
+    def test_summary_win_rate_and_verdicts(self):
+        # no_regime beats aether_rules in 9 of 10 draws; SPY in 1 of 10.
+        draws = [self._draw(1.0, 1.5 if i < 9 else 0.5, 0.5 if i < 9 else 2.0) for i in range(10)]
+        s = pb.robustness_summary(draws)
+        self.assertEqual(s["periods"]["test"]["no_regime"]["win_rate"], 0.9)
+        self.assertEqual(s["periods"]["test"]["spy_buy_hold"]["win_rate"], 0.1)
+        self.assertEqual(s["periods"]["test"]["no_regime"]["sharpe"]["median"], 1.5)
+        self.assertEqual(s["verdicts"], {"no_regime": "robustly better", "spy_buy_hold": "robustly worse"})
+
+    def test_summary_against_another_base(self):
+        # R&D #64 judges against SPY: the win rate is then measured against spy_buy_hold.
+        draws = [self._draw(1.0, 1.5, 2.0 if i < 9 else 0.5) for i in range(10)]
+        s = pb.robustness_summary(draws, base="spy_buy_hold")
+        self.assertEqual(s["periods"]["test"]["aether_rules"]["win_rate"], 0.1)
+        self.assertEqual(s["periods"]["test"]["no_regime"]["win_rate"], 0.1)
+        self.assertNotIn("spy_buy_hold", s["verdicts"])
+
+    def test_verdict_needs_both_halves(self):
+        draws = [self._draw(1.0, 1.5, 0.5) for _ in range(10)]
+        for d in draws:
+            d["train"]["no_regime"]["sharpe"] = 0.5                 # loses on train, wins on test
+        self.assertEqual(pb.robustness_summary(draws)["verdicts"]["no_regime"], "inconclusive")
+
+    def test_win_rate_boundaries(self):
+        at80 = [self._draw(1.0, 1.5 if i < 8 else 0.5, 1.0) for i in range(10)]
+        self.assertEqual(pb.robustness_summary(at80)["verdicts"]["no_regime"], "robustly better")
+        at70 = [self._draw(1.0, 1.5 if i < 7 else 0.5, 1.0) for i in range(10)]
+        self.assertEqual(pb.robustness_summary(at70)["verdicts"]["no_regime"], "inconclusive")
+        ties = [self._draw(1.0, 1.0, 1.0) for _ in range(10)]   # a tie is not a win
+        self.assertEqual(pb.robustness_summary(ties)["periods"]["test"]["no_regime"]["win_rate"], 0.0)
+
+    def test_run_robustness_periods_use_the_split_and_the_start(self):
+        seen = []
+
+        def run_table(syms, days):
+            seen.append((syms, days[0], days[-1]))
+            return {"aether_rules": {"sharpe": 1.0}, "no_regime": {"sharpe": 2.0}}
+
+        paths = [{"symbols": frozenset({"SPY", "A"}), "start": "2024-01-05"}]
+        out = pb.run_robustness(paths, self.CAL, "2025-02-01", run_table)
+        self.assertEqual([s[1:] for s in seen], [("2024-01-05", "2025-02-28"), ("2024-01-05", "2024-01-28"),
+                                                ("2025-02-01", "2025-02-28")])
+        self.assertEqual(out["n_draws"], 1)
+        self.assertEqual(out["per_draw_sharpe"][0]["test"]["no_regime"], 2.0)
 
 
 class TestStopTail(unittest.TestCase):
