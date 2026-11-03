@@ -13,6 +13,7 @@ try:
 except ImportError:
     Stealth = None
 from aether import paths
+from aether.batch_failures import log_batch_failures
 from aether.notify import send_email
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1231,6 +1232,7 @@ def check_from_file(prefer_cache: bool, date=None):
 
     # ── Phase 2: parallel fetch ──
     pg_results: dict[str, PowerGauge] = {}
+    fetch_failed: list[str] = []
     with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
         future_to_sym = {
             pool.submit(get_symbol_data, sym, date, prefer_cache): sym
@@ -1248,11 +1250,13 @@ def check_from_file(prefer_cache: bool, date=None):
                 pool.shutdown(wait=False, cancel_futures=True)
                 raise
             except Exception as e:
-                _pg_log.error(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
+                _pg_log.warning(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
+                fetch_failed.append(sym)
                 sentinel = PowerGauge(sym, date)
                 sentinel.price = -1
                 pg_results[sym] = sentinel
     _pg_log.console(f"Fetch complete ({len(unique_syms)} symbols).")
+    log_batch_failures(_pg_log, "[Chaikin fetch]", fetch_failed, len(unique_syms))
 
     # ── Phase 3: serial compute + write ──
     ohlcv_cache: dict = {}
@@ -1614,6 +1618,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
 
     # ── Phase 2: parallel fetch ───────────────────────────────────────────────
     pg_results: dict[str, PowerGauge] = {}
+    fetch_failed: list[str] = []
     with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
         future_to_sym = {
             pool.submit(get_symbol_data, sym, date, prefer_cache): sym
@@ -1631,11 +1636,13 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
                 pool.shutdown(wait=False, cancel_futures=True)
                 raise
             except Exception as e:
-                _pg_log.error(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
+                _pg_log.warning(f"  [{done}/{len(unique_syms)}] {sym}: fetch error — {e}")
+                fetch_failed.append(sym)
                 sentinel = PowerGauge(sym, date)
                 sentinel.price = -1
                 pg_results[sym] = sentinel
     _pg_log.console(f"Fetch complete ({len(unique_syms)} symbols).")
+    log_batch_failures(_pg_log, "[Chaikin fetch]", fetch_failed, len(unique_syms))
 
     # ── Phase 3: serial compute + write ──────────────────────────────────────
     updated = 0

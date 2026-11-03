@@ -48,7 +48,11 @@ go to Step 1b: many real failures raise no exception.
 - **Build a timeline across processes** (timestamp + pid): who touched the resource last, and what
   happened between the last success and the failure.
 - **Check the external system's documented behavior** (vendor/API docs) before designing a fix
-  around an assumption about it.
+  around an assumption about it. Confirm configured external identifiers still exist (a model name,
+  an endpoint, a plan): a provider can drop one, and every call then fails with no code change.
+- **Question the alert itself.** A warning that repeats although its suggested remedy was followed,
+  or whose message names a cause (e.g. "auth may have failed") that the logs contradict, is a bug in
+  the check. Find what it measures and which code path, under the production config, refreshes it.
 - **Reproduce through the real entry point** with only the network, browser and clock stubbed, using
   the production configuration (not dev defaults). Assert the calls that prove the failing path ran;
   a replay that passes for the wrong reason is worse than none.
@@ -99,7 +103,7 @@ Rules:
 
 If running in an interactive session with a human present, present the diagnosis and fix. Ask: **"Apply this fix? (yes / no / modify)"**
 
-If running in an unattended, headless, or scheduled background environment (e.g. via Task Scheduler where stdin is not available), **do NOT prompt or ask for confirmation**. Treat the `--approval-mode yolo` flag as an absolute directive: proceed immediately to apply the surgical edit autonomously.
+If running in an unattended, headless, or scheduled background environment (e.g. via Task Scheduler where stdin is not available), **do NOT prompt or ask for confirmation**. Treat the agent's auto-approve mode (whatever flag the CLI uses for it) as an absolute directive: proceed immediately to apply the surgical edit autonomously.
 
 In either case, once authorized or running unattended, apply the edit and run:
 ```bash
