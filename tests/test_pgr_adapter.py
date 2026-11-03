@@ -40,7 +40,8 @@ def _live_like_intc():
         "checklistData": {
             "industry": "Weak", "ltTrend": "Weak", "moneyFlow": "Weak",
             "OBOS": "Early", "relativeStrength": "Weak", "pgr": "Neutral +",
-            "status": "Hold",
+            "status": "Hold", "strengthCount": 0, "timingCount": 2,
+            "sentence1": "This stock has <<0 of 3>>positive strength indicators.",
         },
         "signalInfo": {"moneyFlowSell": 1, "breakdownSell": 1},
         "pgrData": _live_pgr_data(),
@@ -105,6 +106,16 @@ class TestAdaptSuggestions(unittest.TestCase):
         self.assertEqual(cl["overboughtOversold"], "Early")   # OBOS -> overboughtOversold
         self.assertEqual(cl["ltTrend"], "Weak")
         self.assertEqual(cl["relativeStrength"], "Weak")
+
+    def test_strength_and_timing_counts_pass_through(self):
+        # The live R&D #32 guard reads these (default 1 when missing).
+        cl = _adapt_suggestions_to_legacy(_live_like_intc(), "INTC")["checklist_stocks"]
+        self.assertEqual((cl["strengthCount"], cl["timingCount"]), (0, 2))
+        self.assertTrue(cl["sentence1"].startswith("This stock has"))
+        d = _live_like_intc(); del d["checklistData"]["strengthCount"]; d["checklistData"]["timingCount"] = None
+        cl = _adapt_suggestions_to_legacy(d, "INTC")["checklist_stocks"]
+        self.assertNotIn("strengthCount", cl)                  # absent, so the guard's default applies
+        self.assertNotIn("timingCount", cl)                    # never None (None < 1 would raise)
 
     def test_signals_default_when_no_signalinfo(self):
         d = _live_like_intc(); d.pop("signalInfo")

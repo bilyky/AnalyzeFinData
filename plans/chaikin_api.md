@@ -141,6 +141,14 @@ lists them in `Data/pgr_factor_gap.json` (treat as missing, not zero), and `--ch
 fails when the latest session's factor coverage drops below 90%. `_check_schema` also
 warns per stock when all four lists are empty.
 
+### Checklist pass-through
+
+`strengthCount`, `timingCount` and `sentence1/2/3a/3b/4` have the same names in the new
+`checklistData` and the legacy `checklist_stocks`, and are copied when present (never as
+`None`). `strengthCount`/`timingCount` feed the live R&D #32 guard
+(`checklist.get("strengthCount", 1) < 1`); from 2026-09-01 until #232 they were missing, so
+the guard used the default and its "both counts 0" half never fired.
+
 ### Raw response copy
 
 Next to each adapted snapshot, `get_symbol_data` keeps the untouched response, gzipped:

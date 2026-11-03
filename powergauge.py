@@ -1039,6 +1039,10 @@ _PGR_FACTOR_MAP = (
 )
 
 
+_CHECKLIST_PASSTHROUGH = ("strengthCount", "timingCount", "sentence1", "sentence2", "sentence3a", "sentence3b",
+                          "sentence4")
+
+
 def _legacy_factor_lists(pgr_data) -> dict:
     """{"Financials": [{"Value": 2}, {"LT Debt to Equity": 3}, ...], ...} from new pgrData.
     A factor the API leaves out (or sends as null) is left out, so an ETF gets empty lists."""
@@ -1124,6 +1128,13 @@ def _adapt_suggestions_to_legacy(data: dict, symbol: str) -> dict:
         "change": str(chg) if chg is not None else None,
         "stockStatus": cl.get("status"),
     }
+    # Same names in the new checklistData and the legacy cache. strengthCount/timingCount feed
+    # the live R&D #32 guard (checklist.get("strengthCount", 1) < 1); they were dropped from
+    # 2026-09-01 until #232, so the guard ran on the default. Copied only when present: a None
+    # would break that comparison.
+    for k in _CHECKLIST_PASSTHROUGH:
+        if cl.get(k) is not None:
+            checklist[k] = cl[k]
     return {"status": "ok", "pgr": pgr_list, "metaInfo": [meta], "checklist_stocks": checklist}
 # @doc-sync-end: chaikin_api
 
