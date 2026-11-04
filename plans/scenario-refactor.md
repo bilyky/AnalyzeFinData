@@ -45,7 +45,7 @@ Named `runners.py` (not `scenarios.py`) to avoid an `aether.scenario.scenarios` 
 
 Each build step ships its own `tests/test_scenario_*.py` (hand-written fakes injected via constructor args, mirroring the E*TRADE per-door test style) and keeps `python -m unittest discover -s tests` fully green.
 
-While BUILD lasts, every B6 stage is a *copy* of a block that still runs in `run_daily_ai_management`. `tests/test_scenario_parity.py` fails the moment a stage drifts from its root block, so **register every new stage in its `_CHECKED` tuple** (its registry test fails otherwise). Delete that file together with the root copies once REPLACE lands.
+While BUILD lasted, every B6 stage was a *copy* of a block that still ran in `run_daily_ai_management`, and `tests/test_scenario_parity.py` failed the moment a stage drifted from its root block. The switch (one PR, after the golden snapshot in #223) made the game call `runners.run_daily_management` and deleted the root copies and the parity test. The stages are now the only copy: change behaviour in `aether/scenario/steps.py`, and expect `tests/test_scenario_runner.py`'s golden file to fail until it is regenerated on purpose.
 
 ## REPLACE order (one seam per PR — characterization harness built before R3)
 
