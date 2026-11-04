@@ -9,8 +9,8 @@ tests pin what it carries over from the root, unchanged:
    transactions, then the portfolio value is logged.
 3. **No state** — nothing is saved or written, and the abort is logged.
 
-Every collaborator is patched on the live module — no disk. Re-export and root
-parity are pinned in ``test_scenario_steps`` and ``test_scenario_parity``.
+Every collaborator is patched on the live module — no disk. Re-export is pinned
+in ``test_scenario_steps``; the composed run in ``test_scenario_runner``.
 """
 import os
 import sys
