@@ -139,10 +139,12 @@ class TestRun(unittest.TestCase):
     def test_only_the_latest_raw_file_is_kept(self):
         raw = os.path.join(self._tmp.name, "raw")
         os.makedirs(raw)
-        for name in ("AAA_2026-01-02.json.gz", "AA_2026-01-02.json.gz", "AAAB_2026-01-02.json.gz"):
+        for name in ("AAA_2026-01-02.json.gz", "AA_2026-01-02.json.gz", "AAAB_2026-01-02.json.gz",
+                     "AAA_B_2026-01-02.json.gz"):                    # another symbol sharing the prefix
             open(os.path.join(raw, name), "w").close()
         bf.run(["AAA"], fetch_fn=lambda s: {"data": [_row("2026-11-02")]}, sleep=0)
         self.assertEqual(sorted(os.listdir(raw)), sorted(["AAAB_2026-01-02.json.gz", "AA_2026-01-02.json.gz",
+                                                          "AAA_B_2026-01-02.json.gz",
                                                           f"AAA_{datetime.date.today().isoformat()}.json.gz"]))
 
     def test_a_partial_report_keeps_the_other_symbols(self):
