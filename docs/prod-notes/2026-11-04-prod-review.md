@@ -1,0 +1,96 @@
+# PROD review 2026-11-04: actions
+
+Source: PROD logs from 11-02 12:00 to 11-04 07:03 (`Data/logs/aether.jsonl`, `Data/logs/agent_runs/*`), plus
+`ai_portfolio_game.json`, `intraday_monitor_state.json`, `autonomous_run.log` and `config.json`.
+
+## What the logs show
+
+**Working**
+- **Schedule:** the tasks run on time again since the 11-02 evening: PreFlight 21:30, Morning 05:30,
+  Trades 07:00, Aftermarket 17:00. The DST re-register worked.
+- **AI:** the OpenRouter 404s stopped after 11-02 13:01.
+- **Chaikin:** the breaker loop is gone; the token has 4.45 days of runway (11-04 07:00).
+- **Checks:** PreFlight passes and the nightly backup syncs.
+- **Nothing stuck:** `run_history.py` stopping at its 600 s limit (11-03, 11-04) is expected; it resumes the
+  next run.
+
+**Deploy state**
+- **#227:** not live on the 11-03 17:21 run. The RapidAPI summary still printed the pre-#227 text "(errors
+  logged above)".
+- **#231:** the logs can't show it. `Data/pick_lists_log.jsonl` exists once it runs.
+
+**Fixed in this PR**
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | **Slot expansion.** On 11-03 it opened an 11th slot at 20.1% cash under BALANCED's 20% buffer. About $16 was free, so the slot bought 1 share of COMP ($9.47). The slot cap grew 5 → 8 → 10 → 11 between 10-20 and 11-03, and holdings grew to 10. | A slot is added only while cash *above the buffer* exceeds 15% of equity. A buy or scale-in under `system.min_ticket_usd` ($100) is skipped. |
+| 6 | **Groq empty answers:** 39 of 68 calls. `gpt-oss-120b` reasons first, and callers ask for 5–150 tokens. Each empty answer fell back to Gemini, which returned 503 at least 44 times. | The error now names the cause. A provider's `min_max_tokens` floors max_tokens. The config patch below sets it. |
+| 8 | **Stop monitor repeats:** 7 breach emails on 11-03 with the same 9–12 names. A name bouncing over its stop counted as cleared, then as new. | Each breach is emailed once. It is re-sent only for a moved stop or a new low (1% lower). A price more than 20% under its stop gets an "out of date" note instead of an AI call. |
+| 10 | **Chaikin no-data symbols:** the same 17 symbols logged 2 warnings each on every refresh. | One summary line per refresh, naming them. It is an ERROR only if most of the batch had no data. |
+| 11 | **RapidAPI "Burst pattern":** errors on 4 of about 800 fetches. | That symbol is retried once after 60 s, at most 5 times per pass. |
+| 12 | **PreFlight:** a skipped smoke test showed as PASS. | It shows SKIP. |
+| 13 | **Watchdog:** "check_logs found issues" logged twice an hour. | Logged once per cycle. |
+
+**No code change needed**
+- **9. Dashboard pricing warnings every minute.**
+  - The once-a-day dedupe (commit 2509314) only reached `main` through #226.
+  - The dashboard process that logged every minute started on 10-30, so it was running the older code.
+  - Since the 11-03 restart, each symbol is logged about once a day.
+
+**Not fixed here: studies first** (each needs a pre-registered backtest before any rule change)
+- **2. Elite waiver:** it admitted COMP with reward/risk 0.08:1 and a 0.95% target.
+- **3. Profit-lock trail:** it uses the day's profile multiplier (DEFENSIVE 1.5×ATR, BALANCED 2.5×) and never
+  lowers a stop.
+  - On 11-04 one DEFENSIVE day raised five stops; MSCI went from $597.66 to $636.79.
+  - The breadth downgrade switched the profile at least five times between 10-13 and 11-04.
+- **4. Scale-out then scale-in:** MSCI was banked at $591.63 on 10-20 and added back at $610.62 on 10-22.
+- **5. Open fill below the stop:** XES had a $106.79 stop and filled at $101.73 on 11-04. This belongs to the
+  R&D #8 stop-limit study.
+
+## Behaviour change to expect (fix 1)
+
+- **What changes:** under BALANCED (20% buffer) and DEFENSIVE (50%), expansion now needs cash above 35% or
+  70% respectively.
+- **Effect today:** the game holds 10 positions against a base of 5 (BALANCED) or 3 (DEFENSIVE). So it makes
+  **no new buys** until enough positions close.
+- **Still allowed:** scale-ins into protected winners, as before.
+- **Unchanged:** in a bull regime (buffer 0) the rule is the same as before.
+- **Owner call:** this cuts exposure, in line with the loss-minimization rule. If you want a different free-cash
+  bar, set `system.slot_expand_free_cash` in config.
+
+## Steps
+
+1. **Back up.**
+   ```powershell
+   $ts = Get-Date -Format yyyyMMdd_HHmmss; $b = "Data\Backup\${ts}_prod_review_1104"; New-Item -ItemType Directory $b | Out-Null
+   Copy-Item Data\config.json, Data\ai_portfolio_game.json, Data\intraday_monitor_state.json $b
+   ```
+2. **Deploy:** pull `main`. This also deploys #227, #228 and #231 if they are not live yet. Restart the
+   dashboard server so it loads the new code.
+3. **Groq config** (after the deploy):
+   ```powershell
+   venv_new\Scripts\python.exe docs\prod-notes\patch_groq_reasoning_2026_11_04.py           # dry run
+   venv_new\Scripts\python.exe docs\prod-notes\patch_groq_reasoning_2026_11_04.py --apply
+   ```
+   Check the next day: `AI call ok: groq` should outnumber "empty answer" / "ran out of tokens" warnings in
+   `aether.jsonl`.
+4. **Gemini CLI tasks** (still open from the 11-02 notes, step 3): `AETHER_DailyDriver`,
+   `AETHER_PostMarketSync`, `AETHER_PostMarketReporter` and the Saturday `AETHER_RD_Scientist` fail with 403
+   on every run. Disable them or move them to the AI
+   tiers.
+5. **Real-account stops:** 9 rows in the workbook's Short_Long sheet have stops 22% to 10× above the price.
+   Update or clear them. The monitor now emails each of them once, with an "out of date" note.
+6. **For the #231 check:** copy `Data/pick_lists_log.jsonl` to the dev machine.
+
+## Check after the first runs
+
+- **07:00 trade log:** no `[Slot Expansion]` line while cash is under the buffer plus 15%. No buy under $100.
+- **Stop monitor:** the first run after the deploy sends nothing for breaches already in the state file. A new
+  breach sends one email.
+- **17:00 RapidAPI pass:** a burst error shows as "burst limit hit; retrying once in 60 s".
+- **Chaikin refresh:** one `[Chaikin] no market data ...` line instead of per-symbol warnings.
+
+## Roll back
+
+`git revert -m 1 <merge>`, then restart the dashboard. The Groq config keys are ignored by the old code; to
+remove them, restore `config.json` from the step 1 backup.
