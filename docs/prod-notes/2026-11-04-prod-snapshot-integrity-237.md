@@ -4,7 +4,7 @@
 Chaikin live and saving the result under the old date. The API only serves current values,
 so those files hold the wrong date's data. On the dev cache about 68,000 snapshots are such
 backfills (written in bursts on 2026-04-26/27, 05-07..09 and 07-24), and 15,290 sit on
-weekday market holidays. Studies that read `Data\Symbol` used them (see R&D #67 in
+weekday market holidays. Studies that read `Data\Symbol` used them (see R&D #74 in
 `plans/roadmap.md`).
 
 This PR stops new ones and adds a script that moves the bad files out of the cache.
@@ -46,7 +46,7 @@ wrong-date count is far above ~110,000 or the "passed" line stays large.
 
 ## 4. Quarantine
 
-Back up first, then move. Not while the morning or evening pipeline runs:
+The move is the backup (nothing is deleted). Run it outside the morning and evening pipeline:
 
 ```powershell
 venv_new\Scripts\python.exe scripts\utils\snapshot_integrity.py --apply
@@ -57,7 +57,7 @@ It prints where the files went. `manifest.json` in that folder lists every file.
 ## 5. After
 
 - Tell me, and I'll re-run the R&D #54-#66 verdicts and the factor study on the cleaned
-  cache (R&D #67).
+  cache (R&D #74).
 - Studies will see those dates as missing. That's the intent: missing, not wrong.
 
 ## Roll back
