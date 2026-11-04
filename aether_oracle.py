@@ -8,10 +8,11 @@ Account id, baseline equity, and target date come from config (gitignored) — n
 hardcode account numbers or balances in source.
 """
 import datetime
+import html
 
 import ai_portfolio_game
 import data_api
-from aether import sell_rules
+from aether import pick_eval, pick_lists, sell_rules
 from aether.config import CFG
 from aether.risk_utils import calculate_atr, is_elite_breakout_candidate
 from aether_logger import get_logger as _get_logger
@@ -339,6 +340,7 @@ def generate_oracle_html(acct, sells, holds, buys):
         <h3 style="color: #7ee787; font-size: 15px; border-bottom: 1px solid #30363d; padding-bottom: 5px; margin-top: 25px;">
             🟢 Top High-Conviction Breakout Setup Recommendations
         </h3>
+        <p style="font-size: 11px; color: #8b949e; margin: 4px 0 8px 0;"><i>Criteria: {html.escape(pick_lists.criteria(pick_lists.ORACLE_BUYS))}</i></p>
         {buys_html}
         
         <!-- Holds List -->
@@ -388,6 +390,7 @@ def run_oracle_advisory():
             return _unavailable_html()
         sells, holds = audit_oracle_portfolio(acct)
         buys = get_oracle_buy_candidates(acct)
+        pick_eval.log_picks(pick_lists.ORACLE_BUYS, buys[:3])    # what the email shows
         return generate_oracle_html(acct, sells, holds, buys)
     except Exception as e:
         _oracle_log.error("Fatal failure running AETHER Oracle advisory", exc_info=True)

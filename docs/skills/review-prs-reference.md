@@ -71,8 +71,17 @@ Read the real message from `$_.ErrorDetails.Message`. The PII scrub still applie
 - **Never pipe a long-running or file-mutating command into `head`.** `head` closes the pipe after N
   lines and the writer is killed mid-run (a mutation run stopped after 10 of 101 mutants this way).
   Redirect to a file and read the summary from it.
-- **API unreachable while `git` works:** some HTTP clients ignore the environment proxy. Pass it
-  explicitly (PowerShell: `Invoke-RestMethod -Proxy $env:HTTPS_PROXY -TimeoutSec 60 …`).
+- **Harnesses that run tests in a child process** (mutation sweeps, probes): decode the child's output
+  explicitly (UTF-8; a Windows default codepage fails on emoji in logs) and count missing or
+  unparseable output as a harness error, never as a surviving mutant. First confirm one mutant you know
+  is caught does fail.
+- **Cleaning a scratch worktree:** remove only untracked output (`git clean -n` previews it).
+  `rm -rf <dir>` also deletes tracked files under it, and the next suite run fails for that reason.
+- **API unreachable while `git` works:** don't trust one client's "unreachable"; try `git ls-remote`,
+  `gh`, and an HTTP client given the proxy explicitly (`$HTTPS_PROXY`; PowerShell:
+  `Invoke-RestMethod -Proxy $env:HTTPS_PROXY -TimeoutSec 60 …`).
+- **Auth:** `gh auth login` (interactive, the user runs it), a `GH_TOKEN` they supply, or
+  `gh auth token` to reuse gh's stored credential.
 - **`gh` not on PATH:** resolve it portably (`command -v gh` / `Get-Command gh`), never a hardcoded path.
 - **The default git credential can't push** (a 403 for a different account): push once with gh's
   stored token, never saving it — `git -c credential.helper= push
@@ -129,6 +138,8 @@ Check these against the current script before relying on it:
   deletion is one `git branch <name> <sha>` away from undo.
 - Batch removals are irreversible local changes: present the classified plan, get the go-ahead, and
   delete your own scratch (temp refs, worktrees, files) when done.
+- **Remote branches:** if your runtime isn't allowed to delete them, list the merged ones for the owner
+  instead of working around the refusal.
 
 ## G. Post-merge doc audit (after a batch of merges, or when asked)
 
@@ -147,8 +158,8 @@ Docs drift between PRs even when each review was careful. After a batch lands:
 
 AETHER is a modular monolith. Its seams: ports & adapters around external dependencies (the E\*TRADE
 `store` and `make_etrade_store()`); a strangler-fig extraction `ai_portfolio_game.py →
-aether/scenario/` whose stages resolve collaborators at call time through `_pkg()`, guarded by a
-stage↔root parity test (`tests/test_scenario_parity.py`); path helpers in `aether/paths.py`
+aether/scenario/` whose stages resolve collaborators at call time through `_pkg()`, pinned by a
+golden snapshot of the daily run (`tests/test_scenario_runner.py`); path helpers in `aether/paths.py`
 (`data_dir()` for state and tokens, `cache_dir()`/`ohlcv_dir()` for market-data caches); and one home
 per rule (R&D items in `plans/roadmap.md`, their code anchors in
 `pre_commit_validator.FEATURE_CHECKS`).
@@ -178,3 +189,10 @@ so the file stays the record.
 **Is reviewing worth it?** When a PR merges, note in its review file which findings were fixed and
 which were declined. Over many PRs, fixed ÷ posted shows whether the reviews earn their length; a low
 ratio means too many findings nobody acts on.
+
+## K. This repo's CI
+
+CI byte-compiles, runs `scripts/utils/pre_commit_validator.py` on the PR's diff (`quality-gate`) and
+ruff (`lint`). It does not run the unit tests. A red `quality-gate` is usually an inline import or a
+silent `except`; reproduce it locally (the validator stops at the first hit per file and exempts
+`test_*.py`).

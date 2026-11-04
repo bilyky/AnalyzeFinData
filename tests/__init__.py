@@ -166,6 +166,7 @@ _decision_eval.LOG = _ledger_tmp / "decision_log.jsonl"
 _ledgers.TRADE_DNA_FILE = _ledger_tmp / "trade_history_dna.json"
 _ledgers.FAILURE_RULES_FILE = _ledger_tmp / "failure_dna_rules.json"
 _ledgers.RETRO_REPORT_FILE = _ledger_tmp / "retrospective_report.txt"
+_ledgers.PICK_LOG_FILE = _ledger_tmp / "pick_lists_log.jsonl"
 
 # ---------------------------------------------------------------------------
 # Singleton-lock / trash / run-guard guard. run_watchdog() and
