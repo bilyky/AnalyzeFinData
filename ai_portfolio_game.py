@@ -372,12 +372,18 @@ def _conviction_cap_pct(total, base_pct, ceiling_pct, relax_start, relax_full):
 # @doc-sync-end: scarcity_core
 
 
-def determine_max_positions(cash_ratio: float, num_positions: int, base_max_positions: int) -> int:
+def determine_max_positions(cash_ratio: float, num_positions: int, base_max_positions: int,
+                            cash_buffer_pct: float = 0.0) -> int:
     """Determine max positions after applying Dynamic Position-Slot Expansion.
+
+    A slot is added only while the cash above the profile's buffer
+    (``cash_ratio - cash_buffer_pct``) exceeds ``CFG.system_slot_expand_free_cash``.
+    Counting the buffer matters: with a 20% buffer, 20.1% cash leaves ~0.1% of equity
+    to spend, and an extra slot then buys a single share (PROD COMP, 2026-11-03).
     Tested deterministically with zero mocks.
     """
     max_positions = base_max_positions
-    while cash_ratio > 0.15 and num_positions >= max_positions:
+    while (cash_ratio - cash_buffer_pct) > CFG.system_slot_expand_free_cash and num_positions >= max_positions:
         max_positions += 1
     return max_positions
 
@@ -593,6 +599,10 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                     _log.warning(f"🛑 AI BUY REJECTED: Per-trade loss cap leaves less than 1 share of {buy['sym']}.")
                     continue
                 cost = qty * buy["price"]
+
+            if cost < CFG.system_min_ticket_usd:
+                _log.warning(f"🛑 AI BUY REJECTED (Minimum Ticket): {buy['sym']} buy of ${cost:,.2f} is below the ${CFG.system_min_ticket_usd:,.0f} minimum.")
+                continue
 
             state["balance"] -= cost
             # Update cumulative bucket counts for sequence

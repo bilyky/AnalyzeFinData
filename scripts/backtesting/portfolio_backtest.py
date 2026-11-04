@@ -64,7 +64,7 @@ The universe is TODAY's symbol list, so results carry survivorship bias (optimis
 Synthetic placeholder bars (provisional / O=H=L=C on zero volume) never price a fill.
 Loss-cap differences from live: a buy with no prior ATR gets no stop here, so no cap
 (live falls back to an 8% stop and caps against it); a trimmed buy may land under
-MIN_TICKET_USD (live rejects it only below 1 share); quantities are fractional.
+MIN_TICKET_USD (live checks it after trimming); quantities are fractional.
 
 The score panel (~6s/symbol) is cached in Data/portfolio_backtest_panel.json, keyed by a
 fingerprint of the scoring code + calibration studies; --rebuild forces a recompute.
@@ -117,8 +117,8 @@ PROFILE_RULES = {
                    "min_score_threshold": 10.0, "cash_buffer_pct": 0.50},
 }
 REGIME_BAND = 2.0          # determine_profile: SPY L60 > +2 AGGRESSIVE, < -2 DEFENSIVE
-SLOT_EXPAND_CASH = 0.15    # determine_max_positions: add slots while cash ratio > 15%
-MIN_TICKET_USD = 100.0
+SLOT_EXPAND_CASH = CFG.system_slot_expand_free_cash  # determine_max_positions: free cash above the buffer
+MIN_TICKET_USD = CFG.system_min_ticket_usd
 INITIAL_EQUITY = 100_000.0
 STOP_TAIL_P95_GATE = 1.5     # % of equity (R&D #54a, pre-registered)
 STOP_TAIL_WORST_GATE = 3.0
@@ -168,9 +168,10 @@ def profile_for(spy_l60) -> str:
     return "BALANCED"
 
 
-def expanded_max_positions(cash_ratio: float, num_positions: int, base_max: int) -> int:
+def expanded_max_positions(cash_ratio: float, num_positions: int, base_max: int,
+                           cash_buffer_pct: float = 0.0) -> int:
     max_positions = base_max
-    while cash_ratio > SLOT_EXPAND_CASH and num_positions >= max_positions:
+    while (cash_ratio - cash_buffer_pct) > SLOT_EXPAND_CASH and num_positions >= max_positions:
         max_positions += 1
     return max_positions
 
@@ -441,11 +442,11 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
         rules = PROFILE_RULES[profile_for(spy.get(day, [None, None])[1]) if regime else "BALANCED"]
         remaining = len(pos) - len(pending_sells)
         if risk_rules:
+            buffer = 0.0 if "cash_buffer" in disable else rules["cash_buffer_pct"]
             max_pos = (rules["max_positions"] if "slot_expansion" in disable else
                        expanded_max_positions(cash / equity if equity else 0.0, remaining,
-                                              rules["max_positions"]))
+                                              rules["max_positions"], buffer))
             per_cap = rules["max_allocation_pct"] * equity
-            buffer = 0.0 if "cash_buffer" in disable else rules["cash_buffer_pct"]
         else:
             max_pos, per_cap, buffer = rules["max_positions"], equity / rules["max_positions"], 0.0
         kept = sum(p["qty"] * p["last"] for s, p in pos.items() if s not in pending_sells)

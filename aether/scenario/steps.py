@@ -680,12 +680,12 @@ def screen_buys(state, prices, rules, ws, profile, today):
     # BUY logic (filtered by profile momentum threshold)
     base_max = rules["max_positions"]
 
-    # Dynamic Position-Slot Expansion: If cash is plentiful (>15% of equity) and we are full, dynamically expand slots to deploy cash!
+    # Dynamic Position-Slot Expansion: add slots while cash above the profile buffer is > 15% of equity and we are full.
     cash_ratio = state["balance"] / state["equity"] if state["equity"] > 1.0 else 0.0
-    max_positions = game.determine_max_positions(cash_ratio, len(state["positions"]), base_max)
+    max_positions = game.determine_max_positions(cash_ratio, len(state["positions"]), base_max,
+                                                 rules["cash_buffer_pct"])
     if max_positions > base_max:
-        game._log.info(f"🛡️ [Slot Expansion] Plentiful cash ({cash_ratio*100:.1f}%) detected. Dynamically expanding slots from {base_max} to {max_positions} to prevent cash drag!")
-        game._log.info(f"🛡️ [Slot Expansion] Plentiful cash detected. Expanding max slots from {base_max} to {max_positions}.")
+        game._log.info(f"[Slot Expansion] Cash {cash_ratio*100:.1f}% is above the {rules['cash_buffer_pct']*100:.0f}% buffer by more than {game.CFG.system_slot_expand_free_cash*100:.0f}%; slots {base_max} -> {max_positions}.")
 
     available_slots = max_positions - len(state["positions"])
 
@@ -1019,6 +1019,9 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
                                 game._log.info(f"🛡️ [Pyramiding Pass] {sym}: add capped at ${risk_cap_usd:,.2f} so a stop-out at ${stop_loss:.2f} loses at most ${max_risk_usd:,.2f}.")
                                 cash_to_deploy = risk_cap_usd
                             add_qty = game.calculate_share_qty(sym, cash_to_deploy, current_px)
+                            if 0 < add_qty * current_px < game.CFG.system_min_ticket_usd:
+                                game._log.info(f"🛡️ [Pyramiding Pass] {sym}: add of ${add_qty * current_px:,.2f} is below the ${game.CFG.system_min_ticket_usd:,.0f} minimum; no scale-in.")
+                                add_qty = 0
 
                             if add_qty > 0:
                                 cost = add_qty * current_px
