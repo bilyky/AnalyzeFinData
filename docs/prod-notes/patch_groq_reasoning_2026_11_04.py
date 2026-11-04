@@ -3,7 +3,7 @@
 Groq's `openai/gpt-oss-120b` is a reasoning model. It spends max_tokens on reasoning before the
 answer, and our callers ask for 5-150 tokens, so 39 of 68 PROD calls (11-02..11-04) came back
 empty and fell through to Gemini (which then returned 503). This sets a token floor and a low
-reasoning effort. Needs the code from the 2026-11-04 PR (it reads `min_max_tokens`).
+reasoning effort. Needs the code from PR #238 (it reads `min_max_tokens`).
 
 Run from the repo root on PROD, after the deploy:
     venv_new\\Scripts\\python.exe docs\\prod-notes\\patch_groq_reasoning_2026_11_04.py            # dry run: prints the plan
