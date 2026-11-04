@@ -529,7 +529,11 @@ class PowerGauge:
                 if key not in cl:
                     warnings.append(f"checklist_stocks missing key '{key}'")
         if warnings:
-            _pg_log.warning(f"  [SCHEMA WARNING] {self.symbol}: " + "; ".join(warnings))
+            # All three blocks empty means Chaikin has no data for the symbol (delisted or
+            # renamed; the refresh reports those once per run), not a changed schema.
+            no_data = not pgr_list and not metainfo and not cl
+            (_pg_log.debug if no_data else _pg_log.warning)(
+                f"  [SCHEMA WARNING] {self.symbol}: " + "; ".join(warnings))
 
     def init_from_ohlcv(self, entry: dict):
         """Populate price fields from an Alpha Vantage OHLCV daily entry."""
@@ -1647,6 +1651,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     # ── Phase 3: serial compute + write ──────────────────────────────────────
     updated = 0
     skipped = 0
+    no_data: list[str] = []
     picks_data: list[dict] = []
     ohlcv_cache: dict = {}  # symbol → full JSON dict (Meta Data + Time Series)
 
@@ -1654,8 +1659,10 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         power_g = pg_results[symbol]
 
         if power_g.price == -1:
-            _pg_log.warning(f"[{n}/{total}] {symbol}: no market data - row skipped (existing values preserved)")
+            _pg_log.debug(f"[{n}/{total}] {symbol}: no market data - row skipped (existing values preserved)")
             skipped += 1
+            if symbol not in fetch_failed:
+                no_data.append(symbol)
             continue
 
         # Load full OHLCV JSON — cached per symbol; _append_ohlcv_entry reuses it to avoid re-read
@@ -1752,6 +1759,11 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
               f"rr={f['risk_ratio']}, setup={flag}, br={f['buying_ratio']}, "
               f"s10={f['short_score']}, l60={f['long_score']}")
         updated += 1
+
+    # One line per run for symbols Chaikin has no data for (PROD: the same 17, often
+    # delisted names, logged 2 warnings each on every refresh). ERROR if most had none.
+    log_batch_failures(_pg_log, "[Chaikin] no market data (rows kept; delisted or renamed?)",
+                       list(dict.fromkeys(no_data)), len(unique_syms))
 
     if picks_data:
         _write_picks_sheet(wb, picks_data, date)
