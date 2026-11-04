@@ -1,9 +1,13 @@
 """
 Populate Data/Symbol cache for the last N trading days.
 
-For each trading day that is missing cache files, fetches live data from the
-Chaikin Analytics API and saves JSON under that date.  Days already fully
-cached are skipped entirely.  Run this once to backfill, then run daily.
+For the most recent trading day (today, or the last session when run on a weekend or
+holiday) it fetches the symbols that are missing and saves them under that date. Days
+already fully cached are skipped.
+
+Older missing days are listed but NOT fetched: the Chaikin API only serves current values
+(it ignores date parameters), so a fetch would store today's data under an old date. For
+PGR history use scripts/utils/chaikin_chart_backfill.py (daily PGR back to 2021-11).
 
 Usage:
     python run_history.py            # last 14 trading days (default)
@@ -27,34 +31,27 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import powergauge
-from aether import paths
+from aether import market_calendar, paths
 from aether.batch_failures import log_batch_failures
 from aether.logger import get_logger
 
 _log = get_logger("run_history")
 
-US_HOLIDAYS_2026 = {
-    datetime.date(2026, 1, 1),   # New Year's Day
-    datetime.date(2026, 1, 19),  # MLK Day
-    datetime.date(2026, 2, 16),  # Presidents' Day
-    datetime.date(2026, 4, 3),   # Good Friday
-    datetime.date(2026, 5, 25),  # Memorial Day
-    datetime.date(2026, 7, 3),   # Independence Day (observed)
-    datetime.date(2026, 9, 7),   # Labor Day
-    datetime.date(2026, 11, 26), # Thanksgiving
-    datetime.date(2026, 11, 27), # Day after Thanksgiving
-    datetime.date(2026, 12, 25), # Christmas
-}
-
-
-def trading_days(n: int) -> list[datetime.date]:
+def trading_days(n: int, today: datetime.date | None = None) -> list[datetime.date]:
+    """The last n NYSE sessions up to today (aether.market_calendar), most recent first."""
     days = []
-    d = datetime.date.today()
+    d = today or datetime.date.today()
     while len(days) < n:
-        if d.weekday() < 5 and d not in US_HOLIDAYS_2026:
+        if market_calendar.is_session(d):
             days.append(d)
         d -= datetime.timedelta(days=1)
-    return days  # most recent first
+    return days
+
+
+def fetchable(day: datetime.date, today: datetime.date | None = None) -> bool:
+    """Only the most recent session can be fetched: the API serves current values, which are
+    that session's (after a weekend or holiday nothing has changed since its close)."""
+    return day == market_calendar.last_session_on_or_before(today or datetime.date.today())
 
 
 def load_symbols() -> list[str]:
@@ -119,6 +116,11 @@ def main():
         missing = days_missing(symbols, day)
         if not missing:
             _log.console(f"{day}: all {len(symbols)} symbols cached — skip")
+            continue
+        if not fetchable(day):
+            _log.warning(f"{day}: {len(missing)} symbols have no snapshot. Not fetched: the API serves "
+                         f"current values only, so a fetch would store today's data under {day}. "
+                         f"First missing: {', '.join(missing[:10])}")
             continue
 
         total = len(missing)
