@@ -14,8 +14,10 @@ Not kept: OHLCV (RapidAPI has it), ATR/EMA (computable), and the signal and EPS 
 checked 2026-11-03 on INTC, every signal was 0 for 5 years while the snapshot cache had 17
 signal days in the last year, and every EPS field was empty.
 
-Checked against the cache on INTC (798 days): the chart's dailyPgr for D-1 equals the
-snapshot's corrected PGR for D 82% of the time (7->5 level map). A good record, not exact.
+Checked against the cache (7->5 level map): the chart's dailyPgr for D-1 equals the
+snapshot's corrected PGR for D on 98-100% of the snapshots written on their own date (INTC
+496, AAPL 826). Over all of INTC's 798 days it was 82%, because ~20% of the cache holds
+wrong-date backfills (R&D #67, scripts/utils/snapshot_integrity.py).
 
 The full response (every field, unchanged) is also kept gzipped in
 Data/Symbol_chart/raw/<SYM>_<date>.json.gz, so nothing is lost to the field choice above.
