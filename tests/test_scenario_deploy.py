@@ -14,8 +14,8 @@ carries over from the root, unchanged:
    the covered-call pass if the market is still open.
 
 Every collaborator is patched on the live module and ``ws`` is a hermetic fake —
-no network or disk. Re-export and root parity are pinned in
-``test_scenario_steps`` and ``test_scenario_parity``.
+no network or disk. Re-export is pinned in ``test_scenario_steps``; the composed
+run in ``test_scenario_runner``.
 """
 import os
 import sys
