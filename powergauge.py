@@ -434,9 +434,11 @@ class PowerGauge:
         self.money_flow = ""
         self.over_bt_sl = ""
         self.relative_strength = ""
+        self.has_pgr_factors = None     # True/False for a stock snapshot; None for ETFs, invalid, unset
 
     def init_from_json(self, data_json, check_schema=True):
         cl = data_json.get('checklist_stocks') or {}
+        self.has_pgr_factors = pgr_factors_present(data_json)
 
         # Early-out: invalid symbol reported by API
         if data_json.get('status') == 'invalid symbol':
@@ -512,8 +514,7 @@ class PowerGauge:
                 warnings.append("pgr[0] missing 'PGR Value'")
             if 'Corrected PGR Value' not in pgr_list[5]:
                 warnings.append("pgr[5] missing 'Corrected PGR Value'")
-            is_etf = len(pgr_list) > 6 and bool(pgr_list[6].get('is_etf_symbol'))
-            if not is_etf and not any(next(iter(e.values()), None) for e in pgr_list[1:5]):
+            if pgr_factors_present(data_json) is False:
                 warnings.append("no PGR factors (Financials/Earnings/Technicals/Experts all empty)")
         metainfo = data_json.get('metaInfo') or []
         if not metainfo:
@@ -1054,6 +1055,23 @@ def _legacy_factor_lists(pgr_data) -> dict:
     return out
 
 
+def pgr_factors_present(bundle: dict):
+    """True/False: does a stock snapshot carry any of the four PGR factor lists? None for an ETF
+    or a bundle without the 7-slot pgr list (invalid symbol)."""
+    pgr = (bundle or {}).get("pgr") or []
+    if len(pgr) < 7 or pgr[6].get("is_etf_symbol"):
+        return None
+    return any(next(iter(e.values()), None) for e in pgr[1:5])
+
+
+def log_factor_coverage(results: dict) -> bool:
+    """One line per batch for stocks that came back without PGR factors: ERROR (so the watchdog
+    emails) when most of them did, as on 2026-09-01; WARNING for a few. Returns the ERROR flag."""
+    stocks = {s: pg.has_pgr_factors for s, pg in results.items() if getattr(pg, "has_pgr_factors", None) is not None}
+    missing = sorted(s for s, ok in stocks.items() if not ok)
+    return log_batch_failures(_pg_log, "[Chaikin factors] no PGR factors", missing, len(stocks))
+
+
 def _pgr_rating_old5(int_rating, name) -> int:
     """Resolve the legacy 1-5 PGR rating from the new integer (1-7) or rating name."""
     if isinstance(int_rating, int) and int_rating > 0:
@@ -1332,6 +1350,7 @@ def check_from_file(prefer_cache: bool, date=None):
                 pg_results[sym] = sentinel
     _pg_log.console(f"Fetch complete ({len(unique_syms)} symbols).")
     log_batch_failures(_pg_log, "[Chaikin fetch]", fetch_failed, len(unique_syms))
+    log_factor_coverage(pg_results)
 
     # ── Phase 3: serial compute + write ──
     ohlcv_cache: dict = {}
@@ -1718,6 +1737,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
                 pg_results[sym] = sentinel
     _pg_log.console(f"Fetch complete ({len(unique_syms)} symbols).")
     log_batch_failures(_pg_log, "[Chaikin fetch]", fetch_failed, len(unique_syms))
+    log_factor_coverage(pg_results)
 
     # ── Phase 3: serial compute + write ──────────────────────────────────────
     updated = 0

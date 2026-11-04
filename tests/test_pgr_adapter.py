@@ -210,6 +210,37 @@ class TestPgrFactors(unittest.TestCase):
         self.assertEqual(pg.relative_strength, "2")
 
 
+class TestFactorCoverageAlert(unittest.TestCase):
+    def _pg(self, has):
+        p = PowerGauge("X")
+        p.has_pgr_factors = has
+        return p
+
+    def test_init_from_json_records_it(self):
+        no = _live_like_intc(); no.pop("pgrData")
+        etf = dict(no, isEtf=True)
+        got = []
+        for d in (_live_like_intc(), no, etf):
+            p = PowerGauge("X")
+            p.init_from_json(_adapt_suggestions_to_legacy(d, "X"), check_schema=False)
+            got.append(p.has_pgr_factors)
+        self.assertEqual(got, [True, False, None])
+
+    def test_most_stocks_without_factors_is_an_error(self):
+        res = {f"S{i}": self._pg(i < 1) for i in range(5)} | {"ETF": self._pg(None)}
+        with self.assertLogs(_pg_log.name, level="ERROR") as cm:
+            self.assertTrue(powergauge.log_factor_coverage(res))
+        self.assertIn("4 of 5 failed (most of the batch)", cm.output[0])
+
+    def test_a_few_is_a_warning_and_none_is_silent(self):
+        res = {f"S{i}": self._pg(i != 0) for i in range(5)}
+        with self.assertLogs(_pg_log.name, level="WARNING") as cm:
+            self.assertFalse(powergauge.log_factor_coverage(res))
+        self.assertTrue(cm.output[0].startswith("WARNING"))
+        with self.assertNoLogs(_pg_log.name, level="WARNING"):
+            self.assertFalse(powergauge.log_factor_coverage({"S": self._pg(True), "E": self._pg(None)}))
+
+
 class TestSchemaWarnsOnEmptyFactors(unittest.TestCase):
     def test_stock_without_factors_warns(self):
         d = _live_like_intc(); d.pop("pgrData")

@@ -133,13 +133,24 @@ Financials and Earnings factor matched one legacy name 77–100% of the time
 (`earningsStability` = Earnings Growth at 100%, `earningsPerformance` = Value at 85%).
 Technicals and Experts move too fast to match two months apart, so they are mapped by
 name; in every group the first new key is the group score. ETFs get empty lists.
+**Technicals and Experts are unverified** until a value match is possible (e.g. "Analyst
+Rating Trend" = `analystOptions`, "Price Strength" = `priceTrend` are name guesses). A study
+that joins post-deploy Technicals/Experts onto pre-September history should say so or
+re-check the mapping on fresh snapshots first. The only live reader, the relative-strength
+fallback in `init_from_json`, uses `Rel Strength vs Market` = `relativeStrengthVsMarket`.
 
 **Gap:** from 2026-09-01 until this mapping shipped, the adapter wrote the four lists
 empty, so the cached snapshots for those sessions have no factors. The API only serves
 current values, so they can't be refilled. `scripts/utils/pgr_factor_repair.py --mark`
-lists them in `Data/pgr_factor_gap.json` (treat as missing, not zero), and `--check`
-fails when the latest session's factor coverage drops below 90%. `_check_schema` also
-warns per stock when all four lists are empty.
+lists them in `Data/pgr_factor_gap.json`. Nothing reads that file yet; it's a record for
+studies. `backtest.load_pgr_subcategories` already treats an empty list as missing.
+`--check` fails when the latest session's factor coverage drops below 90%.
+
+**Alerts:** `_check_schema` warns per stock when all four lists are empty. After each screen
+fetch (`check_from_xls`, `check_from_file`), `log_factor_coverage` logs one
+`[Chaikin factors]` line: WARNING when a few stocks lack factors, ERROR (the watchdog
+emails ERRORs) when most do, as on 2026-09-01. Each `PowerGauge` carries
+`has_pgr_factors` (True/False; None for ETFs and invalid symbols).
 
 ### Checklist pass-through
 

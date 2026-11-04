@@ -34,6 +34,9 @@ class TestHasFactors(unittest.TestCase):
         self.assertIsNone(rep.has_factors(_bundle(factors=False, etf=True)))
         self.assertIsNone(rep.has_factors({"status": "invalid symbol"}))
         self.assertIsNone(rep.has_factors(None))
+        one_group = _bundle(factors=False)
+        one_group["pgr"][1] = {"Financials": [{"Value": 3}]}            # any group counts
+        self.assertTrue(rep.has_factors(one_group))
 
 
 class TestAudit(unittest.TestCase):
@@ -66,6 +69,26 @@ class TestAudit(unittest.TestCase):
                 rep.main(["--since", today, "--mark"])
             with open(os.path.join(data, "pgr_factor_gap.json"), encoding="utf-8") as f:
                 self.assertEqual(json.load(f)["gap_sessions"], [today])
+
+
+class TestCheckWindow(unittest.TestCase):
+    def _main(self, base, data, argv):
+        with mock.patch.object(rep.paths, "symbol_dir", return_value=base),                 mock.patch.object(rep.paths, "data_dir", return_value=data),                 mock.patch.object(rep.market_calendar, "is_session", return_value=True),                 mock.patch.object(rep, "_out"):
+            return rep.main(argv)
+
+    def test_check_looks_at_the_latest_session(self):
+        today = datetime.date.today()
+        older = (today - datetime.timedelta(days=2)).isoformat()
+        with tempfile.TemporaryDirectory() as base, tempfile.TemporaryDirectory() as data:
+            _write(base, "AAA", older, _bundle())                          # older: full
+            _write(base, "AAA", today.isoformat(), _bundle(factors=False))  # latest: empty
+            self.assertEqual(self._main(base, data, ["--check"]), 1)
+
+    def test_check_window_reaches_back_a_week(self):
+        three_ago = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()   # e.g. over a weekend
+        with tempfile.TemporaryDirectory() as base, tempfile.TemporaryDirectory() as data:
+            _write(base, "AAA", three_ago, _bundle())
+            self.assertEqual(self._main(base, data, ["--check"]), 0)
 
 
 class TestRefetchToday(unittest.TestCase):

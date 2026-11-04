@@ -59,11 +59,13 @@ venv_new\Scripts\python.exe scripts\utils\pgr_factor_repair.py --since 2026-08-2
 
 Writes `Data\pgr_factor_gap.json` (the gap sessions). Factor studies should skip those dates.
 
-## 5. Optional: a daily check (ask before installing a task)
+## 5. How a repeat would be caught
 
-`--check` exits 1 when the latest session's factor coverage is under 90%. It's a candidate
-for the watchdog or a small scheduled task, so this kind of silent gap gets caught the next
-day. Not installed by this PR.
+- Each screen run now logs one `[Chaikin factors]` line after the fetch. When most stocks
+  come back without factors it's an **ERROR**, and the watchdog emails ERRORs. No new task.
+- #235 (data completeness) also flags it in the evening email.
+- `--check` exits 1 when the latest session's coverage is under 90%, for a manual look. It's
+  not scheduled; ask me before turning it into a task.
 
 ## Roll back
 
