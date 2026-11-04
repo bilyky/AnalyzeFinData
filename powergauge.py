@@ -122,7 +122,7 @@ class ChaikinSessionUnavailable(EnvironmentError):
 
 
 _chaikin_renewer = _TokenRenewer(
-    lock_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "chaikin_reauth.lock"),
+    lock_path=os.path.join(paths.data_dir(), "chaikin_reauth.lock"),
     renew_fn=lambda: login(interactive=False),
     load_fn=lambda: _load_session_from_file(),
     lock_ttl=180,
@@ -286,14 +286,18 @@ def _build_cache_index():
     _pg_log.info(f"Cache index built: {len(_cache_file_index)} symbols")
 
 
-SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
+# Chaikin auth state lives where E*TRADE's does: aether.paths.data_dir() ($AETHER_DATA_DIR, else
+# <checkout>/Data). It used to be pinned to this module's folder, so a worktree with
+# AETHER_DATA_DIR pointing at the real Data/ still found no session and started a browser login
+# (2026-11-03).
+SESSION_FILE = os.path.join(paths.data_dir(), "session.json")
 
 # Persistent Chrome profile for browser re-auth. Its long-lived `cf_clearance` cookie
 # (~355-day exp, re-minted on each login) is the durable credential that lets Cloudflare
 # Turnstile auto-pass in a real (headed) browser with NO human — a throwaway context has
 # no cf_clearance, hits a cold Turnstile, and fails headless. (verified live 2026-09-09;
 # see plans/chaikin_api.md "Credential model" and memory project_chaikin_auto_reauth.)
-_CHAIKIN_PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "chaikin_chrome_profile")
+_CHAIKIN_PROFILE_DIR = os.path.join(paths.data_dir(), "chaikin_chrome_profile")
 
 _http_session: requests.Session | None = None
 _resolved_proxy: str | None = None   # process-level memo: "" (direct) or a proxy URL
@@ -660,9 +664,9 @@ class PowerGauge:
 
 
 def _load_session_from_file() -> dict:
-    session_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
+    session_file = SESSION_FILE
     if not os.path.exists(session_file):
-        txt_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.txt")
+        txt_file = os.path.join(os.path.dirname(SESSION_FILE), "session.txt")
         if os.path.exists(txt_file):
             with open(txt_file, "r") as f:
                 sid = f.read().strip()
@@ -680,7 +684,7 @@ def _load_session_from_file() -> dict:
 
 
 def _save_session_to_file(session_data: dict):
-    session_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
+    session_file = SESSION_FILE
     os.makedirs(os.path.dirname(session_file), exist_ok=True)
     with open(session_file, "w") as f:
         json.dump(session_data, f, indent=2)
