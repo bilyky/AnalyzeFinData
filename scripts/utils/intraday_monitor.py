@@ -35,7 +35,8 @@ _MATERIAL_DROP_PCT = 0.01
 # An alerted breach is forgotten (so a later breach alerts again) only once the price is
 # this far back above the stop; a bounce around the stop must not re-send the email.
 _CLEAR_MARGIN_PCT = 0.02
-# A price this far below its stop means the stop was set long ago and never updated.
+# A breach this deep: first seen, it is flagged as urgent; already reported under the same stop,
+# the stop is probably out of date (PROD: hand-set stops 22% to 10x above the price).
 _STALE_STOP_PCT = 0.20
 
 def load_state() -> dict:
@@ -125,6 +126,7 @@ def monitor():
     state = load_state()
     last_breached = state.get("last_breached", {})
     alerted = dict(state.get("alerted", last_breached))
+    alerted_before = dict(alerted)   # as of the last run; `alerted` is updated below
 
     # Alert a breach that is new, whose stop moved (e.g. a trailing/ratchet adjustment), or
     # whose price made a new low at least _MATERIAL_DROP_PCT below what we last alerted on.
@@ -176,12 +178,20 @@ def monitor():
             price = data["price"]
             stop = data["stop"]
 
-            if price < stop * (1 - _STALE_STOP_PCT):
-                reasoning = (f"The price is {(1 - price / stop) * 100:.0f}% below the stop, so the stop looks "
-                             "out of date. Update or remove it in the workbook.")
+            deep = price < stop * (1 - _STALE_STOP_PCT)
+            # "Out of date" only for a breach already reported under the same stop: a FIRST-seen
+            # deep breach may be a real crash and must read as the most urgent case, not as a
+            # stop to delete.
+            if deep and sym in modified_breaches and abs(alerted_before[sym].get("stop", stop) - stop) <= 1e-9:
+                reasoning = (f"The price is {(1 - price / stop) * 100:.0f}% below the stop and was already "
+                             "below it at the last alert, so the stop may be out of date. Update or remove "
+                             "it in the workbook if it no longer applies.")
             else:
                 _log.console(f"Running live AI risk analysis and reasoning for {sym}...")
                 reasoning = generate_ai_analysis(sym, price, stop)
+                if deep:
+                    reasoning = (f"DEEP BREACH, first seen this run: the price is {(1 - price / stop) * 100:.0f}% "
+                                 f"below the stop. {reasoning}")
 
             body_parts.append(
                 f"📈 {sym} — BREACH UPDATE!"

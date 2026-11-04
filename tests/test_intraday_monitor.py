@@ -141,11 +141,35 @@ class TestBreachIsEmailedOnce(unittest.TestCase):
                                {"last_breached": {"LULU": {"stop": 400.0, "price": 112.31}}})
         send.assert_not_called()
 
-    def test_stale_stop_gets_a_note_not_an_ai_call(self):
-        send, ai, _ = self._run({"LULU": 400.0, "TT": 409.83}, {"LULU": 112.31, "TT": 405.38},
-                                {"last_breached": {}})
+    def test_first_seen_deep_breach_is_urgent_not_out_of_date(self):
+        # Review of #238: a fresh 25% gap through a valid stop must not read as "remove the stop".
+        send, ai, _ = self._run({"XYZ": 100.0}, {"XYZ": 75.0}, {"last_breached": {}})
+        ai.assert_called_once_with("XYZ", 75.0, 100.0)
+        body = send.call_args.args[1]
+        self.assertIn("DEEP BREACH, first seen this run: the price is 25% below the stop", body)
+        self.assertNotIn("out of date", body)
+
+    def test_deep_breach_already_alerted_gets_the_out_of_date_note(self):
+        # LULU was alerted at $112.31 under the same $400 stop; a new low re-alerts with the note
+        # and no AI call. TT (new, shallow) still gets the AI analysis.
+        state = {"last_breached": {}, "alerted": {"LULU": {"stop": 400.0, "price": 112.31}}}
+        send, ai, _ = self._run({"LULU": 400.0, "TT": 409.83}, {"LULU": 100.0, "TT": 405.38}, state)
         ai.assert_called_once_with("TT", 405.38, 409.83)
-        self.assertIn("out of date", send.call_args.args[1])
+        self.assertIn("may be out of date", send.call_args.args[1])
+
+    def test_out_of_date_needs_a_breach_deeper_than_20_pct(self):
+        # Already alerted and a new low, but only 10% under the stop: AI analysis, no note.
+        state = {"last_breached": {}, "alerted": {"TT": {"stop": 100.0, "price": 92.0}}}
+        send, ai, _ = self._run({"TT": 100.0}, {"TT": 90.0}, state)
+        ai.assert_called_once_with("TT", 90.0, 100.0)
+        self.assertNotIn("out of date", send.call_args.args[1])
+
+    def test_a_sold_name_is_forgotten(self):
+        # GONE is no longer in the workbook (sold): it leaves the alerted memory even though no
+        # quote says it recovered, so a later re-buy that breaches alerts again.
+        state = {"last_breached": {}, "alerted": {"GONE": {"stop": 50.0, "price": 40.0}}}
+        _, _, saved = self._run({"TT": 100.0}, {"TT": 110.0}, state)
+        self.assertNotIn("GONE", saved["alerted"])
 
 if __name__ == "__main__":
     unittest.main()
