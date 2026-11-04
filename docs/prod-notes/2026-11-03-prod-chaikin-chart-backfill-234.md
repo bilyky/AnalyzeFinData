@@ -6,7 +6,8 @@ relative strength, Chaikin trend/cycle/bands, and the close for a cross-check. R
 doesn't have these; the daily snapshots only go back to 2023-08. Read-only on Chaikin's side,
 writes only the new folder. No config change, no scheduled task.
 
-It also keeps the full response, unchanged and gzipped, in `Data\Symbol_chart\raw\`.
+It also keeps the full response, unchanged and gzipped, in `Data\Symbol_chart\raw\` (only the
+latest file per symbol, so re-runs don't pile up).
 
 Cost: one GET per symbol, 2 s apart by default (`--delay N` to change it): about 25 minutes
 for ~617 symbols (estimate). The daily screen already makes ~535 Chaikin calls a day. Disk:
@@ -48,7 +49,8 @@ send me the list if it's more than a handful.
 
 ## Later
 
-Re-running it any time adds the new days and keeps the old ones. It's not scheduled. Ask
+Re-running it any time adds the new days and keeps the old ones. `--symbols X` re-checks only
+X and merges its result into `_report.json`; the other symbols' results stay. It's not scheduled. Ask
 before turning it into a task.
 
 ## Roll back

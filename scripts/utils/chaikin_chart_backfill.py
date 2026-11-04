@@ -19,6 +19,8 @@ snapshot's corrected PGR for D 82% of the time (7->5 level map). A good record, 
 
 The full response (every field, unchanged) is also kept gzipped in
 Data/Symbol_chart/raw/<SYM>_<date>.json.gz, so nothing is lost to the field choice above.
+Only the latest raw file per symbol is kept (each is ~69 KB; the 5-year window covers the
+older ones).
 
 Writes Data/Symbol_chart/<SYM>_chart.json ({"rows": {date: {...}}}, merged with earlier
 runs) and Data/Symbol_chart/_report.json with a content check per symbol: row count, PGR
@@ -81,16 +83,17 @@ def check(rows: dict, rapid_close: dict) -> dict:
     dates = sorted(rows)
     pgr = [rows[d].get("dailyPgr") for d in dates]
     rated = [p for p in pgr if p not in (None, 0)]
+    numeric = [p for p in rated if isinstance(p, (int, float))]
     shared = [d for d in dates if d in rapid_close and rows[d].get("close")][-60:]
     diffs = [abs(rows[d]["close"] / rapid_close[d] - 1) for d in shared if rapid_close[d]]
     res = {"rows": len(dates), "first": dates[0] if dates else None, "last": dates[-1] if dates else None,
-           "rated_days": len(rated), "pgr_out_of_range": sum(1 for p in rated if not 1 <= p <= 7),
+           "rated_days": len(rated), "pgr_out_of_range": len(rated) - len(numeric) + sum(1 for p in numeric if not 1 <= p <= 7),
            "close_shared": len(diffs), "close_median_diff": statistics.median(diffs) if diffs else None}
     problems = []
     if not dates:
         problems.append("no rows")
     if res["pgr_out_of_range"]:
-        problems.append(f"{res['pgr_out_of_range']} PGR values outside 1-7")
+        problems.append(f"{res['pgr_out_of_range']} PGR values outside 1-7 or not numbers")
     if res["close_median_diff"] is not None and res["close_median_diff"] > 0.01:
         problems.append(f"close differs from RapidAPI by {res['close_median_diff']:.1%} (median, last 60 days)")
     res["problems"] = problems
@@ -122,11 +125,15 @@ def fetch(symbol: str, session: dict) -> dict:
 
 
 def save_raw(symbol: str, payload) -> None:
+    """Write today's raw response and drop this symbol's older raw files."""
     d = os.path.join(chart_dir(), "raw")
     os.makedirs(d, exist_ok=True)
-    with gzip.open(os.path.join(d, f"{symbol}_{datetime.date.today().isoformat()}.json.gz"), "wt",
-                   encoding="utf-8") as f:
+    name = f"{symbol}_{datetime.date.today().isoformat()}.json.gz"
+    with gzip.open(os.path.join(d, name), "wt", encoding="utf-8") as f:
         json.dump(payload, f)
+    for old in os.listdir(d):
+        if old != name and old.startswith(f"{symbol}_") and old[len(symbol) + 1:][:4].isdigit():
+            os.remove(os.path.join(d, old))
 
 
 def _load(path: str) -> dict:
@@ -188,14 +195,16 @@ def run(symbols: list, force=False, fetch_fn=None, sleep=SLEEP) -> dict:
 
 
 def report(symbols: list) -> dict:
-    out = {}
+    """Check the given symbols and merge the results into _report.json (other symbols kept)."""
+    path = os.path.join(chart_dir(), "_report.json")
+    out = _load(path).get("symbols", {})
     for s in symbols:
         rows = _load(os.path.join(chart_dir(), f"{s}_chart.json")).get("rows")
         if rows:
             out[s] = check(rows, rapid_closes(s))
-    with open(os.path.join(chart_dir(), "_report.json"), "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump({"written": datetime.datetime.now().isoformat(timespec="seconds"), "symbols": out}, f, indent=1)
-    return out
+    return {s: out[s] for s in symbols if s in out}
 
 
 def main(argv=None) -> int:
