@@ -1,4 +1,5 @@
 import datetime
+import gzip
 import sys
 import re
 import requests
@@ -433,9 +434,11 @@ class PowerGauge:
         self.money_flow = ""
         self.over_bt_sl = ""
         self.relative_strength = ""
+        self.has_pgr_factors = None     # True/False for a stock snapshot; None for ETFs, invalid, unset
 
     def init_from_json(self, data_json, check_schema=True):
         cl = data_json.get('checklist_stocks') or {}
+        self.has_pgr_factors = pgr_factors_present(data_json)
 
         # Early-out: invalid symbol reported by API
         if data_json.get('status') == 'invalid symbol':
@@ -511,6 +514,8 @@ class PowerGauge:
                 warnings.append("pgr[0] missing 'PGR Value'")
             if 'Corrected PGR Value' not in pgr_list[5]:
                 warnings.append("pgr[5] missing 'Corrected PGR Value'")
+            if pgr_factors_present(data_json) is False:
+                warnings.append("no PGR factors (Financials/Earnings/Technicals/Experts all empty)")
         metainfo = data_json.get('metaInfo') or []
         if not metainfo:
             warnings.append("'metaInfo' list missing or empty")
@@ -1014,6 +1019,63 @@ _SIGNAL_KEYS = ("overBoughtSell", "overSoldBuy", "breakdownSell", "breakoutBuy",
                 "relStrengthBreakdown")
 
 
+# pgrData (new) -> the legacy factor lists, in the legacy order: (legacy name, new key).
+# Financials and Earnings were matched on 26 symbols (legacy 2026-08-31 vs live 2026-11-03,
+# 77-100% exact agreement per factor). Technicals and Experts move too fast to match two
+# months apart; they are mapped by name. In every group the first new key is the group
+# score ("Value"). Source of the mapping: plans/chaikin_api.md.
+_PGR_FACTOR_MAP = (
+    ("Financials", "financials", (
+        ("Value", "financialStrength"), ("LT Debt to Equity", "debtEquityRatio"),
+        ("Price to Book", "priceToBookValue"), ("Return on Equity", "returnOnInvestment"),
+        ("Price to Sales", "priceToSalesRatio"), ("Free Cash Flow", "businessValue"))),
+    ("Earnings", "earnings", (
+        ("Value", "earningsPerformance"), ("Earnings Growth", "earningsStability"),
+        ("Earnings Surprise", "epsSurprise"), ("Earnings Trend", "earningsTrend"),
+        ("Projected P/E", "projectedPeRatio"), ("Earnings Consistency", "earningsConsistency"))),
+    ("Technicals", "technicals", (
+        ("Value", "priceVolumeActivity"), ("Rel Strength vs Market", "relativeStrengthVsMarket"),
+        ("Chaikin Money Flow", "chaikinVolumeAccumulation"), ("Price Strength", "priceTrend"),
+        ("Price Trend ROC", "priceTrendRoc"), ("Volume Trend", "volumeTrend"))),
+    ("Experts", "experts", (
+        ("Value", "investorSentiment"), ("Estimate Trend", "earningEstimatesRevision"),
+        ("Short Interest", "shortInterest"), ("Insider Activity", "insiderActivity"),
+        ("Analyst Rating Trend", "analystOptions"), ("Industry Rel Strength", "relativeStrengthVsIndustry"))),
+)
+
+
+_CHECKLIST_PASSTHROUGH = ("strengthCount", "timingCount", "sentence1", "sentence2", "sentence3a", "sentence3b",
+                          "sentence4")
+
+
+def _legacy_factor_lists(pgr_data) -> dict:
+    """{"Financials": [{"Value": 2}, {"LT Debt to Equity": 3}, ...], ...} from new pgrData.
+    A factor the API leaves out (or sends as null) is left out, so an ETF gets empty lists."""
+    pd = pgr_data if isinstance(pgr_data, dict) else {}
+    out = {}
+    for legacy, new, pairs in _PGR_FACTOR_MAP:
+        grp = pd.get(new) if isinstance(pd.get(new), dict) else {}
+        out[legacy] = [{name: grp[key]} for name, key in pairs if grp.get(key) is not None]
+    return out
+
+
+def pgr_factors_present(bundle: dict):
+    """True/False: does a stock snapshot carry any of the four PGR factor lists? None for an ETF
+    or a bundle without the 7-slot pgr list (invalid symbol)."""
+    pgr = (bundle or {}).get("pgr") or []
+    if len(pgr) < 7 or pgr[6].get("is_etf_symbol"):
+        return None
+    return any(next(iter(e.values()), None) for e in pgr[1:5])
+
+
+def log_factor_coverage(results: dict) -> bool:
+    """One line per batch for stocks that came back without PGR factors: ERROR (so the watchdog
+    emails) when most of them did, as on 2026-09-01; WARNING for a few. Returns the ERROR flag."""
+    stocks = {s: pg.has_pgr_factors for s, pg in results.items() if getattr(pg, "has_pgr_factors", None) is not None}
+    missing = sorted(s for s, ok in stocks.items() if not ok)
+    return log_batch_failures(_pg_log, "[Chaikin factors] no PGR factors", missing, len(stocks))
+
+
 def _pgr_rating_old5(int_rating, name) -> int:
     """Resolve the legacy 1-5 PGR rating from the new integer (1-7) or rating name."""
     if isinstance(int_rating, int) and int_rating > 0:
@@ -1050,12 +1112,13 @@ def _adapt_suggestions_to_legacy(data: dict, symbol: str) -> dict:
     industry_name = data.get("industry") or data.get("sector") or data.get("name") or ""
     is_etf = bool(data.get("isEtf"))
 
+    factors = _legacy_factor_lists(data.get("pgrData"))
     pgr_list = [
         {"PGR Value": raw5},
-        {"Financials": []},
-        {"Earnings": []},
-        {"Technicals": []},
-        {"Experts": []},
+        {"Financials": factors["Financials"]},
+        {"Earnings": factors["Earnings"]},
+        {"Technicals": factors["Technicals"]},
+        {"Experts": factors["Experts"]},
         {"Corrected PGR Value": corr5},
         {"is_etf_symbol": is_etf, "technical_rank": data.get("technicalRank") or 0},
     ]
@@ -1087,8 +1150,37 @@ def _adapt_suggestions_to_legacy(data: dict, symbol: str) -> dict:
         "change": str(chg) if chg is not None else None,
         "stockStatus": cl.get("status"),
     }
+    # Same names in the new checklistData and the legacy cache. strengthCount/timingCount feed
+    # the live R&D #32 guard (checklist.get("strengthCount", 1) < 1); they were dropped from
+    # 2026-09-01 until #232, so the guard ran on the default. Copied only when present: a None
+    # would break that comparison.
+    for k in _CHECKLIST_PASSTHROUGH:
+        if cl.get(k) is not None:
+            checklist[k] = cl[k]
     return {"status": "ok", "pgr": pgr_list, "metaInfo": [meta], "checklist_stocks": checklist}
 # @doc-sync-end: chaikin_api
+
+
+def _save_raw(symbol: str, cache_date, raw_jsn) -> None:
+    """Keep the untouched /api/suggestions response next to the adapted snapshot, so a field
+    the adapter drops can be rebuilt later (the 20 PGR factors were lost 2026-09-01 .. #232
+    because only the adapted bundle was kept). ~5 KB gzipped per stock."""
+    try:
+        d = os.path.join(paths.symbol_raw_dir(), symbol)
+        os.makedirs(d, exist_ok=True)
+        with gzip.open(os.path.join(d, f"{symbol}_{cache_date}.json.gz"), "wt", encoding="utf-8") as f:
+            json.dump(raw_jsn, f)
+    except OSError as e:  # the raw copy is a safety net; never fail the fetch over it
+        _pg_log.warning(f"[Raw Cache] {symbol}: could not save the raw response ({e})")
+
+
+def load_raw(symbol: str, cache_date):
+    """The saved raw response for a symbol/date, or None."""
+    p = os.path.join(paths.symbol_raw_dir(), symbol, f"{symbol}_{cache_date}.json.gz")
+    if not os.path.exists(p):
+        return None
+    with gzip.open(p, "rt", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _allow_reauth: bool = True) -> PowerGauge:
@@ -1171,6 +1263,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
             else:
                 with open(os.path.join(symbol_dir, f"{symbol}_{cache_date}.json"), "w") as fw:
                     json.dump(data_jsn, fw)
+                _save_raw(symbol, cache_date, raw_jsn)
 
         elif response.status_code in (401, 403):
             if _allow_reauth:
@@ -1261,6 +1354,7 @@ def check_from_file(prefer_cache: bool, date=None):
                 pg_results[sym] = sentinel
     _pg_log.console(f"Fetch complete ({len(unique_syms)} symbols).")
     log_batch_failures(_pg_log, "[Chaikin fetch]", fetch_failed, len(unique_syms))
+    log_factor_coverage(pg_results)
 
     # ── Phase 3: serial compute + write ──
     ohlcv_cache: dict = {}
@@ -1647,6 +1741,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
                 pg_results[sym] = sentinel
     _pg_log.console(f"Fetch complete ({len(unique_syms)} symbols).")
     log_batch_failures(_pg_log, "[Chaikin fetch]", fetch_failed, len(unique_syms))
+    log_factor_coverage(pg_results)
 
     # ── Phase 3: serial compute + write ──────────────────────────────────────
     updated = 0
