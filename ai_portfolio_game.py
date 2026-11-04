@@ -600,10 +600,6 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                     continue
                 cost = qty * buy["price"]
 
-            if cost < CFG.system_min_ticket_usd:
-                _log.warning(f"🛑 AI BUY REJECTED (Minimum Ticket): {buy['sym']} buy of ${cost:,.2f} is below the ${CFG.system_min_ticket_usd:,.0f} minimum.")
-                continue
-
             state["balance"] -= cost
             # Update cumulative bucket counts for sequence
             if is_scarcity:

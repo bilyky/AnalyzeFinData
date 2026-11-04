@@ -1019,9 +1019,6 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
                                 game._log.info(f"🛡️ [Pyramiding Pass] {sym}: add capped at ${risk_cap_usd:,.2f} so a stop-out at ${stop_loss:.2f} loses at most ${max_risk_usd:,.2f}.")
                                 cash_to_deploy = risk_cap_usd
                             add_qty = game.calculate_share_qty(sym, cash_to_deploy, current_px)
-                            if 0 < add_qty * current_px < game.CFG.system_min_ticket_usd:
-                                game._log.info(f"🛡️ [Pyramiding Pass] {sym}: add of ${add_qty * current_px:,.2f} is below the ${game.CFG.system_min_ticket_usd:,.0f} minimum; no scale-in.")
-                                add_qty = 0
 
                             if add_qty > 0:
                                 cost = add_qty * current_px

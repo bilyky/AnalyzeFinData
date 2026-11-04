@@ -64,7 +64,7 @@ The universe is TODAY's symbol list, so results carry survivorship bias (optimis
 Synthetic placeholder bars (provisional / O=H=L=C on zero volume) never price a fill.
 Loss-cap differences from live: a buy with no prior ATR gets no stop here, so no cap
 (live falls back to an 8% stop and caps against it); a trimmed buy may land under
-MIN_TICKET_USD (live checks it after trimming); quantities are fractional.
+MIN_TICKET_USD (live rejects it only below 1 share); quantities are fractional.
 
 The score panel (~6s/symbol) is cached in Data/portfolio_backtest_panel.json, keyed by a
 fingerprint of the scoring code + calibration studies; --rebuild forces a recompute.
@@ -118,7 +118,7 @@ PROFILE_RULES = {
 }
 REGIME_BAND = 2.0          # determine_profile: SPY L60 > +2 AGGRESSIVE, < -2 DEFENSIVE
 SLOT_EXPAND_CASH = CFG.system_slot_expand_free_cash  # determine_max_positions: free cash above the buffer
-MIN_TICKET_USD = CFG.system_min_ticket_usd
+MIN_TICKET_USD = 100.0
 INITIAL_EQUITY = 100_000.0
 STOP_TAIL_P95_GATE = 1.5     # % of equity (R&D #54a, pre-registered)
 STOP_TAIL_WORST_GATE = 3.0
