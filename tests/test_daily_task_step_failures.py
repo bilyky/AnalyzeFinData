@@ -100,6 +100,13 @@ class TestMainReportsStepFailures(unittest.TestCase):
         self.assertIn("Automation completed successfully.", self._info_lines())
         self.assertNotIn("STEP FAILURE", self.emails[0][0])
 
+    def test_data_completeness_banner_reaches_the_email(self):
+        with mock.patch.object(daily_task, "_data_completeness_banner", return_value="<div>DATA-BANNER</div>"):
+            daily_task.main()
+        subject, body = self.emails[0]
+        self.assertTrue(subject.startswith("[DATA] "))
+        self.assertIn("<body><div>DATA-BANNER</div>", body)
+
     def test_timed_out_history_step_returns_one_and_is_in_the_report(self):
         self.fail_steps = {"run_history.py"}
         rc = daily_task.main()
