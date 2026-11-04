@@ -186,6 +186,7 @@ def ledger_scale_ins(history: list, last_close) -> dict:
         if exit_px is None:
             exit_px = last_close(sym, day)
         row = {"symbol": sym, "date": day, "price": px, "after_scale_out": bool(prior),
+               "same_day": bool(prior) and prior[-1]["date"] == day,
                "ret_pct": round((exit_px / px - 1) * 100, 2) if exit_px else None}
         if prior:
             row["sold_at"] = float(prior[-1]["price"])
@@ -199,7 +200,8 @@ def ledger_scale_ins(history: list, last_close) -> dict:
 
     churn = [x for x in rows if x["after_scale_out"]]
     other = [x for x in rows if not x["after_scale_out"]]
-    out = {"after_scale_out": summary(churn), "other_scale_ins": summary(other), "rows": rows}
+    out = {"after_scale_out": summary(churn), "other_scale_ins": summary(other),
+           "same_day_rebuys": sum(1 for x in churn if x["same_day"]), "rows": rows}
     if len(churn) < MIN_LEDGER_N or len(other) < MIN_LEDGER_N:
         out["direction"] = "TOO_FEW"
     else:
@@ -212,11 +214,13 @@ def ledger_scale_ins(history: list, last_close) -> dict:
 def latest_close_fn():
     cache = {}
 
-    def last_close(sym, _day):
+    def last_close(sym, day):
+        """The latest cached close, or None when the cache does not reach past `day`."""
         if sym not in cache:
             ts = br.load_ohlcv(sym)
-            cache[sym] = float(ts[max(ts)]["4. close"]) if ts else None
-        return cache[sym]
+            cache[sym] = (max(ts), float(ts[max(ts)]["4. close"])) if ts else None
+        hit = cache[sym]
+        return hit[1] if hit and hit[0] > day else None
     return last_close
 
 

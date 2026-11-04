@@ -173,6 +173,13 @@ class TestScaleInLedger(unittest.TestCase):
         self.assertFalse(rows["OLD"]["after_scale_out"])           # outside CHURN_DAYS
         self.assertEqual(out["direction"], "TOO_FEW")
 
+    def test_latest_close_must_postdate_the_add(self):
+        ts = {"2026-10-30": {"4. close": "50.0"}}
+        with mock.patch.object(st.br, "load_ohlcv", return_value=ts):
+            last_close = st.latest_close_fn()
+            self.assertEqual(last_close("MNST", "2026-10-29"), 50.0)
+            self.assertIsNone(last_close("MNST", "2026-11-02"))   # cache ends before the add
+
     def test_direction(self):
         hist = []
         for k in range(3):
