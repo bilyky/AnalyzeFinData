@@ -104,18 +104,74 @@ class TestCheck(Base):
 
     def test_non_trading_day_and_raw_copy(self):
         self.history(upto=7)
-        self.write("AAA", "2026-09-07", _snap())                     # Labor Day 2026
-        self.assertIn("not a trading day", dc.check("2026-09-07", self.base)["alarms"][0])
+        for s in ("AAA", "BBB", "CCC", "DDD"):
+            self.write(s, "2026-09-07", _snap())                     # Labor Day 2026 (a Monday)
+            self.write(s, "2026-09-05", _snap())                     # a Saturday
+        holiday = dc.check("2026-09-07", self.base)
+        self.assertEqual(holiday["alarms"], ["4 snapshots written on 2026-09-07, a weekday market holiday"])
+        weekend = dc.check("2026-09-05", self.base)                  # no bars that day: no bar alarm
+        self.assertEqual((weekend["alarms"], weekend["notes"]), ([], ["4 snapshots on 2026-09-05, a weekend day"]))
         os.makedirs(os.path.join(self._tmp.name, "Symbol_raw", "AAA"))
         open(os.path.join(self._tmp.name, "Symbol_raw", "AAA", "AAA_2026-09-01.json.gz"), "w").close()
         r = dc.check("2026-09-01", self.base)
         self.assertEqual(r["alarms"], ["3 snapshots without a raw copy (Data/Symbol_raw)"])
+
+    def test_screen_symbols_missing_today_are_named(self):
+        self.history(syms=("AAA", "BBB", "CCC", "DDD", "EEE"))
+        for s in ("AAA", "BBB", "CCC", "DDD"):
+            self.write(s, "2026-09-01", _snap())
+        self.write("NEW", "2026-08-31", _snap())                       # in only 1 of 6 prior sessions
+        r = dc.check("2026-09-01", self.base, expected=["aaa", "eee", "NEW", "NEVER"])
+        self.assertEqual(r["alarms"], ["4 snapshots, usually 5", "1 screen symbols missing today: EEE"])
+        self.assertEqual(dc.check("2026-09-01", self.base)["alarms"], ["4 snapshots, usually 5"])  # no list
+
+    def test_thresholds_at_their_edges(self):
+        syms = [f"S{i:02d}" for i in range(10)]
+        self.history(syms=syms)
+        for s in syms[:9]:                                          # 9 of 10 = exactly COUNT_DROP
+            self.write(s, "2026-09-01", _snap())
+        self.assertEqual(dc.check("2026-09-01", self.base)["alarms"], [])
+        os.remove(os.path.join(self.base, "S08", "S08_2026-09-01.json"))   # 8 of 10
+        self.assertEqual(dc.check("2026-09-01", self.base)["alarms"], ["8 snapshots, usually 10"])
+
+    def test_fill_rate_edges(self):
+        syms = [f"S{i:02d}" for i in range(10)]
+        for s in syms:
+            self.bars(s, DAYS)
+        for d in DAYS[:6]:                                          # strengthCount usually in 6/10 (60%)
+            for i, s in enumerate(syms):
+                self.write(s, d, _snap() if i < 6 else {**_snap(), "checklist_stocks": {"industry": "Weak"}})
+        def today(n_with):
+            for i, s in enumerate(syms):
+                self.write(s, "2026-09-01", _snap() if i < n_with else
+                           {**_snap(), "checklist_stocks": {"industry": "Weak"}})
+            return dc.check("2026-09-01", self.base)["alarms"]
+        self.assertEqual(today(3), [])                              # 30% = exactly half of 60%: no alarm
+        self.assertIn("checklist.strengthCount 20% (usually 60%)", today(2)[0])
+        for d in DAYS[:6]:                                          # usually 4/10 (40%): below USUAL_FILL
+            for i, s in enumerate(syms):
+                self.write(s, d, _snap() if i < 4 else {**_snap(), "checklist_stocks": {"industry": "Weak"}})
+        self.assertEqual(today(0), [])
+
+    def test_bar_share_edge_and_status_filter(self):
+        syms = [f"S{i:02d}" for i in range(10)]
+        self.history(syms=syms, upto=7)
+        self.bars("S00", DAYS[:6])                                  # 1 of 10 without a bar = 10%: a note
+        dc._bars_cache.clear()
+        r = dc.check("2026-09-01", self.base)
+        self.assertEqual((r["alarms"], len(r["notes"])), ([], 1))
+        self.bars("S01", DAYS[:6])                                  # 2 of 10 = 20%: an alarm
+        dc._bars_cache.clear()
+        self.assertIn("2 of 10 stocks have no OHLCV bar", dc.check("2026-09-01", self.base)["alarms"][0])
+        self.write("S02", "2026-09-01", {"status": "invalid symbol"})   # not counted as a snapshot
+        self.assertEqual(dc.check("2026-09-01", self.base)["snapshots"], 9)
 
     def test_banner_and_exit_code(self):
         self.assertEqual(dc.html_banner({"alarms": []}), "")
         html = dc.html_banner({"day": "2026-09-01", "alarms": ["x went empty"]})
         self.assertIn("DATA COMPLETENESS: 1 problem(s)", html)
         self.assertIn("<li>x went empty</li>", html)
+        self.assertIn("&lt;script&gt;", dc.html_banner({"day": "d", "alarms": ["signals '<script>'"]}))
         with mock.patch.object(dc, "check", return_value={"day": "d", "alarms": ["a"], "notes": []}), \
                 mock.patch.object(dc.sys.stdout, "write"):
             self.assertEqual(dc.main(["--date", "d"]), 1)
@@ -125,6 +181,16 @@ class TestCheck(Base):
 
 
 class TestDailyTaskBanner(unittest.TestCase):
+    def test_banner_goes_into_the_email_and_subject(self):
+        with mock.patch.object(daily_task, "_data_completeness_banner", return_value="<div>B</div>"):
+            html, subj = daily_task._add_data_banner("<html><body><h2>R</h2></body></html>", "Daily", "d")
+        self.assertEqual((html, subj), ("<html><body><div>B</div><h2>R</h2></body></html>", "[DATA] Daily"))
+        with mock.patch.object(daily_task, "_data_completeness_banner", return_value=""):
+            self.assertEqual(daily_task._add_data_banner("<body>x", "Daily", "d"), ("<body>x", "Daily"))
+        with mock.patch.object(daily_task, "get_symbols_from_xls", return_value=["AAA"]),                 mock.patch.object(dc, "check", return_value={"day": "d", "alarms": []}) as chk:
+            daily_task._data_completeness_banner("d")
+        self.assertEqual(chk.call_args.kwargs["expected"], ["AAA"])
+
     def test_banner_in_the_evening_email_never_raises(self):
         with mock.patch.object(dc, "check", return_value={"day": "2026-09-01", "alarms": ["x went empty"]}):
             self.assertIn("x went empty", daily_task._data_completeness_banner("2026-09-01"))

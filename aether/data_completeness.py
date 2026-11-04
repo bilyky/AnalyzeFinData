@@ -12,7 +12,11 @@ Also checked:
   - values: the 12-char signal string is 0/1 only, the PGR rating is 1-5;
   - each stock's OHLCV (Data/Symbol_full) has a bar for the session;
   - each snapshot has its raw copy (Data/Symbol_raw), once that folder exists;
-  - no snapshots on a non-trading day (2026-05-25, Memorial Day, has 488 with junk signals).
+  - screen symbols (``expected``, the Research sheet) that were there in 8 of the last 10
+    sessions and are missing today are named;
+  - non-trading days: weekend snapshots are a note (the evening task runs daily); a weekday
+    holiday with snapshots is an alarm (2026-05-25, Memorial Day, has 488 with junk
+    signals). There is no OHLCV bar check on a non-trading day.
 
 Read-only. ``check(day)`` returns a report; daily_task puts ``alarms`` at the top of the
 evening email. CLI:
@@ -22,6 +26,7 @@ evening email. CLI:
 """
 import argparse
 import datetime
+import html
 import json
 import os
 import re
@@ -34,6 +39,8 @@ BASELINE_DAYS = 10          # prior sessions the fill rates are compared with
 USUAL_FILL = 0.5            # a field filled for at least half the stocks counts as "usual"
 DROP = 0.5                  # alarm when today's fill rate is under half the usual one
 COUNT_DROP = 0.9            # alarm when there are under 90% of the usual number of snapshots
+BAR_MISS = 0.1              # alarm when more than 10% of stocks have no OHLCV bar for the session
+KEEPS_UP = 0.8              # a screen symbol present in 80% of the prior sessions is expected today
 SIGNALS_RE = re.compile(r"^[01]{12}$")
 
 
@@ -117,7 +124,7 @@ def _latest_day(base: str, symbols: list) -> str | None:
     return None
 
 
-def check(day: str | None = None, base: str | None = None) -> dict:
+def check(day: str | None = None, base: str | None = None, expected: list | None = None) -> dict:
     base = base or paths.symbol_dir()
     symbols = sorted(x for x in os.listdir(base) if os.path.isdir(os.path.join(base, x)))
     day = day or _latest_day(base, symbols)
@@ -127,8 +134,13 @@ def check(day: str | None = None, base: str | None = None) -> dict:
     prior = [st for st in (day_stats(base, symbols, d) for d in _sessions_before(datetime.date.fromisoformat(day),
                                                                                 BASELINE_DAYS)) if st["n"]]
     alarms, notes = [], []
-    if today["n"] and not market_calendar.is_session(datetime.date.fromisoformat(day)):
-        alarms.append(f"{today['n']} snapshots written on {day}, which is not a trading day")
+    d = datetime.date.fromisoformat(day)
+    session = market_calendar.is_session(d)
+    if today["n"] and not session:
+        if d.weekday() >= 5:
+            notes.append(f"{today['n']} snapshots on {day}, a weekend day")
+        else:
+            alarms.append(f"{today['n']} snapshots written on {day}, a weekday market holiday")
     if prior:
         usual_n = statistics.median(st["n"] for st in prior)
         if today["n"] < COUNT_DROP * usual_n:
@@ -147,8 +159,19 @@ def check(day: str | None = None, base: str | None = None) -> dict:
     if today["bad_values"]:
         sample = "; ".join(f"{s}: {', '.join(p)}" for s, p in list(today["bad_values"].items())[:5])
         alarms.append(f"{len(today['bad_values'])} snapshots with bad values ({sample})")
-    no_bar = [s for s in today["symbols"] if not _has_bar(s, day)]
-    if today["n"] and len(no_bar) > 0.1 * today["n"]:
+    if expected and prior:
+        seen = {}
+        for st in prior:
+            for s in st["symbols"]:
+                seen[s] = seen.get(s, 0) + 1
+        have = set(today["symbols"])
+        gone = sorted(s for s in {x.upper() for x in expected}
+                      if seen.get(s, 0) >= KEEPS_UP * len(prior) and s not in have)
+        if gone:
+            alarms.append(f"{len(gone)} screen symbols missing today: {', '.join(gone[:15])}"
+                          + (" ..." if len(gone) > 15 else ""))
+    no_bar = [s for s in today["symbols"] if not _has_bar(s, day)] if session else []
+    if today["n"] and len(no_bar) > BAR_MISS * today["n"]:
         alarms.append(f"{len(no_bar)} of {today['n']} stocks have no OHLCV bar for {day}")
     elif no_bar:
         notes.append(f"{len(no_bar)} stocks without an OHLCV bar for {day}: {', '.join(no_bar[:10])}")
@@ -176,7 +199,7 @@ def html_banner(report: dict) -> str:
     """A block for the top of the evening email; empty when there is nothing to say."""
     if not report.get("alarms"):
         return ""
-    items = "".join(f"<li>{a}</li>" for a in report["alarms"])
+    items = "".join(f"<li>{html.escape(a)}</li>" for a in report["alarms"])
     return (f'<div style="border:2px solid #c0392b;padding:8px 12px;margin-bottom:16px;">'
             f'<b style="color:#c0392b;">DATA COMPLETENESS: {len(report["alarms"])} problem(s) in the '
             f'{report.get("day")} download</b><ul>{items}</ul>'

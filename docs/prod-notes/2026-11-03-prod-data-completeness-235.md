@@ -13,7 +13,10 @@ What it compares, every evening, with the median of the last 10 sessions:
 - values: the 12-char signal string, PGR 1-5 (0 / -1 = unrated);
 - an OHLCV bar for the day (alarm when more than 10% of stocks lack one);
 - a raw copy per snapshot, once `Data\Symbol_raw\` exists (#232);
-- snapshots written on a non-trading day.
+- Research-sheet symbols that were there in 8 of the last 10 sessions and are missing today
+  (named; on dev, 09-01 shows 11 symbols that stopped downloading at the API switch);
+- non-trading days: weekend snapshots are only a note (the 17:00 task runs daily, so
+  Saturday and Sunday emails stay clean); snapshots on a weekday holiday are an alarm.
 
 ## 1. Before deploying: see what it says about recent days (read-only)
 
@@ -22,9 +25,9 @@ venv_new\Scripts\python.exe -m aether.data_completeness --date 2026-09-01
 venv_new\Scripts\python.exe -m aether.data_completeness
 ```
 
-On dev, 2026-09-01 gives "44 fields went empty" and recent days give `OK`. The second line
-checks the latest day; it should be `OK` (the factor loss is now the "usual" state, so it
-isn't flagged again until the fields come back).
+On dev, 2026-09-01 gives "44 fields went empty", 2026-10-31 (Saturday) gives a weekend note
+and `OK`, and 2026-10-30 gives `OK`. The second line checks the latest day; it should be `OK`
+(the factor loss is now the "usual" state, so it isn't flagged again).
 
 ## 2. Deploy
 
