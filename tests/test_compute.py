@@ -343,10 +343,12 @@ class TestSymbolValidation(unittest.TestCase):
              mock.patch("powergauge.os.makedirs"), \
              mock.patch("builtins.open", mock.mock_open()), \
              mock.patch("powergauge.json.dump") as mock_dump, \
+             mock.patch("powergauge._save_raw") as mock_raw, \
              mock.patch.object(PowerGauge, "init_from_json", lambda self, dj, **k: None), \
              mock.patch.object(PowerGauge, "find_prev_pf", lambda self: None):
             get_symbol_data("ZZZZ", date.today(), False)
         mock_dump.assert_called_once()   # ok payload reaches the cache writer
+        mock_raw.assert_called_once_with("ZZZZ", date.today(), resp.json.return_value)  # + the raw copy
 
 
 if __name__ == "__main__":
