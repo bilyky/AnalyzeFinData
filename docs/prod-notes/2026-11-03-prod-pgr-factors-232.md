@@ -30,6 +30,11 @@ sessions to 2026-08-31 show factors for every stock.
 
 Merge #232, then pull on PROD. No config change. No backup needed for the code itself.
 
+**When:** after that day's evening run. If you deploy mid-day, the next screen can read
+today's snapshots that the old code already cached (without factors) and log one
+`[Chaikin factors] … (most of the batch)` ERROR, so the watchdog emails once. It clears
+the next day.
+
 New folder: `Data\Symbol_raw\` gets the untouched Chaikin response for each stock, gzipped
 (~5 KB each, ~3 MB a day, ~750 MB a year). Check the disk has room. If `AETHER_CACHE_DIR`
 is set on PROD, it goes there with `Symbol\`.
