@@ -14,9 +14,10 @@ Also checked:
   - each snapshot has its raw copy (Data/Symbol_raw), once that folder exists;
   - screen symbols (``expected``, the Research sheet) that were there in 8 of the last 10
     sessions and are missing today are named;
-  - non-trading days: weekend snapshots are a note (the evening task runs daily); a weekday
-    holiday with snapshots is an alarm (2026-05-25, Memorial Day, has 488 with junk
-    signals). There is no OHLCV bar check on a non-trading day.
+  - non-trading days (weekends and weekday holidays): snapshots are only a note, because the
+    evening task runs daily and writes them routinely; there is no count or OHLCV bar check,
+    and on a day without snapshots no field comparison. Junk still alarms through the value
+    check (2026-05-25, Memorial Day: 56 snapshots with "-1-1-..." signals).
 
 Read-only. ``check(day)`` returns a report; daily_task puts ``alarms`` at the top of the
 evening email. CLI:
@@ -137,16 +138,14 @@ def check(day: str | None = None, base: str | None = None, expected: list | None
     d = datetime.date.fromisoformat(day)
     session = market_calendar.is_session(d)
     if today["n"] and not session:
-        if d.weekday() >= 5:
-            notes.append(f"{today['n']} snapshots on {day}, a weekend day")
-        else:
-            alarms.append(f"{today['n']} snapshots written on {day}, a weekday market holiday")
+        kind = "a weekend day" if d.weekday() >= 5 else "a weekday market holiday"
+        notes.append(f"{today['n']} snapshots on {day}, {kind}")
     if prior:
         usual_n = statistics.median(st["n"] for st in prior)
-        if today["n"] < COUNT_DROP * usual_n:
+        if session and today["n"] < COUNT_DROP * usual_n:
             alarms.append(f"{today['n']} snapshots, usually {usual_n:.0f}")
         dropped = []
-        for f in sorted({f for st in prior for f in st["rate"]}):
+        for f in sorted({f for st in prior for f in st["rate"]}) if today["n"] else []:
             usual = statistics.median(st["rate"].get(f, 0.0) for st in prior)
             now = today["rate"].get(f, 0.0)
             if usual >= USUAL_FILL and now < DROP * usual:

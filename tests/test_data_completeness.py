@@ -108,7 +108,13 @@ class TestCheck(Base):
             self.write(s, "2026-09-07", _snap())                     # Labor Day 2026 (a Monday)
             self.write(s, "2026-09-05", _snap())                     # a Saturday
         holiday = dc.check("2026-09-07", self.base)
-        self.assertEqual(holiday["alarms"], ["4 snapshots written on 2026-09-07, a weekday market holiday"])
+        self.assertEqual((holiday["alarms"], holiday["notes"]),
+                         ([], ["4 snapshots on 2026-09-07, a weekday market holiday"]))
+        self.write("AAA", "2026-09-07", _snap(signals="-1-1-1-1-1-1-1-1-1-1-1-1"))  # junk still alarms
+        self.assertIn("bad values (AAA", dc.check("2026-09-07", self.base)["alarms"][0])
+        empty = dc.check("2026-04-03", self.base)                   # Good Friday, nothing written
+        self.assertEqual(empty["alarms"], [])
+        self.assertEqual(dc.check("2026-09-08", self.base)["alarms"][0], "0 snapshots, usually 4")  # a session
         weekend = dc.check("2026-09-05", self.base)                  # no bars that day: no bar alarm
         self.assertEqual((weekend["alarms"], weekend["notes"]), ([], ["4 snapshots on 2026-09-05, a weekend day"]))
         os.makedirs(os.path.join(self._tmp.name, "Symbol_raw", "AAA"))
@@ -124,6 +130,24 @@ class TestCheck(Base):
         r = dc.check("2026-09-01", self.base, expected=["aaa", "eee", "NEW", "NEVER"])
         self.assertEqual(r["alarms"], ["4 snapshots, usually 5", "1 screen symbols missing today: EEE"])
         self.assertEqual(dc.check("2026-09-01", self.base)["alarms"], ["4 snapshots, usually 5"])  # no list
+
+    def test_holiday_without_snapshots_is_quiet(self):
+        self.history(upto=7)                                         # sessions up to 09-01, a baseline
+        r = dc.check("2026-09-07", self.base)                        # Labor Day, nothing written
+        self.assertEqual((r["alarms"], r["baseline_sessions"]), ([], 7))
+
+    def test_keeps_up_edge(self):
+        syms = ("AAA", "BBB", "CCC", "DDD")
+        self.history(syms=syms, upto=7)                             # 6 earlier sessions + 09-01
+
+        def screen_alarms():
+            r = dc.check("2026-09-01", self.base, expected=["EEE"])
+            return [a for a in r["alarms"] if "screen symbols" in a]
+        for d in DAYS[2:6]:                                         # EEE in 4 of 6 earlier sessions (67%)
+            self.write("EEE", d, _snap())
+        self.assertEqual(screen_alarms(), [])
+        self.write("EEE", DAYS[1], _snap())                         # 5 of 6 = 83%, over KEEPS_UP 0.8
+        self.assertEqual(screen_alarms(), ["1 screen symbols missing today: EEE"])
 
     def test_thresholds_at_their_edges(self):
         syms = [f"S{i:02d}" for i in range(10)]
@@ -147,7 +171,9 @@ class TestCheck(Base):
                            {**_snap(), "checklist_stocks": {"industry": "Weak"}})
             return dc.check("2026-09-01", self.base)["alarms"]
         self.assertEqual(today(3), [])                              # 30% = exactly half of 60%: no alarm
-        self.assertIn("checklist.strengthCount 20% (usually 60%)", today(2)[0])
+        two = today(2)
+        self.assertEqual(len(two), 1)
+        self.assertIn("checklist.strengthCount 20% (usually 60%)", two[0])
         for d in DAYS[:6]:                                          # usually 4/10 (40%): below USUAL_FILL
             for i, s in enumerate(syms):
                 self.write(s, d, _snap() if i < 4 else {**_snap(), "checklist_stocks": {"industry": "Weak"}})
@@ -162,7 +188,9 @@ class TestCheck(Base):
         self.assertEqual((r["alarms"], len(r["notes"])), ([], 1))
         self.bars("S01", DAYS[:6])                                  # 2 of 10 = 20%: an alarm
         dc._bars_cache.clear()
-        self.assertIn("2 of 10 stocks have no OHLCV bar", dc.check("2026-09-01", self.base)["alarms"][0])
+        alarms = dc.check("2026-09-01", self.base)["alarms"]
+        self.assertEqual(len(alarms), 1)
+        self.assertIn("2 of 10 stocks have no OHLCV bar", alarms[0])
         self.write("S02", "2026-09-01", {"status": "invalid symbol"})   # not counted as a snapshot
         self.assertEqual(dc.check("2026-09-01", self.base)["snapshots"], 9)
 

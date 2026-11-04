@@ -15,8 +15,10 @@ What it compares, every evening, with the median of the last 10 sessions:
 - a raw copy per snapshot, once `Data\Symbol_raw\` exists (#232);
 - Research-sheet symbols that were there in 8 of the last 10 sessions and are missing today
   (named; on dev, 09-01 shows 11 symbols that stopped downloading at the API switch);
-- non-trading days: weekend snapshots are only a note (the 17:00 task runs daily, so
-  Saturday and Sunday emails stay clean); snapshots on a weekday holiday are an alarm.
+- non-trading days (weekends and weekday holidays such as Thanksgiving 11-26 and Christmas
+  12-25): snapshots are only a note, because the 17:00 task runs daily; no count or bar
+  check. Junk values on those days still alarm (Memorial Day 05-25 had 56 junk signal
+  strings).
 
 ## 1. Before deploying: see what it says about recent days (read-only)
 
