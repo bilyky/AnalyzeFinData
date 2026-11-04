@@ -34,7 +34,8 @@ def patch(cfg: dict) -> list[str]:
     if groq.get("min_max_tokens") != MIN_MAX_TOKENS:
         changes.append(f"groq.min_max_tokens: {groq.get('min_max_tokens')!r} -> {MIN_MAX_TOKENS}")
         groq["min_max_tokens"] = MIN_MAX_TOKENS
-    extra = groq.setdefault("extra_body", {})
+    extra = groq.get("extra_body") or {}   # also covers "extra_body": null
+    groq["extra_body"] = extra
     if extra.get("reasoning_effort") != REASONING_EFFORT:
         changes.append(f"groq.extra_body.reasoning_effort: {extra.get('reasoning_effort')!r} -> {REASONING_EFFORT!r}")
         extra["reasoning_effort"] = REASONING_EFFORT
