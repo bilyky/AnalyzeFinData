@@ -26,7 +26,7 @@ an order and never opens a browser. Private inputs and outputs live in `Data/pos
 
 1. Check the clock (ET) with a shell command. Don't assume the date.
 2. The script reads the OceanView context pack offline for account values (see
-   `/oceanview-adviser` Step 0 for what `health` allows). If `health` is `failed`, don't
+   `.claude/commands/oceanview-adviser.md` Step 0 for what `health` allows). If `health` is `failed`, don't
    quote current account numbers.
 
 ## Step 1: Run the monitor
@@ -86,17 +86,7 @@ python scripts/monitoring/position_watch.py --symbol INTC --lesson "<one sentenc
 - **Lots:** losses first, but only outside ±30 days of a vest or ESPP purchase (wash sale).
   Then long-term lots with the smallest gain per share. Short-term lots last.
 
-## Private config (`Data/position_watch/config.json`)
+## Private config
 
-```json
-{"symbol": "INTC", "floor_pct": 0.30, "tranche_pct": 0.05,
- "replacements": ["SPY", "RSP"], "peers": ["AMD", "NVDA", "QCOM", "MU", "AVGO", "TSM", "MRVL", "ON"],
- "stock_plan_shares": 0, "outside_assets_usd": 0, "outside_symbol_shares": 0,
- "acquisition_dates": ["YYYY-MM-DD"], "lt_rate": 0.281, "st_rate": 0.371}
-```
-
-- `stock_plan_shares`: owned (not unvested) shares in the stock-plan account. The API doesn't
-  see it, so update it after each vest or ESPP purchase.
-- `outside_assets_usd`: assets outside E*TRADE (e.g. a 401(k)) that count in the total.
-- `acquisition_dates`: past and upcoming vest and ESPP dates. They drive the wash-sale check.
-- `lt_rate` / `st_rate`: the user's marginal rates. Confirm them with a CPA.
+`Data/position_watch/config.json` and the lots file are set up once; the fields and how to keep
+them current are in `docs/prod-notes/2026-11-03-prod-position-watch-229.md` (steps 2 and 4).

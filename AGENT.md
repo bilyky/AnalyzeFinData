@@ -146,6 +146,7 @@ Step-by-step workflows live as plain markdown in `.claude/commands/<name>.md`. T
 *   `ship-pr` — take a change from branch to pushed PR with CI verified.
 *   `run-study` — backtest-first evidence before wiring, loosening or removing a rule: fixed decision rule, independence-aware statistics, verdict tests, result recorded in `plans/roadmap.md`.
 *   `status`, `analyze`, `compare-stocks`, `daily-run`, `intraday-monitor`, `watchdog`, `pattern-discover`, `extract-intel`, `oceanview-adviser` — portfolio and operations workflows (see each file's header).
+*   `position-watch` — daily recommend-only monitor of one concentrated holding (default INTC): trim / hold / wait with a RETRO of past calls; private inputs in `Data/position_watch/`.
 
 Two skills use the `SKILL.md` frontmatter layout instead (`name` + `description`, then the body); any agent can open them directly:
 

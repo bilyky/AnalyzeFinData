@@ -41,6 +41,7 @@ sys.path.insert(0, BASE_DIR)
 import numpy as np
 
 from aether import market_calendar, patterns, paths
+from bar_provenance import real_dates
 from aether.etrade.client import ETradeClient
 from aether.logger import get_logger
 from aether.oceanview_context import build_oceanview_context
@@ -87,7 +88,7 @@ def load_config(path=None) -> dict:
 
 def bars_from_series(ts: dict) -> dict | None:
     """Real (non-placeholder) daily bars, split-adjusted, as parallel lists."""
-    days = sorted(d for d in ts if not ts[d].get("provisional") and float(ts[d].get("5. volume") or 0) > 0)
+    days = real_dates(ts)
     if len(days) < 30:
         return None
     raw = {k: [float(ts[d][k]) for d in days] for k in ("1. open", "2. high", "3. low", "4. close")}
@@ -247,12 +248,20 @@ def in_wash_window(day: datetime.date, acquisition_dates: list) -> bool:
     return any(abs((day - datetime.date.fromisoformat(a)).days) <= WASH_DAYS for a in acquisition_dates)
 
 
+def anniversary(day: datetime.date) -> datetime.date:
+    """One year after ``day``; a Feb 29 lot rolls to Mar 1 in a non-leap year. Long-term =
+    sold after this date (held more than one year)."""
+    try:
+        return day.replace(year=day.year + 1)
+    except ValueError:
+        return datetime.date(day.year + 1, 3, 1)
+
+
 def pick_lots(lots: list, usd: float, price: float, today: datetime.date, cfg: dict) -> dict:
     """Lots for a sale of ~usd: losses first (only outside the wash-sale windows), then
     long-term lots with the smallest gain per share, then short-term gain lots."""
     wash = in_wash_window(today, cfg["acquisition_dates"])
-    is_lt = lambda lot: today >= datetime.date.fromisoformat(lot["acquired"]).replace(
-        year=datetime.date.fromisoformat(lot["acquired"]).year + 1) + datetime.timedelta(days=1)
+    is_lt = lambda lot: today > anniversary(datetime.date.fromisoformat(lot["acquired"]))
     losses = [x for x in lots if x["price"] > price and not wash]
     lt_g = sorted([x for x in lots if x["price"] <= price and is_lt(x)], key=lambda x: price - x["price"])
     st_g = sorted([x for x in lots if x["price"] <= price and not is_lt(x)], key=lambda x: price - x["price"])
@@ -330,9 +339,12 @@ def _pack_holdings(symbol: str):
     OceanView pack (offline read: never touches the broker, writes nothing). The symbol's
     snapshot value is taken out so the caller reprices those shares at today's price."""
     pack = build_oceanview_context(live=False)
-    held = [p for p in pack["state"]["positions"] if p["symbol"] == symbol]
+    state = pack.get("state") or {}
+    if state.get("positions") is None or state.get("accounts") is None:
+        return None, None, pack.get("meta") or {}     # no broker snapshot: holdings unknown
+    held = [p for p in state["positions"] if p["symbol"] == symbol]
     shares = sum(p["qty"] for p in held)
-    net = sum(a.get("net_value") or 0 for a in pack["state"]["accounts"])
+    net = sum(a.get("net_value") or 0 for a in state["accounts"])
     return shares, net - sum(p.get("mval") or 0 for p in held), pack["meta"]
 
 
@@ -372,9 +384,12 @@ def run(symbol=None, live=False, journal=True, config_path=None) -> dict:
     if live_px:
         price = live_px
     shares, acct_other, meta = _pack_holdings(symbol)
-    sym_value = (shares + cfg["stock_plan_shares"] + cfg["outside_symbol_shares"]) * price
-    total = acct_other + (shares + cfg["stock_plan_shares"]) * price + cfg["outside_assets_usd"]
-    conc = concentration(sym_value, total, cfg["floor_pct"])
+    if shares is None:      # no account snapshot: the share of the total is unknown, so no TRIM
+        conc = {"value": None, "total": None, "pct": None, "headroom_usd": None}
+    else:
+        sym_value = (shares + cfg["stock_plan_shares"] + cfg["outside_symbol_shares"]) * price
+        total = acct_other + (shares + cfg["stock_plan_shares"]) * price + cfg["outside_assets_usd"]
+        conc = concentration(sym_value, total, cfg["floor_pct"])
     today = datetime.date.today()
     doubts = data_doubts(m["date"], {s: p["days"][-1] if p else None for s, p in peer_bars.items()},
                          {s: repl[s]["date"] if s in repl else None for s in cfg["replacements"]},
@@ -416,7 +431,8 @@ def print_report(rep: dict) -> None:
     for s, r in rep["replacements"].items():
         _out(f"  replacement {s}: {r['close']:.2f}, vs SMA50 {f(r['stretch_50'])}, RSI {f(r['rsi14'], '.0f')}, "
              f"entry {'OK' if r['entry_ok'] else 'stretched'}")
-    _out(f"  concentration {f(c['pct'], '.1%')} of total; above the floor: ${c['headroom_usd']:,.0f}")
+    head = "-" if c["headroom_usd"] is None else f"${c['headroom_usd']:,.0f}"
+    _out(f"  concentration {f(c['pct'], '.1%')} of total; above the floor: {head}")
     _out(f"\n  CALL: {k['action']}" + (f" ~${k['tranche_usd']:,.0f} into {k['replacement']}" if k["action"] == "TRIM" else ""))
     for reason in k["reasons"]:
         _out(f"    - {reason}")

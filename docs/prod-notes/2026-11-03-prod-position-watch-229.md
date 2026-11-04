@@ -22,6 +22,27 @@ Data\position_watch\INTC_lots.json     your lots: [{"acquired": "YYYY-MM-DD", "q
 Data\position_watch\INTC_journal.jsonl the daily calls + lessons (keep one copy only: run on one machine)
 ```
 
+The config fields (any left out take the defaults shown):
+
+```json
+{"symbol": "INTC", "floor_pct": 0.30, "tranche_pct": 0.05,
+ "replacements": ["SPY", "RSP"], "peers": ["AMD", "NVDA", "QCOM", "MU", "AVGO", "TSM", "MRVL", "ON"],
+ "stock_plan_shares": 0, "outside_assets_usd": 0, "outside_symbol_shares": 0,
+ "acquisition_dates": ["YYYY-MM-DD"], "lt_rate": 0.281, "st_rate": 0.371}
+```
+
+- `stock_plan_shares`: owned (not unvested) shares in the stock-plan account. The API doesn't
+  see that account.
+- `outside_assets_usd`: everything outside E*TRADE that counts in the total (e.g. the 401(k)),
+  **including** the value of any `outside_symbol_shares`. Those shares are added to the
+  symbol's value but not again to the total.
+- `outside_symbol_shares`: shares of the symbol held outside E*TRADE (e.g. INTC in the 401(k)).
+- `acquisition_dates`: past and upcoming vest and ESPP dates. They drive the wash-sale check.
+- `lt_rate` / `st_rate`: your marginal rates.
+
+If the account snapshot is missing (a fresh machine with no OceanView pack yet), the script
+still runs: the share of the total shows `-` and the call is HOLD, never TRIM.
+
 Check it reads them (no journal write):
 
 ```powershell

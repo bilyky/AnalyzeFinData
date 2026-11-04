@@ -190,6 +190,14 @@ class TestLots(unittest.TestCase):
         self.assertNotIn("2026-06-01", [x["acquired"] for x in r["lots"]])
         self.assertEqual(r["lots"][0]["acquired"], "2024-01-02")
 
+    def test_feb_29_lot_does_not_crash(self):
+        self.assertEqual(pw.anniversary(datetime.date(2024, 2, 29)), datetime.date(2025, 3, 1))
+        self.assertEqual(pw.anniversary(datetime.date(2024, 3, 1)), datetime.date(2025, 3, 1))
+        lots = [{"acquired": "2024-02-29", "qty": 10, "price": 50.0}]
+        for day, lt in ((datetime.date(2025, 3, 1), False), (datetime.date(2025, 3, 2), True)):
+            r = pw.pick_lots(lots, 300, 60.0, day, dict(CFG, acquisition_dates=[]))
+            self.assertEqual(r["lots"][0]["term"], "LT" if lt else "ST")
+
     def test_tax_estimate(self):
         r = pw.pick_lots(self.lots, 600, 60.0, datetime.date(2027, 1, 5), dict(CFG, acquisition_dates=[]))
         # Only the loss lot is needed: 10 sh x (60 - 110) = -500 short-term.
@@ -253,6 +261,112 @@ class TestPackHoldings(unittest.TestCase):
         with mock.patch.object(pw, "build_oceanview_context", return_value=pack):
             shares, other, meta = pw._pack_holdings("INTC")
         self.assertEqual((shares, other, meta["health"]), (10, 1200.0, "degraded"))
+
+
+def _session_bars(n=300, drift=0.0, seed=0, end=None):
+    """n session bars ending on the last completed session (so no stale-history doubt)."""
+    end = end or pw.market_calendar.last_session_on_or_before(datetime.date.today() - datetime.timedelta(days=1))
+    days, d = [], end
+    while len(days) < n:
+        if pw.market_calendar.is_session(d):
+            days.append(d.isoformat())
+        d -= datetime.timedelta(days=1)
+    days.reverse()
+    rng = np.random.default_rng(seed)
+    closes = list(100 * np.exp(np.cumsum(rng.normal(drift, 0.01, n))))
+    return {"days": days, "idx": {x: i for i, x in enumerate(days)}, "o": closes, "h": closes, "l": closes,
+            "c": closes, "v": [1e6] * n}
+
+
+class TestBoundaries(unittest.TestCase):
+    def test_overbought_replacement_is_not_an_entry(self):
+        b = _bars([100.0] * 50 + [100.0 + 0.1 * k for k in range(1, 16)])   # +1.5%, but RSI 100
+        r = pw.replacement_timing(b, 64)
+        self.assertLess(r["stretch_50"], pw.STRETCH_MAX)
+        self.assertFalse(r["entry_ok"])
+
+    def test_wash_window_edges(self):
+        self.assertTrue(pw.in_wash_window(datetime.date(2026, 12, 30), ["2026-11-30"]))    # day 30
+        self.assertFalse(pw.in_wash_window(datetime.date(2026, 12, 31), ["2026-11-30"]))   # day 31
+        self.assertTrue(pw.in_wash_window(datetime.date(2026, 10, 31), ["2026-11-30"]))    # 30 before
+
+    def test_crash_day_edge(self):
+        conc = pw.concentration(500_000, 1_000_000, 0.30)
+        at = pw.decide(_metrics(ret_1=-0.05), _resid(-1.5), [], _repl(), conc, CFG)
+        below = pw.decide(_metrics(ret_1=-0.0501), _resid(-1.5), [], _repl(), conc, CFG)
+        self.assertEqual((at["action"], below["action"]), ("TRIM", "WAIT"))
+
+    def test_placeholder_bars_are_dropped(self):
+        ts = {(datetime.date(2025, 1, 1) + datetime.timedelta(days=k)).isoformat():
+              {"1. open": "10", "2. high": "10", "3. low": "10", "4. close": "10", "5. volume": "100"}
+              for k in range(40)}
+        ts["2025-01-05"]["provisional"] = True
+        ts["2025-01-06"]["5. volume"] = "0"
+        days = pw.bars_from_series(ts)["days"]
+        self.assertEqual(len(days), 38)
+        self.assertNotIn("2025-01-05", days)
+        self.assertNotIn("2025-01-06", days)
+
+
+class TestRun(unittest.TestCase):
+    """run() wiring: bars, the account snapshot and the quote are patched; no files, no network."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        bars = {s: _session_bars(seed=i) for i, s in enumerate(["INTC", *CFG["peers"], "SPY", "RSP"])}
+        self.cfg = os.path.join(self._tmp.name, "config.json")
+        with open(self.cfg, "w", encoding="utf-8") as f:
+            f.write('{"stock_plan_shares": 100, "outside_assets_usd": 1000}')
+        self._p = [mock.patch.object(pw, "load_bars", side_effect=lambda s: bars.get(s)),
+                   mock.patch.object(pw, "watch_dir", return_value=self._tmp.name)]
+        for p in self._p:
+            p.start()
+
+    def tearDown(self):
+        for p in self._p:
+            p.stop()
+        self._tmp.cleanup()
+
+    def _run(self, pack=(10, 500.0, {"health": "ok"}), live_px=None, live=False, call=None):
+        with mock.patch.object(pw, "_pack_holdings", return_value=pack),                 mock.patch.object(pw, "_live_price", return_value=live_px),                 mock.patch.object(pw, "decide", side_effect=(lambda *a: dict(call)) if call else pw.decide):
+            return pw.run("INTC", live=live, journal=False, config_path=self.cfg)
+
+    def test_no_account_snapshot_gives_hold_not_a_crash(self):
+        r = self._run(pack=(None, None, {"health": "failed"}))
+        self.assertIsNone(r["concentration"]["pct"])
+        self.assertEqual(r["call"]["action"], "HOLD")
+        self.assertIn("account snapshot failed: the share of the total is uncertain", r["doubts"])
+        with mock.patch.object(pw, "_out"):
+            pw.print_report(r)                                   # prints "-" for the unknowns
+
+    def test_total_counts_stock_plan_shares(self):
+        r = self._run(live_px=50.0, live=True)
+        c = r["concentration"]
+        self.assertEqual(c["value"], (10 + 100) * 50.0)            # brokerage + stock plan
+        self.assertEqual(c["total"], 500.0 + (10 + 100) * 50.0 + 1000)
+        self.assertEqual((r["price"], r["price_source"]), (50.0, "live quote"))
+
+    def test_doubts_turn_a_trim_into_wait(self):
+        trim = {"action": "TRIM", "reasons": ["weak"], "tranche_usd": 100.0, "replacement": "SPY"}
+        self.assertEqual(self._run(call=trim)["call"]["action"], "TRIM")                  # nothing in doubt
+        r = self._run(call=trim, live=True, live_px=None)                                 # quote failed
+        self.assertEqual(r["call"]["action"], "WAIT")
+        self.assertIn("not sure: live quote unavailable: using the last close", r["call"]["reasons"])
+        r = self._run(call=trim, pack=(10, 500.0, {"health": "failed"}))
+        self.assertEqual(r["call"]["action"], "WAIT")
+
+    def test_retro_skips_todays_call(self):
+        with mock.patch.object(pw, "retro", wraps=pw.retro) as retro:
+            self._run()
+        self.assertEqual(retro.call_args.args[3], datetime.date.today().isoformat())
+
+
+class TestPackHoldingsMissing(unittest.TestCase):
+    def test_no_positions_or_accounts_means_unknown(self):
+        for state in ({"positions": None, "accounts": None}, {"positions": [], "accounts": None}, {}):
+            with mock.patch.object(pw, "build_oceanview_context",
+                                   return_value={"meta": {"health": "failed"}, "state": state}):
+                self.assertEqual(pw._pack_holdings("INTC")[:2], (None, None))
 
 
 class TestConfig(unittest.TestCase):
