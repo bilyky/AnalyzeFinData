@@ -77,6 +77,7 @@ class TestRunHistoryStops(unittest.TestCase):
              mock.patch("run_history.load_symbols", return_value=["A", "B", "C", "D"]), \
              mock.patch("run_history.trading_days", return_value=[day, day - datetime.timedelta(days=1)]), \
              mock.patch("run_history.days_missing", side_effect=lambda syms, d: list(syms)), \
+             mock.patch("run_history.fetchable", return_value=True), \
              mock.patch("run_history.powergauge.login", return_value={"jsessionid": "x"}), \
              mock.patch("run_history.powergauge.get_symbol_data", side_effect=fetch), \
              mock.patch.dict("os.environ", {"CHAIKIN_WORKERS": "1"}):
