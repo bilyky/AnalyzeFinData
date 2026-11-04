@@ -128,6 +128,8 @@ class TestWatchdogNightHoursSkip(unittest.TestCase):
 
         # Verify that task/log audits WERE successfully run overnight (no blind spots!)
         self.assertEqual(mock_check_logs.call_count, 2)
+        # The re-audit after healing must not log "found issues" a second time (#238).
+        self.assertEqual([c.kwargs for c in mock_check_logs.call_args_list], [{}, {"log_found": False}])
         mock_log.info.assert_any_call("💤 [Night-Hours Skip] Skipping heavy process supervisor and port sentry overnight.")
 
     # run_watchdog() would otherwise launch REAL children: the process supervisor
@@ -167,6 +169,8 @@ class TestWatchdogNightHoursSkip(unittest.TestCase):
 
         # Verify check_logs WAS called (full diagnostics executed!)
         self.assertEqual(mock_check_logs.call_count, 2)
+        # The re-audit after healing must not log "found issues" a second time (#238).
+        self.assertEqual([c.kwargs for c in mock_check_logs.call_args_list], [{}, {"log_found": False}])
 
 
 class TestRecoveryNextStepsFalseGreen(unittest.TestCase):
