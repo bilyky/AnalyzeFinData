@@ -279,6 +279,13 @@ def _session_bars(n=300, drift=0.0, seed=0, end=None):
 
 
 class TestBoundaries(unittest.TestCase):
+    def test_rsi_edge_at_70(self):
+        b = _bars([100.0] * 60)
+        with mock.patch.object(pw, "rsi", return_value=70.0):
+            self.assertFalse(pw.replacement_timing(b, 59)["entry_ok"])
+        with mock.patch.object(pw, "rsi", return_value=69.9):
+            self.assertTrue(pw.replacement_timing(b, 59)["entry_ok"])
+
     def test_overbought_replacement_is_not_an_entry(self):
         b = _bars([100.0] * 50 + [100.0 + 0.1 * k for k in range(1, 16)])   # +1.5%, but RSI 100
         r = pw.replacement_timing(b, 64)
@@ -358,7 +365,9 @@ class TestRun(unittest.TestCase):
     def test_retro_skips_todays_call(self):
         with mock.patch.object(pw, "retro", wraps=pw.retro) as retro:
             self._run()
-        self.assertEqual(retro.call_args.args[3], datetime.date.today().isoformat())
+        args = retro.call_args.args
+        self.assertEqual(len(args), 4, "retro() must be told today's date")
+        self.assertEqual(args[3], datetime.date.today().isoformat())
 
 
 class TestPackHoldingsMissing(unittest.TestCase):
