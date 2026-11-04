@@ -14,8 +14,8 @@ unchanged:
 3. **Cash** — the loop credits nothing; ``balance_addition`` is added once.
 
 Every collaborator is patched on the live module — no network or disk.
-Re-export and root parity are pinned in ``test_scenario_steps`` and
-``test_scenario_parity``.
+Re-export is pinned in ``test_scenario_steps``; the composed run in
+``test_scenario_runner``.
 """
 import os
 import sys

@@ -11,6 +11,10 @@ begins lifting the god-function's *stateful stages* out of
 mutate it in place, and return their result — the shape a ``RunContext`` step will
 compose in B7.
 
+Since the switch the game runs these stages through ``runners.run_daily_management``;
+they are the only copy of this logic. The "extracted verbatim from" notes below
+describe where each block came from.
+
 FIRST STAGE: ``determine_profile``
 ----------------------------------
 Extracted verbatim from the profile-determination block at the top of

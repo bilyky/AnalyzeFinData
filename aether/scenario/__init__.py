@@ -1,15 +1,15 @@
-"""aether.scenario — composable scenario package (BUILD phase, strangler-fig).
+"""aether.scenario — composable scenario package (strangler-fig, R&D #44).
 
 Decomposes the 2178-line procedural ``ai_portfolio_game.py`` into entity views,
 action ports, and composable scenario runners, mirroring the shipped
 ``aether/etrade/`` hexagonal ports-and-adapters schema (design doc
 ``plans/scenario-refactor.md``, R&D #44).
 
-**Additive during BUILD:** nothing here is wired into ``ai_portfolio_game`` yet —
-the root script is untouched until the REPLACE phase, so the full test suite
-cannot regress while the package is assembled: prices (B1), entity views (B2),
-helpers (B3), ``steps`` (B5/B6) and ``runners`` (B7) are all built and tested, but
-the game doesn't call them yet.
+Built additively (prices B1, entity views B2, helpers B3, ``steps`` B5/B6,
+``runners`` B7). The game's daily run now goes through the package:
+``ai_portfolio_game.run_daily_ai_management`` calls ``runners.run_daily_management``,
+and the stages in ``steps`` are the only copy of that logic. The price ports (B1)
+and entity views (B2) are still not used by the game.
 
 Re-exports the price surface (B1), the entity views (B2) and the stateless helper
 surface (B3) so scenario code (and, from the REPLACE phase, the root script) can
