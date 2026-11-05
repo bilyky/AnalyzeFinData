@@ -128,6 +128,8 @@ class TestWatchdogNightHoursSkip(unittest.TestCase):
 
         # Verify that task/log audits WERE successfully run overnight (no blind spots!)
         self.assertEqual(mock_check_logs.call_count, 2)
+        # The re-audit after healing must not log "found issues" a second time (#238).
+        self.assertEqual([c.kwargs for c in mock_check_logs.call_args_list], [{}, {"log_found": False}])
         mock_log.info.assert_any_call("💤 [Night-Hours Skip] Skipping heavy process supervisor and port sentry overnight.")
 
     # run_watchdog() would otherwise launch REAL children: the process supervisor
@@ -167,6 +169,8 @@ class TestWatchdogNightHoursSkip(unittest.TestCase):
 
         # Verify check_logs WAS called (full diagnostics executed!)
         self.assertEqual(mock_check_logs.call_count, 2)
+        # The re-audit after healing must not log "found issues" a second time (#238).
+        self.assertEqual([c.kwargs for c in mock_check_logs.call_args_list], [{}, {"log_found": False}])
 
 
 class TestRecoveryNextStepsFalseGreen(unittest.TestCase):
@@ -205,6 +209,23 @@ class TestRecoveryNextStepsFalseGreen(unittest.TestCase):
         self.assertNotIn("pushed the fix to the main branch", html)
         self.assertIn("Automatic Resume", html)
         self.assertNotIn("delete the circuit breaker lock file", html)
+
+
+
+class TestCheckLogsWarnsOncePerCycle(unittest.TestCase):
+    """The watchdog audits logs twice per cycle (before and after healing). Only the first
+    audit logs "check_logs found issues"; PROD logged each one twice an hour."""
+
+    def _warnings(self, **kw):
+        with mock.patch.object(watchdog, "_check_plain_logs", return_value=["E1"]),              mock.patch.object(watchdog, "_check_structured_log", return_value=[]),              mock.patch.object(watchdog, "_log") as log:
+            self.assertEqual(watchdog.check_logs(**kw), ["E1"])
+        return [c for c in log.warning.call_args_list if "check_logs found issues" in c.args[0]]
+
+    def test_first_audit_warns(self):
+        self.assertEqual(len(self._warnings()), 1)
+
+    def test_re_audit_does_not_warn_again(self):
+        self.assertEqual(self._warnings(log_found=False), [])
 
 
 if __name__ == "__main__":

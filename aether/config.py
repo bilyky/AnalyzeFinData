@@ -254,6 +254,10 @@ class _Config:
         # loses at most this fraction of equity: (entry - stop) * shares <= equity * pct.
         self.system_max_trade_risk_pct = float(
             os.environ.get("AETHER_MAX_TRADE_RISK_PCT") or system.get("max_trade_risk_pct", 0.01))
+        # Slot expansion adds a slot only while cash above the profile's buffer exceeds this
+        # fraction of equity (determine_max_positions).
+        self.system_slot_expand_free_cash = float(
+            os.environ.get("AETHER_SLOT_EXPAND_FREE_CASH") or system.get("slot_expand_free_cash", 0.15))
         
         # Breakout Waiver / PGR Bypass parameters
         self.system_bypass_score_floor  = float(os.environ.get("AETHER_BYPASS_SCORE_FLOOR")  or system.get("bypass_score_floor", 8.0))

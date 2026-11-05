@@ -372,12 +372,18 @@ def _conviction_cap_pct(total, base_pct, ceiling_pct, relax_start, relax_full):
 # @doc-sync-end: scarcity_core
 
 
-def determine_max_positions(cash_ratio: float, num_positions: int, base_max_positions: int) -> int:
+def determine_max_positions(cash_ratio: float, num_positions: int, base_max_positions: int,
+                            cash_buffer_pct: float = 0.0) -> int:
     """Determine max positions after applying Dynamic Position-Slot Expansion.
+
+    A slot is added only while the cash above the profile's buffer
+    (``cash_ratio - cash_buffer_pct``) exceeds ``CFG.system_slot_expand_free_cash``.
+    Counting the buffer matters: with a 20% buffer, 20.1% cash leaves ~0.1% of equity
+    to spend, and an extra slot then buys a single share (PROD COMP, 2026-11-03).
     Tested deterministically with zero mocks.
     """
     max_positions = base_max_positions
-    while cash_ratio > 0.15 and num_positions >= max_positions:
+    while (cash_ratio - cash_buffer_pct) > CFG.system_slot_expand_free_cash and num_positions >= max_positions:
         max_positions += 1
     return max_positions
 
@@ -650,24 +656,42 @@ def calculate_ticker_trend_score(symbol: str):
     cache as a flat market (Zero-Trust).
     """
     try:
-        closes = _load_closes(symbol)
-        if len(closes) < 200:
-            return None
-
-        sma20 = sum(closes[-20:]) / 20
-        sma50 = sum(closes[-50:]) / 50
-        sma200 = sum(closes[-200:]) / 200
-        current_price = closes[-1]
-
-        s_20 = 2.5 if current_price > sma20 else -2.5
-        s_50 = 2.5 if current_price > sma50 else -2.5
-        s_200 = 2.5 if current_price > sma200 else -2.5
-        s_cross1 = 1.25 if sma20 > sma50 else -1.25
-        s_cross2 = 1.25 if sma50 > sma200 else -1.25
-
-        return s_20 + s_50 + s_200 + s_cross1 + s_cross2
+        return trend_score_from_closes(_load_closes(symbol))
     except Exception:
         return None
+
+
+def trend_score_from_closes(closes) -> float | None:
+    """The trend score of calculate_ticker_trend_score from a close series (oldest first),
+    or None with fewer than 200 closes. Pure, so a backtest can score past days."""
+    if len(closes) < 200:
+        return None
+    sma20 = sum(closes[-20:]) / 20
+    sma50 = sum(closes[-50:]) / 50
+    sma200 = sum(closes[-200:]) / 200
+    current_price = closes[-1]
+
+    s_20 = 2.5 if current_price > sma20 else -2.5
+    s_50 = 2.5 if current_price > sma50 else -2.5
+    s_200 = 2.5 if current_price > sma200 else -2.5
+    s_cross1 = 1.25 if sma20 > sma50 else -1.25
+    s_cross2 = 1.25 if sma50 > sma200 else -1.25
+
+    return s_20 + s_50 + s_200 + s_cross1 + s_cross2
+
+
+# SPY's trend score more than this above RSP's (equal-weight S&P) = narrow breadth.
+BREADTH_DIVERGENCE_MAX = 4.0
+
+
+def breadth_downgrade(base_profile: str, spy_score, rsp_score) -> str:
+    """The profile after the breadth check: one step more defensive (AGGRESSIVE -> BALANCED,
+    BALANCED -> DEFENSIVE) when SPY's trend score leads RSP's by more than
+    BREADTH_DIVERGENCE_MAX. A missing score (None) never downgrades."""
+    if spy_score is None or rsp_score is None or spy_score - rsp_score <= BREADTH_DIVERGENCE_MAX:
+        return base_profile
+    return {"AGGRESSIVE": "BALANCED", "BALANCED": "DEFENSIVE"}.get(base_profile, base_profile)
+
 
 def calculate_bubble_z_score(symbol: str):
     """
@@ -735,14 +759,12 @@ def get_market_regime():
             return base_profile
         delta = spy_score - rsp_score
 
-        if delta > 4.0:
+        if delta > BREADTH_DIVERGENCE_MAX:
             _log.warning(f"⚠️ [BREADTH ALERT] SPY-RSP Divergence is high: {delta:.2f} (SPY: {spy_score:.1f}, RSP: {rsp_score:.1f})")
-            if base_profile == "AGGRESSIVE":
-                _log.info("  -> Downgrading profile from AGGRESSIVE to BALANCED due to narrow market breadth!")
-                return "BALANCED"
-            elif base_profile == "BALANCED":
-                _log.info("  -> Downgrading profile from BALANCED to DEFENSIVE due to narrow market breadth!")
-                return "DEFENSIVE"
+        adjusted = breadth_downgrade(base_profile, spy_score, rsp_score)
+        if adjusted != base_profile:
+            _log.info(f"  -> Downgrading profile from {base_profile} to {adjusted} due to narrow market breadth!")
+            return adjusted
     except Exception as e:
         _log.warning(f"Error applying breadth divergence filter: {e}")
 

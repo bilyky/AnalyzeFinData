@@ -46,6 +46,11 @@ MAX_GAP_DAYS = 30   # trigger compact/full fetch if latest entry is this many ca
 SLEEP_SEC    = 14   # 14 s between requests → 4.3 req/min (safe under 5/min limit)
 COMPACT_WINDOW_DAYS = 120  # a compact fetch returns ~100 sessions (~140 calendar days)
 QUOTA_STOP_AFTER = 3  # consecutive 429s = quota spent: stop the run instead of burning 14 s per symbol
+# Alpha Vantage's "Burst pattern detected" (3-4 of ~400 fetches per PROD run, 11-02/11-03,
+# despite the 14 s spacing) clears after a pause: retry that symbol once. Capped per pass so
+# the retries stay inside pass_timeout_seconds' 600 s slack.
+BURST_RETRY_WAIT_S = 60
+BURST_RETRIES_PER_PASS = 5
 DORMANT_DAYS = 45     # no real bar this long = likely delisted/dead: queue it LAST, not first
 REQUEST_TIMEOUT = 30  # per-call HTTP timeout (s)
 
@@ -338,10 +343,19 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
                      len(queue), budget, results["deferred"])
 
         quota_hits = 0
+        burst_retries = 0
         for i, (_last, _order, sym, path, existing) in enumerate(queue[:budget], 1):
             outputsize = "full" if existing is None else "compact"
             try:
-                _fetch_and_merge(sym, path, outputsize=outputsize)
+                try:
+                    _fetch_and_merge(sym, path, outputsize=outputsize)
+                except RuntimeError as e:
+                    if "Burst pattern" not in str(e) or burst_retries >= BURST_RETRIES_PER_PASS:
+                        raise
+                    burst_retries += 1
+                    _log.info("  [RapidAPI] %s: burst limit hit; retrying once in %d s", sym, BURST_RETRY_WAIT_S)
+                    time.sleep(BURST_RETRY_WAIT_S)
+                    _fetch_and_merge(sym, path, outputsize=outputsize)
                 results["updated"] += 1
                 quota_hits = 0
                 _log.console("  [RapidAPI] %s: %s fetch OK (%d/%d, updated=%d)",
