@@ -38,6 +38,14 @@ class TestChaikinAuthStateFollowsDataDir(unittest.TestCase):
             with open(f, encoding="utf-8") as fh:
                 self.assertEqual(json.load(fh), {"jsessionid": "abc"})
 
+    def test_legacy_session_txt_is_read_next_to_session_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "session.txt"), "w", encoding="utf-8") as fh:
+                fh.write("legacy-id\n")
+            with mock.patch.object(powergauge, "SESSION_FILE", os.path.join(tmp, "session.json")), \
+                    mock.patch.object(powergauge, "_chaikin_uuid", return_value="u"):
+                self.assertEqual(powergauge._load_session_from_file()["jsessionid"], "legacy-id")
+
 
 class TestQuoteFailuresAreLogged(unittest.TestCase):
     def test_a_failed_batch_warns_and_the_rest_still_returns(self):

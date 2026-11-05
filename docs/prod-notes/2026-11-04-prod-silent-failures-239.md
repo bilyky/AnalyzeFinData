@@ -25,7 +25,7 @@ $env:AETHER_DATA_DIR
 ```powershell
 $dst = $env:AETHER_DATA_DIR   # or the User/Machine value above
 Copy-Item Data\session.json $dst
-Copy-Item Data\chaikin_chrome_profile $dst -Recurse
+Copy-Item Data\chaikin_chrome_profile $dst -Recurse   # with Chrome closed: a profile in use copies partially
 ```
 
 ## 2. Deploy
