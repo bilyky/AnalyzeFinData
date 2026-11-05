@@ -6,7 +6,8 @@ Config (`config.json` -> `ai`):
                  `type` (the wire format, a key of TRANSPORTS), a `model`, and for HTTP
                  types an `endpoint` and `api_key_source` (`env:VAR` or a literal key).
                  Optional `extra_body` adds provider-specific request fields; the core
-                 fields (model, messages, max_tokens, ...) always win.
+                 fields (model, messages, max_tokens, ...) always win. Optional
+                 `min_max_tokens` is a floor on max_tokens, for reasoning models.
     tiers      — named, ordered lists of provider names, e.g.
                  {"cheap": ["groq", "gemini_lite"], "strong": ["groq", "gemini_oai"]}.
     primary    — the default chain head when a call names no tier (legacy).
@@ -166,10 +167,13 @@ def _parse_openai_response(resp) -> str:
         raise ValueError(f"Unexpected JSON response: 'message' is not a dict: {data}")
 
     content = message.get("content")
-    if content is None and choice.get("finish_reason") == "length":
+    # Groq returns "" rather than None here, so test for any empty content.
+    if not content and choice.get("finish_reason") == "length":
         raise ValueError("Model ran out of tokens before answering (finish_reason=length, content empty). "
                          "Reasoning models spend max_tokens on reasoning first; set the provider's "
-                         "extra_body to {\"reasoning\": {\"enabled\": false}} or pick a non-reasoning model.")
+                         "min_max_tokens (e.g. 1024) and a low reasoning effort in extra_body "
+                         "(Groq: {\"reasoning_effort\": \"low\"}; OpenRouter: {\"reasoning\": {\"enabled\": false}}), "
+                         "or pick a non-reasoning model.")
     if not isinstance(content, str):
         raise ValueError(f"Unexpected JSON response: 'content' is not a string: {data}")
 
@@ -228,10 +232,12 @@ def _t_openai_compatible(pcfg, name, system, messages, max_tokens, temperature) 
     # extra_body: provider-specific request fields from config (e.g. OpenRouter's
     # {"reasoning": {"enabled": false}}). The core fields below always win.
     payload = dict(pcfg.get("extra_body") or {})
+    # min_max_tokens: a floor for reasoning models, which spend the budget on reasoning
+    # before answering; callers ask for as little as 5 tokens (instruments.py).
     payload.update({
         "model": model,
         "messages": ([{"role": "system", "content": system}] if system else []) + messages,
-        "max_tokens": max_tokens,
+        "max_tokens": max(max_tokens, int(pcfg.get("min_max_tokens") or 0)),
         "temperature": temperature,
     })
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}

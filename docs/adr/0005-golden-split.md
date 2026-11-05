@@ -25,6 +25,12 @@
   The message text may change; the meaning may not.
 - **Retire the old mutation check.** `scripts/utils/mutate_scenario_steps.py` goes once
   `steps.py` is deleted, after its mutants are rewritten as unit tests on the new pure policies.
+- **Measured gates, so no safety net is lost in transit.**
+  - **When the golden is split (S1):** the behaviour golden plus the audit test must still catch
+    the 56 mutants the full golden catches today. The #241 review measured that 8 of them are
+    caught only through log lines.
+  - **Before the stage tests and the mutation script are deleted (S9):** the new unit tests must
+    catch all 155 mutants, or a mapped equivalent of each.
 - **CI runs the tests.** It gains a job for the unit, contract and architecture suites. Today it
   runs none.
 

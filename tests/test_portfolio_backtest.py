@@ -202,7 +202,7 @@ class TestSimulate(unittest.TestCase):
         panel = {"A": {DAYS[0]: [6.0, 0.0]}, "B": {DAYS[0]: [5.5, 0.0]}}
         one_slot = {k: dict(v, max_positions=1) for k, v in pb.PROFILE_RULES.items()}
         with mock.patch.object(pb, "PROFILE_RULES", one_slot), \
-             mock.patch.object(pb, "expanded_max_positions", side_effect=lambda c, n, base: base):
+             mock.patch.object(pb, "expanded_max_positions", side_effect=lambda c, n, base, buf=0.0: base):
             default = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0)
             flipped = pb.simulate(panel, bars, DAYS[:3], cost_bps=0.0, initial=10_000.0,
                                   rank=lambda sym, day, sc: -sc[0])
@@ -289,8 +289,9 @@ class TestSimulate(unittest.TestCase):
         self.assertAlmostEqual(r["curve"][1][2], 5 * 0.15 * 10_000.0)  # BALANCED: 5 x 15%
 
     def test_disable_cash_buffer_and_slot_expansion(self):
-        # BALANCED: day 1 fills 5 x 15% = 75%. Cash 25% > 15% opens a 6th slot, which the
-        # 20% buffer limits to 80% - 75% = $500; without the buffer it gets the full 15%.
+        # BALANCED: day 1 fills 5 x 15% = 75%. Cash 25% is only 5% above the 20% buffer, so
+        # no 6th slot (it used to open one worth $500). Without the buffer, 25% free cash
+        # opens a 6th slot with the full 15%.
         syms = [f"S{k}" for k in range(8)]
         bars = {s: _bars([10] * 4) for s in syms} | {"SPY": _bars([100] * 4)}
         panel = {s: {DAYS[0]: [6.0, 0.0], DAYS[1]: [6.0, 0.0]} for s in syms}
@@ -298,7 +299,7 @@ class TestSimulate(unittest.TestCase):
         for off in ((), ("cash_buffer",), ("slot_expansion",)):
             r = pb.simulate(panel, bars, DAYS[:4], cost_bps=0.0, initial=10_000.0, disable=set(off))
             invested[off] = r["curve"][2][2]
-        self.assertAlmostEqual(invested[()], 8_000.0)
+        self.assertAlmostEqual(invested[()], 7_500.0)
         self.assertAlmostEqual(invested[("cash_buffer",)], 9_000.0)
         self.assertAlmostEqual(invested[("slot_expansion",)], 7_500.0)
 

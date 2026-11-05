@@ -165,7 +165,9 @@ class TestNewPreflightFeatures(unittest.TestCase):
         # Test 4: By default, if --smoke is not in sys.argv, smoke test is skipped.
         with mock.patch("sys.argv", ["preflight_validator.py"]):
             ok, issues = pf.check_pipeline_smoke_test()
-            self.assertTrue(ok)
+            self.assertTrue(ok)                       # does not fail the run...
+            self.assertEqual(pf.status_word(ok, "conn"), "SKIP")   # ...but is not shown as PASS
+            self.assertTrue(pf.overall_ok([("Pipeline Smoke Test", ok, "conn")]))
             self.assertEqual(issues, [])
             mock_run.assert_not_called()
 

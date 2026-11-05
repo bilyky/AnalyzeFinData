@@ -1,6 +1,6 @@
 # Plan: Decompose `ai_portfolio_game.py` into an `aether/scenario/` package (entities + action ports + composable scenarios)
 
-> **SUPERSEDED (2026-11-05)** by [aether-services.md](./aether-services.md) (R&D #75). Kept for history.
+> **SUPERSEDED (2026-11-05)** by [aether-services.md](./aether-services.md) (R&D #78). Kept for history.
 > What this plan delivered: the daily run split into 11 tested stages (`aether/scenario/steps.py`), a golden
 > snapshot, and the switch (#228). What it left behind: stages that reach back into `ai_portfolio_game` through
 > `_pkg()` (130 `game.X` calls); a 1,531-line root file; about 940 unused lines (`prices.py`, `schema.py`,

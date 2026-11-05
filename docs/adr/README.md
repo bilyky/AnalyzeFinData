@@ -12,4 +12,4 @@ a new record and links back to it.
 | [0004](0004-many-portfolios-and-consumers.md) | Many portfolios (`portfolio_id`) and many consumer projects (versioned service APIs) | Accepted 2026-11-05 |
 | [0005](0005-golden-split.md) | Split the daily-run golden test into behaviour and audit logs | Accepted 2026-11-05 |
 
-The plan that applies these decisions is [`plans/aether-services.md`](../../plans/aether-services.md) (R&D #75).
+The plan that applies these decisions is [`plans/aether-services.md`](../../plans/aether-services.md) (R&D #78).

@@ -1,14 +1,15 @@
 # Plan: AETHER as modular services, with a real domain model, many portfolios, and a database-ready data layer
 
-> R&D #75 (approved 2026-11-05). Replaces the R&D #44 "scenario" refactor ([scenario-refactor.md](./scenario-refactor.md), now superseded).
-> The decisions are recorded as ADRs in [`docs/adr/`](../docs/adr/). Progress is tracked in R&D #75 in [`roadmap.md`](./roadmap.md).
+> R&D #78 (approved 2026-11-05). Replaces the R&D #44 "scenario" refactor ([scenario-refactor.md](./scenario-refactor.md), now superseded).
+> The decisions are recorded as ADRs in [`docs/adr/`](../docs/adr/). Progress is tracked in R&D #78 in [`roadmap.md`](./roadmap.md).
 
 ## Context — why we are re-planning
 
 R&D #44 (plans/scenario-refactor.md) lifted the 720-line `run_daily_ai_management` into 11
 verbatim stages in `aether/scenario/steps.py`, and #228 made the game run them. The extraction
 was verified, with a golden snapshot, 155/155 mutants caught, and a byte-identical real-data dry
-run. But the design is poor. Findings on origin/main:
+run. But the design is poor. Findings on origin/main (measured at `abde1a2`, 2026-11-04; the counts are a
+snapshot, and the Development > Project Model page shows them live):
 
 - **No object model.** Portfolio, positions, orders and transactions are raw dicts changed in
   place by any function. The SELL transaction is built 4 ways, "close a position" exists 3
@@ -257,8 +258,8 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
   as `portfolio_id="ai_game"`.
 - **CI:** add a job that runs the unit, contract and architecture suites (today CI runs only
   compile, the validator and ruff).
-- **Retire:** `mutate_scenario_steps.py`, after its mutants have been turned into unit tests on
-  the new policies.
+- **Retire:** `mutate_scenario_steps.py`, only after the new unit tests catch all 155 of its mutants
+  (or a mapped equivalent of each). That's a measured gate in S9, not a promise.
 - **Hermetic tests:** every new path or store gets its redirect in `tests/__init__.py` in the
   same PR.
 - **Every PR:** red-then-green tests, small diffs, merge-in (not rebase), ruff, the validator.
@@ -271,7 +272,7 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
 |---|---|---|---|---|
 | F1 | Repository: abort and alert if the backup fails; atomic write | no | unit tests | right after the JSON repository |
 | F2 | Fresh $10k only on a true first run; corrupt state with no restorable backup → raise | no | unit tests | with F1 |
-| F3 | The run gate uses holiday-aware calendar/session | holidays | red test 2026-11-26 | with `market_data` session |
+| F3 | The run gate uses holiday-aware calendar/session | holidays | red test 2026-11-26 | early, before 2026-11-26 (step 1c) |
 | F4 | Remove the 4 doubled log lines | no | audit test | after the golden split |
 | F5 | The dashboard regime equals the traded regime (one function) | display | unit test | after `trading` strategy |
 | F6 | Column 23 ≠ ATR (`options.py:292`) | header-missing case | red test | with the `research` column map |
@@ -290,8 +291,17 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
    The source of truth is `plans/aether-services-progress.json` (steps, fixes and services, each with its status and
    PR), updated in every PR. The page also shows live code metrics: root-file lines, `game.X` calls, magic `row[N]`
    indexes, and `aether/scenario` lines.
+1c. **F3 holiday-aware run gate, early:** a small independent PR that lands before 2026-11-26 (Thanksgiving).
+   Today `is_market_open()` checks only weekends and 9:30-16:00 ET, so the 07:00 run passes its first gate on a
+   weekday holiday. It doesn't wait for S5.
 2. **S1 golden split** plus the audit test. **S1b** CI job for the unit, contract and
    architecture suites.
+   **Gate (measured):** with the game calling the runner, the golden-only mutant sweep (each
+   `mutate_scenario_steps.py` mutant against the golden test alone) catches 56 of 155 with the log stream
+   and 48 without it (#241 review). S1 must show that the behaviour golden plus the audit test still catch
+   all 56. The 8 caught only through log lines need explicit checks: cash buffer off, the s10 floor's
+   cash-percent scale, the R:R reject, the queued-order dedup type, the stop ratchet never lowering, the
+   abort log, the cash-deployment gate upgrade, and the heal scope. Several of these are behaviour, not wording.
 3. **S2 delete dead code:** `scenario/prices|schema|helpers` and their tests,
    `deduct_operational_costs`, `--report`.
 4. **S3 shared kernel:** `aether/core` (ids, Clock, event bus, errors) plus the architecture test
@@ -306,13 +316,15 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
    Then **F1 + F2**.
 6. **S5 `market_data`:** clock/session (computed once per run), `OhlcvStore` (freshness and heal,
    per-run caches), `ChainedPriceFeed`. The game's functions delegate, so external importers keep
-   working. Then **F3**.
+   working. (F3 already landed early, as step 1c.)
 7. **S6 `research`:** `ResearchSource` plus the column map, read once per run. Then **F6**.
 8. **S7 `ledger`:** DNA, decision log and failure rules as event subscribers.
 9. **S8 `trading`:** `StrategyProfile`, the policies and the spec sets, then `DailyRunService`
    replacing the scenario stages one group per PR (settle/queued, exits, entries, deploy). The
    `Portfolio` methods replace the dict mutation. Golden (a) on each PR. Then **F5**.
 10. **S9 delete `aether/scenario/`,** `_pkg`, the validator exemptions and `test_scenario_*`.
+    **Gate (measured):** before deleting the stage tests and `mutate_scenario_steps.py`, the new policy and
+    service unit tests must catch all 155 mutants, or a mapped equivalent of each, listed in the PR.
 11. **S10 `reporting`:** summaries, email and the excel log. Reports no longer write state.
 12. **S11 composition root + thin CLI:** `bootstrap`; external importers (data_api, server,
     real_copilot, aether_oracle, intraday_monitor, validate_scarcity_cap) move to the service

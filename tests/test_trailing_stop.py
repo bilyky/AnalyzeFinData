@@ -249,13 +249,13 @@ class TestAntiFragileFlexibility(unittest.TestCase):
     @mock.patch("ai_portfolio_game._cache_stale", return_value=False)
     def test_multiple_slot_expansion_with_while_loop(self, mock_stale, mock_verify, mock_breaker, mock_load_wb, mock_hours, mock_get_prices, mock_save_game, mock_load_game, mock_regime):
         # Setup a portfolio with 6 positions, but base max_positions is 5 (BALANCED profile)
-        # Cash is plentiful: Balance = 3000, Equity = 10000. Cash ratio = 30.0% (> 15%!).
-        # The system must dynamically expand slots using a while loop until max_positions exceeds 6 (it expands 5 -> 6 -> 7).
+        # Cash is plentiful: Balance = 5000 vs 6000 invested, cash ratio ~45%, which is more than
+        # 15% above BALANCED's 20% buffer. Slots expand 5 -> 6 -> 7 in the while loop.
         # This yields available_slots = 1, so CDW is successfully bought!
         mock_regime.return_value = "NEUTRAL"
         state = {
-            "balance": 3000.0,
-            "equity": 10000.0,
+            "balance": 5000.0,
+            "equity": 11000.0,
             "positions": {
                 "P1": {"qty": 1, "cost": 1000.0, "is_scarcity": False},
                 "P2": {"qty": 1, "cost": 1000.0, "is_scarcity": False},
