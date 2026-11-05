@@ -38,7 +38,7 @@ _CASES = [
     ("calculate_ticker_trend_score", ("SPY",), ("SPY",)),
     ("calculate_bubble_z_score", ("SPY",), ("SPY",)),
     ("calculate_share_qty", ("AAPL", 1000.0, 100.0), ("AAPL", 1000.0, 100.0)),
-    ("determine_max_positions", (0.20, 5, 5), (0.20, 5, 5)),
+    ("determine_max_positions", (0.20, 5, 5, 0.20), (0.20, 5, 5, 0.20)),
     ("adaptive_s10_floor", (0.30,), (0.30,)),
     ("should_pyramid_into_winner", (True, True, 5.0, 5.0), (True, True, 5.0, 5.0)),
     ("check_failure_rules", ("X", "Bull", 6.0, 1.0, "Tech"), ("X", "Bull", 6.0, 1.0, "Tech", 0.0)),
