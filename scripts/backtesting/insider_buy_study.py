@@ -92,7 +92,8 @@ from aether import instruments, paths  # noqa: E402
 FIRST_Q, LAST_Q = "2012q1", "2026q3"
 INDEX_URL = "https://www.sec.gov/data-research/sec-markets-data/insider-transactions-data-sets"
 # The SEC asks for a contact address in the User-Agent and serves a block page without one.
-UA = "AnalyzeFinData research admin@example.com"
+# Set SEC_USER_AGENT to "<name> <your contact address>"; the default is a placeholder.
+UA = os.environ.get("SEC_USER_AGENT") or "AnalyzeFinData research admin@example.com"
 MIN_VALUE = 100_000
 BIG_VALUE = 1_000_000
 SPACING = 20
@@ -341,13 +342,17 @@ def summarize(rows: list, key: str, lag: int) -> dict:
     monthly = [sum(v) / len(v) for _m, v in sorted(by_m.items())]
     xs = [r[key] for r in vals]
     return {"n": len(xs), "months": len(monthly), "mean": sum(xs) / len(xs), "median": statistics.median(xs),
-            "hit": sum(x > 0 for x in xs) / len(xs), "t_nw": nw_t(monthly, lag)}
+            "hit": sum(x > 0 for x in xs) / len(xs), "month_mean": sum(monthly) / len(monthly),
+            "t_nw": nw_t(monthly, lag)}
 
 
 def verdict(primary: dict, subset: dict) -> str:
+    """Means are the monthly means the t-stat is computed on (review 2026-11-05: the first
+    version tested the per-event mean next to a t over monthly means; the verdicts recorded
+    so far are the same under both)."""
     t = primary.get("t_nw")
-    if t is not None and primary.get("mean", 0) > 0 and t >= 1.96:
-        if subset.get("n", 0) >= MIN_SUBSET and subset.get("mean", 0) > 0:
+    if t is not None and primary.get("month_mean", 0) > 0 and t >= 1.96:
+        if subset.get("n", 0) >= MIN_SUBSET and subset.get("month_mean", 0) > 0:
             return "PAUSE_SUPPORTED"
         return "EDGE_NOT_IN_TRIM_SETUP"
     if t is not None and t <= -1.96:
@@ -357,7 +362,7 @@ def verdict(primary: dict, subset: dict) -> str:
 
 def verdict_drop(sub: dict) -> str:
     t = sub.get("t_nw")
-    if sub.get("n", 0) >= MIN_SUBSET and sub.get("mean", 0) > 0 and t is not None and t >= 1.96:
+    if sub.get("n", 0) >= MIN_SUBSET and sub.get("month_mean", 0) > 0 and t is not None and t >= 1.96:
         return "DROP_PAUSE_SUPPORTED"
     if t is not None and t <= -1.96:
         return "NO_EDGE"
@@ -455,7 +460,8 @@ def main(argv=None) -> int:
         _out(f"fetched {len(r['fetched'])}, cached {len(r['cached'])}, failed {r['failed']}")
         return 0
     res = run()
-    out = os.path.join(paths.data_dir(), f"insider_buy_study_{datetime.date.today().isoformat()}.json")
+    # A new file per run (date and time), so an earlier run's numbers are never overwritten.
+    out = os.path.join(paths.data_dir(), f"insider_buy_study_{datetime.datetime.now():%Y-%m-%d_%H%M%S}.json")
     with open(out, "w", encoding="utf-8") as f:
         json.dump(res, f, indent=1)
     _out(f"Insider-buy study {res['quarters'][0]}..{res['quarters'][1]}: {res['purchases']} purchase lines, "

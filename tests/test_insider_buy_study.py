@@ -115,6 +115,9 @@ class TestRoutineDropShock(unittest.TestCase):
         self.assertFalse(ib.is_routine(h, "111", "X", "2025-03-15"))      # another month
         self.assertFalse(ib.is_routine(h, "111", "X", "2027-02-15"))      # only 2024 in the 3 prior years
         self.assertFalse(ib.is_routine(h, "222", "X", "2025-02-15"))      # first-time buyer
+        h2 = ib.buy_history([{"symbol": "X", "filed": f"{y}-02-10", "traded": f"{y}-02-08", "value": 1, "ceo": False,
+                              "owners": ("333",)} for y in (2024, 2025)])
+        self.assertFalse(ib.is_routine(h2, "333", "X", "2025-02-20"))     # this year's own buy doesn't count
 
     def test_event_is_opportunistic_if_any_buyer_is(self):
         h = ib.buy_history([{"symbol": "X", "filed": f"{y}-05-02", "traded": f"{y}-05-01", "value": 1, "ceo": False,
@@ -137,10 +140,10 @@ class TestRoutineDropShock(unittest.TestCase):
         self.assertAlmostEqual(row["ret20"], 72 / 112 - 1)                  # 20 sessions back, not 5
 
     def test_verdict_drop(self):
-        self.assertEqual(ib.verdict_drop({"n": 40, "mean": 0.03, "t_nw": 2.1}), "DROP_PAUSE_SUPPORTED")
-        self.assertEqual(ib.verdict_drop({"n": 20, "mean": 0.10, "t_nw": 3.0}), "INCONCLUSIVE")    # too few
-        self.assertEqual(ib.verdict_drop({"n": 40, "mean": 0.03, "t_nw": 1.9}), "INCONCLUSIVE")
-        self.assertEqual(ib.verdict_drop({"n": 40, "mean": -0.03, "t_nw": -2.0}), "NO_EDGE")
+        self.assertEqual(ib.verdict_drop({"n": 40, "month_mean": 0.03, "t_nw": 2.1}), "DROP_PAUSE_SUPPORTED")
+        self.assertEqual(ib.verdict_drop({"n": 20, "month_mean": 0.10, "t_nw": 3.0}), "INCONCLUSIVE")    # too few
+        self.assertEqual(ib.verdict_drop({"n": 40, "month_mean": 0.03, "t_nw": 1.9}), "INCONCLUSIVE")
+        self.assertEqual(ib.verdict_drop({"n": 40, "month_mean": -0.03, "t_nw": -2.0}), "NO_EDGE")
 
 
 class TestStatsAndVerdict(unittest.TestCase):
@@ -152,22 +155,40 @@ class TestStatsAndVerdict(unittest.TestCase):
         self.assertAlmostEqual(ib.nw_t(xs, 0), m / (var / 6) ** 0.5)
         self.assertNotAlmostEqual(ib.nw_t(xs, 2), ib.nw_t(xs, 0))
 
+    def test_benchmark_window_matches_the_stock_window(self):
+        b = _bars([10.0, 10.0, 10.0, 11.0])                                    # stock +10% over sessions 2->3
+        idx = {d: 0.0 for d in b["days"]}
+        idx[b["days"][2]] = 0.50          # the start day's own move is before the window: not removed
+        self.assertAlmostEqual(ib.outcome(b, idx, 1, 1), 0.10)
+        idx[b["days"][2]], idx[b["days"][3]] = 0.0, 0.04                     # the end day's move is inside
+        self.assertAlmostEqual(ib.outcome(b, idx, 1, 1), 0.10 - 0.04)
+
     def test_summarize_groups_by_month(self):
         rows = [{"filed": "2026-01-05", "x": 0.1}, {"filed": "2026-01-20", "x": 0.3},
                 {"filed": "2026-02-03", "x": -0.1}, {"filed": "2026-03-03", "x": 0.2, }]
         s = ib.summarize(rows, "x", 0)
         self.assertEqual((s["n"], s["months"]), (4, 3))
         self.assertAlmostEqual(s["mean"], 0.125)
+        self.assertAlmostEqual(s["month_mean"], (0.2 - 0.1 + 0.2) / 3)
 
     def test_verdict_branches(self):
-        good = {"n": 500, "mean": 0.02, "t_nw": 2.5}
-        self.assertEqual(ib.verdict(good, {"n": 40, "mean": 0.01}), "PAUSE_SUPPORTED")
-        self.assertEqual(ib.verdict(good, {"n": 20, "mean": 0.05}), "EDGE_NOT_IN_TRIM_SETUP")   # subset too small
-        self.assertEqual(ib.verdict(good, {"n": 40, "mean": -0.01}), "EDGE_NOT_IN_TRIM_SETUP")
-        self.assertEqual(ib.verdict({"n": 500, "mean": 0.03, "t_nw": 1.5}, {"n": 40, "mean": 0.1}), "INCONCLUSIVE")
-        self.assertEqual(ib.verdict({"n": 500, "mean": -0.02, "t_nw": -2.2}, {"n": 40, "mean": 0.1}), "NO_EDGE")
-        # positive t but negative mean can't happen in practice; a big mean alone doesn't pass:
-        self.assertEqual(ib.verdict({"n": 9, "mean": 0.2, "t_nw": None}, {"n": 40, "mean": 0.1}), "INCONCLUSIVE")
+        good = {"n": 500, "month_mean": 0.02, "t_nw": 2.5}
+        self.assertEqual(ib.verdict(good, {"n": 40, "month_mean": 0.01}), "PAUSE_SUPPORTED")
+        self.assertEqual(ib.verdict(good, {"n": 20, "month_mean": 0.05}), "EDGE_NOT_IN_TRIM_SETUP")   # too small
+        self.assertEqual(ib.verdict(good, {"n": 40, "month_mean": -0.01}), "EDGE_NOT_IN_TRIM_SETUP")
+        self.assertEqual(ib.verdict({"n": 500, "month_mean": 0.03, "t_nw": 1.5}, {"n": 40, "month_mean": 0.1}),
+                         "INCONCLUSIVE")
+        self.assertEqual(ib.verdict({"n": 500, "month_mean": -0.02, "t_nw": -2.2}, {"n": 40, "month_mean": 0.1}),
+                         "NO_EDGE")
+        self.assertEqual(ib.verdict({"n": 9, "month_mean": 0.2, "t_nw": None}, {"n": 40, "month_mean": 0.1}),
+                         "INCONCLUSIVE")
+
+    def test_verdict_uses_the_monthly_mean_not_the_event_mean(self):
+        # a few huge events make the event mean positive while the monthly mean is negative
+        primary = {"n": 500, "mean": 0.05, "month_mean": -0.01, "t_nw": 2.5}
+        self.assertEqual(ib.verdict(primary, {"n": 40, "mean": 0.1, "month_mean": 0.1}), "INCONCLUSIVE")
+        sub = {"n": 40, "mean": 0.05, "month_mean": -0.01, "t_nw": 2.5}
+        self.assertEqual(ib.verdict_drop(sub), "INCONCLUSIVE")
 
 
 if __name__ == "__main__":
