@@ -157,6 +157,16 @@ class TestBreachIsEmailedOnce(unittest.TestCase):
         ai.assert_called_once_with("TT", 405.38, 409.83)
         self.assertIn("may be out of date", send.call_args.args[1])
 
+    def test_a_crash_that_deepens_under_the_same_stop_is_urgent(self):
+        # Recheck of #238: alerted at -5%, now -25% under the same stop -> a crash in progress,
+        # not a stale stop. AI analysis with the DEEP BREACH label, no "out of date".
+        state = {"last_breached": {}, "alerted": {"XYZ": {"stop": 100.0, "price": 95.0}}}
+        send, ai, _ = self._run({"XYZ": 100.0}, {"XYZ": 75.0}, state)
+        ai.assert_called_once_with("XYZ", 75.0, 100.0)
+        body = send.call_args.args[1]
+        self.assertIn("DEEP BREACH, deeper than at the last alert: the price is 25% below the stop", body)
+        self.assertNotIn("out of date", body)
+
     def test_out_of_date_needs_a_breach_deeper_than_20_pct(self):
         # Already alerted and a new low, but only 10% under the stop: AI analysis, no note.
         state = {"last_breached": {}, "alerted": {"TT": {"stop": 100.0, "price": 92.0}}}

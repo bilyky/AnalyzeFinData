@@ -179,10 +179,13 @@ def monitor():
             stop = data["stop"]
 
             deep = price < stop * (1 - _STALE_STOP_PCT)
-            # "Out of date" only for a breach already reported under the same stop: a FIRST-seen
-            # deep breach may be a real crash and must read as the most urgent case, not as a
-            # stop to delete.
-            if deep and sym in modified_breaches and abs(alerted_before[sym].get("stop", stop) - stop) <= 1e-9:
+            # "Out of date" only for a breach that was ALREADY this deep at the last alert, under
+            # the same stop. A first-seen deep breach, or one that was shallow at the last alert
+            # and has since crashed through the 20% bar, may be a real crash and must read as the
+            # most urgent case, not as a stop to delete.
+            prev = alerted_before.get(sym)   # None for a new breach
+            if (deep and prev and abs(prev.get("stop", stop) - stop) <= 1e-9
+                    and prev.get("price", price) < stop * (1 - _STALE_STOP_PCT)):
                 reasoning = (f"The price is {(1 - price / stop) * 100:.0f}% below the stop and was already "
                              "below it at the last alert, so the stop may be out of date. Update or remove "
                              "it in the workbook if it no longer applies.")
@@ -190,7 +193,8 @@ def monitor():
                 _log.console(f"Running live AI risk analysis and reasoning for {sym}...")
                 reasoning = generate_ai_analysis(sym, price, stop)
                 if deep:
-                    reasoning = (f"DEEP BREACH, first seen this run: the price is {(1 - price / stop) * 100:.0f}% "
+                    seen = "first seen this run" if sym in new_breaches else "deeper than at the last alert"
+                    reasoning = (f"DEEP BREACH, {seen}: the price is {(1 - price / stop) * 100:.0f}% "
                                  f"below the stop. {reasoning}")
 
             body_parts.append(
