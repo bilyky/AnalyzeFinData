@@ -170,7 +170,7 @@ class TestBurstRetry(_Base):
 
     def setUp(self):
         super().setUp()
-        self.syms = [f"S{k}" for k in range(8)]
+        self.syms = [f"S{k}" for k in range(rapidapi.BURST_RETRIES_PER_PASS + 3)]   # more than the cap
         for sym in self.syms:
             self.seed(sym, "2026-09-20")
 
@@ -183,7 +183,7 @@ class TestBurstRetry(_Base):
             if calls[sym] <= fail_times.get(sym, 0):
                 raise RuntimeError(self.BURST)
         with mock.patch.object(rapidapi.time, "sleep") as sleep:
-            res = self.run_pass(self.syms, side_effect=burst, max_fetches=8)
+            res = self.run_pass(self.syms, side_effect=burst, max_fetches=len(self.syms))
         return res, calls, sleep
 
     def test_burst_is_retried_once_after_a_pause(self):
@@ -201,7 +201,11 @@ class TestBurstRetry(_Base):
         res, calls, _ = self._run({s: 1 for s in self.syms})
         retried = [s for s in self.syms if calls[s] == 2]
         self.assertEqual(len(retried), rapidapi.BURST_RETRIES_PER_PASS)
-        self.assertEqual(len(res["errors"]), 8 - rapidapi.BURST_RETRIES_PER_PASS)
+        self.assertEqual(len(res["errors"]), len(self.syms) - rapidapi.BURST_RETRIES_PER_PASS)
+
+    def test_cap_covers_the_worst_night_seen(self):
+        # PROD 11-04: 10 burst failures in one pass; all of them should get their retry.
+        self.assertGreaterEqual(rapidapi.BURST_RETRIES_PER_PASS, 10)
 
 
 
@@ -213,6 +217,17 @@ class TestPassTimeout(_Base):
         t = rapidapi.pass_timeout_seconds(400)
         self.assertGreaterEqual(t, 400 * (rapidapi.SLEEP_SEC + rapidapi.REQUEST_TIMEOUT))
         self.assertGreater(t, 600)
+        # ...and every burst retry at its worst case (wait + full HTTP timeout), on top of the fetches.
+        retries = rapidapi.BURST_RETRIES_PER_PASS * (rapidapi.BURST_RETRY_WAIT_S + rapidapi.REQUEST_TIMEOUT)
+        self.assertGreaterEqual(t, 400 * (rapidapi.SLEEP_SEC + rapidapi.REQUEST_TIMEOUT) + retries)
+
+    def test_each_allowed_retry_adds_its_wait_and_timeout(self):
+        # Review of #245: dropping the 60 s wait from the budget passed every test. Pin the exact
+        # cost of one more allowed retry.
+        base = rapidapi.pass_timeout_seconds(400)
+        with mock.patch.object(rapidapi, "BURST_RETRIES_PER_PASS", rapidapi.BURST_RETRIES_PER_PASS + 1):
+            more = rapidapi.pass_timeout_seconds(400)
+        self.assertEqual(more - base, rapidapi.BURST_RETRY_WAIT_S + rapidapi.REQUEST_TIMEOUT)
         self.assertEqual(rapidapi.pass_timeout_seconds(), rapidapi.pass_timeout_seconds(CFG.rapidapi_max_fetches))
 
     def test_daily_task_passes_the_budgeted_timeout(self):
