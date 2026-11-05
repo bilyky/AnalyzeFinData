@@ -287,13 +287,17 @@ def read_journal(path: str) -> list:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def retro(journal: list, price_now: float, repl_now: dict, today: str | None = None) -> dict:
+def retro(journal: list, price_now: float, repl_now: dict, today: str | None = None, bar: str | None = None) -> dict:
     """Score each past call: TRIM was right if the symbol lagged the replacement since;
     HOLD/WAIT were right if it kept up. Replacement = the one the call named, else the average.
-    Calls made on ``today`` (ISO date) are skipped: there is nothing to score yet."""
+    Calls made on ``today`` (ISO date) are skipped: there is nothing to score yet. So are calls
+    made on the current price ``bar``: with no newer bar, both returns are 0% (2026-11-04 scored
+    a 0% vs 0% "good" on stale data)."""
     scored = []
     for e in journal:
         if today and e["date"] >= today:
+            continue
+        if bar and e.get("bar") and e["bar"] >= bar:
             continue
         keys = [e["replacement"]] if e.get("replacement") else list(e["replacements"])
         rr = [repl_now[k] / e["replacements"][k] - 1 for k in keys if k in repl_now and k in e["replacements"]]
@@ -402,7 +406,7 @@ def run(symbol=None, live=False, journal=True, config_path=None) -> dict:
             lots = pick_lots(json.load(f), call["tranche_usd"], price, today, cfg)
     jpath = os.path.join(watch_dir(), f"{symbol}_journal.jsonl")
     past = read_journal(jpath)
-    r = retro(past, price, {k: v["close"] for k, v in repl.items()}, today.isoformat())
+    r = retro(past, price, {k: v["close"] for k, v in repl.items()}, today.isoformat(), m["date"])
     report = {"symbol": symbol, "rules": RULES_VERSION, "as_of_bar": m["date"], "price": price,
               "price_source": "live quote" if live_px else f"close {m['date']}", "pack_health": meta.get("health"),
               "metrics": m, "rbr": {"score": score, "tags": tags}, "vs_peers": rb, "replacements": repl,

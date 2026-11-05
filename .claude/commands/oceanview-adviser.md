@@ -11,6 +11,17 @@ Engine: `aether/options_adviser.py` (pure, unit-tested, interface-agnostic). CLI
 at any holding. This skill runs the **offline** path and reports the menu; it recommends
 only — it never places an order.
 
+## Sub-skills
+
+| Sub-skill | Use it for |
+|---|---|
+| `.claude/commands/position-watch.md` | A concentrated holding the user wants to bring down slowly: a daily trim / hold / wait call with a RETRO of past calls, a concentration floor, and tax-lot order with wash-sale windows. Shares Step 0's context pack and the guardrails below. |
+
+**Employer stock with a hedging ban (the user's INTC):** Intel's Insider Trading Policy bans
+employees from options, collars, other hedges and short sales on INTC. Don't build this
+options menu for INTC; use `position-watch` instead. The menu stays available for holdings
+without such a ban.
+
 ## Step 0 — Boot from the OceanView Context Pack
 
 Before advising, load the **Context Pack** (`aether/oceanview_context.py`): one manifest of

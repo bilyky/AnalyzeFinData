@@ -213,6 +213,12 @@ class TestRetroAndJournal(unittest.TestCase):
         self.assertEqual([s["good"] for s in r["scored"]], [True, False])
         self.assertEqual(r["hit_rate"], 0.5)
 
+    def test_retro_needs_a_newer_bar(self):
+        j = [{"date": "2026-11-03", "bar": "2026-11-02", "price": 60.0, "action": "WAIT", "replacement": None,
+              "replacements": {"SPY": 700.0}}]
+        self.assertEqual(pw.retro(j, 60.0, {"SPY": 700.0}, "2026-11-04", "2026-11-02")["scored"], [])   # stale
+        self.assertEqual(len(pw.retro(j, 58.0, {"SPY": 710.0}, "2026-11-04", "2026-11-04")["scored"]), 1)
+
     def test_retro_skips_todays_call(self):
         j = [{"date": "2026-11-02", "price": 60.0, "action": "HOLD", "replacement": None,
               "replacements": {"SPY": 700.0}},
@@ -366,8 +372,9 @@ class TestRun(unittest.TestCase):
         with mock.patch.object(pw, "retro", wraps=pw.retro) as retro:
             self._run()
         args = retro.call_args.args
-        self.assertEqual(len(args), 4, "retro() must be told today's date")
+        self.assertEqual(len(args), 5, "retro() must be told today's date and the current bar")
         self.assertEqual(args[3], datetime.date.today().isoformat())
+        self.assertEqual(args[4], pw.load_bars("INTC")["days"][-1])
 
 
 class TestPackHoldingsMissing(unittest.TestCase):

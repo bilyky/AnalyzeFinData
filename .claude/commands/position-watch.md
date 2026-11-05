@@ -5,6 +5,10 @@ how it's behaving, whether the move is its own or the sector's, whether a small 
 replacement makes sense today, and a RETRO of yesterday's call. A slow, adjustable process,
 never a one-shot sale.
 
+**Part of OceanView:** a sub-skill of `.claude/commands/oceanview-adviser.md`. It reads the
+same OceanView context pack (Step 0 there) and follows the same guardrails. For INTC it
+replaces OceanView's options menu, which Intel's policy rules out.
+
 Engine: `scripts/monitoring/position_watch.py` (pure functions, unit-tested). It never places
 an order and never opens a browser. Private inputs and outputs live in `Data/position_watch/`
 (git-ignored): `config.json`, `<SYM>_lots.json`, `<SYM>_journal.jsonl`.
