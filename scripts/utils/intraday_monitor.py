@@ -32,6 +32,12 @@ STATE_FILE = _BASE_DIR / "Data" / "intraday_monitor_state.json"
 # Without this, ordinary sub-percent ticks flip "changed" on every 30-min run and
 # re-send the alert — the duplicate-email spam this monitor is meant to cure.
 _MATERIAL_DROP_PCT = 0.01
+# An alerted breach is forgotten (so a later breach alerts again) only once the price is
+# this far back above the stop; a bounce around the stop must not re-send the email.
+_CLEAR_MARGIN_PCT = 0.02
+# A breach this deep: first seen, it is flagged as urgent; already reported under the same stop,
+# the stop is probably out of date (PROD: hand-set stops 22% to 10x above the price).
+_STALE_STOP_PCT = 0.20
 
 def load_state() -> dict:
     """Load the last active stop-breach state from disk."""
@@ -114,48 +120,50 @@ def monitor():
         else:
             _log.warning(f"Could not fetch live price for {sym}")
 
-    # Load previous state
+    # Load previous state. "alerted" remembers what each email already reported, so a
+    # breach is emailed once, not again each time the price crosses back over the stop
+    # (PROD 2026-11-03: 7 emails in one day, the same 9-12 breaches in each).
     state = load_state()
     last_breached = state.get("last_breached", {})
+    alerted = dict(state.get("alerted", last_breached))
+    alerted_before = dict(alerted)   # as of the last run; `alerted` is updated below
 
-    # Determine if something changed compared to the previous run
-    new_breaches = [s for s in current_breaches if s not in last_breached]
+    # Alert a breach that is new, whose stop moved (e.g. a trailing/ratchet adjustment), or
+    # whose price made a new low at least _MATERIAL_DROP_PCT below what we last alerted on.
+    # A small tick, a bounce or a recovery does not send an email.
+    new_breaches, modified_breaches = [], []
+    for s, cur in current_breaches.items():
+        prev = alerted.get(s)
+        if prev is None:
+            new_breaches.append(s)
+        elif (abs(cur["stop"] - prev.get("stop", cur["stop"])) > 1e-9
+              or cur["price"] < prev["price"] * (1 - _MATERIAL_DROP_PCT)):
+            modified_breaches.append(s)
     cleared_breaches = [s for s in last_breached if s not in current_breaches]
-    
-    # Re-alert an existing breach only when it materially worsens: the stop level
-    # moved (e.g. a trailing/ratchet adjustment) or the price made a new low at
-    # least _MATERIAL_DROP_PCT below what we last alerted on. A small tick or an
-    # upward bounce toward the stop must NOT re-trigger the email.
-    modified_breaches = []
-    for s in current_breaches:
-        if s in last_breached:
-            prev = last_breached[s]
-            cur = current_breaches[s]
-            stop_moved = abs(cur["stop"] - prev.get("stop", cur["stop"])) > 1e-9
-            dropped_further = cur["price"] < prev["price"] * (1 - _MATERIAL_DROP_PCT)
-            if stop_moved or dropped_further:
-                modified_breaches.append(s)
+    actionable_symbols = sorted(new_breaches + modified_breaches)
 
-    has_changed = bool(new_breaches or cleared_breaches or modified_breaches)
+    # Forget a symbol once it is no longer monitored (sold) or has recovered clearly.
+    monitored_stops = {p["symbol"]: p["stop"] for p in monitored}
+    for s in list(alerted):
+        px = quotes.get(s)
+        if s not in monitored_stops or (px and px > monitored_stops[s] * (1 + _CLEAR_MARGIN_PCT)):
+            del alerted[s]
+    for s in actionable_symbols:
+        alerted[s] = current_breaches[s]
 
-    if current_breaches:
-        if not has_changed:
-            _log.info(f"Stop breach state unchanged ({len(current_breaches)} active breaches). Bypassing duplicate email dispatch.")
-            return
-
-        # Prepare rich qualitative report with AI analysis for each item
+    if actionable_symbols:
         diff_msgs = []
         if new_breaches:
-            diff_msgs.append(f"🔴 NEW BREACHES DETECTED: {', '.join(new_breaches)}")
+            diff_msgs.append(f"🔴 NEW BREACHES DETECTED: {', '.join(sorted(new_breaches))}")
+        if modified_breaches:
+            diff_msgs.append(f"🔄 EXISTING BREACH PRICES UPDATED: {', '.join(sorted(modified_breaches))}")
         if cleared_breaches:
             diff_msgs.append(f"🟢 BREACHES CLEARED/EXITED: {', '.join(cleared_breaches)}")
-        if modified_breaches:
-            diff_msgs.append(f"🔄 EXISTING BREACH PRICES UPDATED: {', '.join(modified_breaches)}")
 
-        _log.warning(f"Stop breach state changed! Dispatching rich, AI-analyzed alert email...")
-        
+        _log.warning("Stop breach state changed! Dispatching rich, AI-analyzed alert email...")
+
         subject = f"AETHER ALERT: Stop Breach Detected ({len(current_breaches)} Position{'s' if len(current_breaches) > 1 else ''})"
-        
+
         body_parts = [
             "The following stop-loss breaches have been detected in your active E*TRADE portfolio.\n",
             "📊 DIFFERENCE SUMMARY:",
@@ -165,23 +173,37 @@ def monitor():
             "=" * 80 + "\n"
         ]
 
-        actionable_symbols = sorted(list(set(new_breaches + modified_breaches)))
-        
         for sym in actionable_symbols:
             data = current_breaches[sym]
             price = data["price"]
             stop = data["stop"]
-            
-            _log.console(f"Running live AI risk analysis and reasoning for {sym}...")
-            ai_reasoning = generate_ai_analysis(sym, price, stop)
-            
+
+            deep = price < stop * (1 - _STALE_STOP_PCT)
+            # "Out of date" only for a breach that was ALREADY this deep at the last alert, under
+            # the same stop. A first-seen deep breach, or one that was shallow at the last alert
+            # and has since crashed through the 20% bar, may be a real crash and must read as the
+            # most urgent case, not as a stop to delete.
+            prev = alerted_before.get(sym)   # None for a new breach
+            if (deep and prev and abs(prev.get("stop", stop) - stop) <= 1e-9
+                    and prev.get("price", price) < stop * (1 - _STALE_STOP_PCT)):
+                reasoning = (f"The price is {(1 - price / stop) * 100:.0f}% below the stop and was already "
+                             "below it at the last alert, so the stop may be out of date. Update or remove "
+                             "it in the workbook if it no longer applies.")
+            else:
+                _log.console(f"Running live AI risk analysis and reasoning for {sym}...")
+                reasoning = generate_ai_analysis(sym, price, stop)
+                if deep:
+                    seen = "first seen this run" if sym in new_breaches else "deeper than at the last alert"
+                    reasoning = (f"DEEP BREACH, {seen}: the price is {(1 - price / stop) * 100:.0f}% "
+                                 f"below the stop. {reasoning}")
+
             body_parts.append(
                 f"📈 {sym} — BREACH UPDATE!"
                 f"\n  * Current Price:   ${price:.2f}"
                 f"\n  * Stop-Loss Level: ${stop:.2f}"
                 f"\n  * Technical Delta: {round(((price - stop)/stop)*100, 2):+.2f}%"
                 f"\n  * AI Risk Analysis & Reasoning:"
-                f"\n    {ai_reasoning}"
+                f"\n    {reasoning}"
                 f"\n\n" + "-" * 80
             )
 
@@ -200,15 +222,16 @@ def monitor():
 
         notify.send_email(subject, "\n".join(body_parts))
         _log.info(f"Sent rich consolidated alert email for {len(current_breaches)} breaches.")
+    elif current_breaches:
+        _log.info(f"Stop breach state unchanged ({len(current_breaches)} active breaches, all already alerted). Bypassing duplicate email dispatch.")
+    elif cleared_breaches:
+        # If breaches exist in memory but are now cleared (e.g. they were sold!)
+        _log.info(f"All stop breaches cleared (bypassed email notification to avoid noise): {', '.join(cleared_breaches)}")
     else:
-        if cleared_breaches:
-            # If breaches exist in memory but are now cleared (e.g. they were sold!)
-            _log.info(f"All stop breaches cleared (bypassed email notification to avoid noise): {', '.join(cleared_breaches)}")
-        else:
-            _log.info("No stop breaches detected.")
+        _log.info("No stop breaches detected.")
 
     # Save the current state for the next run
-    save_state({"last_breached": current_breaches})
+    save_state({"last_breached": current_breaches, "alerted": alerted})
 
 if __name__ == "__main__":
     monitor()
