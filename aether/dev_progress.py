@@ -1,9 +1,9 @@
-"""Development > Project Model: progress of the AETHER services redesign (R&D #75).
+"""Development > Project Model: progress of the AETHER services redesign (R&D #78).
 
 Two parts:
 
 * the plan's progress, read from ``plans/aether-services-progress.json`` (steps, fixes and
-  services, each with a status and PR). That file is updated by hand in every R&D #75 PR;
+  services, each with a status and PR). That file is updated by hand in every R&D #78 PR;
 * live code metrics measured from the source tree on every call, so the page shows what the
   code actually looks like, not what anyone claims about it.
 """
@@ -48,7 +48,7 @@ def code_metrics(root) -> dict:
         "services_lines": _line_count(services),
         "game_attr_calls": sum(len(_GAME_ATTR.findall(_read(p))) for p in scenario + services),
         "magic_row_indexes": sum(len(_MAGIC_ROW.findall(_read(p))) for p in run_code),
-        # Only the daily-run code: aether/etrade has its own _pkg() and is out of R&D #75's scope.
+        # Only the daily-run code: aether/etrade has its own _pkg() and is out of R&D #78's scope.
         "pkg_shims": sum(len(_PKG_DEF.findall(_read(p))) for p in scenario + services),
     }
 

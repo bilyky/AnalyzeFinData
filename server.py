@@ -193,7 +193,7 @@ def create_app():
 
     @app.get("/api/dev/project-model")
     def get_project_model():
-        """Development > Project Model: R&D #75 progress plus live code metrics."""
+        """Development > Project Model: R&D #78 progress plus live code metrics."""
         try:
             return dev_progress.project_model(_DIR)
         except FileNotFoundError:

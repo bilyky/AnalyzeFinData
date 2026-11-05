@@ -1903,7 +1903,7 @@ function loadTab(tab) {
     else if (tab === "development") loadProjectModel();
 }
 
-// ── Development > Project Model (R&D #75 progress + live code metrics) ──────────
+// ── Development > Project Model (R&D #78 progress + live code metrics) ──────────
 const PM_STATUS_CLASS = {
     done: "text-emerald-400", in_review: "text-sky-400", in_progress: "text-amber-300",
     todo: "text-slate-500", blocked: "text-rose-400", decision: "text-fuchsia-300",
