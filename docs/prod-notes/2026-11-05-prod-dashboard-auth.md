@@ -8,7 +8,11 @@ that can reach the machine could open these without logging in:
 - `/api/pipeline/logs`, `/api/logs/aether`, `/api/logs/aether/json`: logs (machine paths,
   auth events, trade decisions);
 - `/api/chat`: it took a login header but never checked it, so anyone could spend the AI
-  provider's quota.
+  provider's quota;
+- `/api/requalify`: the same, and it also ran a live Chaikin fetch and an E*TRADE quote
+  through the auth role (which may renew tokens). It now needs the login and reads quotes
+  on the read-only data role (cached token; Google Finance fallback);
+- `/api/compare` with the AI summary (`summarize`): the plain comparison stays open.
 
 After this deploy they all need the dashboard login (top right). Everything else is
 unchanged.
@@ -32,7 +36,8 @@ venv_new\Scripts\python.exe server.py restart
 ## 3. Check
 
 - Logged out: Accounts says "🔒 Log in (top right) to see this."; chat replies "🔒 Log in…";
-  the INTC plan link says to log in first.
+  the INTC plan link says to log in first; the System tab still shows health and tasks, and
+  the Logs view says "🔒 Log in (top right) to see the logs."; Requalify says to log in.
 - Logged in: Accounts, logs, chat and the plan link work as before. The plan opens in a new
   tab.
 - From another device without logging in, `http://<prod>:8888/api/accounts` returns 401.

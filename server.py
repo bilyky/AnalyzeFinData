@@ -346,6 +346,7 @@ def create_app():
         body: dict = Body(...),
         authorization: str = Header(default=""),
     ):
+        _require_admin(authorization)          # live Chaikin, E*TRADE quotes and the strong AI tier
         """Phase 1: fetch live factors + run AI on factors only.
         Spawns a background thread for Phase 2 (news enrichment)."""
         symbol = (body.get("symbol") or "").upper().strip()
@@ -502,7 +503,7 @@ def create_app():
     # ── Multi-stock comparison ──────────────────────────────────────────────────
 
     @app.post("/api/compare")
-    async def compare(body: dict = Body(...)):
+    async def compare(body: dict = Body(...), authorization: str = Header(default="")):
         """Structured side-by-side comparison + deterministic ranking for a list of
         symbols. Pure data (no LLM) — the single source of truth any client (UI, chat,
         agent skill) summarizes. Body: {"symbols": ["TG","CC",...], "as_of"?: "YYYY-MM-DD",
@@ -512,6 +513,8 @@ def create_app():
         symbols = [s.upper().strip() for s in (body.get("symbols") or []) if str(s).strip()]
         if not symbols:
             return {"error": "symbols required"}
+        if body.get("summarize"):
+            _require_admin(authorization)      # the AI summary spends the provider's quota
         as_of = body.get("as_of")
         loop = asyncio.get_running_loop()
         data = await loop.run_in_executor(None, stock_compare.compare_data, symbols, as_of)

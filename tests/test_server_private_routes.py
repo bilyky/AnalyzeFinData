@@ -3,6 +3,7 @@
 and the logs used to answer anyone. The route functions are called directly from
 create_app()'s route table (starlette's TestClient needs a package this venv doesn't have)."""
 import asyncio
+import inspect
 import types
 import unittest
 from unittest import mock
@@ -60,6 +61,29 @@ class TestPrivateRoutes(unittest.TestCase):
         with self.assertRaises(HTTPException) as cm:
             asyncio.run(fn(messages=[{"role": "user", "content": "hi"}], authorization=""))
         self.assertEqual(cm.exception.status_code, 401)
+
+    def _post(self, path):
+        return next(r.endpoint for r in self.app.routes if getattr(r, "path", None) == path and "POST" in r.methods)
+
+    def test_requalify_needs_a_token(self):
+        with self.assertRaises(HTTPException) as cm:
+            asyncio.run(self._post("/api/requalify")(body={"symbol": "INTC"}, authorization=""))
+        self.assertEqual(cm.exception.status_code, 401)
+
+    def test_compare_needs_a_token_only_for_the_ai_summary(self):
+        fn = self._post("/api/compare")
+        with self.assertRaises(HTTPException) as cm:
+            asyncio.run(fn(body={"symbols": ["AAA"], "summarize": True}, authorization=""))
+        self.assertEqual(cm.exception.status_code, 401)
+        with mock.patch.object(server.stock_compare, "compare_data", return_value={"rows": []}) as cd:
+            out = asyncio.run(fn(body={"symbols": ["AAA"]}, authorization=""))
+        cd.assert_called_once()
+        self.assertEqual(out, {"rows": []})
+
+    def test_requalify_reads_quotes_on_the_data_plane(self):
+        src = inspect.getsource(server.data_api.requalify_symbol)
+        self.assertIn('ETradeClient("production", role="data")', src)
+        self.assertNotIn('role="auth"', src)                    # no renew / re-auth from a dashboard click
 
     def test_public_routes_still_exist_without_auth_params(self):
         for path in PUBLIC_SAMPLE:

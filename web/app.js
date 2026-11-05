@@ -31,6 +31,7 @@ async function openPrivatePage(path) {
     if (!r.ok) { window.alert(`${path} → ${r.status}`); return; }
     const url = URL.createObjectURL(await r.blob());
     window.open(url, "_blank", "noopener");
+    setTimeout(() => URL.revokeObjectURL(url), 60000);   // the new tab has loaded it by then
 }
 
 // ── Auth state ─────────────────────────────────────────────────────────────
@@ -1007,7 +1008,8 @@ async function fetchAndRenderLog() {
             st.textContent = `${entries.length} entries · aether.jsonl${lvlFilter ? " (" + lvlFilter + ")" : ""}`;
         }
     } catch (err) {
-        lv.textContent = "Error loading logs: " + err.message;
+        lv.textContent = err.status === 401 ? "🔒 Log in (top right) to see the logs."
+                                            : "Error loading logs: " + err.message;
     }
     // Auto-scroll only if already at the bottom
     if (lv.scrollHeight - lv.scrollTop < lv.clientHeight + 40)
@@ -1169,8 +1171,10 @@ function hideTooltip() {
 }
 
 async function loadSystem() {
+    // The logs need the login; logged out they come back empty instead of failing the whole tab.
     const [health, tasks, logs, manual] = await Promise.all([
-        api("/api/health"), api("/api/tasks"), api("/api/pipeline/logs?lines=100"),
+        api("/api/health"), api("/api/tasks"),
+        api("/api/pipeline/logs?lines=100").catch(() => ({ lines: [] })),
         api("/api/tasks/manual"),
     ]);
 
@@ -2718,7 +2722,9 @@ async function requalify(sym, cost, triggerBtn) {
             body: JSON.stringify({ symbol: sym, cost }),
         });
     } catch (err) {
-        const errHtml = `<div class="px-4 py-2 text-xs text-red-400">Error: ${esc(err.message)}</div>`;
+        const errHtml = err.status === 401
+            ? `<div class="px-4 py-2 text-xs text-slate-400">🔒 Log in (top right) to requalify.</div>`
+            : `<div class="px-4 py-2 text-xs text-red-400">Error: ${esc(err.message)}</div>`;
         if (resultRow) resultRow.firstElementChild.innerHTML = errHtml;
         if (smRq) smRq.innerHTML = errHtml;
         if (triggerBtn) { triggerBtn.disabled = false; }
