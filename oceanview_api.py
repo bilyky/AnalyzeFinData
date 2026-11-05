@@ -12,7 +12,8 @@ One call, summary(symbol), returns everything the tab shows for a concentrated h
   - research: the latest results of the studies that bear on the plan.
 
 Private inputs (Data/position_watch/: config, lots, journal) stay on the machine. The lots'
-"account" field is never returned. The server route that calls this requires the login.
+"account" field is never returned, neither in `lots` nor in a TRIM day's `today.lots`. The
+server route that calls this requires the login.
 """
 import datetime
 import glob
@@ -92,6 +93,9 @@ def summary(symbol: str | None = None) -> dict:
     symbol = (symbol or cfg["symbol"]).upper()
     today = datetime.date.today()
     rep = pw.run(symbol, live=False, journal=False)
+    if rep.get("lots") and rep["lots"].get("lots"):          # a TRIM day's picked lots carry the account
+        rep = {**rep, "lots": {**rep["lots"],
+                               "lots": [{k: v for k, v in x.items() if k != "account"} for x in rep["lots"]["lots"]]}}
     lots_raw = _read_json(os.path.join(pw.watch_dir(), f"{symbol}_lots.json")) or []
     if isinstance(lots_raw, dict):
         lots_raw = lots_raw.get("lots") or []

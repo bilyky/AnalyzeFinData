@@ -326,8 +326,11 @@ def create_app():
         """The OceanView tab: position-watch's report (read-only, no journal write), the
         journal and RETRO, lots, the vest/ESPP calendar and study results. Private: login."""
         _require_admin(authorization)
+        sym = symbol.strip().upper()
+        if sym and not re.fullmatch(r"[A-Z.]{1,6}", sym):     # it becomes part of private file names
+            raise HTTPException(status_code=400, detail="symbol must be 1-6 letters")
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, oceanview_api.summary, symbol.strip().upper() or None)
+        return await loop.run_in_executor(None, oceanview_api.summary, sym or None)
 
     @app.get("/api/accounts")
     async def accounts():

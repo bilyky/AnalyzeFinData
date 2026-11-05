@@ -16,8 +16,9 @@ adds a journal entry. The lots' account field is never sent to the page.
 
 ## 1. Order
 
-Merge after #229 (position-watch). This PR sits on its branch. #243 (login on the other
-private routes) can go before or after; this page sends the login itself.
+#229 (position-watch) is merged, so this can go any time. #243 (login on the other private
+routes) can go before or after; this page sends the login itself. If #243 lands first, this
+PR's `web/app.js` needs a small merge (both touch the same area).
 
 ## 2. Private files on PROD
 

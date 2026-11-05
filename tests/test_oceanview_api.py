@@ -30,6 +30,17 @@ class TestLotsAndCalendar(unittest.TestCase):
         self.assertEqual((recent["term"], recent["gain"]), ("ST", 100.0))
         self.assertEqual(recent["days_to_lt"], (D(2026, 11, 11) - D(2025, 12, 1)).days)   # LT the day after the anniversary
 
+    def test_long_term_starts_the_day_after_the_anniversary(self):
+        lots = [{"acquired": "2025-03-10", "qty": 1, "price": 1.0}]
+        self.assertEqual(ov.lots_table(lots, 2.0, D(2026, 3, 10))[0]["term"], "ST")      # the anniversary
+        self.assertEqual(ov.lots_table(lots, 2.0, D(2026, 3, 11))[0]["term"], "LT")
+
+    def test_calendar_window_edges(self):
+        for day, status in ((D(2026, 10, 31), "now"), (D(2026, 12, 30), "now"),
+                            (D(2026, 10, 30), "upcoming"), (D(2026, 12, 31), "past")):
+            with self.subTest(day=day):
+                self.assertEqual(ov.calendar(["2026-11-30"], day)[0]["status"], status)
+
     def test_calendar_windows(self):
         c = ov.calendar(["2026-11-30", "2026-08-19", "2027-02-19"], D(2026, 11, 5))
         self.assertEqual([(x["date"], x["status"]) for x in c],
@@ -69,6 +80,24 @@ class TestResearchAndSummary(unittest.TestCase):
         self.assertEqual(s["calendar"][0]["date"], "2026-11-30")
 
 
+class TestTrimDayAndFileShape(unittest.TestCase):
+    def test_trim_day_lots_drop_the_account_and_dict_shaped_lots_file_works(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "INTC_lots.json"), "w", encoding="utf-8") as f:
+                json.dump({"lots": [{"acquired": "2020-01-02", "qty": 2, "price": 10.0, "account": "x"}]}, f)
+            rep = {"price": 20.0, "call": {"action": "TRIM"},
+                   "lots": {"shares": 1, "est_tax": 1.0,
+                            "lots": [{"acquired": "2020-01-02", "sell_qty": 1, "account": "Brokerage 1234"}]}}
+            with mock.patch.object(ov.pw, "watch_dir", return_value=tmp), \
+                    mock.patch.object(ov.pw, "load_config", return_value=dict(ov.pw.DEFAULTS)), \
+                    mock.patch.object(ov.pw, "run", return_value=rep), \
+                    mock.patch.object(ov, "research", return_value=[]):
+                s = ov.summary()
+        self.assertNotIn("account", s["today"]["lots"]["lots"][0])
+        self.assertEqual(s["today"]["lots"]["lots"][0]["sell_qty"], 1)
+        self.assertEqual(len(s["lots"]), 1)                                  # {"lots": [...]} file shape
+
+
 class TestRoute(unittest.TestCase):
     def test_summary_route_needs_the_login(self):
         cfg = types.SimpleNamespace(web_secret="t", admins=[])
@@ -82,6 +111,10 @@ class TestRoute(unittest.TestCase):
             self.assertEqual(asyncio.run(fn(symbol="intc", authorization="Bearer " + server.make_token("u", "t"))),
                              {"ok": 1})
         summ.assert_called_once_with("INTC")
+        for bad in ("../X", "INTC_LOTS", "TOOLONGX"):
+            with self.subTest(bad=bad), self.assertRaises(HTTPException) as cm:
+                asyncio.run(fn(symbol=bad, authorization="Bearer " + server.make_token("u", "t")))
+            self.assertEqual(cm.exception.status_code, 400)
 
 
 if __name__ == "__main__":
