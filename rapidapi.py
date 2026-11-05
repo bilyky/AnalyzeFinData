@@ -46,11 +46,11 @@ MAX_GAP_DAYS = 30   # trigger compact/full fetch if latest entry is this many ca
 SLEEP_SEC    = 14   # 14 s between requests → 4.3 req/min (safe under 5/min limit)
 COMPACT_WINDOW_DAYS = 120  # a compact fetch returns ~100 sessions (~140 calendar days)
 QUOTA_STOP_AFTER = 3  # consecutive 429s = quota spent: stop the run instead of burning 14 s per symbol
-# Alpha Vantage's "Burst pattern detected" (3-4 of ~400 fetches per PROD run, 11-02/11-03,
-# despite the 14 s spacing) clears after a pause: retry that symbol once. Capped per pass so
-# the retries stay inside pass_timeout_seconds' 600 s slack.
+# Alpha Vantage's "Burst pattern detected" (4 of ~400 fetches per PROD run on 11-02/11-03, 10 on
+# 11-04, despite the 14 s spacing) clears after a pause: retry that symbol once. Capped per pass;
+# pass_timeout_seconds() counts every retry at its worst case.
 BURST_RETRY_WAIT_S = 60
-BURST_RETRIES_PER_PASS = 5
+BURST_RETRIES_PER_PASS = 10
 DORMANT_DAYS = 45     # no real bar this long = likely delisted/dead: queue it LAST, not first
 REQUEST_TIMEOUT = 30  # per-call HTTP timeout (s)
 
@@ -60,7 +60,8 @@ def pass_timeout_seconds(max_fetches: int | None = None) -> int:
     worst case (sleep + full HTTP timeout) plus slack for the pre-scan. A caller that kills
     the pass sooner silently caps it — PROD's daily_task killed it at 600 s (~42 fetches)."""
     budget = CFG.rapidapi_max_fetches if max_fetches is None else max_fetches
-    return budget * (SLEEP_SEC + REQUEST_TIMEOUT) + 600
+    burst_retries = BURST_RETRIES_PER_PASS * (BURST_RETRY_WAIT_S + REQUEST_TIMEOUT)
+    return budget * (SLEEP_SEC + REQUEST_TIMEOUT) + burst_retries + 600
 
 _BASE_URL = "https://alpha-vantage.p.rapidapi.com/query"
 _HEADERS  = {
