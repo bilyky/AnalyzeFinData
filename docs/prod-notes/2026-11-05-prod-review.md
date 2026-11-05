@@ -1,0 +1,50 @@
+# PROD review 2026-11-05: actions
+
+Source: PROD logs from 11-04 07:04 to 11-05 07:17, plus the game, monitor and backup state files and `config.json`
+(read masked).
+
+## Deploy state on 11-05 07:17
+- **Live:** #227, #232 and #237. PROD pulled between 11-04 17:57 and 11-05 05:30, as #232's note asked.
+- **Not live:** #238, which merged at 09:42 PT on 11-05, after these logs. Its runbook
+  (`2026-11-04-prod-review-238.md` § Steps) still applies, and this PR adds nothing to it except the checks below.
+
+## What the logs show
+| # | Finding | Status |
+|---|---|---|
+| 1 | Slot expansion on the old code: at 32.6% cash under BALANCED's 20% buffer it opened slots 5 → 10, bought 9 NEM ($1,064) and added 5 MNST ($245). | Fixed by #238 (free cash 12.6% < 15%: neither would happen). Deploy it. |
+| 2 | Stop monitor: 13 breach emails on 11-04. | Fixed by #238. |
+| 3 | Groq: 64 answers, 23 empty. The patch is not applied yet. | #238 patch after the deploy. |
+| 4 | The 11-04 evening `run_history.py 5` printed nothing for 30 min and was killed at 1800 s; AftermarketReport exited 1 (the report still went out). It was the old run_history; #237's version did the 11-05 morning backfill in 79 s. | **This PR:** a killed step's last output is now logged, so a repeat shows where it stopped. Check tonight. |
+| 5 | The nightly backup timed out (600 s, against 2 minutes on 11-03); the last success was 11-03 22:12. `robocopy /E` copies only new or changed files, so many new files appeared on 11-04; the logs don't show which. | Check tonight (robocopy resumes). **This PR:** a market-hours run now says why it skipped and when to rerun. |
+| 6 | RapidAPI "Burst pattern": 10 of about 400 fetches (4 the night before). #238 retries at most 5. | **This PR:** up to 10 retries per pass, counted in the pass timeout (evening worst case 403 of 420 min). |
+| 7 | SEDG stop: $27.80, filled at $26.665, loss $121.70 = 1.16% of equity (above the 1% cap). | Recorded in R&D #52 with XES. |
+| 8 | Profile DEFENSIVE on 11-04, BALANCED on 11-05; the DEFENSIVE-day stop ratchets stay. | Recorded in R&D #76. |
+| 9 | MNST added to again on 11-05 after two scale-outs. | Recorded in R&D #66; #238 stops scale-ins while the book is full. |
+| 10 | The same 17 symbols return no Chaikin data on every refresh: EA, CTRA, WBD, IRBT, MAKX, NDX, QRVO, PCH, HOLX, AREN, RYI, ASRT, MRC, IPG, IAC, MGPI, K. | Owner: remove them from the Research sheet. No code: #238 already logs them as one line, and they cost 17 calls per refresh. |
+
+## Steps
+1. **Deploy:** if #238 is not deployed yet, follow its runbook. This PR is pulled with it; it has no config or data
+   step.
+2. **Tonight, check:**
+   - **17:00 run:** if `run_history.py` times out again, the ERROR line now ends with "Last output before the kill:"
+     and its last 15 lines. Send them to me.
+   - **22:10 backup:** `Data\backup_status.json` should show `"last_result": "ok"`. If it times out again, run this
+     (read-only) and send me the result, so we know what grew:
+     ```powershell
+     Get-ChildItem Data -Directory | ForEach-Object { "{0,-30} {1,10:N0} files" -f $_.Name, (Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count }
+     ```
+   - **RapidAPI pass:** burst errors show as "burst limit hit; retrying once in 60 s", up to 10 times.
+3. **Your decisions:**
+   - The real-account stop breaches in the monitor's email. 11 of 19 were new on 11-05, mostly semiconductors.
+     Selling is manual.
+   - The 17 no-data symbols above.
+   - The Gemini CLI tasks (`AETHER_DailyDriver`, `AETHER_PostMarketSync`, `AETHER_PostMarketReporter`) last
+     wrote their logs on 11-02. If you disabled them, nothing more to do.
+
+## Copying files for a review
+Put PROD files in `Data/prod_copy/<date>/` on the dev machine, not straight into `Data/` (`Data/prod_copy/README.md`
+there). On 11-05 the copy into `Data/` put PROD's E*TRADE tokens and Chaikin session on the dev machine. The
+dev dashboard then failed an E*TRADE login with PROD's tokens.
+
+## Roll back
+`git revert -m 1 <merge>`. No data or config to undo.
