@@ -30,10 +30,25 @@ Copy-Item Data\chaikin_chrome_profile $dst -Recurse   # with Chrome closed: a pr
 
 ## 2. Deploy
 
-Merge #239, pull on PROD.
+Merge #239, pull on PROD, then restart the dashboard. The paths are read when a process
+starts, so an already-running dashboard keeps the old ones until restarted:
+
+```powershell
+venv_new\Scripts\python.exe server.py restart
+```
+
+Scheduled tasks start fresh processes, so they pick it up on their next run.
 
 ## 3. Check
 
+- Where Chaikin's files are now looked for (read-only, prints paths, no secrets):
+
+  ```powershell
+  venv_new\Scripts\python.exe -c "import powergauge as pg; print(pg.SESSION_FILE); print(pg._CHAIKIN_PROFILE_DIR)"
+  ```
+
+  Both should be in the folder from step 1 (`<repo>\Data` when `AETHER_DATA_DIR` is unset), and
+  `session.json` should exist there.
 - The next morning/evening run fetches Chaikin data as usual (no `Session rejected` or
   browser login in the log).
 - If an E*TRADE token dies during the day, the log now shows
