@@ -210,6 +210,29 @@ class TestOpenAICompatibleFreeModels(unittest.TestCase):
         self.assertIn("finish_reason=length", str(cm.exception))
         self.assertIn("reasoning", str(cm.exception))
 
+    @mock.patch.object(ai_client, "_resolve_key", return_value="KEY")
+    @mock.patch("aether.ai_client.requests.post")
+    def test_empty_string_cut_off_by_length_names_the_cause(self, m_post, _key):
+        # Groq's gpt-oss returns content "" (not None) when reasoning uses up max_tokens
+        # (PROD 2026-11-02..04: 39 of 68 calls); the error must still name the cause.
+        m_post.return_value = _resp({"choices": [{"message": {"content": ""},
+                                                  "finish_reason": "length"}]})
+        with self._providers({"gpt": _GPT}), self.assertRaises(ValueError) as cm:
+            ai_client.evaluate("SYS", "USR", provider="gpt", max_tokens=5)
+        self.assertIn("finish_reason=length", str(cm.exception))
+        self.assertIn("min_max_tokens", str(cm.exception))
+
+    @mock.patch.object(ai_client, "_resolve_key", return_value="KEY")
+    @mock.patch("aether.ai_client.requests.post")
+    def test_min_max_tokens_is_a_floor(self, m_post, _key):
+        m_post.return_value = _resp({"choices": [{"message": {"content": "YES"}}]})
+        for asked, floor, sent in ((5, 1024, 1024), (2000, 1024, 2000), (120, None, 120)):
+            with self.subTest(asked=asked, floor=floor):
+                cfg = dict(_GPT, **({"min_max_tokens": floor} if floor else {}))
+                with self._providers({"gpt": cfg}):
+                    ai_client.evaluate("SYS", "USR", provider="gpt", max_tokens=asked)
+                self.assertEqual(m_post.call_args.kwargs["json"]["max_tokens"], sent)
+
     @mock.patch("aether.ai_client.time.sleep")
     @mock.patch.object(ai_client, "_resolve_key", return_value="KEY")
     @mock.patch("aether.ai_client.requests.post")

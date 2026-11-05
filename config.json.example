@@ -66,7 +66,10 @@
         "type": "openai_compatible",
         "model": "openai/gpt-oss-120b",
         "endpoint": "https://api.groq.com/openai/v1/chat/completions",
-        "api_key_source": "env:GROQ_API_KEY"
+        "api_key_source": "env:GROQ_API_KEY",
+        "_note_reasoning": "gpt-oss is a reasoning model: it spends max_tokens on reasoning before the answer. Without these two keys it returned an empty answer on 39 of 68 PROD calls (2026-11-02..04), because callers ask for 5-150 tokens.",
+        "min_max_tokens": 1024,
+        "extra_body": {"reasoning_effort": "low"}
       },
       "gemini_lite": {
         "_note": "FREE, cheap-tier fallback. Gemini Flash-Lite via Google AI Studio (aistudio.google.com), GEMINI_API_KEY, no credit card. Flash-Lite had the larger free quota (reported ~500 requests/day, Sept 2026); see your live limits at aistudio.google.com/rate-limit. Google may use free-tier prompts for training. Check the model id in AI Studio.",

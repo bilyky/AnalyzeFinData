@@ -99,7 +99,7 @@ import instruments
 from aether.config import CFG
 from aether.risk_utils import risk_capped_cash, split_adjust_ohlcv
 from patterns import _wilder_atr
-from sell_rules import exit_decision, soft_exit, winner_protected
+from sell_rules import exit_decision, safely_in_profit, soft_exit, winner_protected
 
 DATA_DIR = os.path.join(BASE_DIR, "Data")
 PANEL_PATH = os.path.join(DATA_DIR, "portfolio_backtest_panel.json")
@@ -117,7 +117,7 @@ PROFILE_RULES = {
                    "min_score_threshold": 10.0, "cash_buffer_pct": 0.50},
 }
 REGIME_BAND = 2.0          # determine_profile: SPY L60 > +2 AGGRESSIVE, < -2 DEFENSIVE
-SLOT_EXPAND_CASH = 0.15    # determine_max_positions: add slots while cash ratio > 15%
+SLOT_EXPAND_CASH = CFG.system_slot_expand_free_cash  # determine_max_positions: free cash above the buffer
 MIN_TICKET_USD = 100.0
 INITIAL_EQUITY = 100_000.0
 STOP_TAIL_P95_GATE = 1.5     # % of equity (R&D #54a, pre-registered)
@@ -168,9 +168,10 @@ def profile_for(spy_l60) -> str:
     return "BALANCED"
 
 
-def expanded_max_positions(cash_ratio: float, num_positions: int, base_max: int) -> int:
+def expanded_max_positions(cash_ratio: float, num_positions: int, base_max: int,
+                           cash_buffer_pct: float = 0.0) -> int:
     max_positions = base_max
-    while cash_ratio > SLOT_EXPAND_CASH and num_positions >= max_positions:
+    while (cash_ratio - cash_buffer_pct) > SLOT_EXPAND_CASH and num_positions >= max_positions:
         max_positions += 1
     return max_positions
 
@@ -304,7 +305,7 @@ def _bar(bars, sym, day):
 def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
              initial=INITIAL_EQUITY, excluded=frozenset(), max_trade_risk_pct=None,
              disable=frozenset(), hurst_filter=None, admit=None, rank=None,
-             min_fill_pct=None, exit_rules=None) -> dict:
+             min_fill_pct=None, exit_rules=None, profile_fn=None) -> dict:
     """Replay `panel` ({sym: {date: [s10, l60]}}) over `calendar` (sorted trading days).
 
     max_trade_risk_pct: when set (and risk_rules is on), each buy is trimmed so
@@ -322,7 +323,14 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
     exit_rules (risk_rules only, R&D #63): {"trail": True} ratchets the stop up to the highest
     close since entry minus the entry ATR multiple x today's ATR (never down); {"hold_profit":
     True} lets the soft exit fire only at a loss; {"stop_scale": x} puts the initial stop x times
-    as far away; {"min_hold": n} blocks the soft exit for the first n trading days."""
+    as far away; {"min_hold": n} blocks the soft exit for the first n trading days.
+    {"lock": "day" | "entry"} is the live profit-lock (aether/scenario/steps.py): once safely in
+    profit (sell_rules.safely_in_profit) the stop ratchets up to the highest close since entry
+    minus a multiple of today's ATR, and past 1.5 ATR of gain it is lifted to the entry price;
+    never down. "day" takes the multiple from the day's profile, as live does; "entry" keeps
+    the multiple the position was bought with.
+    profile_fn: optional callable(day) -> profile name, used instead of the SPY-L60 band when
+    the regime rule is on (e.g. the live breadth downgrade, prod_review_rules_study.py)."""
     unknown = set(disable) - set(RULES)
     if unknown:
         raise ValueError(f"unknown rules: {sorted(unknown)}")
@@ -339,6 +347,11 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
     traded_usd = 0.0
     cap_trims = 0
     spy = panel.get("SPY", {})
+
+    def day_profile(day):
+        if not (risk_rules and "regime" not in disable):
+            return "BALANCED"
+        return profile_fn(day) if profile_fn else profile_for(spy.get(day, [None, None])[1])
 
     def close_position(sym, px, day, reason):
         nonlocal cash, traded_usd
@@ -397,6 +410,14 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
                 close_position(sym, min(b["o"][i], p["stop"]), day, "stop")
                 continue
             p["last"] = b["c"][i]
+            if risk_rules and ex.get("lock") and p["stop"] and b["atr"][i] > 0:
+                atr = b["atr"][i]
+                p["peak"] = max(p["peak"], p["entry"], b["c"][i])
+                if safely_in_profit(b["c"][i], p["entry"], atr):
+                    mult = p["mult"] if ex["lock"] == "entry" else PROFILE_RULES[day_profile(day)]["atr_multiplier"]
+                    p["stop"] = max(p["stop"], p["peak"] - mult * atr)
+                if b["c"][i] - p["entry"] > 1.5 * atr:
+                    p["stop"] = max(p["stop"], p["entry"])
             if risk_rules and ex.get("trail") and p["stop"]:
                 # Chandelier: known at today's close, used from tomorrow's open on.
                 p["peak"] = max(p["peak"], b["c"][i])
@@ -437,15 +458,14 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
                 pending_sells[sym] = "momentum decay"
 
         # 5. Entry signals on today's scores, sized against today's equity.
-        regime = risk_rules and "regime" not in disable
-        rules = PROFILE_RULES[profile_for(spy.get(day, [None, None])[1]) if regime else "BALANCED"]
+        rules = PROFILE_RULES[day_profile(day)]
         remaining = len(pos) - len(pending_sells)
         if risk_rules:
+            buffer = 0.0 if "cash_buffer" in disable else rules["cash_buffer_pct"]
             max_pos = (rules["max_positions"] if "slot_expansion" in disable else
                        expanded_max_positions(cash / equity if equity else 0.0, remaining,
-                                              rules["max_positions"]))
+                                              rules["max_positions"], buffer))
             per_cap = rules["max_allocation_pct"] * equity
-            buffer = 0.0 if "cash_buffer" in disable else rules["cash_buffer_pct"]
         else:
             max_pos, per_cap, buffer = rules["max_positions"], equity / rules["max_positions"], 0.0
         kept = sum(p["qty"] * p["last"] for s, p in pos.items() if s not in pending_sells)
