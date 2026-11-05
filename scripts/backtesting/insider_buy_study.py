@@ -41,6 +41,25 @@ DECISION RULE (fixed 2026-11-05, before any result):
   The 20-session figures, CEO-only and $1M+ events, and the by-period split are context
   only, not part of the verdict.
 
+SECOND TEST (added 2026-11-05 AFTER the first result was INCONCLUSIVE, on the user's
+question; disclosed as such). Research on insider trading (Cohen, Malloy & Pomorski 2012)
+finds routine purchases carry no information and opportunistic ones do. Definitions, fixed
+before this run:
+  - routine buyer: the insider bought this stock in the same calendar month in at least 2
+    of the 3 previous calendar years; opportunistic = anything else (first-time buyers too).
+    An event is opportunistic if at least one buyer that day is. Only filings from
+    SPLIT_FROM on (three years of history needed; data starts 2012).
+  - after a big drop: the stock's own return over the 20 sessions up to the decision day
+    is DROP_20 or worse (INTC on 2026-11-02: about -48%).
+  DECISION RULE: opportunistic buys after a big drop, 60-session excess:
+  - DROP_PAUSE_SUPPORTED: n >= MIN_SUBSET, mean > 0 and NW t >= 1.96.
+  - otherwise INCONCLUSIVE (NO_EDGE if t <= -1.96). No rule unless supported.
+  Routine buys, opportunistic buys without a drop, and the TRIM-setup slice are context.
+  Also context (added on the user's "black swan" question, not a test): opportunistic buys
+  within SHOCK_WINDOW sessions after a single-day drop of SHOCK_DAY or worse (INTC: -29% on
+  2026-10-30, the CEO bought one session later).
+  This is the second test on the same data, so a lone pass deserves caution.
+
 Known biases: today's universe (the cache holds symbols that exist today, plus a few
 delisted ones), matched by the ticker on the filing (renamed companies are missed), no
 trading costs, no stop-outs.
@@ -80,6 +99,10 @@ SPACING = 20
 HORIZONS = (20, 60)
 NW_LAG = {20: 0, 60: 2}
 MIN_SUBSET = 30
+SPLIT_FROM = "2015-01-01"
+DROP_20 = -0.20
+SHOCK_DAY = -0.15
+SHOCK_WINDOW = 10
 DAILY_CAP = 0.5            # winsorize daily returns in the equal-weight index at +/-50%
 csv.field_size_limit(10_000_000)
 
@@ -164,8 +187,10 @@ def parse_purchases(z: zipfile.ZipFile) -> list:
     for r in _rows(z, "REPORTINGOWNER.tsv"):
         rel = (r.get("RPTOWNER_RELATIONSHIP") or "").lower()
         title = (r.get("RPTOWNER_TITLE") or "").lower()
-        o = owners.setdefault(r["ACCESSION_NUMBER"], {"insider": False, "ceo": False})
-        o["insider"] |= "director" in rel or "officer" in rel
+        o = owners.setdefault(r["ACCESSION_NUMBER"], {"insider": False, "ceo": False, "ciks": []})
+        if "director" in rel or "officer" in rel:
+            o["insider"] = True
+            o["ciks"].append((r.get("RPTOWNERCIK") or "").strip())
         o["ceo"] |= "ceo" in title or "chief executive" in title
     out = []
     for r in _rows(z, "NONDERIV_TRANS.tsv"):
@@ -179,7 +204,8 @@ def parse_purchases(z: zipfile.ZipFile) -> list:
         filed = _iso(subs[acc]["FILING_DATE"])
         if filed:
             out.append({"symbol": subs[acc]["ISSUERTRADINGSYMBOL"].strip().upper(), "filed": filed,
-                        "value": shares * price, "ceo": owners[acc]["ceo"]})
+                        "value": shares * price, "ceo": owners[acc]["ceo"],
+                        "owners": tuple(owners[acc]["ciks"]), "traded": _iso(r.get("TRANS_DATE") or "") or filed})
     return out
 
 
@@ -197,13 +223,43 @@ def events_from(purchases: list, min_value=MIN_VALUE) -> list:
     agg = {}
     for p in purchases:
         e = agg.setdefault((p["symbol"], p["filed"]), {"symbol": p["symbol"], "filed": p["filed"], "value": 0.0,
-                                                        "ceo": False})
+                                                        "ceo": False, "buys": []})
         e["value"] += p["value"]
         e["ceo"] |= p["ceo"]
+        e["buys"] += [(o, p.get("traded", p["filed"])) for o in p.get("owners", ())]
     return sorted((e for e in agg.values() if e["value"] >= min_value), key=lambda e: (e["symbol"], e["filed"]))
 
 
+def buy_history(purchases: list) -> dict:
+    """{(owner, symbol): {(year, month), ...}} of every purchase's trade month."""
+    h: dict = {}
+    for p in purchases:
+        t = p.get("traded", p["filed"])
+        for o in p.get("owners", ()):
+            h.setdefault((o, p["symbol"]), set()).add((int(t[:4]), int(t[5:7])))
+    return h
+
+
+def is_routine(history: dict, owner: str, symbol: str, traded: str) -> bool:
+    """Bought this stock in the same calendar month in at least 2 of the 3 previous years."""
+    months = history.get((owner, symbol), set())
+    y, m = int(traded[:4]), int(traded[5:7])
+    return sum((y - k, m) in months for k in (1, 2, 3)) >= 2
+
+
+def opportunistic(event: dict, history: dict) -> bool:
+    """At least one buyer that day isn't routine (an event with no owner data counts as opportunistic)."""
+    buys = event.get("buys") or []
+    return not buys or any(not is_routine(history, o, event["symbol"], t) for o, t in buys)
+
+
 # ── Returns ──────────────────────────────────────────────────────────────────
+
+def worst_day(b: dict, i: int, window: int) -> float:
+    """The worst single-day return over the `window` sessions up to and including bar i."""
+    c = b["c"]
+    return min((c[k] / c[k - 1] - 1 for k in range(max(1, i - window + 1), i + 1) if c[k - 1]), default=0.0)
+
 
 def ew_index(bars: dict) -> dict:
     """{date: equal-weight daily return across the universe} (daily returns capped)."""
@@ -299,9 +355,18 @@ def verdict(primary: dict, subset: dict) -> str:
     return "INCONCLUSIVE"
 
 
+def verdict_drop(sub: dict) -> str:
+    t = sub.get("t_nw")
+    if sub.get("n", 0) >= MIN_SUBSET and sub.get("mean", 0) > 0 and t is not None and t >= 1.96:
+        return "DROP_PAUSE_SUPPORTED"
+    if t is not None and t <= -1.96:
+        return "NO_EDGE"
+    return "INCONCLUSIVE"
+
+
 # ── Driver ───────────────────────────────────────────────────────────────────
 
-def build_rows(events: list, bars: dict, idx: dict) -> list:
+def build_rows(events: list, bars: dict, idx: dict, history: dict | None = None) -> list:
     """One row per kept event: the first per symbol within SPACING sessions, with its decision
     day, TRIM-setup flag and excess returns. Events whose symbol isn't in the universe drop."""
     rows, last = [], {}
@@ -313,7 +378,11 @@ def build_rows(events: list, bars: dict, idx: dict) -> list:
         if i is None or i < 1 or (e["symbol"] in last and i - last[e["symbol"]] < SPACING):
             continue
         last[e["symbol"]] = i
-        row = {**e, "decision_day": b["days"][i], "trim_setup": trim_setup(b, idx, i)}
+        row = {k: v for k, v in e.items() if k != "buys"}
+        row.update(decision_day=b["days"][i], trim_setup=trim_setup(b, idx, i),
+                   ret20=b["c"][i] / b["c"][i - 20] - 1 if i >= 20 and b["c"][i - 20] else None,
+                   shock=worst_day(b, i, SHOCK_WINDOW) <= SHOCK_DAY,
+                   opportunistic=opportunistic(e, history or {}))
         for h in HORIZONS:
             row[f"x{h}"] = outcome(b, idx, i, h)
         rows.append(row)
@@ -340,7 +409,7 @@ def run() -> dict:
             purchases += parse_purchases(zipfile.ZipFile(p))
     bars = load_universe()
     idx = ew_index(bars)
-    rows = build_rows(events_from(purchases), bars, idx)
+    rows = build_rows(events_from(purchases), bars, idx, buy_history(purchases))
     trim = [r for r in rows if r["trim_setup"]]
     res = {"run": datetime.datetime.now().isoformat(timespec="seconds"), "quarters": [FIRST_Q, LAST_Q],
            "purchases": len(purchases), "events": len(rows), "universe": len(bars),
@@ -351,6 +420,18 @@ def run() -> dict:
                       ("since2020", [r for r in rows if r["filed"] >= "2020"])):
         res[name] = {f"x{h}": summarize(sub, f"x{h}", NW_LAG[h]) for h in HORIZONS}
     res["verdict"] = verdict(res["all"]["x60"], res["trim_setup"]["x60"])
+    split = [r for r in rows if r["filed"] >= SPLIT_FROM]
+    drop = [r for r in split if r["ret20"] is not None and r["ret20"] <= DROP_20]
+    groups2 = {"opp_after_drop": [r for r in drop if r["opportunistic"]],
+               "routine_after_drop": [r for r in drop if not r["opportunistic"]],
+               "opp_no_drop": [r for r in split if r["opportunistic"] and r not in drop],
+               "routine_all": [r for r in split if not r["opportunistic"]],
+               "opp_after_drop_trim": [r for r in drop if r["opportunistic"] and r["trim_setup"]],
+               "opp_after_shock": [r for r in split if r["opportunistic"] and r["shock"]],
+               "routine_after_shock": [r for r in split if not r["opportunistic"] and r["shock"]]}
+    for name, sub in groups2.items():
+        res[name] = {f"x{h}": summarize(sub, f"x{h}", NW_LAG[h]) for h in HORIZONS}
+    res["verdict_drop"] = verdict_drop(res["opp_after_drop"]["x60"])
     res["rows"] = rows
     return res
 
@@ -383,6 +464,12 @@ def main(argv=None) -> int:
         for h in HORIZONS:
             _out(f"  {name:10s} +{h:<3d} {_fmt(res[name][f'x{h}'])}")
     _out(f"\nVERDICT (primary all x60, subset trim_setup x60): {res['verdict']}")
+    _out(f"\nSecond test (added after the first result; filings from {SPLIT_FROM}, drop = 20 sessions <= {DROP_20:.0%}):")
+    for name in ("opp_after_drop", "routine_after_drop", "opp_no_drop", "routine_all", "opp_after_drop_trim",
+                 "opp_after_shock", "routine_after_shock"):
+        for h in HORIZONS:
+            _out(f"  {name:20s} +{h:<3d} {_fmt(res[name][f'x{h}'])}")
+    _out(f"VERDICT (opportunistic after a big drop, x60): {res['verdict_drop']}")
     _out(f"written: {out}")
     return 0
 

@@ -100,6 +100,49 @@ class TestTiming(unittest.TestCase):
         self.assertAlmostEqual(idx["2024-01-02"], (0.5 + 0.0) / 2)
 
 
+class TestRoutineDropShock(unittest.TestCase):
+    def test_parser_keeps_owner_and_trade_date(self):
+        z = _zip("A1\t02-NOV-2026\t4\tINTC\n", "A1\tDirector,Officer\tCEO\n",
+                 "A1\tP\tA\t150000\t64.73\n")
+        out = ib.parse_purchases(z)
+        self.assertEqual(out[0]["traded"], "2026-11-02")             # no TRANS_DATE column -> filing date
+
+    def test_routine_needs_2_of_3_prior_years_same_month(self):
+        p = [{"symbol": "X", "filed": f"{y}-02-10", "traded": f"{y}-02-08", "value": 2e5, "ceo": True,
+              "owners": ("111",)} for y in (2023, 2024)]
+        h = ib.buy_history(p)
+        self.assertTrue(ib.is_routine(h, "111", "X", "2025-02-15"))       # Feb 2023 + Feb 2024
+        self.assertFalse(ib.is_routine(h, "111", "X", "2025-03-15"))      # another month
+        self.assertFalse(ib.is_routine(h, "111", "X", "2027-02-15"))      # only 2024 in the 3 prior years
+        self.assertFalse(ib.is_routine(h, "222", "X", "2025-02-15"))      # first-time buyer
+
+    def test_event_is_opportunistic_if_any_buyer_is(self):
+        h = ib.buy_history([{"symbol": "X", "filed": f"{y}-05-02", "traded": f"{y}-05-01", "value": 1, "ceo": False,
+                             "owners": ("111",)} for y in (2022, 2023, 2024)])
+        ev = {"symbol": "X", "buys": [("111", "2025-05-01")]}
+        self.assertFalse(ib.opportunistic(ev, h))
+        ev["buys"].append(("999", "2025-05-01"))
+        self.assertTrue(ib.opportunistic(ev, h))
+        self.assertTrue(ib.opportunistic({"symbol": "X", "buys": []}, h))
+
+    def test_worst_day_and_pre_drop(self):
+        b = _bars([float(p) for p in range(100, 130)] + [70.0, 71.0, 72.0])   # rising, a -46% day, small rises
+        self.assertAlmostEqual(ib.worst_day(b, 32, 10), 70 / 129 - 1)
+        self.assertAlmostEqual(ib.worst_day(b, 32, 2), 72 / 71 - 1)          # the crash is outside a 2-day window
+        ev = [{"symbol": "A", "filed": b["days"][32], "value": 2e5, "ceo": True, "buys": [("1", b["days"][32])]}]
+        with mock.patch.object(ib, "trim_setup", return_value=False):
+            row = ib.build_rows(ev, {"A": b}, {d: 0.0 for d in b["days"]}, {})[0]
+        self.assertTrue(row["shock"])
+        self.assertTrue(row["opportunistic"])
+        self.assertAlmostEqual(row["ret20"], 72 / 112 - 1)                  # 20 sessions back, not 5
+
+    def test_verdict_drop(self):
+        self.assertEqual(ib.verdict_drop({"n": 40, "mean": 0.03, "t_nw": 2.1}), "DROP_PAUSE_SUPPORTED")
+        self.assertEqual(ib.verdict_drop({"n": 20, "mean": 0.10, "t_nw": 3.0}), "INCONCLUSIVE")    # too few
+        self.assertEqual(ib.verdict_drop({"n": 40, "mean": 0.03, "t_nw": 1.9}), "INCONCLUSIVE")
+        self.assertEqual(ib.verdict_drop({"n": 40, "mean": -0.03, "t_nw": -2.0}), "NO_EDGE")
+
+
 class TestStatsAndVerdict(unittest.TestCase):
     def test_nw_t(self):
         self.assertIsNone(ib.nw_t([1.0, 2.0], 0))
