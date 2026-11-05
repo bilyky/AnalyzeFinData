@@ -9,7 +9,7 @@ dashboard login, and shows, for INTC:
 - **RETRO:** every daily call, how it turned out, the hit rate, and the lessons;
 - **Tax & calendar:** gains by long/short term, lots turning long-term soon, and the vest /
   ESPP dates with their wash-sale windows;
-- **Research:** the latest study results that bear on the plan (R&D #78, gap drift).
+- **Research:** the latest study results that bear on the plan (R&D #80, gap drift).
 
 The page is read-only: it runs position-watch with `journal=False`, so opening it never
 adds a journal entry. The lots' account field is never sent to the page.
