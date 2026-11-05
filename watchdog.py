@@ -183,11 +183,14 @@ def _check_structured_log(now: datetime.datetime) -> list[str]:
     return errors
 
 
-def check_logs():
-    """Audit all AETHER logs (plain text + structured JSONL) for errors in the last hour."""
+def check_logs(log_found: bool = True):
+    """Audit all AETHER logs (plain text + structured JSONL) for errors in the last hour.
+
+    ``log_found=False`` skips the "found issues" warning, for the re-audit later in the
+    same cycle, which would otherwise log the same issues a second time."""
     now = datetime.datetime.now()
     errors = _check_plain_logs(now) + _check_structured_log(now)
-    if errors:
+    if errors and log_found:
         _log.warning("check_logs found issues", extra={"count": len(errors)})
     return errors
 
@@ -1116,7 +1119,7 @@ def run_watchdog():
         validation_output = "Compilation check skipped (outside active market prep/trading window)."
 
     # 6. Re-Audit Logs after the fix
-    remaining_errors = check_logs()
+    remaining_errors = check_logs(log_found=False)
     today_str = now_la.strftime("%Y-%m-%d")
     new_errors, log_error_sigs = ([], set()) if ai_triggered else _new_log_errors(remaining_errors, today_str)
     

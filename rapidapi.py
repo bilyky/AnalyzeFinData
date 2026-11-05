@@ -46,6 +46,11 @@ MAX_GAP_DAYS = 30   # trigger compact/full fetch if latest entry is this many ca
 SLEEP_SEC    = 14   # 14 s between requests → 4.3 req/min (safe under 5/min limit)
 COMPACT_WINDOW_DAYS = 120  # a compact fetch returns ~100 sessions (~140 calendar days)
 QUOTA_STOP_AFTER = 3  # consecutive 429s = quota spent: stop the run instead of burning 14 s per symbol
+# Alpha Vantage's "Burst pattern detected" (4 of ~400 fetches per PROD run on 11-02/11-03, 10 on
+# 11-04, despite the 14 s spacing) clears after a pause: retry that symbol once. Capped per pass;
+# pass_timeout_seconds() counts every retry at its worst case.
+BURST_RETRY_WAIT_S = 60
+BURST_RETRIES_PER_PASS = 10
 DORMANT_DAYS = 45     # no real bar this long = likely delisted/dead: queue it LAST, not first
 REQUEST_TIMEOUT = 30  # per-call HTTP timeout (s)
 
@@ -55,7 +60,8 @@ def pass_timeout_seconds(max_fetches: int | None = None) -> int:
     worst case (sleep + full HTTP timeout) plus slack for the pre-scan. A caller that kills
     the pass sooner silently caps it — PROD's daily_task killed it at 600 s (~42 fetches)."""
     budget = CFG.rapidapi_max_fetches if max_fetches is None else max_fetches
-    return budget * (SLEEP_SEC + REQUEST_TIMEOUT) + 600
+    burst_retries = BURST_RETRIES_PER_PASS * (BURST_RETRY_WAIT_S + REQUEST_TIMEOUT)
+    return budget * (SLEEP_SEC + REQUEST_TIMEOUT) + burst_retries + 600
 
 _BASE_URL = "https://alpha-vantage.p.rapidapi.com/query"
 _HEADERS  = {
@@ -338,10 +344,19 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
                      len(queue), budget, results["deferred"])
 
         quota_hits = 0
+        burst_retries = 0
         for i, (_last, _order, sym, path, existing) in enumerate(queue[:budget], 1):
             outputsize = "full" if existing is None else "compact"
             try:
-                _fetch_and_merge(sym, path, outputsize=outputsize)
+                try:
+                    _fetch_and_merge(sym, path, outputsize=outputsize)
+                except RuntimeError as e:
+                    if "Burst pattern" not in str(e) or burst_retries >= BURST_RETRIES_PER_PASS:
+                        raise
+                    burst_retries += 1
+                    _log.info("  [RapidAPI] %s: burst limit hit; retrying once in %d s", sym, BURST_RETRY_WAIT_S)
+                    time.sleep(BURST_RETRY_WAIT_S)
+                    _fetch_and_merge(sym, path, outputsize=outputsize)
                 results["updated"] += 1
                 quota_hits = 0
                 _log.console("  [RapidAPI] %s: %s fetch OK (%d/%d, updated=%d)",

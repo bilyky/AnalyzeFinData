@@ -43,6 +43,42 @@ class TestRunCommandRecordsFailures(unittest.TestCase):
         self.assertIn("timed out", daily_task._failed_steps[0])
         self.assertTrue(log.error.called)
 
+    def test_timeout_logs_the_last_output_before_the_kill(self):
+        # PROD 11-04: run_history.py hung 30 min and the log showed only the timeout.
+        out = "\n".join(f"line {k}" for k in range(1, 31))
+        boom = subprocess.TimeoutExpired(["python", "run_history.py"], 600, output=out, stderr=b"warn: stuck on EA")
+        with mock.patch.object(daily_task.subprocess, "run", side_effect=boom), \
+             mock.patch.object(daily_task, "_log") as log:
+            daily_task.run_command([sys.executable, "run_history.py", "5"], timeout=600)
+        msg = log.error.call_args.args[0]
+        self.assertIn("Last output before the kill", msg)
+        self.assertIn("line 30", msg)
+        self.assertIn("warn: stuck on EA", msg)
+        self.assertNotIn("line 1\n", msg)                 # only the tail
+
+    def test_output_tail_decodes_bytes(self):
+        # Review of #245: run_command is text-mode, but TimeoutExpired can carry bytes.
+        tail = daily_task._output_tail(b"fetching 2026-11-04\n", "warn: slow")
+        self.assertEqual(tail, "fetching 2026-11-04\nwarn: slow")
+        self.assertNotIn("b'", tail)
+
+    def test_timeout_without_output_says_so(self):
+        boom = subprocess.TimeoutExpired(["python", "run_history.py"], 600)
+        with mock.patch.object(daily_task.subprocess, "run", side_effect=boom), \
+             mock.patch.object(daily_task, "_log") as log:
+            daily_task.run_command([sys.executable, "run_history.py", "5"], timeout=600)
+        self.assertIn("No output before the kill.", log.error.call_args.args[0])
+
+    def test_a_real_killed_child_keeps_its_output(self):
+        # No mocks: subprocess.run must hand back what the child printed before the kill.
+        # The text is built at run time so it is not in the command line the message also echoes.
+        code = "import time; print('fetch' + 'ing ' + str(2000 + 26), flush=True); time.sleep(30)"
+        with mock.patch.object(daily_task, "_log") as log:
+            daily_task.run_command([sys.executable, "-c", code], timeout=3)
+        msg = log.error.call_args.args[0]
+        self.assertIn("fetching 2026", msg.split("Last output before the kill:", 1)[-1])
+        self.assertIn("Last output before the kill:", msg)
+
     def test_nonzero_exit_is_recorded_and_logged_as_error(self):
         bad = subprocess.CompletedProcess([], 2, stdout="", stderr="Traceback ...")
         with mock.patch.object(daily_task.subprocess, "run", return_value=bad), \

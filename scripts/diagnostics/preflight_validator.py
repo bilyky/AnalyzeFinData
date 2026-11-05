@@ -528,7 +528,7 @@ def check_pipeline_smoke_test(base_dir: Path = BASE_DIR) -> tuple[bool, list[str
     """
     if "--smoke" not in sys.argv:
         _log.console("  Skipping Pipeline Smoke Test (pass --smoke to run)...")
-        return True, []
+        return "SKIPPED", []
 
     _log.console("  Running pipeline smoke test (--cached)...")
     issues = []
@@ -605,9 +605,12 @@ def check_ai_providers() -> tuple[bool, list[str]]:
 
 
 def status_word(ok, kind: str) -> str:
-    """Console/email label for one roster entry. "advisory" checks show WARN, never FAIL."""
+    """Console/email label for one roster entry. "advisory" checks show WARN, never FAIL.
+    "WAIVED" and "SKIPPED" are truthy sentinels: they count as passed but say so."""
     if ok == "WAIVED":
         return "WAIVED"
+    if ok == "SKIPPED":
+        return "SKIP"
     if kind == "lock":
         return "CLEAN" if ok else "LOCKED"
     if kind == "advisory":
@@ -616,7 +619,7 @@ def status_word(ok, kind: str) -> str:
 
 
 def overall_ok(checks) -> bool:
-    """The run's verdict: every non-advisory check passed (WAIVED counts as passed)."""
+    """The run's verdict: every non-advisory check passed (WAIVED and SKIPPED count as passed)."""
     return all(ok for _, ok, kind in checks if kind != "advisory")
 
 
@@ -633,7 +636,8 @@ def send_preflight_email(checks, missing_items, active_locks, duration, all_ok, 
         subject = f"🔔 AETHER Pre-Flight Status Briefing: {today}"
 
         _colors = {"PASS": "#2ea043", "CLEAN": "#2ea043", "FAIL": "#f85149",
-                   "LOCKED": "#db6d28", "WAIVED": "#db6d28", "WARN": "#db6d28"}
+                   "LOCKED": "#db6d28", "WAIVED": "#db6d28", "WARN": "#db6d28",
+                   "SKIP": "#8b949e"}
 
         rows = ""
         for i, (label, ok, kind) in enumerate(checks, 1):
