@@ -50,6 +50,7 @@
             <button data-tab="dashboard" class="tab-btn px-4 py-2 border-b-2 border-transparent">Dashboard</button>
             <button data-tab="research"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Research</button>
             <button data-tab="accounts"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Accounts</button>
+            <button data-tab="oceanview" class="tab-btn px-4 py-2 border-b-2 border-transparent">OceanView</button>
             <button data-tab="chat"      class="tab-btn px-4 py-2 border-b-2 border-transparent">Chat</button>
             <button data-tab="system"    class="tab-btn px-4 py-2 border-b-2 border-transparent">System</button>
             <button data-tab="about"     class="tab-btn px-4 py-2 border-b-2 border-transparent">About</button>
@@ -541,6 +542,15 @@
         </section>
 
         <!-- ======================= ABOUT TAB ======================= -->
+        <!-- OceanView: the concentrated-holding programme (private: needs the login) -->
+        <section id="tab-oceanview" class="tab-panel hidden">
+            <div class="flex items-baseline justify-between mb-4">
+                <h2 class="section-title">OceanView <span id="ov-symbol" class="text-slate-400"></span></h2>
+                <span id="ov-asof" class="text-xs text-slate-500"></span>
+            </div>
+            <div id="ov-body"><div class="text-center text-slate-500 py-6">Loading…</div></div>
+        </section>
+
         <section id="tab-about" class="tab-panel hidden">
             <div class="space-y-8 max-w-5xl mx-auto mb-12">
                 <!-- Overview Header -->

@@ -86,7 +86,7 @@ $("login-form").addEventListener("submit", async (e) => {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 let activeTab = "dashboard";
-const VALID_TABS = ["dashboard", "research", "accounts", "chat", "system", "about"];
+const VALID_TABS = ["dashboard", "research", "accounts", "oceanview", "chat", "system", "about"];
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
@@ -1892,11 +1892,116 @@ async function runBacktest() {
 $("bt-run").addEventListener("click", runBacktest);
 $("bt-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") runBacktest(); });
 
+// ── OceanView tab (private: the endpoint needs the login token) ─────────────
+const ovPct = (x, d = 1) => (x == null ? "—" : (x * 100).toFixed(d) + "%");
+const ovSigned = (x, d = 1) => (x == null ? "—" : (x >= 0 ? "+" : "") + (x * 100).toFixed(d) + "%");
+const OV_ACTION = { TRIM: "text-amber-300", HOLD: "text-emerald-300", WAIT: "text-sky-300" };
+
+function ovCard(title, inner) {
+    return `<div class="card mb-6"><div class="card-label mb-3">${esc(title)}</div>${inner}</div>`;
+}
+
+function ovToday(d) {
+    const t = d.today, c = t.concentration || {}, call = t.call || {}, m = t.metrics || {}, p = t.vs_peers || {};
+    const pct = c.pct, floor = d.floor_pct, width = pct == null ? 0 : Math.min(100, pct * 100 / 0.6);
+    const reasons = (call.reasons || []).map((r) => `<li>${esc(r)}</li>`).join("");
+    const doubts = (t.doubts || []).length
+        ? `<div class="mt-2 text-sm text-amber-300">Data doubts (a TRIM would be held back): ${t.doubts.map(esc).join("; ")}</div>` : "";
+    const repl = Object.entries(t.replacements || {}).map(([s, r]) =>
+        `<tr><td class="pr-4">${esc(s)}</td><td class="pr-4">${fmt$(r.close)}</td><td class="pr-4">${ovSigned(r.stretch_50)} vs 50-day</td>
+         <td class="pr-4">RSI ${r.rsi14 == null ? "—" : r.rsi14.toFixed(0)}</td>
+         <td class="${r.entry_ok ? "text-emerald-300" : "text-amber-300"}">${r.entry_ok ? "entry OK" : "stretched"}</td></tr>`).join("");
+    const lots = t.lots && t.lots.lots ? `<div class="mt-3 text-sm">Would sell ${t.lots.shares} sh (est. tax ${fmt$(t.lots.est_tax)}):
+        ${t.lots.lots.map((l) => `${esc(l.acquired)} ${l.sell_qty} sh @ ${fmt$(l.price)} (${esc(l.term)})`).join(", ")}</div>` : "";
+    return ovCard("Today", `
+        <div class="flex flex-wrap items-baseline gap-6">
+            <div class="text-3xl font-bold ${OV_ACTION[call.action] || ""}">${esc(call.action || "—")}
+                ${call.action === "TRIM" ? `<span class="text-base text-slate-300">~${fmt$(call.tranche_usd)} into ${esc(call.replacement)}</span>` : ""}</div>
+            <div class="text-sm text-slate-400">price ${fmt$(t.price)} (${esc(t.price_source)}) · bar ${esc(t.as_of_bar)} · account snapshot ${esc(t.pack_health || "—")} · rules ${esc(t.rules)}</div>
+        </div>
+        <ul class="list-disc ml-5 mt-2 text-sm">${reasons}</ul>${doubts}
+        <div class="mt-4 text-sm">Share of total <b>${ovPct(pct)}</b> · floor ${ovPct(floor, 0)} · above the floor ${c.headroom_usd == null ? "—" : fmt$(c.headroom_usd)}</div>
+        <div class="relative h-3 mt-1 rounded bg-slate-800">
+            <div class="absolute h-3 rounded bg-emerald-500/70" style="width:${width}%"></div>
+            <div class="absolute h-3 w-0.5 bg-amber-300" style="left:${floor * 100 / 0.6}%" title="floor"></div>
+        </div>
+        <div class="text-xs text-slate-500 mt-1">bar scale 0–60% · amber line = floor</div>
+        <div class="mt-4 text-sm">vs peers: beta ${p.beta == null ? "—" : p.beta.toFixed(2)} · own move 20d ${ovSigned(p.resid_20)} (z ${p.z_20 == null ? "—" : p.z_20.toFixed(2)}) ·
+            trend vs 50-day ${ovSigned(m.vs_sma50)}, 200-day ${ovSigned(m.vs_sma200)} · from 52w high ${ovSigned(m.drawdown_52w)}</div>
+        <table class="mt-3 text-sm">${repl}</table>${lots}
+        ${t.wash_window_today ? `<div class="mt-2 text-sm text-sky-300">Inside a wash-sale window today: no loss sales.</div>` : ""}`);
+}
+
+function ovRetro(d) {
+    const r = (d.today || {}).retro || {};
+    const scored = Object.fromEntries((r.scored || []).map((s) => [s.date, s]));
+    const rows = (d.journal || []).slice().reverse().map((e) => {
+        const s = scored[e.date];
+        const verdict = s ? `<span class="${s.good ? "text-emerald-300" : "text-red-300"}">${s.good ? "good" : "bad"}</span>
+            (${ovSigned(s.symbol_ret)} vs ${ovSigned(s.replacement_ret)})` : `<span class="text-slate-500">not scored yet</span>`;
+        const lessons = (e.lessons || []).map((l) => `<div class="text-xs text-slate-400">💡 ${esc(l)}</div>`).join("");
+        return `<tr class="border-t border-slate-800 align-top"><td class="py-1 pr-4">${esc(e.date)}</td>
+            <td class="pr-4 ${OV_ACTION[e.action] || ""}">${esc(e.action)}</td><td class="pr-4">${fmt$(e.price)}</td>
+            <td class="pr-4">${ovPct(e.pct)}</td><td class="pr-4">${verdict}${lessons}</td></tr>`;
+    }).join("");
+    const hit = r.hit_rate == null ? "—" : ovPct(r.hit_rate, 0) + ` over ${(r.scored || []).length} call(s)`;
+    return ovCard(`RETRO · hit rate ${hit}`, `<div class="overflow-x-auto"><table class="w-full text-sm">
+        <tr class="text-slate-400 text-left"><th class="pr-4">Date</th><th class="pr-4">Call</th><th class="pr-4">Price</th><th class="pr-4">Share</th><th class="pr-4">Since then</th></tr>${rows}</table></div>`);
+}
+
+function ovTax(d) {
+    const lots = d.lots || [];
+    const sum = (f) => lots.filter(f).reduce((a, l) => a + l.gain, 0);
+    const soon = lots.filter((l) => l.term === "ST" && l.days_to_lt > 0 && l.days_to_lt <= 60);
+    const cal = (d.calendar || []).map((c) => `<tr class="border-t border-slate-800"><td class="py-1 pr-4">${esc(c.date)}</td>
+        <td class="pr-4">${esc(c.window_from)} → ${esc(c.window_to)}</td>
+        <td class="${c.status === "now" ? "text-sky-300" : c.status === "past" ? "text-slate-500" : ""}">${esc(c.status)}</td></tr>`).join("");
+    const lotRows = lots.map((l) => `<tr class="border-t border-slate-800"><td class="pr-4">${esc(l.acquired)}</td><td class="pr-4">${l.qty}</td>
+        <td class="pr-4">${fmt$(l.price)}</td><td class="pr-4 ${l.gain >= 0 ? "" : "text-red-300"}">${fmt$(l.gain)}</td>
+        <td class="pr-4">${esc(l.term)}${l.term === "ST" ? ` (${l.days_to_lt} d to LT)` : ""}</td></tr>`).join("");
+    return ovCard("Tax & calendar", `
+        <div class="text-sm mb-3">Lots ${lots.length} · long-term gain ${fmt$(sum((l) => l.term === "LT" && l.gain > 0))} ·
+            short-term gain ${fmt$(sum((l) => l.term === "ST" && l.gain > 0))} · losses ${fmt$(sum((l) => l.gain < 0))}
+            ${soon.length ? ` · <span class="text-amber-300">${soon.length} lot(s) turn long-term within 60 days</span>` : ""}</div>
+        <div class="card-label mb-1">Vest / ESPP dates and wash-sale windows (±30 days)</div>
+        <table class="text-sm mb-4">${cal}</table>
+        <details><summary class="cursor-pointer text-sm text-slate-300">All lots</summary>
+            <div class="overflow-x-auto"><table class="w-full text-sm mt-2">
+            <tr class="text-slate-400 text-left"><th class="pr-4">Acquired</th><th class="pr-4">Qty</th><th class="pr-4">Basis</th><th class="pr-4">Gain now</th><th class="pr-4">Term</th></tr>${lotRows}</table></div></details>
+        <div class="text-xs text-slate-500 mt-2">Estimates only: confirm with your CPA.</div>`);
+}
+
+function ovResearch(d) {
+    const items = (d.research || []).map((r) => {
+        const rows = (r.rows || []).map((x) => `<tr class="border-t border-slate-800"><td class="pr-4">${esc(x.group)}</td><td class="pr-4">${x.n ?? "—"}</td>
+            <td class="pr-4">${ovSigned(x.mean, 2)}</td><td class="pr-4">${ovSigned(x.median, 2)}</td><td>${x.t == null ? "—" : x.t.toFixed(2)}</td></tr>`).join("");
+        return `<div class="mb-4"><div class="text-sm"><b>${esc(r.id)}</b> ${esc(r.title)} · <span class="text-amber-300">${esc(r.verdict || "")}</span>
+            ${r.verdict_2 ? ` · second test: <span class="text-amber-300">${esc(r.verdict_2)}</span>` : ""}</div>
+            <table class="text-sm mt-1"><tr class="text-slate-400 text-left"><th class="pr-4">group</th><th class="pr-4">n</th><th class="pr-4">60d mean</th><th class="pr-4">median</th><th class="pr-4">t</th></tr>${rows}</table></div>`;
+    }).join("");
+    return ovCard("Research (excess return vs the market, 60 sessions)", items || `<div class="text-sm text-slate-500">No study results on this machine.</div>`);
+}
+
+async function loadOceanView() {
+    const body = $("ov-body");
+    try {
+        const d = await api("/api/oceanview/summary", { headers: authHeaders() });
+        $("ov-symbol").textContent = d.symbol;
+        $("ov-asof").textContent = `as of ${d.as_of} · recommend-only`;
+        body.innerHTML = ovToday(d) + ovRetro(d) + ovTax(d) + ovResearch(d);
+    } catch (e) {
+        body.innerHTML = String(e.message).includes("401")
+            ? '<div class="text-center text-slate-400 py-6">🔒 Log in (top right) to see OceanView.</div>'
+            : `<div class="text-center text-red-300 py-6">Could not load OceanView: ${esc(e.message)}</div>`;
+    }
+}
+
 // ── Per-tab loader ───────────────────────────────────────────────────────────
 function loadTab(tab) {
     if (tab === "dashboard") loadDashboard();
     else if (tab === "research") loadResearch();
     else if (tab === "accounts") loadAccounts();
+    else if (tab === "oceanview") loadOceanView();
     else if (tab === "chat") setTimeout(() => $("chat-input").focus(), 50);
     else if (tab === "system") { loadSystem(); _startLogRefresh(); }
     else if (tab === "about") { loadRoadmap(); loadIntelIdeas(); }
