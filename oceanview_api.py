@@ -73,7 +73,7 @@ def research() -> list:
     files = sorted(glob.glob(os.path.join(paths.data_dir(), "insider_buy_study_*.json")))
     r = _read_json(files[-1]) if files else None
     if r:
-        out.append({"id": "R&D #75", "title": "Insider open-market buys vs trims", "run": r.get("run"),
+        out.append({"id": "R&D #78", "title": "Insider open-market buys vs trims", "run": r.get("run"),
                     "verdict": r.get("verdict"), "verdict_2": r.get("verdict_drop"),
                     "rows": [{"group": k, "n": _x60(r, k).get("n"), "mean": _x60(r, k).get("mean"),
                               "median": _x60(r, k).get("median"), "t": _x60(r, k).get("t_nw")}
