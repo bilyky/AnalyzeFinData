@@ -110,10 +110,25 @@ def run_command(command_list, timeout=STEP_TIMEOUT_S):
         else:
             _log.info("Command completed successfully.")
         return result.stdout
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
         _failed_steps.append(f"{step}: timed out after {timeout}s")
-        _log.error(f"🚨 Command timed out after {timeout}s: {' '.join(command_list)}")
+        # The child's last output says where it stopped (PROD 11-04: run_history.py hung for
+        # 30 min and the log showed only the timeout).
+        tail = _output_tail(e.stdout, e.stderr)
+        _log.error(f"🚨 Command timed out after {timeout}s: {' '.join(command_list)}"
+                   + (f"\nLast output before the kill:\n{tail}" if tail else "\nNo output before the kill."))
         return ""
+
+
+def _output_tail(stdout, stderr, lines=15) -> str:
+    """The last `lines` lines of a killed child's stdout + stderr (str or bytes, either may be None)."""
+    parts = []
+    for out in (stdout, stderr):
+        if isinstance(out, bytes):
+            out = out.decode("utf-8", errors="replace")
+        if out:
+            parts.append(out.rstrip())
+    return "\n".join("\n".join(parts).splitlines()[-lines:])
 
 
 def _step_failure_banner(failed: list[str]) -> str:
