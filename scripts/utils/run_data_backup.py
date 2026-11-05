@@ -73,9 +73,13 @@ def main() -> int:
         # sync_data_folder() returns True without recording anything during market hours, by
         # design (no copying while the trade run and the monitor use Data/). Say so, and when a
         # manual run will work (PROD 11-05: two manual runs at 07:16 logged a bare ERROR).
-        _log.error("Data backup skipped: sync_data_folder() does not copy during market hours "
-                   "(6:30 AM - 1:15 PM PT). Run it again after 1:15 PM PT; the last recorded "
-                   f"attempt is still {before or 'none'} ({status.get('last_result') or 'no result'}).")
+        last = f"the last recorded attempt is still {before or 'none'} ({status.get('last_result') or 'no result'})"
+        if watchdog.is_market_hours():
+            _log.error("Data backup skipped: sync_data_folder() does not copy during market hours "
+                       f"(6:30 AM - 1:15 PM PT). Run it again after 1:15 PM PT; {last}.")
+        else:
+            # The other no-record path: sync_data_folder() found no Data/ folder (it logs why).
+            _log.error(f"Data backup did not run and recorded nothing (see the warning above); {last}.")
         return 1
     if not ok or status.get("last_result") != "ok":
         _log.error(f"Data backup did not complete (result: {status.get('last_result')}).")

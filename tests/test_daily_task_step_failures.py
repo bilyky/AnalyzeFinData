@@ -56,6 +56,12 @@ class TestRunCommandRecordsFailures(unittest.TestCase):
         self.assertIn("warn: stuck on EA", msg)
         self.assertNotIn("line 1\n", msg)                 # only the tail
 
+    def test_output_tail_decodes_bytes(self):
+        # Review of #245: run_command is text-mode, but TimeoutExpired can carry bytes.
+        tail = daily_task._output_tail(b"fetching 2026-11-04\n", "warn: slow")
+        self.assertEqual(tail, "fetching 2026-11-04\nwarn: slow")
+        self.assertNotIn("b'", tail)
+
     def test_timeout_without_output_says_so(self):
         boom = subprocess.TimeoutExpired(["python", "run_history.py"], 600)
         with mock.patch.object(daily_task.subprocess, "run", side_effect=boom), \
