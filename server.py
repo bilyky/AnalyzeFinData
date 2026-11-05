@@ -42,6 +42,7 @@ from fastapi.staticfiles import StaticFiles
 from config import CFG
 from external_intel import dedup_rd_topics
 import data_api
+from aether import dev_progress
 import uvicorn
 import ai_portfolio_game
 import ai_client
@@ -189,6 +190,14 @@ def create_app():
             with open(roadmap_path, encoding="utf-8") as f:
                 return {"markdown": f.read()}
         raise HTTPException(status_code=404, detail="plans/roadmap.md not found")
+
+    @app.get("/api/dev/project-model")
+    def get_project_model():
+        """Development > Project Model: R&D #75 progress plus live code metrics."""
+        try:
+            return dev_progress.project_model(_DIR)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="plans/aether-services-progress.json not found")
 
     @app.get("/api/intel-ideas")
     def get_intel_ideas():
