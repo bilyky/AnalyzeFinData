@@ -87,8 +87,13 @@ class TestBackupWaitsForCollection(unittest.TestCase):
              mock.patch.object(run_data_backup.watchdog, "sync_data_folder", return_value=True), \
              mock.patch.object(run_data_backup.watchdog, "backup_status",
                                return_value={"last_attempt": "yesterday", "last_result": "ok"}), \
-             mock.patch.object(run_data_backup, "_log"):
+             mock.patch.object(run_data_backup, "_log") as log:
             self.assertEqual(run_data_backup.main(), 1)
+        # The message says why and when a manual run works (PROD 11-05: a bare ERROR at 07:16).
+        msg = log.error.call_args.args[0]
+        self.assertIn("market hours", msg)
+        self.assertIn("after 1:15 PM PT", msg)
+        self.assertIn("yesterday (ok)", msg)
 
     def test_an_offline_share_is_a_failed_backup(self):
         code, *_ = self._main([[]], last_result="offline")
