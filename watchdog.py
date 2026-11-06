@@ -75,7 +75,8 @@ _SCHTASKS_TIMEOUT_S = 60
 # A watchdog cycle that still holds the lock after this long is treated as hung: it is killed
 # and the lock is reclaimed. Preflight uses the same limit.
 WATCHDOG_LOCK_MAX_AGE_MIN = 120
-SYNC_TIMEOUT_S = 600  # robocopy timeout for sync_data_folder (PR #64 raised it for the cache volume)
+SYNC_TIMEOUT_S = 1500  # robocopy timeout for sync_data_folder (600 s timed out on PROD 11-04 and 11-05). Only the
+                       # 22:10 backup task syncs; its 150-min limit covers the 120-min wait plus this.
 
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 

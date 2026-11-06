@@ -87,7 +87,7 @@
       "time_limit_min": 420,
       "log": "aftermarket_report_agent.log",
       "summary": "Evening report, then the OHLCV recovery pass.",
-      "description": "daily_task: 5-day history backfill, workbook refresh, the evening report email, the Data sync, then the RapidAPI OHLCV recovery pass. Exits 1 and marks the report STEP FAILURE when a step fails.",
+      "description": "daily_task: 5-day history backfill, workbook refresh, the evening report email, then the RapidAPI OHLCV recovery pass (the Data backup is its own 22:10 task). Exits 1 and marks the report STEP FAILURE when a step fails.",
       "notes": "The limit must cover daily_task.worst_case_runtime_seconds() (a test checks it)."
     },
     {
