@@ -60,6 +60,11 @@ Read the real message from `$_.ErrorDetails.Message`. The PII scrub still applie
   and time out; set `HTTPS_PROXY` to the proxy `git` uses, or use a proxy-aware client (§C).
 - **Git Bash (MSYS) path conversion** rewrites arguments such as `refs/x:.claude/file` into Windows
   paths, producing `ambiguous argument` errors. Prefix commands with `MSYS_NO_PATHCONV=1`.
+- **Inline Python through an agent's shell tool can lose backslashes:** `'\\n'` in a heredoc may arrive
+  as a real newline, and `"C:\utils"` as a `\u` escape. That breaks string literals or edits the wrong
+  text. For edits that contain backslashes, use the editor tool, or write the script to a file first.
+- **`python -I` ignores `PYTHONIOENCODING`.** On a cp1252 console, printing emoji from logs raises
+  `UnicodeEncodeError`; call `sys.stdout.reconfigure(encoding="utf-8")` in the script.
 - **`git merge-tree --write-tree X Y` takes commits.** Given a tree id it exits non-zero, which reads
   like a conflict. To test several branches together, merge them in sequence in a detached scratch
   worktree.

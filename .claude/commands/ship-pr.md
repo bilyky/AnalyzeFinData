@@ -20,9 +20,12 @@ pre-flight (test command, linters, commit conventions) comes from the repo's own
 - **Run the repo's pre-flight and paste real output** — test suite, linters, type-checks, build. Never
   `--no-verify`; if a hook fails, fix the cause.
 - **Prove every new test is red without the change.** Commit (or copy) your work first, swap the
-  pre-change file in with `git show origin/main:<path> > <path>`, run the test, then restore with
-  `git checkout HEAD -- <path>` (or from your private copy). Never restore from the shared stash or from
+  pre-change file in with `git show origin/main:<path> > <path>`, run the test, then restore **from where
+  you saved it**: `git checkout HEAD -- <path>` only if the fix is committed, else copy your private copy
+  back (`checkout HEAD` on an uncommitted fix deletes it). Never restore from the shared stash or from
   `stash@{0}` — another session's entry may be on top. A test that passes either way proves nothing.
+  - Read the red's failure message: it must fail on the new behaviour. An assertion on text the old
+    code also produces (an echoed command line, a fixture value) passes either way.
   - A test that only *errors* on the old code (the new name doesn't exist yet) is not a red. Mutate
     the new code instead (delete the counter, flip the comparison) and confirm a test fails.
   - When the code under test runs inside a longer flow, assert the test's own precondition still

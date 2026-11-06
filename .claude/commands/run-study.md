@@ -7,12 +7,19 @@ rule fixed in advance, and the result recorded where the project tracks R&D (her
 
 ## 1. Frame it before touching data
 
+- **Search the R&D record first.** The same rule may already have a study. An INCONCLUSIVE or failed
+  one blocks wiring the rule on new anecdotes; re-open it only with a new design or more data.
 - **The question in one line**, tied to the symptom that raised it (the log line, the ledger rows).
 - **Groups and outcome:** what is compared (e.g. gate passes vs the cohort it excludes), over which
   horizon, on which universe. Mirror the production rule *exactly* — call the code's own function for
   the rule; never re-implement it in the study.
 - **Decision rule, written down first:** the statistic, the threshold, and what each verdict does
-  ("TOO_STRICT → consider relaxing; INCONCLUSIVE → keep"). Put it in the script's docstring.
+  ("TOO_STRICT → consider relaxing; INCONCLUSIVE → keep"). Put it in the script's docstring and
+  **commit and push the script before the first run**, so the history proves the order. Any later
+  edit to the script, even a descriptive part, is disclosed with the result.
+- **Mirror the live decision inputs, not just the rule.** If production picks a parameter from state
+  the simulator lacks (a regime, a profile, a breadth check), pull that logic into a pure function
+  the live code calls, and pass it in. A study on a simplified input answers a different question.
 
 ## 2. Build it so it can't fool you
 
