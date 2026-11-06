@@ -71,6 +71,20 @@ python scripts/monitoring/position_watch.py --symbol INTC --lesson "<one sentenc
 3. Every ~20 calls, review the hit rate and the lessons with the user. Propose rule changes
    only with evidence, as a new `RULES_VERSION`, and say what changed.
 
+## Step 4: Dated investment plan (when one exists)
+
+If `Data/position_watch/invest_plan.json` exists (a short plan with dated buy steps, stops and a
+sell window), run its daily check and read the TODAY lines back:
+
+```bash
+python scripts/monitoring/invest_plan.py
+```
+
+It says which step is due, "wait a day" after a market drop of 2%+, whether RSP is stretched,
+each holding against its stop, and the days to the sell window. Before a winners step, check
+each candidate's last 3 similar setups (CLAUDE.md). Record actual purchases in the plan's
+`fills` (date, symbol, shares, price; a stop price for single stocks). Recommend-only.
+
 ## The rules (v2, heuristics, tuned by the RETRO)
 
 - **Never act when not sure.** A TRIM becomes WAIT when any input is in doubt: the price
