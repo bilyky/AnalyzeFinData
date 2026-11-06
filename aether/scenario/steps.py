@@ -933,8 +933,11 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
     ``run_daily_ai_management`` (``if available_slots > 0 and state["balance"] >
     min_cash_required:``) — the last trading stage before the root's
     ``except``/``finally``. It is one stage because the pyramiding and
-    covered-call passes are nested inside its market-hours branch. Unchanged
-    from the root, and only when there is a free slot and cash above the buffer:
+    covered-call passes are nested inside its market-hours branch. When the
+    circuit breaker left its verdict on ``state`` (``circuit_breaker.FREEZE_KEY``),
+    no buys are queued or made and no scale-ins run; covered calls still do.
+    Otherwise as in the root, and only when there is a free slot and cash above
+    the buffer:
 
     * **After hours** — the top ``available_slots`` candidates are queued as
       BUY orders in ``state["queued_orders"]`` (deduped by symbol).
@@ -959,22 +962,32 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
     """
     game = _pkg()
 
+    # An active circuit breaker freezes every buy: new entries, after-hours queueing and
+    # scale-ins (covered calls still run). enforce_circuit_breaker only cleared queued buys and
+    # tightened stops, so on PROD 2026-11-06 (SPY -3.38% the day before) the same run still
+    # bought AU and added to LUV three minutes after the breaker fired.
+    freeze_reason = state.get(game.circuit_breaker.FREEZE_KEY)
+    frozen = bool(freeze_reason)
+    if frozen:
+        game._log.warning(f"[Breaker] Buying frozen this run (new buys and scale-ins): {freeze_reason}")
+
     if available_slots > 0 and state["balance"] > min_cash_required:
         if not game.is_market_hours():
             # Queue the buys up to available slots
-            for buy in top_buys[:available_slots]:
+            for buy in ([] if frozen else top_buys[:available_slots]):
                 if not any(q["symbol"] == buy["sym"] and q["type"] == "BUY" for q in state.get("queued_orders", [])):
                     state.setdefault("queued_orders", []).append({
                         "type": "BUY", "symbol": buy["sym"], "reason": "Top-ranked quantitative pick (After-Hours)"
                     })
                     game._log.info(f"📝 [Queued] After-hours BUY queued for {buy['sym']}")
         else:
-            game._execute_buys(state, top_buys, available_slots, min_cash_required, rules,
-                          today, now_time, new_transactions, prices)
+            if not frozen:
+                game._execute_buys(state, top_buys, available_slots, min_cash_required, rules,
+                              today, now_time, new_transactions, prices)
 
             # ── Dynamic Pyramiding: Scale into winning trends with idle cash ──
             cash_ratio = state["balance"] / state["equity"] if state["equity"] > 1.0 else 0.0
-            if cash_ratio > game.CFG.system_pyramiding_cash_ratio:  # idle-cash trigger for scaling in
+            if not frozen and cash_ratio > game.CFG.system_pyramiding_cash_ratio:  # idle-cash trigger for scaling in
                 game._log.info(f"🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash ({cash_ratio*100:.1f}%)...")
                 for sym, pos in list(state["positions"].items()):
                     # Never buy back what this run (or an earlier run today) just sold, e.g.
@@ -1079,6 +1092,7 @@ def finalize_run(state, wb, new_transactions):
         except Exception:
             pass
     if state is not None:
+        state.pop(game.circuit_breaker.FREEZE_KEY, None)   # transient, never saved
         game.save_game(state)
         game.update_excel_log(state, new_transactions)
         game._log.info(f"🤖 AI Portfolio Value: ${state['equity']} (Cash: ${round(state['balance'], 2)})")

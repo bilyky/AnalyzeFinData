@@ -55,6 +55,17 @@ class TestOnlyTheBackupTaskSyncs(unittest.TestCase):
         self.assertGreaterEqual(t["time_limit_min"] * 60,
                                 run_data_backup.MAX_WAIT_MIN * 60 + watchdog.SYNC_TIMEOUT_S)
 
+    def test_sync_timeout_is_above_the_600s_that_timed_out_on_prod(self):
+        # PROD 11-04 and 11-05: robocopy hit 600 s both nights (last full backup 11-03).
+        self.assertGreater(watchdog.SYNC_TIMEOUT_S, 600)
+
+    def test_evening_task_budget_does_not_count_the_sync(self):
+        # daily_task does not sync (run_data_backup is the only caller); its worst case
+        # must not move with the backup's timeout.
+        base = daily_task.worst_case_runtime_seconds()
+        with mock.patch.object(watchdog, "SYNC_TIMEOUT_S", watchdog.SYNC_TIMEOUT_S + 10_000):
+            self.assertEqual(daily_task.worst_case_runtime_seconds(), base)
+
 
 class TestBackupWaitsForCollection(unittest.TestCase):
     def _main(self, collectors, last_result="ok"):

@@ -28,7 +28,8 @@ STEPS = ROOT / "aether" / "scenario" / "steps.py"
 MODULES = ["tests.test_scenario_steps", "tests.test_scenario_assemble", "tests.test_scenario_settle",
            "tests.test_scenario_queued", "tests.test_scenario_exits",
            "tests.test_scenario_sell_exec", "tests.test_scenario_buy_screen", "tests.test_scenario_rotation",
-           "tests.test_scenario_deploy", "tests.test_scenario_finalize", "tests.test_scenario_workbook_gate"]
+           "tests.test_scenario_deploy", "tests.test_scenario_finalize", "tests.test_scenario_workbook_gate",
+           "tests.test_breaker_freezes_buys"]
 
 # (label, exact text in steps.py, replacement). Each anchor must occur exactly once.
 MUTANTS = [
@@ -199,15 +200,19 @@ MUTANTS += [  # deploy_capital (BUY execution / queue, pyramiding, covered calls
      'if available_slots >= 0 and state["balance"] > min_cash_required:'),
     ("dep: gate cash >=", 'if available_slots > 0 and state["balance"] > min_cash_required:',
      'if available_slots > 0 and state["balance"] >= min_cash_required:'),
-    ("dep: queue every candidate", 'for buy in top_buys[:available_slots]:', 'for buy in top_buys:'),
+    ("dep: queue every candidate", 'for buy in ([] if frozen else top_buys[:available_slots]):',
+     'for buy in ([] if frozen else top_buys):'),
+    ("dep: breaker freeze ignored", 'frozen = bool(freeze_reason)', 'frozen = False'),
+    ("dep: freeze blocks covered calls", '            if game.is_market_hours():\n                game._log.info("🚀',
+     '            if game.is_market_hours() and not frozen:\n                game._log.info("🚀'),
     ("dep: queue no dedup", 'if not any(q["symbol"] == buy["sym"] and q["type"] == "BUY" for q in state.get("queued_orders", [])):',
      'if True:'),
     ("dep: dedup ignores type", 'q["symbol"] == buy["sym"] and q["type"] == "BUY" for q',
      'q["symbol"] == buy["sym"] for q'),
     ("dep: no execute_buys", 'game._execute_buys(state, top_buys, available_slots, min_cash_required, rules,\n'
-     '                          today, now_time, new_transactions, prices)', 'pass'),
-    ("dep: degenerate ratio -2", 'else 0.0\n            if cash_ratio > game.CFG.system_pyramiding_cash_ratio:',
-     'else -2.0\n            if cash_ratio > game.CFG.system_pyramiding_cash_ratio:'),
+     '                              today, now_time, new_transactions, prices)', 'pass'),
+    ("dep: degenerate ratio -2", 'else 0.0\n            if not frozen and cash_ratio > game.CFG.system_pyramiding_cash_ratio:',
+     'else -2.0\n            if not frozen and cash_ratio > game.CFG.system_pyramiding_cash_ratio:'),
     ("dep: same-day guard off", 'sold earlier today; no scale-in.")\n                        continue',
      'sold earlier today; no scale-in.")\n                        pass'),
     ("dep: stop-below-cost guard off", "is below cost ${pos['cost']:.2f}; no scale-in.\")\n                        continue",
@@ -218,8 +223,10 @@ MUTANTS += [  # deploy_capital (BUY execution / queue, pyramiding, covered calls
     ("dep: guard ignores type", 't.get("symbol") == sym and t.get("type") == "SELL" and t.get("date") == today',
      't.get("symbol") == sym and t.get("date") == today'),
     ("dep: guard ignores date", 't.get("type") == "SELL" and t.get("date") == today\n', 't.get("type") == "SELL"\n'),
-    ("dep: trigger >=", 'if cash_ratio > game.CFG.system_pyramiding_cash_ratio:',
-     'if cash_ratio >= game.CFG.system_pyramiding_cash_ratio:'),
+    ("dep: trigger >=", 'if not frozen and cash_ratio > game.CFG.system_pyramiding_cash_ratio:',
+     'if not frozen and cash_ratio >= game.CFG.system_pyramiding_cash_ratio:'),
+    ("dep: freeze lets scale-ins run", 'if not frozen and cash_ratio > game.CFG.system_pyramiding_cash_ratio:',
+     'if cash_ratio > game.CFG.system_pyramiding_cash_ratio:'),
     ("dep: price fallback 0", '                    current_px = prices.get(sym, pos["cost"])',
      '                    current_px = prices.get(sym, 0.0)'),
     ("dep: winner >=", 'is_winner = (current_px > pos["cost"])', 'is_winner = (current_px >= pos["cost"])'),
@@ -248,7 +255,8 @@ MUTANTS += [  # finalize_run (the finally: block)
     ("fin: no save", 'game.save_game(state)', 'pass'),
     ("fin: no excel log", 'game.update_excel_log(state, new_transactions)', 'pass'),
     ("fin: excel log drops txs", 'game.update_excel_log(state, new_transactions)', 'game.update_excel_log(state, [])'),
-    ("fin: save without state", '    if state is not None:\n        game.save_game(state)', '    if True:\n        game.save_game(state)'),
+    ("fin: save without state", '    if state is not None:\n        state.pop(', '    if True:\n        state.pop('),
+    ("fin: freeze key saved", 'state.pop(game.circuit_breaker.FREEZE_KEY, None)   # transient, never saved', 'pass'),
     ("fin: no abort log", 'game._log.info("🤖 AI Management aborted', 'game._log.debug("🤖 AI Management aborted'),
 ]
 

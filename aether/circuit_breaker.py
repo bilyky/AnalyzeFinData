@@ -22,6 +22,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SPY_FILE = Path(paths.ohlcv_dir()) / "SPY_daily.json"   # $AETHER_CACHE_DIR-aware (aether.paths)
 VXX_FILE = Path(paths.ohlcv_dir()) / "VXX_daily.json"
 
+# Transient key on the run's state: the breaker's verdict for the buy stage (deploy_capital), so it
+# acts on the same check with no second market-data read. finalize_run removes it before saving.
+FREEZE_KEY = "_breaker_freeze"
+
 def load_spy_history() -> list[dict]:
     """Load sorted daily price series for the SPY ETF from the local cache."""
     if not SPY_FILE.exists():
@@ -211,6 +215,10 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
     """
     is_active, reason = check_systemic_risk(prices)
     positions = state.get("positions", {})
+    if is_active:
+        state[FREEZE_KEY] = reason     # the buy stage freezes new buys and scale-ins on this
+    else:
+        state.pop(FREEZE_KEY, None)
     
     if not is_active:
         # AETHER Elastic Memory: If the breaker is inactive, restore original wide stops cleanly!
