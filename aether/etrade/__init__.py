@@ -1844,7 +1844,11 @@ def fetch_quotes(tokens, symbols: list[str], env="sandbox") -> dict[str, float]:
                 px  = _last_trade(q)
                 if sym and px:
                     out[sym] = px
-        except Exception:
+        except Exception as e:
+            # Still return what the other batches got, but say why this one is missing: a 401
+            # (dead token) used to come back as a silent {} (2026-11-03).
+            _log.warning(f"E*TRADE quotes failed for {len(batch)} symbols ({', '.join(batch[:5])}"
+                         f"{' ...' if len(batch) > 5 else ''}): {e}")
             continue
     return out
 

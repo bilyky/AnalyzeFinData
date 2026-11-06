@@ -1,0 +1,47 @@
+{
+  "project": "AETHER Services (R&D #78)",
+  "plan": "plans/aether-services.md",
+  "adr": "docs/adr/README.md",
+  "updated": "2026-11-05",
+  "statuses": ["todo", "in_progress", "in_review", "done", "blocked", "decision"],
+  "services": [
+    {"id": "market_data", "title": "Market data", "owns": "prices (E*TRADE, Google, OHLCV cache), OHLCV bars, freshness and heal, calendar and session", "status": "todo", "step": "S5"},
+    {"id": "research", "title": "Research", "owns": "screener workbook as ResearchRow (one column map), regime inputs", "status": "todo", "step": "S6"},
+    {"id": "portfolio", "title": "Portfolio", "owns": "Portfolio aggregate, registry of portfolios, repository (JSON, PostgreSQL opt-in), read model", "status": "todo", "step": "S4"},
+    {"id": "trading", "title": "Trading", "owns": "daily run per portfolio: exits, entries, sizing, circuit breaker, covered calls", "status": "todo", "step": "S8"},
+    {"id": "reporting", "title": "Reporting", "owns": "daily summary, morning report, excel performance log, email", "status": "todo", "step": "S10"},
+    {"id": "ledger", "title": "Ledger", "owns": "trade DNA, decision log, failure rules, scorecard (event subscribers)", "status": "todo", "step": "S7"}
+  ],
+  "steps": [
+    {"id": "S0", "title": "Plan + ADRs; R&D #44 superseded", "status": "done", "pr": 241, "prod": false},
+    {"id": "S0b", "title": "Development > Project Model page", "status": "in_review", "pr": 242, "prod": false},
+    {"id": "S1", "title": "Golden split (behaviour + audit logs); must still catch the 56 mutants", "status": "todo", "pr": null, "prod": false},
+    {"id": "S1b", "title": "CI job runs the unit, contract and architecture suites", "status": "todo", "pr": null, "prod": false},
+    {"id": "S2", "title": "Delete dead code (scenario prices/schema/helpers, unused CLI bits)", "status": "todo", "pr": null, "prod": false},
+    {"id": "S3", "title": "Shared kernel (aether/core) + architecture test", "status": "todo", "pr": null, "prod": false},
+    {"id": "S4", "title": "Portfolio service: domain model, JSON repository, unit of work, read model", "status": "todo", "pr": null, "prod": true},
+    {"id": "S5", "title": "Market data service: session once per run, OHLCV store, price chain", "status": "todo", "pr": null, "prod": true},
+    {"id": "S6", "title": "Research service: ResearchRow column map, read once per run", "status": "todo", "pr": null, "prod": true},
+    {"id": "S7", "title": "Ledger service: event subscribers", "status": "todo", "pr": null, "prod": true},
+    {"id": "S8", "title": "Trading service: profiles, policies, buy specs, DailyRunService", "status": "todo", "pr": null, "prod": true},
+    {"id": "S9", "title": "Delete aether/scenario and the _pkg() pattern; new tests must catch all 155 mutants first", "status": "todo", "pr": null, "prod": false},
+    {"id": "S10", "title": "Reporting service (reports stop writing state)", "status": "todo", "pr": null, "prod": true},
+    {"id": "S11", "title": "Composition root + thin CLI; external importers on service APIs", "status": "todo", "pr": null, "prod": true},
+    {"id": "S12", "title": "Many portfolios (portfolio_id, registry, per-portfolio guard)", "status": "todo", "pr": null, "prod": true},
+    {"id": "S13", "title": "HTTP routers per service (for other projects)", "status": "todo", "pr": null, "prod": false},
+    {"id": "S14", "title": "PostgreSQL data layer (opt-in, shadow diff before cutover)", "status": "todo", "pr": null, "prod": true}
+  ],
+  "fixes": [
+    {"id": "F1", "title": "Save aborts if the backup fails; atomic write", "trading": false, "evidence": "unit tests", "status": "todo", "pr": null},
+    {"id": "F2", "title": "No silent fresh $10k state on a corrupt file", "trading": false, "evidence": "unit tests", "status": "todo", "pr": null},
+    {"id": "F3", "title": "Run gate respects market holidays (early, before 2026-11-26)", "trading": true, "evidence": "red test on a holiday", "status": "todo", "pr": null},
+    {"id": "F4", "title": "Remove the 4 doubled log lines", "trading": false, "evidence": "audit log test", "status": "todo", "pr": null},
+    {"id": "F5", "title": "Dashboard regime equals the traded regime", "trading": false, "evidence": "unit test", "status": "todo", "pr": null},
+    {"id": "F6", "title": "Research column 23 is not ATR (options fallback)", "trading": true, "evidence": "red test", "status": "todo", "pr": null},
+    {"id": "F7", "title": "Queued buys get the live buy checks", "trading": true, "evidence": "replay of past queued buys", "status": "todo", "pr": null},
+    {"id": "F8", "title": "Circuit breaker lowers stops when it clears (study first)", "trading": true, "evidence": "backtest on trigger dates", "status": "todo", "pr": null},
+    {"id": "F9", "title": "OHLCV readers split-adjusted, one at a time", "trading": true, "evidence": "backtest each", "status": "todo", "pr": null},
+    {"id": "F10", "title": "One SELL transaction and position shape", "trading": false, "evidence": "reviewed golden update", "status": "todo", "pr": null},
+    {"id": "B9", "title": "Game state follows AETHER_DATA_DIR?", "trading": false, "evidence": "check the PROD task environment", "status": "decision", "pr": null}
+  ]
+}

@@ -86,7 +86,7 @@ $("login-form").addEventListener("submit", async (e) => {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 let activeTab = "dashboard";
-const VALID_TABS = ["dashboard", "research", "accounts", "chat", "system", "about"];
+const VALID_TABS = ["dashboard", "research", "accounts", "chat", "system", "development", "about"];
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
@@ -1900,6 +1900,59 @@ function loadTab(tab) {
     else if (tab === "chat") setTimeout(() => $("chat-input").focus(), 50);
     else if (tab === "system") { loadSystem(); _startLogRefresh(); }
     else if (tab === "about") { loadRoadmap(); loadIntelIdeas(); }
+    else if (tab === "development") loadProjectModel();
+}
+
+// ── Development > Project Model (R&D #78 progress + live code metrics) ──────────
+const PM_STATUS_CLASS = {
+    done: "text-emerald-400", in_review: "text-sky-400", in_progress: "text-amber-300",
+    todo: "text-slate-500", blocked: "text-rose-400", decision: "text-fuchsia-300",
+};
+const PM_METRICS = [
+    ["root_file_lines", "ai_portfolio_game.py lines"],
+    ["scenario_lines", "aether/scenario lines"],
+    ["services_lines", "aether/services lines"],
+    ["game_attr_calls", "game.X calls"],
+    ["magic_row_indexes", "magic row[N]"],
+    ["pkg_shims", "_pkg() shims"],
+];
+
+function _pmStatus(s) {
+    return `<span class="${PM_STATUS_CLASS[s] || "text-slate-400"}">${esc(String(s).replace("_", " "))}</span>`;
+}
+
+function _pmSummary(counts) {
+    // Plain text (assigned via textContent), so no escaping here.
+    return "(" + Object.entries(counts || {}).map(([k, v]) => `${k.replace("_", " ")} ${v}`).join(" · ") + ")";
+}
+
+function _pmPr(pr) {
+    return pr ? `<a class="text-sky-400 hover:underline" href="https://github.com/bilyky/AnalyzeFinData/pull/${Number(pr)}" target="_blank" rel="noopener">#${Number(pr)}</a>` : "";
+}
+
+async function loadProjectModel() {
+    let d;
+    try {
+        d = await api("/api/dev/project-model");
+    } catch (e) {
+        _muted($("pm-services"), "Project model unavailable: " + e.message);
+        return;
+    }
+    $("pm-project").textContent = d.project || "";
+    $("pm-updated").textContent = d.updated || "–";
+    $("pm-metrics").innerHTML = PM_METRICS.map(([k, label]) =>
+        `<div class="card"><div class="card-label">${esc(label)}</div><div class="text-2xl font-semibold mt-1">${esc(d.metrics?.[k] ?? "–")}</div></div>`).join("");
+    $("pm-services").innerHTML = (d.services || []).map((s) =>
+        `<div class="border border-slate-800 rounded p-3"><div class="flex justify-between"><span class="font-medium">${esc(s.title)}</span>${_pmStatus(s.status)}</div>
+         <div class="text-xs text-slate-400 mt-1">${esc(s.owns)}</div><div class="text-xs text-slate-500 mt-1">step ${esc(s.step)}</div></div>`).join("");
+    $("pm-steps-summary").textContent = _pmSummary(d.summary?.steps);
+    $("pm-steps").innerHTML = (d.steps || []).map((s) =>
+        `<tr class="border-t border-slate-800"><td class="py-1 pr-2 font-mono text-xs">${esc(s.id)}</td><td class="py-1 pr-2">${esc(s.title)}${s.prod ? ' <span class="text-xs text-amber-400">PROD</span>' : ""}</td>
+         <td class="py-1 pr-2 whitespace-nowrap">${_pmStatus(s.status)}</td><td class="py-1">${_pmPr(s.pr)}</td></tr>`).join("");
+    $("pm-fixes-summary").textContent = _pmSummary(d.summary?.fixes);
+    $("pm-fixes").innerHTML = (d.fixes || []).map((f) =>
+        `<tr class="border-t border-slate-800"><td class="py-1 pr-2 font-mono text-xs">${esc(f.id)}</td><td class="py-1 pr-2">${esc(f.title)}${f.trading ? ' <span class="text-xs text-rose-400">trading</span>' : ""}
+         <div class="text-xs text-slate-500">${esc(f.evidence)}</div></td><td class="py-1 pr-2 whitespace-nowrap">${_pmStatus(f.status)}</td><td class="py-1">${_pmPr(f.pr)}</td></tr>`).join("");
 }
 
 function _muted(el, msg) {
