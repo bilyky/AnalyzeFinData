@@ -1,0 +1,48 @@
+# PROD review 2026-11-06: actions
+
+Source: PROD logs from 11-05 07:18 to 11-06 07:03, read from `Data/prod_copy/2026-11-06/` on the dev machine:
+the game, monitor, backup and pick-log files, and `config.json` (read masked).
+
+## Deploy state on 11-06 07:03
+- **Live:** #238. PROD pulled after the 11-05 evening run, as the runbook said. Proof:
+  - the new `[Slot Expansion] Cash … above the … buffer` line;
+  - the one-line `[Chaikin] no market data` summary;
+  - the monitor's `alerted` state.
+- **Probably live:** #245, from the same pull. None of its new log lines has fired yet.
+- **#231 live:** every list has been logged daily in `pick_lists_log.jsonl` since 11-04.
+- **Not done:** the Groq patch. `config.json` has no `min_max_tokens` or `reasoning_effort`, and Groq logged 19
+  "ran out of tokens" since the pull.
+
+## Findings
+| # | Finding | Status |
+|---|---|---|
+| 1 | **The circuit breaker did not stop buying.** SPY fell 3.38% on 11-05. At 07:00:11 the breaker fired and tightened 5 stops. At 07:03 the same run bought 10 AU ($904) and added 15 LUV ($677). `enforce_circuit_breaker` only cleared queued buys. | **This PR:** an active breaker freezes new buys, after-hours queueing and scale-ins. Covered calls still run. |
+| 2 | **The backup timed out again** (600 s on 11-04 and 11-05). The last full backup was 11-03 22:12. | **This PR:** robocopy gets 1500 s. The 22:10 task's 150-minute limit still covers its 120-minute wait plus the copy. The cause is still unknown (step 3). |
+| 3 | **Groq** ran out of tokens 19 times. | Owner: run the #238 Groq patch (step 2). |
+| 4 | **MEDP stop-out from the DEFENSIVE-day raise.** Sold at $648.05 on 11-06 against the $653.57 stop raised on 11-04; the BALANCED trail would have left about $633. MNST also stopped out, but its BALANCED trail alone would have been above the fill. | Recorded in R&D #76 (one case, approximate). |
+| 5 | **Buy-backs.** MNST: added 5 at $48.91 on 11-05, stopped at $45.29 on 11-06 (about −$18 on the add). LUV: 8 sold at $44.57 on 11-02, 15 added at $45.11 on 11-06. | Recorded in R&D #66. #238 stops scale-ins only while the book is full; on 11-06 cash was 42%. |
+| 6 | **Stop monitor** (#238): one email since the pull (06:45, real-account breaches 8 → 9), against 9 on 11-05. | Working. |
+| 7 | **The 11-05 evening run** completed with no timeout; run_history took about 7 minutes (#237). | Working. |
+
+## Steps
+1. **Deploy this PR:** pull. No config or data step. **Trading change:** on a circuit-breaker day the game buys
+   nothing, and stops still tighten and fire as before. The breaker fires on:
+   - SPY −2% in a day;
+   - SPY −5% from its 10-day high;
+   - VXX +15%;
+   - a missing live SPY price.
+2. **Groq patch** (from #238, not applied yet):
+   ```powershell
+   venv_new\Scripts\python.exe docs\prod-notes\patch_groq_reasoning_2026_11_04.py           # dry run
+   venv_new\Scripts\python.exe docs\prod-notes\patch_groq_reasoning_2026_11_04.py --apply
+   ```
+3. **Backup:** after tonight's 22:10 run, check `Data\backup_status.json` for `"last_result": "ok"`. If it still
+   times out, run this read-only count and send me the output:
+   ```powershell
+   Get-ChildItem Data -Directory | ForEach-Object { "{0,-30} {1,10:N0} files" -f $_.Name, (Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count }
+   ```
+4. **On the next circuit-breaker day,** check that the 07:00 log has `[Breaker] Buying frozen this run` and no
+   `AI LIVE BUY` or `Pyramiding Scale-In` after it.
+
+## Roll back
+`git revert -m 1 <merge>`. No data or config to undo.
