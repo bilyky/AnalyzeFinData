@@ -9,10 +9,29 @@ const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").
 // ── central aether wiki database (loaded dynamically) ───────────────
 let AETHER_WIKI = {};
 
+// Every call carries the login token when there is one: private routes (accounts, logs,
+// the personal plan) return 401 without it.
 async function api(path, opts) {
-    const r = await fetch(path, opts);
-    if (!r.ok) throw new Error(`${path} → ${r.status}`);
+    const o = opts || {};
+    const r = await fetch(path, { ...o, headers: { ...authHeaders(), ...(o.headers || {}) } });
+    if (!r.ok) {
+        const err = new Error(`${path} → ${r.status}`);
+        err.status = r.status;
+        throw err;
+    }
     return r.json();
+}
+
+const LOGIN_NEEDED = '<div class="text-center text-slate-400 py-6">🔒 Log in (top right) to see this.</div>';
+
+// Open a private page (served only with the login token) in a new tab.
+async function openPrivatePage(path) {
+    const r = await fetch(path, { headers: authHeaders() });
+    if (r.status === 401) { window.alert("Log in first (top right) to open this page."); return; }
+    if (!r.ok) { window.alert(`${path} → ${r.status}`); return; }
+    const url = URL.createObjectURL(await r.blob());
+    window.open(url, "_blank", "noopener");
+    setTimeout(() => URL.revokeObjectURL(url), 60000);   // the new tab has loaded it by then
 }
 
 // ── Auth state ─────────────────────────────────────────────────────────────
@@ -989,7 +1008,8 @@ async function fetchAndRenderLog() {
             st.textContent = `${entries.length} entries · aether.jsonl${lvlFilter ? " (" + lvlFilter + ")" : ""}`;
         }
     } catch (err) {
-        lv.textContent = "Error loading logs: " + err.message;
+        lv.textContent = err.status === 401 ? "🔒 Log in (top right) to see the logs."
+                                            : "Error loading logs: " + err.message;
     }
     // Auto-scroll only if already at the bottom
     if (lv.scrollHeight - lv.scrollTop < lv.clientHeight + 40)
@@ -1151,8 +1171,10 @@ function hideTooltip() {
 }
 
 async function loadSystem() {
+    // The logs need the login; logged out they come back empty instead of failing the whole tab.
     const [health, tasks, logs, manual] = await Promise.all([
-        api("/api/health"), api("/api/tasks"), api("/api/pipeline/logs?lines=100"),
+        api("/api/health"), api("/api/tasks"),
+        api("/api/pipeline/logs?lines=100").catch(() => ({ lines: [] })),
         api("/api/tasks/manual"),
     ]);
 
@@ -1404,9 +1426,15 @@ async function sendChatMessage(text) {
     try {
         const r = await fetch("/api/chat", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...authHeaders() },
             body: JSON.stringify(_chatHistory),
         });
+        if (r.status === 401) {
+            _removeThinking();
+            _chatHistory.pop();                     // not sent: don't keep it in the history
+            _appendMessage("assistant", "🔒 Log in (top right) to use the chat.");
+            return;
+        }
         const d = await r.json();
         _removeThinking();
         const reply = d.reply || "(no response)";
@@ -1896,7 +1924,10 @@ $("bt-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") runBa
 function loadTab(tab) {
     if (tab === "dashboard") loadDashboard();
     else if (tab === "research") loadResearch();
-    else if (tab === "accounts") loadAccounts();
+    else if (tab === "accounts") loadAccounts().catch((e) => {
+        if (e.status === 401) $("accounts-container").innerHTML = LOGIN_NEEDED;
+        else console.error(e);
+    });
     else if (tab === "chat") setTimeout(() => $("chat-input").focus(), 50);
     else if (tab === "system") { loadSystem(); _startLogRefresh(); }
     else if (tab === "about") { loadRoadmap(); loadIntelIdeas(); }
@@ -2691,7 +2722,9 @@ async function requalify(sym, cost, triggerBtn) {
             body: JSON.stringify({ symbol: sym, cost }),
         });
     } catch (err) {
-        const errHtml = `<div class="px-4 py-2 text-xs text-red-400">Error: ${esc(err.message)}</div>`;
+        const errHtml = err.status === 401
+            ? `<div class="px-4 py-2 text-xs text-slate-400">🔒 Log in (top right) to requalify.</div>`
+            : `<div class="px-4 py-2 text-xs text-red-400">Error: ${esc(err.message)}</div>`;
         if (resultRow) resultRow.firstElementChild.innerHTML = errHtml;
         if (smRq) smRq.innerHTML = errHtml;
         if (triggerBtn) { triggerBtn.disabled = false; }

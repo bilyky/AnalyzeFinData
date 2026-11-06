@@ -160,9 +160,11 @@ def create_app():
         return JSONResponse({"status": "AETHER API running", "docs": "/docs"})
 
     @app.get("/plan/intc", include_in_schema=False)
-    async def intc_plan():
+    async def intc_plan(authorization: str = Header(default="")):
         # Personal, printable income/protection plan. Lives in Data/ (gitignored, private),
         # so the page is served on demand and 404s cleanly on any checkout that lacks it.
+        # Login required: the dashboard listens on the network (web.host 0.0.0.0).
+        _require_admin(authorization)
         plan = _DIR / "Data" / "INTC_Income_Plan.html"
         if plan.exists():
             return FileResponse(str(plan))
@@ -320,7 +322,8 @@ def create_app():
     # ── Accounts (2 real + 1 game) ──────────────────────────────────────────────
 
     @app.get("/api/accounts")
-    async def accounts():
+    async def accounts(authorization: str = Header(default="")):
+        _require_admin(authorization)          # real broker accounts: login required
         return data_api.read_accounts()
 
     # ── Requalify — live AI position analysis ────────────────────────────────
@@ -343,6 +346,7 @@ def create_app():
         body: dict = Body(...),
         authorization: str = Header(default=""),
     ):
+        _require_admin(authorization)          # live Chaikin, E*TRADE quotes and the strong AI tier
         """Phase 1: fetch live factors + run AI on factors only.
         Spawns a background thread for Phase 2 (news enrichment)."""
         symbol = (body.get("symbol") or "").upper().strip()
@@ -499,7 +503,7 @@ def create_app():
     # ── Multi-stock comparison ──────────────────────────────────────────────────
 
     @app.post("/api/compare")
-    async def compare(body: dict = Body(...)):
+    async def compare(body: dict = Body(...), authorization: str = Header(default="")):
         """Structured side-by-side comparison + deterministic ranking for a list of
         symbols. Pure data (no LLM) — the single source of truth any client (UI, chat,
         agent skill) summarizes. Body: {"symbols": ["TG","CC",...], "as_of"?: "YYYY-MM-DD",
@@ -509,6 +513,8 @@ def create_app():
         symbols = [s.upper().strip() for s in (body.get("symbols") or []) if str(s).strip()]
         if not symbols:
             return {"error": "symbols required"}
+        if body.get("summarize"):
+            _require_admin(authorization)      # the AI summary spends the provider's quota
         as_of = body.get("as_of")
         loop = asyncio.get_running_loop()
         data = await loop.run_in_executor(None, stock_compare.compare_data, symbols, as_of)
@@ -536,12 +542,14 @@ def create_app():
     # ── Pipeline log ──────────────────────────────────────────────────────────
 
     @app.get("/api/pipeline/logs")
-    async def pipeline_logs(lines: int = Query(100, ge=1, le=1000)):
+    async def pipeline_logs(lines: int = Query(100, ge=1, le=1000), authorization: str = Header(default="")):
+        _require_admin(authorization)          # logs: machine paths, auth events, trade decisions
         return {"lines": data_api.read_log_tail(lines)}
 
     @app.get("/api/logs/aether")
-    async def aether_log_txt(lines: int = Query(200, ge=1, le=2000)):
-        """Last N lines from Data/logs/aether.log (plain text, newest-last)."""
+    async def aether_log_txt(lines: int = Query(200, ge=1, le=2000), authorization: str = Header(default="")):
+        """Last N lines from Data/logs/aether.log (plain text, newest-last). Login required."""
+        _require_admin(authorization)
 
         p = _DIR / "Data" / "logs" / "aether.log"
         if not p.exists():
@@ -554,8 +562,10 @@ def create_app():
 
     @app.get("/api/logs/aether/json")
     async def aether_log_json(lines: int = Query(200, ge=1, le=2000),
-                              level: str = Query("", description="Filter by level: DEBUG INFO WARNING ERROR")):
-        """Last N JSONL entries from Data/logs/aether.jsonl, optionally filtered by level."""
+                              level: str = Query("", description="Filter by level: DEBUG INFO WARNING ERROR"),
+                              authorization: str = Header(default="")):
+        """Last N JSONL entries from Data/logs/aether.jsonl, optionally filtered by level. Login required."""
+        _require_admin(authorization)
 
 
         p = _DIR / "Data" / "logs" / "aether.jsonl"
@@ -611,6 +621,7 @@ def create_app():
         """Multi-turn chat with the configured AI provider, augmented with live
         AETHER context (portfolio state, regime, top picks, OHLCV freshness).
         messages: [{role: user|assistant, content: str}]"""
+        _require_admin(authorization)          # it spends the AI provider's quota: login required
         if not ai_client.primary():
             return {"reply": "No AI provider configured. Enable one in config.json under ai.providers.", "provider": None}
 
