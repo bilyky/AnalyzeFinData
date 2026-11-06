@@ -145,6 +145,7 @@ Step-by-step workflows live as plain markdown in `.claude/commands/<name>.md`. T
 *   `review-prs` — review open PRs against the fixed rubric and post findings as PR comments; includes the merge-in and lossless-cleanup procedures.
 *   `ship-pr` — take a change from branch to pushed PR with CI verified.
 *   `run-study` — backtest-first evidence before wiring, loosening or removing a rule: fixed decision rule, independence-aware statistics, verdict tests, result recorded in `plans/roadmap.md`.
+*   `prod-review` — review a production snapshot (logs + state copied to `Data/prod_copy/<date>/`): deploy state, health, behaviour, findings classified, one fix PR whose PROD note is the runbook for the whole next pull. Reader: `scripts/diagnostics/prod_snapshot.py`.
 *   `status`, `analyze`, `compare-stocks`, `daily-run`, `intraday-monitor`, `watchdog`, `pattern-discover`, `extract-intel`, `oceanview-adviser` — portfolio and operations workflows (see each file's header).
 *   `position-watch` — sub-skill of `oceanview-adviser`: daily recommend-only monitor of one concentrated holding (default INTC), trim / hold / wait with a RETRO of past calls; for INTC it replaces the options menu (Intel bans hedging). Private inputs in `Data/position_watch/`.
 
