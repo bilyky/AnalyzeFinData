@@ -126,6 +126,32 @@ class TestConfig(_Tmp):
         self.assertEqual(out["oracle.account"], "<set>")                       # a number under a secret key
         self.assertNotIn("hunter2", json.dumps(out))
 
+    def test_text_is_shown_only_under_known_safe_keys(self):
+        # Deny by default: a short login under "username" (not a key/pass word, no secret shape) and a
+        # free-text note must not print; a model or provider type may.
+        p = os.path.join(self.dir, "config.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"etrade": {"username": "jdoe1x", "proxy": "", "login_strategy": "headless"},
+                       "ai": {"primary": "groq", "providers": {"groq": {"type": "openai_compatible",
+                                                                        "_note": "free tier, ask Jo first"}}}}, f)
+        out = ps.config_keys(p, ["etrade.username", "etrade.proxy", "etrade.login_strategy", "ai.primary",
+                                 "ai.providers.groq.type", "ai.providers.groq._note"])
+        self.assertEqual(out["etrade.username"], "<set>")
+        self.assertEqual(out["ai.providers.groq._note"], "<set>")
+        self.assertEqual(out["etrade.proxy"], "<empty>")
+        self.assertEqual(out["etrade.login_strategy"], "headless")
+        self.assertEqual(out["ai.primary"], "groq")
+        self.assertEqual(out["ai.providers.groq.type"], "openai_compatible")
+        self.assertNotIn("jdoe1x", json.dumps(out))
+
+    def test_a_number_under_a_user_key_is_masked(self):
+        p = os.path.join(self.dir, "config.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"broker": {"user_number": 4815162, "max_tokens": 1024}}, f)
+        out = ps.config_keys(p, ["broker.user_number", "broker.max_tokens"])
+        self.assertEqual(out["broker.user_number"], "<set>")
+        self.assertEqual(out["broker.max_tokens"], 1024)
+
 
 class TestCli(_Tmp):
     def test_errors_command_prints_a_summary(self):

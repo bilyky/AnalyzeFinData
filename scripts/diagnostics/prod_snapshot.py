@@ -7,7 +7,7 @@ summary, so a review reads tens of lines instead of megabytes of log.
     schedule   <agent_runs_dir> [--days N]        first log time per job per day (catches DST / missed runs)
     errors     <aether.jsonl> --since TS [--top N] WARNING/ERROR grouped by normalized message, first/last
     signatures <aether.jsonl> --since TS --sig LABEL=TEXT ...   which code ran: counts of distinctive lines
-    config     <config.json> --key a.b.c ...      value or presence of keys, secrets masked by name and shape
+    config     <config.json> --key a.b.c ...      value or presence of keys; text shown only for known-safe keys
 
 TS is "YYYY-MM-DD HH:MM" in the log's local time. Run with `python -I` from outside the extracted folder.
 """
@@ -21,10 +21,14 @@ import sys
 import zipfile
 
 _NUM = re.compile(r"\d+(\.\d+)?")
-# Long words anywhere in a key name (api_key_source, smtp_password; "tokens", a count, is not one); short ones at the end
-# (user, ip, id), so "provider" or "ideal" are not caught.
+# Long words anywhere in a key name (api_key_source, smtp_password, username; "tokens", a count, is not one); short
+# ones at the end (ip, id), so "provider" or "ideal" are not caught.
 _SECRET_KEY = re.compile(r"key|token(?!s)|secret|pass|pwd|auth|cookie|session|account|acct|email|url|host|share|"
-                         r"(user|ip|id|dir|path)$", re.I)
+                         r"user|(ip|id|dir|path)$", re.I)
+# Text is printed only under these key names (deny by default): a login, a free-text note or any other
+# string under another name shows <set>. Numbers, booleans and null print unless the key looks secret.
+_SAFE_TEXT_KEY = re.compile(r"(type|model|primary|provider|mode|env|environment|level|profile|tier|strategy|"
+                            r"reasoning_effort|timezone)$", re.I)
 _TS_LINE = re.compile(r"^\[?(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})")
 
 
@@ -118,7 +122,8 @@ def _looks_secret(value):
 
 
 def config_keys(config_path, keys):
-    """{dotted key: shown value}; a missing key shows <missing>, a secret-looking one <set>."""
+    """{dotted key: shown value}; a missing key shows <missing>. Text is shown only under a known-safe
+    key name (_SAFE_TEXT_KEY) and when it doesn't look secret; every other text value shows <set>."""
     with open(config_path, encoding="utf-8") as f:
         cfg = json.load(f)
     out = {}
@@ -140,10 +145,12 @@ def config_keys(config_path, keys):
             # A number is shown unless its key names an account, id or secret (4+ digits alone is
             # too broad: max_tokens 1024, a port, a year).
             out[dotted] = "<set>" if _SECRET_KEY.search(dotted.split(".")[-1]) else node
-        elif _SECRET_KEY.search(dotted.split(".")[-1]) or _looks_secret(node):
-            out[dotted] = "<set>"
+        elif node == "":
+            out[dotted] = "<empty>"
         else:
-            out[dotted] = node
+            last = dotted.split(".")[-1]
+            safe = _SAFE_TEXT_KEY.search(last) and not _SECRET_KEY.search(last) and not _looks_secret(node)
+            out[dotted] = node if safe else "<set>"
     return out
 
 
