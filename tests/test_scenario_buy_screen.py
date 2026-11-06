@@ -17,8 +17,8 @@ the root, unchanged:
 4. **Overbought guard** (R&D #32) and the final sort.
 
 Every collaborator is patched on the live module and ``ws`` is a hermetic fake —
-no network or disk. Re-export and root parity are pinned in
-``test_scenario_steps`` and ``test_scenario_parity``.
+no network or disk. Re-export is pinned in ``test_scenario_steps``; the composed
+run in ``test_scenario_runner``.
 """
 import os
 import sys
@@ -63,7 +63,7 @@ class _Harness:
     def __init__(self, *, max_pos=None, excluded=(), floor=2.0, stale=(), heal_fixes=(),
                  age=None, bottom=(False, ""), elite=False, cache=None, min_rr=2.0):
         self.log = mock.MagicMock()
-        self.max_pos = mock.MagicMock(side_effect=lambda ratio, held, base: base if max_pos is None else max_pos)
+        self.max_pos = mock.MagicMock(side_effect=lambda ratio, held, base, buffer=0.0: base if max_pos is None else max_pos)
         self.excluded = mock.MagicMock(side_effect=lambda s: s in excluded)
         self.floor = mock.MagicMock(return_value=floor)
         healed = set()
@@ -132,7 +132,7 @@ class TestSlots(unittest.TestCase):
         state = _state(balance=300.0, equity=1000.0, positions={"H1": {}, "H2": {}})
         with _Harness() as h:
             out = _run([], state=state)
-        h.max_pos.assert_called_once_with(0.3, 2, 5)
+        h.max_pos.assert_called_once_with(0.3, 2, 5, 0.2)  # the profile buffer is passed
         self.assertEqual((out["max_positions"], out["available_slots"]), (5, 3))
         self.assertEqual(out["min_cash_required"], 200.0)
         self.assertNotIn("Slot Expansion", h.logged())
@@ -141,7 +141,7 @@ class TestSlots(unittest.TestCase):
         with _Harness(max_pos=7) as h:
             out = _run([], state=_state(positions={"H1": {}}))
         self.assertEqual((out["max_positions"], out["available_slots"]), (7, 6))
-        self.assertIn("from 5 to 7", h.logged())
+        self.assertIn("slots 5 -> 7", h.logged())
 
     def test_degenerate_equity_gives_zero_cash_ratio(self):
         with _Harness() as h:

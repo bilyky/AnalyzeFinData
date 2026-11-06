@@ -158,8 +158,8 @@ Docs drift between PRs even when each review was careful. After a batch lands:
 
 AETHER is a modular monolith. Its seams: ports & adapters around external dependencies (the E\*TRADE
 `store` and `make_etrade_store()`); a strangler-fig extraction `ai_portfolio_game.py →
-aether/scenario/` whose stages resolve collaborators at call time through `_pkg()`, guarded by a
-stage↔root parity test (`tests/test_scenario_parity.py`); path helpers in `aether/paths.py`
+aether/scenario/` whose stages resolve collaborators at call time through `_pkg()`, pinned by a
+golden snapshot of the daily run (`tests/test_scenario_runner.py`); path helpers in `aether/paths.py`
 (`data_dir()` for state and tokens, `cache_dir()`/`ohlcv_dir()` for market-data caches); and one home
 per rule (R&D items in `plans/roadmap.md`, their code anchors in
 `pre_commit_validator.FEATURE_CHECKS`).

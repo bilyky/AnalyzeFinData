@@ -32,7 +32,7 @@ def cache_dir() -> str:
     Deliberately separate from AETHER_DATA_DIR. That one also moves the E*TRADE auth state
     (token, browser state, reauth lock) and the trash, so pointing a worktree at the real
     Data/ with it would make the worktree read and write the PRODUCTION token. Setting
-    AETHER_CACHE_DIR moves ONLY Data/Symbol and Data/Symbol_full, which is what a worktree
+    AETHER_CACHE_DIR moves ONLY Data/Symbol, Data/Symbol_raw and Data/Symbol_full, which is what a worktree
     backtest or study needs. Use it instead of a directory junction: on 2026-10-06 removing a
     worktree whose cache dirs were junctions into the main checkout deleted the real caches.
 
@@ -46,6 +46,11 @@ def cache_dir() -> str:
 def symbol_dir() -> str:
     """Per-symbol daily Chaikin snapshots (Data/Symbol/<SYM>/<SYM>_<date>.json)."""
     return os.path.join(cache_dir(), "Symbol")
+
+
+def symbol_raw_dir() -> str:
+    """Untouched Chaikin responses, gzipped (Data/Symbol_raw/<SYM>/<SYM>_<date>.json.gz)."""
+    return os.path.join(cache_dir(), "Symbol_raw")
 
 
 def ohlcv_dir() -> str:

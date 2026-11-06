@@ -163,6 +163,51 @@ class TestQuotaStop(_Base):
         self.assertFalse(res["quota_stopped"])
 
 
+class TestBurstRetry(_Base):
+    """Alpha Vantage's 'Burst pattern detected' (PROD 11-02/11-03, 4 of ~800 fetches) clears
+    after a pause, so the symbol is retried once instead of waiting a day."""
+    BURST = "Alpha Vantage error for X: Burst pattern detected. Please consider spreading out"
+
+    def setUp(self):
+        super().setUp()
+        self.syms = [f"S{k}" for k in range(rapidapi.BURST_RETRIES_PER_PASS + 3)]   # more than the cap
+        for sym in self.syms:
+            self.seed(sym, "2026-09-20")
+
+    def _run(self, fail_times):
+        calls = {}
+
+        def burst(sym, path, outputsize="compact"):
+            calls[sym] = calls.get(sym, 0) + 1
+            self.fetched.append(sym)
+            if calls[sym] <= fail_times.get(sym, 0):
+                raise RuntimeError(self.BURST)
+        with mock.patch.object(rapidapi.time, "sleep") as sleep:
+            res = self.run_pass(self.syms, side_effect=burst, max_fetches=len(self.syms))
+        return res, calls, sleep
+
+    def test_burst_is_retried_once_after_a_pause(self):
+        res, calls, sleep = self._run({"S2": 1})
+        self.assertEqual(calls["S2"], 2)
+        self.assertEqual(res["errors"], [])
+        sleep.assert_any_call(rapidapi.BURST_RETRY_WAIT_S)
+
+    def test_second_burst_is_a_normal_failure(self):
+        res, calls, _ = self._run({"S2": 2})
+        self.assertEqual(calls["S2"], 2)
+        self.assertEqual([s for s, _ in res["errors"]], ["S2"])
+
+    def test_retries_are_capped_per_pass(self):
+        res, calls, _ = self._run({s: 1 for s in self.syms})
+        retried = [s for s in self.syms if calls[s] == 2]
+        self.assertEqual(len(retried), rapidapi.BURST_RETRIES_PER_PASS)
+        self.assertEqual(len(res["errors"]), len(self.syms) - rapidapi.BURST_RETRIES_PER_PASS)
+
+    def test_cap_covers_the_worst_night_seen(self):
+        # PROD 11-04: 10 burst failures in one pass; all of them should get their retry.
+        self.assertGreaterEqual(rapidapi.BURST_RETRIES_PER_PASS, 10)
+
+
 
 class TestPassTimeout(_Base):
     """The caller's kill timeout must cover the whole budget: PROD's daily_task killed every
@@ -172,6 +217,17 @@ class TestPassTimeout(_Base):
         t = rapidapi.pass_timeout_seconds(400)
         self.assertGreaterEqual(t, 400 * (rapidapi.SLEEP_SEC + rapidapi.REQUEST_TIMEOUT))
         self.assertGreater(t, 600)
+        # ...and every burst retry at its worst case (wait + full HTTP timeout), on top of the fetches.
+        retries = rapidapi.BURST_RETRIES_PER_PASS * (rapidapi.BURST_RETRY_WAIT_S + rapidapi.REQUEST_TIMEOUT)
+        self.assertGreaterEqual(t, 400 * (rapidapi.SLEEP_SEC + rapidapi.REQUEST_TIMEOUT) + retries)
+
+    def test_each_allowed_retry_adds_its_wait_and_timeout(self):
+        # Review of #245: dropping the 60 s wait from the budget passed every test. Pin the exact
+        # cost of one more allowed retry.
+        base = rapidapi.pass_timeout_seconds(400)
+        with mock.patch.object(rapidapi, "BURST_RETRIES_PER_PASS", rapidapi.BURST_RETRIES_PER_PASS + 1):
+            more = rapidapi.pass_timeout_seconds(400)
+        self.assertEqual(more - base, rapidapi.BURST_RETRY_WAIT_S + rapidapi.REQUEST_TIMEOUT)
         self.assertEqual(rapidapi.pass_timeout_seconds(), rapidapi.pass_timeout_seconds(CFG.rapidapi_max_fetches))
 
     def test_daily_task_passes_the_budgeted_timeout(self):

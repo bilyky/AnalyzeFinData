@@ -103,10 +103,12 @@ def calculate_share_qty(symbol: str, cash_to_use: float, price: float) -> float:
     return _pkg().calculate_share_qty(symbol, cash_to_use, price)
 
 
-def determine_max_positions(cash_ratio: float, num_positions: int, base_max_positions: int) -> int:
+def determine_max_positions(cash_ratio: float, num_positions: int, base_max_positions: int,
+                            cash_buffer_pct: float = 0.0) -> int:
     """Base max-positions after Dynamic Position-Slot Expansion (grow the cap while
-    idle cash > 15% and slots are full)."""
-    return _pkg().determine_max_positions(cash_ratio, num_positions, base_max_positions)
+    cash above the profile's buffer exceeds ``CFG.system_slot_expand_free_cash`` and
+    slots are full)."""
+    return _pkg().determine_max_positions(cash_ratio, num_positions, base_max_positions, cash_buffer_pct)
 
 
 def adaptive_s10_floor(cash_pct: float) -> float:

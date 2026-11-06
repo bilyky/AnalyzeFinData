@@ -1,8 +1,10 @@
-"""Characterization test: runners.run_daily_management == run_daily_ai_management.
+"""Characterization test for the daily run (runners.run_daily_management).
 
-Each case runs the root ``ai_portfolio_game.run_daily_ai_management`` and the B7
-runner under the same patches, on fresh copies of the same fixtures, and
-requires the same observable result:
+Each case runs ``ai_portfolio_game.run_daily_ai_management`` and the B7 runner
+under the same patches, on fresh copies of the same fixtures. Since the switch the
+game calls the runner, so the two always agree; what pins the behaviour is the
+golden file (``tests/fixtures/scenario_runner_golden.json``), recorded from the old
+function body before the switch. Every case must match it on:
 
 * the state passed to ``save_game`` and the transactions passed to
   ``update_excel_log``;

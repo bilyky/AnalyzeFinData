@@ -55,6 +55,17 @@ class TestOnlyTheBackupTaskSyncs(unittest.TestCase):
         self.assertGreaterEqual(t["time_limit_min"] * 60,
                                 run_data_backup.MAX_WAIT_MIN * 60 + watchdog.SYNC_TIMEOUT_S)
 
+    def test_sync_timeout_is_above_the_600s_that_timed_out_on_prod(self):
+        # PROD 11-04 and 11-05: robocopy hit 600 s both nights (last full backup 11-03).
+        self.assertGreater(watchdog.SYNC_TIMEOUT_S, 600)
+
+    def test_evening_task_budget_does_not_count_the_sync(self):
+        # daily_task does not sync (run_data_backup is the only caller); its worst case
+        # must not move with the backup's timeout.
+        base = daily_task.worst_case_runtime_seconds()
+        with mock.patch.object(watchdog, "SYNC_TIMEOUT_S", watchdog.SYNC_TIMEOUT_S + 10_000):
+            self.assertEqual(daily_task.worst_case_runtime_seconds(), base)
+
 
 class TestBackupWaitsForCollection(unittest.TestCase):
     def _main(self, collectors, last_result="ok"):
@@ -87,8 +98,28 @@ class TestBackupWaitsForCollection(unittest.TestCase):
              mock.patch.object(run_data_backup.watchdog, "sync_data_folder", return_value=True), \
              mock.patch.object(run_data_backup.watchdog, "backup_status",
                                return_value={"last_attempt": "yesterday", "last_result": "ok"}), \
-             mock.patch.object(run_data_backup, "_log"):
+             mock.patch.object(run_data_backup.watchdog, "is_market_hours", return_value=True), \
+             mock.patch.object(run_data_backup, "_log") as log:
             self.assertEqual(run_data_backup.main(), 1)
+        # The message says why and when a manual run works (PROD 11-05: a bare ERROR at 07:16).
+        msg = log.error.call_args.args[0]
+        self.assertIn("market hours", msg)
+        self.assertIn("after 1:15 PM PT", msg)
+        self.assertIn("yesterday (ok)", msg)
+
+    def test_a_no_record_run_outside_market_hours_does_not_blame_market_hours(self):
+        # Review of #245: a missing Data/ folder also returns without recording an attempt.
+        with mock.patch.object(run_data_backup, "running_collectors", return_value=[]), \
+             mock.patch.object(run_data_backup.watchdog, "sync_data_folder", return_value=False), \
+             mock.patch.object(run_data_backup.watchdog, "backup_status",
+                               return_value={"last_attempt": "yesterday", "last_result": "ok"}), \
+             mock.patch.object(run_data_backup.watchdog, "is_market_hours", return_value=False), \
+             mock.patch.object(run_data_backup, "_log") as log:
+            self.assertEqual(run_data_backup.main(), 1)
+        msg = log.error.call_args.args[0]
+        self.assertNotIn("market hours", msg)
+        self.assertIn("recorded nothing", msg)
+        self.assertIn("yesterday (ok)", msg)
 
     def test_an_offline_share_is_a_failed_backup(self):
         code, *_ = self._main([[]], last_result="offline")

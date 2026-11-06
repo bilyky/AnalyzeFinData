@@ -63,17 +63,17 @@ class TestRunHistory(unittest.TestCase):
 
 
 class TestScreen(unittest.TestCase):
-    def _screen(self, fail):
+    def _screen(self, fail, no_factors=()):
         with tempfile.TemporaryDirectory() as td:
             syms = os.path.join(td, "symbols_to_check.txt")
             with open(syms, "w") as f:
                 f.write("1 AAA\n2 BBB\n3 CCC\n4 DDD\n")
-            good = powergauge.PowerGauge("AAA", datetime.date(2026, 10, 27))
-
             def fetch(sym, d, prefer):
                 if sym in fail:
                     raise requests.ConnectionError("Max retries exceeded")
-                return good
+                pg = powergauge.PowerGauge(sym, datetime.date(2026, 10, 27))
+                pg.has_pgr_factors = sym not in no_factors
+                return pg
             real_join = os.path.join
 
             def join(*a):
@@ -97,11 +97,17 @@ class TestScreen(unittest.TestCase):
         self.assertEqual(log.error.call_count, 1)
         self.assertIn("[Chaikin fetch]: 3 of 4 failed", log.error.call_args.args[0])
 
+    def test_most_stocks_without_pgr_factors_is_one_error(self):
+        log = self._screen(set(), no_factors={"AAA", "BBB", "CCC"})
+        lines = [str(c) for c in log.error.call_args_list if "[Chaikin factors]" in str(c)]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("3 of 4 failed (most of the batch): AAA, BBB, CCC", lines[0])
+
 
 class TestXlsScreen(unittest.TestCase):
     """check_from_xls is the screen PROD uses (symbols_to_check.txt is retired); #227 review 🟠."""
 
-    def _screen(self, fail):
+    def _screen(self, fail, no_factors=()):
         import openpyxl
         with tempfile.TemporaryDirectory() as td:
             book = os.path.join(td, "state_of_the_day.xlsx")
@@ -118,6 +124,7 @@ class TestXlsScreen(unittest.TestCase):
                     raise requests.ConnectionError("Max retries exceeded")
                 pg = powergauge.PowerGauge(sym, d)
                 pg.price = -1                      # "no data": the write phase skips the row
+                pg.has_pgr_factors = sym not in no_factors
                 return pg
             with mock.patch.object(powergauge, "XLSX_FILE", book),                  mock.patch.object(powergauge, "SRC_XLSX", book),                  mock.patch("powergauge._backup_xlsx", return_value=None),                  mock.patch("powergauge._build_cache_index"),                  mock.patch("powergauge.login", return_value={"jsessionid": "x"}),                  mock.patch("powergauge.get_symbol_data", side_effect=fetch),                  mock.patch.object(powergauge, "_pg_log") as log:
                 try:
@@ -134,6 +141,45 @@ class TestXlsScreen(unittest.TestCase):
         lines = [str(c) for c in log.error.call_args_list if "[Chaikin fetch]" in str(c)]
         self.assertEqual(len(lines), 1)
         self.assertIn("3 of 4 failed (most of the batch)", lines[0])
+
+    def test_most_stocks_without_pgr_factors_is_one_error(self):
+        log = self._screen(set(), no_factors={"AAA", "BBB", "CCC"})
+        lines = [str(c) for c in log.error.call_args_list if "[Chaikin factors]" in str(c)]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("3 of 4 failed (most of the batch)", lines[0])
+
+
+    def test_no_data_symbols_get_one_line_not_one_per_row(self):
+        # PROD 11-02..11-04: the same 17 no-data symbols logged a warning each per refresh.
+        log = self._screen({"AAA", "BBB", "CCC"})          # DDD: fetched, but no data
+        per_row = [c for c in log.warning.call_args_list if "row skipped" in str(c)]
+        self.assertEqual(per_row, [])
+        lines = [str(c) for c in log.warning.call_args_list if "[Chaikin] no market data" in str(c)]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("1 of 4 failed", lines[0])        # fetch failures are not counted twice
+        self.assertIn("DDD", lines[0])
+
+    def test_all_no_data_is_one_error(self):
+        log = self._screen(set())
+        lines = [str(c) for c in log.error.call_args_list if "[Chaikin] no market data" in str(c)]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("4 of 4 failed (most of the batch)", lines[0])
+
+
+class TestSchemaWarning(unittest.TestCase):
+    def _check(self, data):
+        with mock.patch.object(powergauge, "_pg_log") as log:
+            powergauge.PowerGauge("IRBT", datetime.date(2026, 11, 3))._check_schema(data)
+        return log
+
+    def test_empty_payload_is_no_data_not_a_schema_change(self):
+        log = self._check({})
+        log.warning.assert_not_called()
+        self.assertIn("SCHEMA WARNING", log.debug.call_args.args[0])
+
+    def test_partial_payload_still_warns(self):
+        log = self._check({"pgr": [], "metaInfo": [{"Last": 1}], "checklist_stocks": {}})
+        self.assertIn("SCHEMA WARNING", log.warning.call_args.args[0])
 
 
 if __name__ == "__main__":

@@ -40,6 +40,7 @@ import sell_rules
 import decision_eval
 import instruments
 from aether import options
+from aether.scenario import runners
 from aether.market_calendar import NYSE_HOLIDAYS, last_session_on_or_before
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
@@ -371,12 +372,18 @@ def _conviction_cap_pct(total, base_pct, ceiling_pct, relax_start, relax_full):
 # @doc-sync-end: scarcity_core
 
 
-def determine_max_positions(cash_ratio: float, num_positions: int, base_max_positions: int) -> int:
+def determine_max_positions(cash_ratio: float, num_positions: int, base_max_positions: int,
+                            cash_buffer_pct: float = 0.0) -> int:
     """Determine max positions after applying Dynamic Position-Slot Expansion.
+
+    A slot is added only while the cash above the profile's buffer
+    (``cash_ratio - cash_buffer_pct``) exceeds ``CFG.system_slot_expand_free_cash``.
+    Counting the buffer matters: with a 20% buffer, 20.1% cash leaves ~0.1% of equity
+    to spend, and an extra slot then buys a single share (PROD COMP, 2026-11-03).
     Tested deterministically with zero mocks.
     """
     max_positions = base_max_positions
-    while cash_ratio > 0.15 and num_positions >= max_positions:
+    while (cash_ratio - cash_buffer_pct) > CFG.system_slot_expand_free_cash and num_positions >= max_positions:
         max_positions += 1
     return max_positions
 
@@ -649,24 +656,42 @@ def calculate_ticker_trend_score(symbol: str):
     cache as a flat market (Zero-Trust).
     """
     try:
-        closes = _load_closes(symbol)
-        if len(closes) < 200:
-            return None
-
-        sma20 = sum(closes[-20:]) / 20
-        sma50 = sum(closes[-50:]) / 50
-        sma200 = sum(closes[-200:]) / 200
-        current_price = closes[-1]
-
-        s_20 = 2.5 if current_price > sma20 else -2.5
-        s_50 = 2.5 if current_price > sma50 else -2.5
-        s_200 = 2.5 if current_price > sma200 else -2.5
-        s_cross1 = 1.25 if sma20 > sma50 else -1.25
-        s_cross2 = 1.25 if sma50 > sma200 else -1.25
-
-        return s_20 + s_50 + s_200 + s_cross1 + s_cross2
+        return trend_score_from_closes(_load_closes(symbol))
     except Exception:
         return None
+
+
+def trend_score_from_closes(closes) -> float | None:
+    """The trend score of calculate_ticker_trend_score from a close series (oldest first),
+    or None with fewer than 200 closes. Pure, so a backtest can score past days."""
+    if len(closes) < 200:
+        return None
+    sma20 = sum(closes[-20:]) / 20
+    sma50 = sum(closes[-50:]) / 50
+    sma200 = sum(closes[-200:]) / 200
+    current_price = closes[-1]
+
+    s_20 = 2.5 if current_price > sma20 else -2.5
+    s_50 = 2.5 if current_price > sma50 else -2.5
+    s_200 = 2.5 if current_price > sma200 else -2.5
+    s_cross1 = 1.25 if sma20 > sma50 else -1.25
+    s_cross2 = 1.25 if sma50 > sma200 else -1.25
+
+    return s_20 + s_50 + s_200 + s_cross1 + s_cross2
+
+
+# SPY's trend score more than this above RSP's (equal-weight S&P) = narrow breadth.
+BREADTH_DIVERGENCE_MAX = 4.0
+
+
+def breadth_downgrade(base_profile: str, spy_score, rsp_score) -> str:
+    """The profile after the breadth check: one step more defensive (AGGRESSIVE -> BALANCED,
+    BALANCED -> DEFENSIVE) when SPY's trend score leads RSP's by more than
+    BREADTH_DIVERGENCE_MAX. A missing score (None) never downgrades."""
+    if spy_score is None or rsp_score is None or spy_score - rsp_score <= BREADTH_DIVERGENCE_MAX:
+        return base_profile
+    return {"AGGRESSIVE": "BALANCED", "BALANCED": "DEFENSIVE"}.get(base_profile, base_profile)
+
 
 def calculate_bubble_z_score(symbol: str):
     """
@@ -734,14 +759,12 @@ def get_market_regime():
             return base_profile
         delta = spy_score - rsp_score
 
-        if delta > 4.0:
+        if delta > BREADTH_DIVERGENCE_MAX:
             _log.warning(f"⚠️ [BREADTH ALERT] SPY-RSP Divergence is high: {delta:.2f} (SPY: {spy_score:.1f}, RSP: {rsp_score:.1f})")
-            if base_profile == "AGGRESSIVE":
-                _log.info("  -> Downgrading profile from AGGRESSIVE to BALANCED due to narrow market breadth!")
-                return "BALANCED"
-            elif base_profile == "BALANCED":
-                _log.info("  -> Downgrading profile from BALANCED to DEFENSIVE due to narrow market breadth!")
-                return "DEFENSIVE"
+        adjusted = breadth_downgrade(base_profile, spy_score, rsp_score)
+        if adjusted != base_profile:
+            _log.info(f"  -> Downgrading profile from {base_profile} to {adjusted} due to narrow market breadth!")
+            return adjusted
     except Exception as e:
         _log.warning(f"Error applying breadth divergence filter: {e}")
 
@@ -1425,725 +1448,14 @@ def _has_strong_setups_today(min_score=9.5) -> bool:
 
 
 def run_daily_ai_management(force=False, manual_profile=None):
-    state = None
-    try:
-        open_status, msg = is_market_open()
-        if not open_status and not force:
-            _log.info(f"Aborting AI Move: {msg}")
-            return
+    """One daily management run: profile, workbook gate, prices, exits, buys, rotation, save.
 
-        state = load_game()
-        today = str(datetime.date.today())
-        now_time = datetime.datetime.now().strftime("%H:%M:%S")
-        new_transactions = []
-
-        # Determine strategy profile (Adaptive vs. Manual Override)
-        if manual_profile and manual_profile.upper() == "ADAPTIVE":
-            profile = get_market_regime()
-            state["profile"] = profile
-            state["profile_mode"] = "ADAPTIVE"
-            _log.info(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive pilot restored)")
-        elif manual_profile:
-            profile = manual_profile
-            state["profile"] = profile
-            state["profile_mode"] = "MANUAL"
-            _log.info(f"🤖 AI ACTIVE STRATEGY: {profile} (Manual Override - Locked)")
-        elif state.get("profile_mode") == "MANUAL":
-            # Auto-Reset Manual Override: A manual override is a one-time tactical choice.
-            # On the next automated run (no CLI profile passed), we automatically reset back to ADAPTIVE autopilot.
-            _log.console("  [AETHER] Manual override expired. Automatically resetting back to Adaptive autopilot...")
-            state["profile_mode"] = "ADAPTIVE"
-            profile = get_market_regime()
-
-            # Adaptive Cash-Deployment Upgrade Gate (Only for Autopilot!)
-            equity = state.get("equity", 0)
-            cash_ratio = state.get("balance", 0) / equity if equity > 1.0 else 0
-            if profile == "DEFENSIVE" and cash_ratio > 0.40 and _has_strong_setups_today(min_score=9.5):
-                _log.console(f"  [AETHER] Cash is plentiful ({cash_ratio*100:.1f}%) and strong bottom setups are detected.")
-                _log.info("  -> Adaptively upgrading today's strategy profile from DEFENSIVE to BALANCED to deploy cash safely!")
-                profile = "BALANCED"
-
-            state["profile"] = profile
-            _log.info(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive)")
-        else:
-            profile = get_market_regime()
-            state["profile_mode"] = "ADAPTIVE"
-
-            # Adaptive Cash-Deployment Upgrade Gate (Only for Autopilot!)
-            equity = state.get("equity", 0)
-            cash_ratio = state.get("balance", 0) / equity if equity > 1.0 else 0
-            if profile == "DEFENSIVE" and cash_ratio > 0.40 and _has_strong_setups_today(min_score=9.5):
-                _log.console(f"  [AETHER] Cash is plentiful ({cash_ratio*100:.1f}%) and strong bottom setups are detected.")
-                _log.info("  -> Adaptively upgrading today's strategy profile from DEFENSIVE to BALANCED to deploy cash safely!")
-                profile = "BALANCED"
-
-            state["profile"] = profile
-            _log.info(f"🤖 AI ACTIVE STRATEGY: {profile} (Adaptive)")
-
-        rules = get_strategy_rules(profile)
-
-        if not XLSX_FILE.exists():
-            _log.info("Workbook not found. AI Management deferred.")
-            return
-
-        # Live-data-only mandate: never trade on a workbook neither refresh updated.
-        stale = workbook_staleness(XLSX_FILE)
-        if stale:
-            _log.error(f"🛑 Refusing to trade on a stale workbook: {stale}.")
-            try:
-                notify.send_email(f"ALERT: AI trades skipped - stale workbook ({today})",
-                                  f"The trade run did not act because the {stale}.\n\n"
-                                  "Check the evening daily_task and morning pipeline logs, refresh the "
-                                  "workbook (python main.py), then rerun: python ai_portfolio_game.py --run --force")
-            except Exception as e:
-                _log.error(f"Could not send the stale-workbook alert: {e}")
-            return
-
-        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
-        ws = wb["Research"]
-        
-        symbols_to_check = list(state["positions"].keys())
-
-        # Pre-flight: batch-heal stale OHLCV caches before the decision loop so
-        # _sma50 never blocks on a live network call mid-iteration.
-        stale_syms = [s for s in symbols_to_check if _cache_stale(s, max_stale_days=_MAX_STALE_DAYS)]
-        if stale_syms:
-            _log.info(f"[Pre-flight] Healing {len(stale_syms)} stale OHLCV cache(s) before evaluation: {stale_syms}")
-            for _s in stale_syms:
-                _heal_symbol_cache(_s)
-
-        # Dynamically heal/classify legacy positions
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            sym = row[3]
-            if sym in state["positions"] and "is_scarcity" not in state["positions"][sym]:
-                industry_str = row[4] or ""
-                is_scarcity = instruments.is_scarcity_asset(sym, industry_str)
-                state["positions"][sym]["is_scarcity"] = is_scarcity
-                _log.info(f"  [AETHER State Healer] Classified existing position {sym} as scarcity={is_scarcity}")
-
-        research_symbols = _active_setup_symbols(ws)
-
-        queued = state.get("queued_orders", [])
-        queued_syms = [q["symbol"] for q in queued]
-        
-        # Ensure we always fetch the live price of SPY for our Circuit Breaker
-        all_syms = list(set(symbols_to_check + research_symbols + queued_syms + ["SPY"]))
-        prices = get_live_prices(all_syms)
-        
-        # --- Price Source Gate ---
-        # Primary source: E*TRADE live API. Automatic fallback: Google Finance scraper.
-        # If both fail (prices is empty), crash — no stale workbook prices allowed.
-        if not prices:
-            raise RuntimeError("Critical Data Failure: Both E*TRADE and Google Finance fallback returned no prices. No live source of truth available!")
-
-        # --- Systemic Crash Circuit Breaker Guard ---
-        circuit_breaker.enforce_circuit_breaker(state, prices)
-
-        # --- Options Settlement Pass (R&D #26) ---
-        # Settle any active weekly Covered Calls expiring today!
-        options.resolve_expiring_options(state, today, prices)
-
-        # Zero-Trust: surface held positions with no live quote, but do NOT abort the
-        # run over them — aborting would skip stop-loss enforcement on every *other*
-        # position too, violating the Rule of Loss Minimization. Unpriced names fall
-        # back to cost for the equity figure (via _live_equity) and are held (their
-        # cost-based price won't trip a stop) until a quote returns.
-        missing_prices = [sym for sym in symbols_to_check if sym not in prices or not prices[sym] or prices[sym] <= 0]
-        if missing_prices:
-            _log.console(f"  [AETHER] PORTFOLIO ERROR: No live quote found for held positions {missing_prices}! Using cost basis for their equity share and skipping their stop check this run.")
-
-        state["equity"] = round(_live_equity(state["balance"], state["positions"], prices), 0)
-
-        # 0. Execute QUEUED ORDERS (Strategic Overrides with Volatility Sizing)
-        if queued:
-            _log.info("🤖 AI EXECUTING QUEUED STRATEGIC ORDERS...")
-            for order in queued:
-                sym = order["symbol"]
-                price = prices.get(sym, 0)
-                if price <= 0: continue
-                
-                if order["type"] == "SELL" and sym in state["positions"]:
-                    pos = state["positions"][sym]
-                    options.unwind_option_liability_if_held(sym, pos, state, price, today)
-                    state["positions"].pop(sym)
-                    proceeds = pos["qty"] * price
-                    state["balance"] += proceeds
-                    tx = {
-                        "date": today, "time": now_time, "type": "SELL", 
-                        "symbol": sym, "price": price, "qty": pos["qty"], 
-                        "pnl": round((price - pos["cost"]) * pos["qty"], 2),
-                        "details": f"Queued Sell: {order['reason']}",
-                        "stop_loss": pos.get("stop_loss"),
-                    }
-                    state["history"].append(tx)
-                    new_transactions.append(tx)
-                    _log.info(f"🤖 AI QUEUED SELL EXECUTED: {sym} at ${price} (PnL: ${tx['pnl']})")
-                    log_closed_trade_dna(sym, pos, price, today)
-                    
-                elif order["type"] == "BUY" and sym not in state["positions"]:
-                    # Zero-Trust Freshness Gate (execution-time): a queued BUY may have sat overnight,
-                    # so the screen-time gate that cleared it can be stale by now. The ATR stop below is
-                    # derived from this cache, so re-verify freshness before filling. Heal once, then
-                    # SKIP (drop) the order rather than execute on untrustworthy data — the screener
-                    # re-surfaces the name next run if it still qualifies. (Queued SELLs are intentionally
-                    # NOT gated: a strategic/stop exit must always be allowed to run.)
-                    if _cache_stale(sym, max_stale_days=_MAX_STALE_DAYS):
-                        _heal_symbol_cache(sym)
-                        if _cache_stale(sym, max_stale_days=_MAX_STALE_DAYS):
-                            _log.warning(f"🛑 QUEUED BUY SKIPPED (Zero-Trust Freshness): {sym} - OHLCV cache stale/missing at execution; refusing to derive an ATR stop from untrustworthy data.")
-                            continue
-                    max_positions = rules["max_positions"]
-                    available_slots = max_positions - len(state["positions"])
-                    if state["balance"] > 500 and available_slots > 0:
-                        max_allocation = state["equity"] * rules["max_allocation_pct"]
-                        cash_to_use = min(state["balance"] / available_slots, max_allocation)
-                        
-                        qty = calculate_share_qty(sym, cash_to_use, price)
-                        if qty > 0:
-                            cost = qty * price
-                            state["balance"] -= cost
-                            
-                            # Volatility-Based Stop Loss customized by profile
-                            atr = risk_utils.calculate_atr(sym)
-                            if atr and atr > 0:
-                                stop_loss = round(price - (rules["atr_multiplier"] * atr), 2)
-                                stop_desc = f"ATR-based Stop: ${stop_loss} ({rules['atr_multiplier']} * ATR)"
-                            else:
-                                stop_loss = round(price * 0.92, 2)
-                                stop_desc = f"8% Fallback Stop: ${stop_loss}"
-                                
-                            # Resolve buy DNA for queued buys
-                            q_pgr = "Neutral"
-                            q_s10 = 0.0
-                            q_l60 = 0.0
-                            q_score = 0.0
-                            q_industry = "Unknown"
-                            for r_row in ws.iter_rows(min_row=2, values_only=True):
-                                if r_row[3] == sym:
-                                    q_pgr = r_row[6] or "Neutral"
-                                    q_industry = r_row[4] or "Unknown"
-                                    try:
-                                        q_s10 = float(r_row[24] or 0.0)
-                                        q_l60 = float(r_row[25] or 0.0)
-                                        q_score = round(q_s10 + q_l60, 1)
-                                    except (ValueError, TypeError):
-                                        pass
-                                    break
-                                    
-                            state["positions"][sym] = {
-                                "qty": qty, 
-                                "cost": price, 
-                                "stop_loss": stop_loss,
-                                "buy_dna": {
-                                    "buy_date": today,
-                                    "pgr": q_pgr,
-                                    "s10": q_s10,
-                                    "l60": q_l60,
-                                    "score": q_score,
-                                    "z_score": 0.0,
-                                    "industry": q_industry
-                                }
-                            }
-                            tx = {
-                                "date": today, "time": now_time, "type": "BUY", 
-                                "symbol": sym, "price": price, "qty": qty,
-                                "details": f"Queued Buy: {order['reason']} ({stop_desc})"
-                            }
-                            state["history"].append(tx)
-                            new_transactions.append(tx)
-                            _log.info(f"🤖 AI QUEUED BUY EXECUTED: {qty} shares of {sym} at ${price} ({stop_desc})")
-            
-            state["queued_orders"] = []
-
-        # SELL logic — unified deterministic exit policy (sell_rules.exit_decision):
-        # hard ATR stop > soft momentum signal (winner-protected) > hold.
-        symbols_to_sell = {}  # sym -> exit reason, recorded on the SELL tx
-        decision_entries = []
-        for sym in list(state["positions"].keys()):
-            pos = state["positions"][sym]
-            s10 = l60 = 0
-            prev_close = pos.get("cost", 0.0)
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                if row[3] == sym:
-                    s10 = row[24] or 0
-                    l60 = row[25] or 0
-                    try:
-                        prev_close = float(row[8] or pos.get("cost", 0.0))
-                    except Exception:
-                        prev_close = pos.get("cost", 0.0)
-                    break
-            price = prices.get(sym, pos.get("cost"))
-
-            # ── AETHER Profit-Lock Trailing Stop-Loss Ratchet (Priority 1) ──
-            atr = risk_utils.calculate_atr(sym)
-            if atr and atr > 0:
-                # 1. Peak Price Tracking: track highest close since acquisition
-                highest_close = pos.get("highest_close_since_acq", 0.0)
-                highest_close = max(highest_close, pos.get("cost", 0.0), price)
-                pos["highest_close_since_acq"] = highest_close
-                
-                # Determine trailing multiplier (1.5x for Scarcity, profile rules-based for Standard)
-                is_scarcity = pos.get("is_scarcity", False)
-                multiplier = 1.5 if is_scarcity else rules.get("atr_multiplier", 2.5)
-                
-                # 2. Peter Lynch Flower Protection: Only ratchet stop upward once safely in profit (> FLOWER_PROFIT_ATR x ATR)
-                if sell_rules.safely_in_profit(price, pos.get("cost", 0.0), atr):
-                    recalculated_stop = round(highest_close - (multiplier * atr), 2)
-                    old_stop = pos.get("stop_loss", 0.0)
-                    if recalculated_stop > old_stop:
-                        pos["stop_loss"] = recalculated_stop
-                        _log.info(f"[Profit-Lock] {sym} stop ratcheted: ${old_stop:.2f} -> ${recalculated_stop:.2f} (peak close ${highest_close:.2f})")
-                        _log.info(f"🛡️ [Profit-Lock] {sym} stop ratcheted upwards: ${old_stop:.2f} ➡️ ${recalculated_stop:.2f}")
-                        
-                # 3. Breakeven Trigger: If price has rallied > 1.5x ATR, lock in exact purchase Cost Basis (Breakeven)
-                if (price - pos.get("cost", 0.0)) > (1.5 * atr):
-                    old_stop = pos.get("stop_loss", 0.0)
-                    cost_basis = pos.get("cost", 0.0)
-                    if cost_basis > old_stop:
-                        pos["stop_loss"] = cost_basis
-                        _log.info(f"[Breakeven Lock] {sym} stop raised to cost basis: ${old_stop:.2f} -> ${cost_basis:.2f}")
-                        _log.info(f"🛡️ [Breakeven Lock] {sym} stop bumped to Cost Basis: ${old_stop:.2f} ➡️ ${cost_basis:.2f}")
-            # ── Bank-As-You-Go scale-out (Defensive Overlay — Rule B) ──
-            # Take PARTIAL profit as a winner runs through ATR tiers — distinct from
-            # the full, pop-based liquidation loop below. This only ever removes risk
-            # (never scales a loser, never adds exposure), reduces pos["qty"] rather
-            # than popping the position, and persists pos["banked_pct"] (the cumulative
-            # fraction sold) so each tier fires exactly once. Executes only in market
-            # hours; if a tier is crossed after-hours it fires on the next live cycle.
-            if atr and atr > 0 and price and price > 0 and pos.get("qty", 0) > 1 and is_market_hours():
-                banked_pct = float(pos.get("banked_pct", 0.0) or 0.0)
-                # Pass the conviction bar into the pure planner: a high-conviction
-                # flower (L60 >= the covered-call ceiling) is never trimmed, mirroring
-                # the covered-call flower exclusion so the two winner-side mechanics
-                # share ONE conviction bar (plans/roadmap.md, Jul-25 dont-sell-winners). The planner
-                # returns frac 0.0 + a "held: high-conviction flower" reason when it
-                # suppresses a would-be bank; surface that so the hold is visible.
-                so_frac, so_reason = risk_utils.scale_out_plan(
-                    price, pos.get("cost", 0.0), atr, banked_pct,
-                    l60=l60, l60_ceiling=CFG.system_covered_call_l60_ceiling)
-                if so_frac <= 0 and so_reason.startswith("held: high-conviction"):
-                    _log.info(f"🌺 [Scale-Out] {sym}: {so_reason}")
-                if so_frac > 0 and banked_pct < 1.0:
-                    # banked_pct is a fraction of the ORIGINAL lot; recover the original
-                    # size (works for legacy positions with no banked_pct) to size the sale.
-                    original_qty = pos["qty"] / (1.0 - banked_pct)
-                    sell_qty = int(round(so_frac * original_qty))
-                    # Keep at least one share so the trailing-stop exit path owns the
-                    # final close (log_closed_trade_dna / option unwind live there).
-                    sell_qty = max(0, min(sell_qty, pos["qty"] - 1))
-                    if sell_qty >= 1:
-                        proceeds = sell_qty * price
-                        state["balance"] += proceeds
-                        pos["qty"] -= sell_qty
-                        pos["banked_pct"] = round(banked_pct + so_frac, 6)
-                        tx = {"date": today, "time": now_time, "type": "SELL",
-                              "symbol": sym, "price": price, "qty": sell_qty,
-                              "pnl": round((price - pos.get("cost", 0.0)) * sell_qty, 2),
-                              "details": f"Scale-out (Bank-As-You-Go): {so_reason}"}
-                        state["history"].append(tx)
-                        new_transactions.append(tx)
-                        _log.info(f"🏦 [Scale-Out] {sym}: banked {sell_qty} sh at "
-                                  f"${price:.2f} — {so_reason}; {pos['qty']} sh left trailing")
-            # ────────────────────────────────────────────────────────────────
-
-            # Check Idiosyncratic Single-Stock Gap-Down Guard (Whipsaw protection)
-            is_gap_frozen = False
-            if circuit_breaker.is_single_stock_gap_frozen(sym, price, prev_close):
-                is_gap_frozen = True
-                gap_pct = round(((price - prev_close) / prev_close) * 100, 2) if prev_close > 0 else 0.0
-                _log.info(f"❄️ [Gap Guard] {sym} gapped down {gap_pct}% overnight. Holding stop wide to prevent opening whipsaw.")
-
-            # Only pay the OHLCV read when the soft signal actually fires (winner-
-            # protection is the only consumer of sma50); HOLD positions skip the I/O.
-            sma50 = _sma50(sym) if sell_rules.soft_exit(s10, l60) else None
-            # build_entry is the single source of the decision: it runs the exit
-            # policy once, logs it, and (run_shadow=None) shadow-runs AI only for
-            # non-HOLD candidates. The action it returns drives the actual sell.
-            entry = decision_eval.build_entry(
-                symbol=sym, price=price, cost=pos.get("cost"),
-                stop_loss=None if is_gap_frozen else pos.get("stop_loss"), 
-                s10=s10, l60=l60, sma50=sma50,
-                date=today, run_shadow=None)
-            
-            # AI Second-Opinion Exit Override Gate (R&D Item 14), one rule in sell_rules.ai_exit_override:
-            # an AI HOLD / FLAG-FOR-REVIEW downgrades a momentum SELL of a position safely in profit;
-            # a stop breach, a loser or a marginal gain always sells.
-            old_action = entry["rules_action"]
-            entry["rules_action"], override_reason, ignored_reason = sell_rules.ai_exit_override(
-                old_action, entry["rules_reason"], price=price, cost=pos.get("cost"), atr=atr,
-                live_verdicts=entry.get("verdicts"), holding=pos)
-            if override_reason:
-                entry["rules_reason"] = f"AI Override: {override_reason} (was {entry['rules_reason']})"
-                _log.info(
-                    f"🛡️ [AI EXIT OVERRIDE] {sym} sell overridden! "
-                    f"Decision downgraded from {old_action} to {entry['rules_action']}. Reason: {override_reason}"
-                )
-            elif ignored_reason:
-                _log.info(f"🛑 [AI Override] {sym}: AI verdict not applied ({ignored_reason}).")
-
-            decision_entries.append(entry)
-            if entry["rules_action"] == "SELL":
-                exit_reason = entry["rules_reason"] or "Technical exit"
-                if not is_market_hours():
-                    # Queue the sell instead of executing immediately
-                    if not any(q["symbol"] == sym and q["type"] == "SELL" for q in state.get("queued_orders", [])):
-                        state.setdefault("queued_orders", []).append({
-                            "type": "SELL", "symbol": sym, "reason": f"Exit triggered: {exit_reason}"
-                        })
-                        _log.info(f"📝 [Queued] After-hours SELL queued for {sym}: {entry['rules_reason']}")
-                else:
-                    symbols_to_sell[sym] = exit_reason
-            elif entry["rules_action"] == "REVIEW":
-                # Winner above its 50-DMA on a soft signal — hold, don't dump.
-                _log.info(f"🌸 AI HOLD (winner-protected): {sym} — {entry['rules_reason']}")
-        if decision_entries:
-            decision_eval.log_decisions(decision_entries)
-
-        for sym, exit_reason in symbols_to_sell.items():
-            pos = state["positions"][sym]
-            price = prices.get(sym, pos["cost"])
-            options.unwind_option_liability_if_held(sym, pos, state, price, today)
-            state["positions"].pop(sym)
-            
-            # Slippage-Protected Limit Stop (STP LMT - R&D #8): once the price is at or below the
-            # stop, the order is a stop-limit whose limit is the market price, so it fills at the
-            # market price. A gap below the stop is a real loss; filling at the stop overstated P&L.
-            stop_loss = pos.get("stop_loss", 0.0)
-            stop_fill = stop_loss > 0.0 and price <= stop_loss
-            if stop_fill:
-                _log.info(f"🛡️ [STP LMT] {sym} stop ${stop_loss:.2f} triggered; limit at market ${price:.2f}, filled at ${price:.2f}.")
-                
-            proceeds = pos["qty"] * price
-            state["balance"] += proceeds
-            tx = {"date": today, "time": now_time, "type": "SELL", "symbol": sym, "price": price, "qty": pos["qty"], "pnl": round((price - pos["cost"]) * pos["qty"], 2),
-                  "details": f"Exit: {exit_reason}" + (f" [STP LMT @ market, stop {stop_loss:.2f}]" if stop_fill else ""),
-                  "stop_loss": pos.get("stop_loss")}
-            state["history"].append(tx)
-            new_transactions.append(tx)
-            _log.info(f"🤖 AI LIVE SELL: {sym} at ${price} (Time: {now_time})")
-            log_closed_trade_dna(sym, pos, price, today)
-
-        # BUY logic (filtered by profile momentum threshold)
-        base_max = rules["max_positions"]
-        
-        # Dynamic Position-Slot Expansion: If cash is plentiful (>15% of equity) and we are full, dynamically expand slots to deploy cash!
-        cash_ratio = state["balance"] / state["equity"] if state["equity"] > 1.0 else 0.0
-        max_positions = determine_max_positions(cash_ratio, len(state["positions"]), base_max)
-        if max_positions > base_max:
-            _log.info(f"🛡️ [Slot Expansion] Plentiful cash ({cash_ratio*100:.1f}%) detected. Dynamically expanding slots from {base_max} to {max_positions} to prevent cash drag!")
-            _log.info(f"🛡️ [Slot Expansion] Plentiful cash detected. Expanding max slots from {base_max} to {max_positions}.")
-            
-        available_slots = max_positions - len(state["positions"])
-        
-        # Enforce defensive cash buffer
-        min_cash_required = state["equity"] * rules["cash_buffer_pct"]
-        
-        # Always build top_buys list and track active position scores
-        top_buys = []
-        active_position_scores = {}
-        
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            sym = row[3]
-            if not sym: continue
-            total_score = (row[24] or 0.0) + (row[25] or 0.0)
-            
-            # If sym is currently in positions, record its current score
-            if sym in state["positions"]:
-                active_position_scores[sym] = total_score
-                continue
-                
-            # TEMPORARY: skip leveraged/inverse/crypto ETFs as new long buys — the
-            # long swing-low framework doesn't fit them (see instruments.py + R&D).
-            # They still get ATR-based stops if already held; this only blocks entry.
-            if instruments.is_excluded(sym):
-                continue
-            setup = str(row[20] or '')
-            price = prices.get(sym, 0)
-            short10 = row[24] or 0.0
-
-            # Dynamic Adaptive s10 Floor (R&D #15) — thresholds single-sourced via helper.
-            cash_pct = (state["balance"] / state["equity"]) * 100.0 if state.get("equity", 0) > 0 else 0.0
-            required_floor = adaptive_s10_floor(cash_pct)
-
-            # Strict Short10 Momentum Floor: Reject buy entries if short-term momentum is below required floor
-            if short10 < required_floor:
-                if (setup in ('1', 'OK', 1)) and price > 0:
-                    _log.warning(f"🛑 AI BUY REJECTED (Momentum Floor): {sym} - Short10 score {short10} is below required {required_floor} floor (cash_pct={round(cash_pct, 1)}%).")
-                continue
-
-            # Filter by strategy profile threshold OR mathematically confirmed bottom
-            if (setup in ('1', 'OK', 1)) and price > 0:
-                # Zero-Trust Freshness Gate (CLAUDE.md Rule of Zero-Trust / Temporal Zero-Trust):
-                # Never OPEN a new position on stale or missing OHLCV. Every downstream risk level —
-                # the ATR stop assigned in _execute_buys, swing support, and is_bottom_confirmed just
-                # below — is derived from this cache, so acting on a stale bar is the real "buying
-                # blind" (empty workbook S/R is not — that still gets a live ATR stop). Attempt one
-                # self-heal, then reject if the cache is still not fresh. Held positions are pre-healed
-                # above (line ~1437); this extends the identical discipline to buy candidates, which
-                # were previously ungated. NOTE: this gate sits at the top of the qualifying-candidate
-                # block, so it applies to EVERY buy candidate — those with explicit workbook S/R just
-                # as much as the empty-S/R rows handled below — not only the empty-S/R case. Validated
-                # over the live cache: a meaningful fraction of symbols are stale on any given day, and
-                # their ATR stops would be computed off old bars.
-                if _cache_stale(sym, max_stale_days=_MAX_STALE_DAYS):
-                    _healed = _heal_symbol_cache(sym)  # bool: True only on a real refresh
-                    if _cache_stale(sym, max_stale_days=_MAX_STALE_DAYS):
-                        # Distinguish missing vs N-days-stale in the reject line, reusing the cheap
-                        # raw-JSON age (_cache_age_days) that _cache_stale already read — not the
-                        # heavier split-adjusting ohlcv_age_days. The precise heal outcome (healed /
-                        # lock-deferred / failed / 0-updates) is on the preceding [Self-Healer] line,
-                        # so lock-deferral is separable from genuine failure.
-                        _age = _cache_age_days(sym)
-                        _age_desc = "missing" if _age is None else f"{_age}d stale"
-                        _log.warning(f"🛑 AI BUY REJECTED (Zero-Trust Freshness): {sym} - OHLCV cache {_age_desc}, self-heal did not refresh it (healed={_healed}; see preceding [Self-Healer] line for lock-deferral vs failure); refusing to derive risk levels from untrustworthy data.")
-                        continue
-
-                bottom_ok, bottom_msg = is_bottom_confirmed(sym)
-
-                # Catastrophic Gap Guard (The CNXC Trap):
-                # Reject gap-downs > 8% unless bottom is independently confirmed — a volume-confirmed
-                # capitulation gap is exactly the entry signal bottom detection targets.
-                prev_close = row[10]
-                if prev_close and prev_close > 0:
-                    gap_pct = (price - prev_close) / prev_close
-                    if gap_pct <= -0.08 and not bottom_ok:
-                        _log.warning(f"🛑 AI BUY REJECTED (CNXC Trap): {sym} - Gap-Down {round(gap_pct*100, 1)}% with no confirmed bottom.")
-                        continue
-
-                # Reward-to-Risk & Target Upside Filter (Risk-Reward Gate):
-                # Reject if the projected Reward-to-Risk ratio is below CFG.system_default_min_rr,
-                # OR if the projected target gain percentage is below 5.0% of the current price.
-                # EXEMPTION (Breakout Risk-Reward Waiver - R&D #13 & #32):
-                # An elite momentum leader (see is_elite_breakout_candidate: combined + s10 both
-                # above the CFG.system_bypass_* floors) waives the conservative R:R and target-gain
-                # fallback restrictions below, to capture breakout alpha on names with no real
-                # overhead resistance. Gate is delegated so the thresholds live in one place.
-                stop_val = _to_float(row[9], 0.0)
-                target_val = _to_float(row[11], 0.0)
-                pgr_val = str(row[6] or "Neutral")
-
-                is_elite_breakout = risk_utils.is_elite_breakout_candidate(total_score, short10)
-
-                # The R:R and target-gain gates apply ONLY when the workbook carries explicit
-                # Support/Resistance levels (row[9]/row[11]). A row with empty workbook S/R is NOT
-                # "buying blind": the execution path assigns a downstream ATR-based stop, so such a
-                # setup is intentionally allowed to fall through to the ATR fallback rather than be
-                # rejected here. Do NOT re-add a hard reject on missing workbook S/R — it preempts
-                # that ATR stop and rejects entries the system was designed to make.
-                if stop_val > 0 and target_val > 0:
-                    upside = target_val - price
-                    downside = price - stop_val
-                    rr_ratio = round(upside / downside, 2) if downside > 0 else 0.0
-                    target_gain_pct = round((upside / price) * 100, 2) if price > 0 else 0.0
-
-                    min_rr = CFG.system_default_min_rr
-                    if rr_ratio < min_rr:
-                        if is_elite_breakout:
-                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived {min_rr}:1 R:R limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, R:R: {rr_ratio}:1).")
-                        else:
-                            _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required {min_rr}:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
-                            continue
-
-                    if target_gain_pct < 5.0:
-                        if is_elite_breakout:
-                            _log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived 5.0% target upside limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, Target Gain: {target_gain_pct}%).")
-                        else:
-                            _log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Projected target gain of {target_gain_pct}% is less than the required 5.0% minimum (Upside: ${round(upside, 2)}).")
-                            continue
-                else:
-                    # Incomplete workbook S/R (missing stop AND/OR target — this branch is the negation
-                    # of `stop_val > 0 and target_val > 0`) — synthesize the risk thesis for TRANSPARENCY,
-                    # not as a gate.
-                    # The freshness gate above already proved the cache is trustworthy, and _execute_buys
-                    # assigns a live ATR stop, so this row is not "buying blind". Derive stop/target from
-                    # the SAME split-adjusted, provenance-reporting resolvers the UI and backtests use and
-                    # log the thesis. We deliberately DO NOT hard-gate on this synthesized R:R: the nearest
-                    # confirmed resistance is structurally the smallest possible upside while support can be
-                    # far below, so a uniform R:R>=2 reject would gut the fresh pipeline (validated live —
-                    # most fresh names score R:R<2 on synthesized levels). The R:R / target-gain quality
-                    # screen stays scoped to explicit workbook levels; freshness is the real safety gate.
-                    excl = instruments.is_excluded(sym)
-                    # Load the (freshness-gated) split-adjusted series ONCE and feed both resolvers,
-                    # instead of letting each reload + re-adjust the same cache is_bottom_confirmed
-                    # already read above. Freshness is guaranteed by the gate, so the resolvers'
-                    # internal staleness check is redundant here and passing the series skips it.
-                    _hi, _lo, _cl, _ = risk_utils._load_ohlcv_series(sym)
-                    _sd = risk_utils.resolve_stop_detailed(price, highs=_hi, lows=_lo, closes=_cl, exclude_swing=excl)
-                    _td = risk_utils.resolve_target_detailed(price, highs=_hi, lows=_lo, closes=_cl, exclude_swing=excl)
-                    _wb_sr = f"workbook stop={row[9]!r}/target={row[11]!r} incomplete"
-                    _log.info(f"[Synthesized Risk Thesis] {sym} @ ${price}: stop ${_sd.get('stop')} ({_sd.get('source')}) / target ${_td.get('target')} ({_td.get('source')}) — {_wb_sr}; live ATR stop applied at execution.")
-
-                if total_score >= rules["min_score_threshold"] or bottom_ok:
-                    bottom_desc = f" (Bottom Confirmed: {bottom_msg})" if bottom_ok else ""
-                    top_buys.append({
-                        "sym": sym,
-                        "price": price,
-                        "total": total_score,
-                        "pgr": row[6] or "Neutral",
-                        "s10": row[24] or 0.0,
-                        "l60": row[25] or 0.0,
-                        "bottom_desc": bottom_desc,
-                        "industry": row[4]
-                    })
-                else:
-                    _log.warning(f"🛑 AI BUY REJECTED (Profile Threshold): {sym} - Combined score {round(total_score, 2)} is below the {profile} minimum of {rules['min_score_threshold']} and no confirmed bottom.")
-
-        # ── R&D #32 Overbought Breakout Guard score penalty ──
-        for buy_cand in top_buys:
-            sym_upper = buy_cand["sym"].upper()
-            cache = _load_symbol_today_cache(sym_upper, today)
-            if cache:
-                checklist = cache.get("checklist_stocks", {})
-                strength_count = checklist.get("strengthCount", 1)
-                timing_count = checklist.get("timingCount", 1)
-                industry_rating = checklist.get("industry", "Neutral")
-                
-                if (strength_count < 1 and timing_count < 1) or industry_rating == "Weak":
-                    buy_cand["total"] -= 1.5
-                    _log.info(f"🛡️ [R&D #32 Guard] Applied -1.5 score penalty to {sym_upper} (overbought/weak-sector: strength={strength_count}, timing={timing_count}, industry={industry_rating})")
-
-        top_buys.sort(key=lambda x: x["total"], reverse=True)
-
-        # ── R&D #27: Dynamic Momentum Rotation Engine ──
-        sells_to_rotate, available_slots, balance_addition = evaluate_momentum_rotation(
-            profile, is_market_hours(), available_slots, max_positions, 
-            state["positions"], prices, top_buys, active_position_scores
-        )
-        
-        for sym_to_sell in sells_to_rotate:
-            pos = state["positions"][sym_to_sell]
-            price = prices.get(sym_to_sell, pos["cost"])
-            options.unwind_option_liability_if_held(sym_to_sell, pos, state, price, today)
-            state["positions"].pop(sym_to_sell)
-            
-            # Retrieve score for logging details if available
-            score_val = active_position_scores.get(sym_to_sell, 0.0)
-            
-            tx = {
-                "date": today, 
-                "time": now_time, 
-                "type": "SELL", 
-                "symbol": sym_to_sell, 
-                "price": price, 
-                "qty": pos["qty"], 
-                "pnl": round((price - pos["cost"]) * pos["qty"], 2),
-                "details": f"🔄 [MOMENTUM ROTATION] Sold mature position {sym_to_sell} (Score: {score_val:.1f}) to free slot."
-            }
-            state["history"].append(tx)
-            new_transactions.append(tx)
-            _log.info(f"🔄 [MOMENTUM ROTATION] Sold mature position {sym_to_sell} (Score: {score_val:.1f}) @ ${price} to open slot.")
-            log_closed_trade_dna(sym_to_sell, pos, price, today)
-            
-        state["balance"] += balance_addition
-
-        if available_slots > 0 and state["balance"] > min_cash_required:
-            if not is_market_hours():
-                # Queue the buys up to available slots
-                for buy in top_buys[:available_slots]:
-                    if not any(q["symbol"] == buy["sym"] and q["type"] == "BUY" for q in state.get("queued_orders", [])):
-                        state.setdefault("queued_orders", []).append({
-                            "type": "BUY", "symbol": buy["sym"], "reason": "Top-ranked quantitative pick (After-Hours)"
-                        })
-                        _log.info(f"📝 [Queued] After-hours BUY queued for {buy['sym']}")
-            else:
-                _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
-                              today, now_time, new_transactions, prices)
-
-                # ── Dynamic Pyramiding: Scale into winning trends with idle cash ──
-                cash_ratio = state["balance"] / state["equity"] if state["equity"] > 1.0 else 0.0
-                if cash_ratio > CFG.system_pyramiding_cash_ratio:  # idle-cash trigger for scaling in
-                    _log.info(f"🛡️ [Pyramiding Pass] Checking active positions to deploy idle cash ({cash_ratio*100:.1f}%)...")
-                    for sym, pos in list(state["positions"].items()):
-                        # Never buy back what this run (or an earlier run today) just sold, e.g.
-                        # a Bank-As-You-Go scale-out: that books profit and restores the
-                        # exposure at the same price (PROD GNE 2026-10-02).
-                        if any(t.get("symbol") == sym and t.get("type") == "SELL" and t.get("date") == today
-                               for t in state["history"]):
-                            _log.info(f"🛡️ [Pyramiding Pass] {sym}: sold earlier today; no scale-in.")
-                            continue
-                        # R&D #31 adds only to protected positions: the stop is at or above cost.
-                        stop_loss = pos.get("stop_loss") or 0.0
-                        if stop_loss < pos["cost"]:
-                            _log.info(f"🛡️ [Pyramiding Pass] {sym}: stop ${stop_loss:.2f} is below cost ${pos['cost']:.2f}; no scale-in.")
-                            continue
-                        current_px = prices.get(sym, pos["cost"])
-                        # A winner is in profit and trading at or near its peak close
-                        is_winner = (current_px > pos["cost"])
-                        has_peak = (pos.get("highest_close_since_acq", 0.0) >= current_px * 0.98) # within 2% of peak close
-
-                        # Retrieve its Short10 and Long60 momentum scores from row
-                        s10 = 0.0
-                        l60 = 0.0
-                        for row in ws.iter_rows(min_row=2, values_only=True):
-                            if row[3] == sym:
-                                s10 = row[24] or 0.0
-                                l60 = row[25] or 0.0
-                                break
-
-                        # Pyramiding momentum gate (R&D #31) — delegated to a single-sourced helper.
-                        if should_pyramid_into_winner(is_winner, has_peak, s10, l60):
-                            max_pos_allocation = state["equity"] * rules["max_allocation_pct"]
-                            current_allocation = pos["qty"] * current_px
-                            remaining_room = max_pos_allocation - current_allocation
-
-                            if remaining_room > 500.0:  # Minimum scale-in size is $500
-                                cash_to_deploy = min(state["balance"] - (state["equity"] * rules["cash_buffer_pct"]), remaining_room)
-                                # Same per-trade loss cap as a new buy: the added shares may lose at most
-                                # equity * max_trade_risk_pct at the stop (the old shares' locked gain is not counted).
-                                max_risk_usd = state["equity"] * CFG.system_max_trade_risk_pct
-                                risk_cap_usd = risk_utils.risk_capped_cash(current_px, stop_loss, max_risk_usd)
-                                if risk_cap_usd is not None and cash_to_deploy > risk_cap_usd:
-                                    _log.info(f"🛡️ [Pyramiding Pass] {sym}: add capped at ${risk_cap_usd:,.2f} so a stop-out at ${stop_loss:.2f} loses at most ${max_risk_usd:,.2f}.")
-                                    cash_to_deploy = risk_cap_usd
-                                add_qty = calculate_share_qty(sym, cash_to_deploy, current_px)
-
-                                if add_qty > 0:
-                                    cost = add_qty * current_px
-                                    state["balance"] -= cost
-
-                                    # Blended cost basis recalculation
-                                    old_qty = pos["qty"]
-                                    old_cost = pos["cost"]
-                                    new_qty = old_qty + add_qty
-                                    blended_cost = round(((old_qty * old_cost) + (cost)) / new_qty, 2)
-
-                                    pos["qty"] = new_qty
-                                    pos["cost"] = blended_cost
-
-                                    tx = {
-                                        "date": today, "time": now_time, "type": "BUY_SCALE_IN", 
-                                        "symbol": sym, "price": current_px, "qty": add_qty,
-                                        "details": f"Pyramiding Scale-In (Breakout Peak, s10={s10})"
-                                    }
-                                    state["history"].append(tx)
-                                    new_transactions.append(tx)
-
-                                    _log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f} (Blended Cost: ${blended_cost:.2f})")
-                                    _log.info(f"🛡️ [Pyramiding Scale-In] Added {add_qty} shares to {sym} @ ${current_px:.2f}")
-                # ───────────────────────────────────────────────────────────
-
-                # ── Dynamic Covered Call Writing (R&D #26): Generate weekly premium cash-flow ──
-                if is_market_hours():
-                    _log.info("🚀 [Options Pass] Checking active holdings to write weekly Covered Calls...")
-                    options.execute_weekly_covered_call_pass(state, today, prices, ws)
-                # ───────────────────────────────────────────────────────────
-
-    except RuntimeError:
-        raise  # critical failures (no prices, etc.) must propagate — never swallow
-    except Exception as e:
-        _log.exception(f"run_daily_ai_management failed: {e}")
-    finally:
-        if "wb" in locals() and wb:
-            try:
-                wb.close()
-            except Exception:
-                pass
-        if state is not None:
-            save_game(state)
-            update_excel_log(state, new_transactions)
-            _log.info(f"🤖 AI Portfolio Value: ${state['equity']} (Cash: ${round(state['balance'], 2)})")
-        else:
-            _log.info("🤖 AI Management aborted before state initialization. Game state preserved.")
+    The stages live in ``aether.scenario.steps`` and run in order in
+    ``aether.scenario.runners.run_daily_management``; this function only calls it.
+    ``tests/test_scenario_runner.py`` pins the result against a golden snapshot of
+    this function's output from before the switch (R&D #44).
+    """
+    return runners.run_daily_management(force=force, manual_profile=manual_profile)
 
 def deduct_operational_costs(amount):
     if amount <= 0: return

@@ -1,10 +1,10 @@
 """Scenario runners: the stages in :mod:`aether.scenario.steps`, composed (B7).
 
-``run_daily_management`` is ``ai_portfolio_game.run_daily_ai_management``
-rebuilt from the B6 stages, in the root's order, with the root's own setup and
-error handling around them. It is not wired in: the game still runs its own
-function. ``tests/test_scenario_runner.py`` runs both under the same patches and
-requires the same saved state, transactions, logs and exceptions.
+``run_daily_management`` is the game's daily run, built from the B6 stages in
+the order the old ``run_daily_ai_management`` body ran them, with its setup and
+error handling around them. ``ai_portfolio_game.run_daily_ai_management`` now just
+calls it. ``tests/test_scenario_runner.py`` pins its saved state, transactions,
+logs and exceptions against a golden snapshot recorded from the old body.
 
 Collaborators are read off the live root module at call time (``steps._pkg()``),
 so ``mock.patch.object(game, ...)`` reaches the runner and every stage.

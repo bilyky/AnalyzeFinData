@@ -83,7 +83,7 @@ This file documents the foundational, workspace-wide cognitive, temporal, and so
 ### 🔗 No Links Into Data/ (Worktree Junction Wipe Rule)
 *   **The Mandate:** Never junction or symlink production `Data/`, or anything inside it, into a worktree or any other folder. Removing the worktree deletes *through* the link: on 2026-10-06 that lost 551,974 cache files. Detail: [docs/agent-reference.md §B](docs/agent-reference.md).
 *   **The Rules:**
-    1.  **Reach the real caches with `AETHER_CACHE_DIR=<main checkout>/Data`** (caches only), **never `AETHER_DATA_DIR`** (it also moves the E*TRADE token and the trash). It grants writes (for a read-only study, copy the files instead), and not every script honors it (list in §B).
+    1.  **Reach the real caches with `AETHER_CACHE_DIR=<main checkout>/Data`** (caches only), **never `AETHER_DATA_DIR`** (it also moves the E*TRADE token, Chaikin's session and Chrome profile, and the trash). It grants writes (for a read-only study, copy the files instead), and not every script honors it (list in §B).
     2.  **An unavoidable link:** say so in the PR, and remove the link itself (`cmd /c rmdir <link>` / `unlink <link>`) before you finish, then re-scan.
     3.  **Scan every worktree for links before removing it;** never remove one that still has a link (`prune_merged_worktrees.py` enforces this). A link into `Data/` needs the owner's OK.
     4.  **Before a batch cleanup, note the `Data/Symbol*` entry counts** and compare after. After an intentional shrink, delete `Data/data_sentinel.json` so the watchdog takes the new size as its baseline.
@@ -146,6 +146,7 @@ Step-by-step workflows live as plain markdown in `.claude/commands/<name>.md`. T
 *   `ship-pr` — take a change from branch to pushed PR with CI verified.
 *   `run-study` — backtest-first evidence before wiring, loosening or removing a rule: fixed decision rule, independence-aware statistics, verdict tests, result recorded in `plans/roadmap.md`.
 *   `status`, `analyze`, `compare-stocks`, `daily-run`, `intraday-monitor`, `watchdog`, `pattern-discover`, `extract-intel`, `oceanview-adviser` — portfolio and operations workflows (see each file's header).
+*   `position-watch` — sub-skill of `oceanview-adviser`: daily recommend-only monitor of one concentrated holding (default INTC), trim / hold / wait with a RETRO of past calls; for INTC it replaces the options menu (Intel bans hedging). Private inputs in `Data/position_watch/`.
 
 Two skills use the `SKILL.md` frontmatter layout instead (`name` + `description`, then the body); any agent can open them directly:
 

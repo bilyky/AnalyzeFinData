@@ -11,8 +11,8 @@ tests pin what it carries over from the root, unchanged:
    ``(wb, wb["Research"])``.
 
 Every collaborator is patched on the live module — no disk or email. Re-export
-and root parity are pinned in ``test_scenario_steps`` and
-``test_scenario_parity``.
+is pinned in ``test_scenario_steps``; the composed run in
+``test_scenario_runner``.
 """
 import os
 import sys

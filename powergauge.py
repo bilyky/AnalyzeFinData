@@ -1,4 +1,5 @@
 import datetime
+import gzip
 import sys
 import re
 import requests
@@ -122,7 +123,7 @@ class ChaikinSessionUnavailable(EnvironmentError):
 
 
 _chaikin_renewer = _TokenRenewer(
-    lock_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "chaikin_reauth.lock"),
+    lock_path=os.path.join(paths.data_dir(), "chaikin_reauth.lock"),
     renew_fn=lambda: login(interactive=False),
     load_fn=lambda: _load_session_from_file(),
     lock_ttl=180,
@@ -286,14 +287,18 @@ def _build_cache_index():
     _pg_log.info(f"Cache index built: {len(_cache_file_index)} symbols")
 
 
-SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
+# Chaikin auth state lives where E*TRADE's does: aether.paths.data_dir() ($AETHER_DATA_DIR, else
+# <checkout>/Data). It used to be pinned to this module's folder, so a worktree with
+# AETHER_DATA_DIR pointing at the real Data/ still found no session and started a browser login
+# (2026-11-03).
+SESSION_FILE = os.path.join(paths.data_dir(), "session.json")
 
 # Persistent Chrome profile for browser re-auth. Its long-lived `cf_clearance` cookie
 # (~355-day exp, re-minted on each login) is the durable credential that lets Cloudflare
 # Turnstile auto-pass in a real (headed) browser with NO human — a throwaway context has
 # no cf_clearance, hits a cold Turnstile, and fails headless. (verified live 2026-09-09;
 # see plans/chaikin_api.md "Credential model" and memory project_chaikin_auto_reauth.)
-_CHAIKIN_PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "chaikin_chrome_profile")
+_CHAIKIN_PROFILE_DIR = os.path.join(paths.data_dir(), "chaikin_chrome_profile")
 
 _http_session: requests.Session | None = None
 _resolved_proxy: str | None = None   # process-level memo: "" (direct) or a proxy URL
@@ -433,9 +438,11 @@ class PowerGauge:
         self.money_flow = ""
         self.over_bt_sl = ""
         self.relative_strength = ""
+        self.has_pgr_factors = None     # True/False for a stock snapshot; None for ETFs, invalid, unset
 
     def init_from_json(self, data_json, check_schema=True):
         cl = data_json.get('checklist_stocks') or {}
+        self.has_pgr_factors = pgr_factors_present(data_json)
 
         # Early-out: invalid symbol reported by API
         if data_json.get('status') == 'invalid symbol':
@@ -511,6 +518,8 @@ class PowerGauge:
                 warnings.append("pgr[0] missing 'PGR Value'")
             if 'Corrected PGR Value' not in pgr_list[5]:
                 warnings.append("pgr[5] missing 'Corrected PGR Value'")
+            if pgr_factors_present(data_json) is False:
+                warnings.append("no PGR factors (Financials/Earnings/Technicals/Experts all empty)")
         metainfo = data_json.get('metaInfo') or []
         if not metainfo:
             warnings.append("'metaInfo' list missing or empty")
@@ -529,7 +538,11 @@ class PowerGauge:
                 if key not in cl:
                     warnings.append(f"checklist_stocks missing key '{key}'")
         if warnings:
-            _pg_log.warning(f"  [SCHEMA WARNING] {self.symbol}: " + "; ".join(warnings))
+            # All three blocks empty means Chaikin has no data for the symbol (delisted or
+            # renamed; the refresh reports those once per run), not a changed schema.
+            no_data = not pgr_list and not metainfo and not cl
+            (_pg_log.debug if no_data else _pg_log.warning)(
+                f"  [SCHEMA WARNING] {self.symbol}: " + "; ".join(warnings))
 
     def init_from_ohlcv(self, entry: dict):
         """Populate price fields from an Alpha Vantage OHLCV daily entry."""
@@ -660,9 +673,9 @@ class PowerGauge:
 
 
 def _load_session_from_file() -> dict:
-    session_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
+    session_file = SESSION_FILE
     if not os.path.exists(session_file):
-        txt_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.txt")
+        txt_file = os.path.join(os.path.dirname(SESSION_FILE), "session.txt")
         if os.path.exists(txt_file):
             with open(txt_file, "r") as f:
                 sid = f.read().strip()
@@ -680,7 +693,7 @@ def _load_session_from_file() -> dict:
 
 
 def _save_session_to_file(session_data: dict):
-    session_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "session.json")
+    session_file = SESSION_FILE
     os.makedirs(os.path.dirname(session_file), exist_ok=True)
     with open(session_file, "w") as f:
         json.dump(session_data, f, indent=2)
@@ -1010,6 +1023,63 @@ _SIGNAL_KEYS = ("overBoughtSell", "overSoldBuy", "breakdownSell", "breakoutBuy",
                 "relStrengthBreakdown")
 
 
+# pgrData (new) -> the legacy factor lists, in the legacy order: (legacy name, new key).
+# Financials and Earnings were matched on 26 symbols (legacy 2026-08-31 vs live 2026-11-03,
+# 77-100% exact agreement per factor). Technicals and Experts move too fast to match two
+# months apart; they are mapped by name. In every group the first new key is the group
+# score ("Value"). Source of the mapping: plans/chaikin_api.md.
+_PGR_FACTOR_MAP = (
+    ("Financials", "financials", (
+        ("Value", "financialStrength"), ("LT Debt to Equity", "debtEquityRatio"),
+        ("Price to Book", "priceToBookValue"), ("Return on Equity", "returnOnInvestment"),
+        ("Price to Sales", "priceToSalesRatio"), ("Free Cash Flow", "businessValue"))),
+    ("Earnings", "earnings", (
+        ("Value", "earningsPerformance"), ("Earnings Growth", "earningsStability"),
+        ("Earnings Surprise", "epsSurprise"), ("Earnings Trend", "earningsTrend"),
+        ("Projected P/E", "projectedPeRatio"), ("Earnings Consistency", "earningsConsistency"))),
+    ("Technicals", "technicals", (
+        ("Value", "priceVolumeActivity"), ("Rel Strength vs Market", "relativeStrengthVsMarket"),
+        ("Chaikin Money Flow", "chaikinVolumeAccumulation"), ("Price Strength", "priceTrend"),
+        ("Price Trend ROC", "priceTrendRoc"), ("Volume Trend", "volumeTrend"))),
+    ("Experts", "experts", (
+        ("Value", "investorSentiment"), ("Estimate Trend", "earningEstimatesRevision"),
+        ("Short Interest", "shortInterest"), ("Insider Activity", "insiderActivity"),
+        ("Analyst Rating Trend", "analystOptions"), ("Industry Rel Strength", "relativeStrengthVsIndustry"))),
+)
+
+
+_CHECKLIST_PASSTHROUGH = ("strengthCount", "timingCount", "sentence1", "sentence2", "sentence3a", "sentence3b",
+                          "sentence4")
+
+
+def _legacy_factor_lists(pgr_data) -> dict:
+    """{"Financials": [{"Value": 2}, {"LT Debt to Equity": 3}, ...], ...} from new pgrData.
+    A factor the API leaves out (or sends as null) is left out, so an ETF gets empty lists."""
+    pd = pgr_data if isinstance(pgr_data, dict) else {}
+    out = {}
+    for legacy, new, pairs in _PGR_FACTOR_MAP:
+        grp = pd.get(new) if isinstance(pd.get(new), dict) else {}
+        out[legacy] = [{name: grp[key]} for name, key in pairs if grp.get(key) is not None]
+    return out
+
+
+def pgr_factors_present(bundle: dict):
+    """True/False: does a stock snapshot carry any of the four PGR factor lists? None for an ETF
+    or a bundle without the 7-slot pgr list (invalid symbol)."""
+    pgr = (bundle or {}).get("pgr") or []
+    if len(pgr) < 7 or pgr[6].get("is_etf_symbol"):
+        return None
+    return any(next(iter(e.values()), None) for e in pgr[1:5])
+
+
+def log_factor_coverage(results: dict) -> bool:
+    """One line per batch for stocks that came back without PGR factors: ERROR (so the watchdog
+    emails) when most of them did, as on 2026-09-01; WARNING for a few. Returns the ERROR flag."""
+    stocks = {s: pg.has_pgr_factors for s, pg in results.items() if getattr(pg, "has_pgr_factors", None) is not None}
+    missing = sorted(s for s, ok in stocks.items() if not ok)
+    return log_batch_failures(_pg_log, "[Chaikin factors] no PGR factors", missing, len(stocks))
+
+
 def _pgr_rating_old5(int_rating, name) -> int:
     """Resolve the legacy 1-5 PGR rating from the new integer (1-7) or rating name."""
     if isinstance(int_rating, int) and int_rating > 0:
@@ -1046,12 +1116,13 @@ def _adapt_suggestions_to_legacy(data: dict, symbol: str) -> dict:
     industry_name = data.get("industry") or data.get("sector") or data.get("name") or ""
     is_etf = bool(data.get("isEtf"))
 
+    factors = _legacy_factor_lists(data.get("pgrData"))
     pgr_list = [
         {"PGR Value": raw5},
-        {"Financials": []},
-        {"Earnings": []},
-        {"Technicals": []},
-        {"Experts": []},
+        {"Financials": factors["Financials"]},
+        {"Earnings": factors["Earnings"]},
+        {"Technicals": factors["Technicals"]},
+        {"Experts": factors["Experts"]},
         {"Corrected PGR Value": corr5},
         {"is_etf_symbol": is_etf, "technical_rank": data.get("technicalRank") or 0},
     ]
@@ -1083,8 +1154,37 @@ def _adapt_suggestions_to_legacy(data: dict, symbol: str) -> dict:
         "change": str(chg) if chg is not None else None,
         "stockStatus": cl.get("status"),
     }
+    # Same names in the new checklistData and the legacy cache. strengthCount/timingCount feed
+    # the live R&D #32 guard (checklist.get("strengthCount", 1) < 1); they were dropped from
+    # 2026-09-01 until #232, so the guard ran on the default. Copied only when present: a None
+    # would break that comparison.
+    for k in _CHECKLIST_PASSTHROUGH:
+        if cl.get(k) is not None:
+            checklist[k] = cl[k]
     return {"status": "ok", "pgr": pgr_list, "metaInfo": [meta], "checklist_stocks": checklist}
 # @doc-sync-end: chaikin_api
+
+
+def _save_raw(symbol: str, cache_date, raw_jsn) -> None:
+    """Keep the untouched /api/suggestions response next to the adapted snapshot, so a field
+    the adapter drops can be rebuilt later (the 20 PGR factors were lost 2026-09-01 .. #232
+    because only the adapted bundle was kept). ~5 KB gzipped per stock."""
+    try:
+        d = os.path.join(paths.symbol_raw_dir(), symbol)
+        os.makedirs(d, exist_ok=True)
+        with gzip.open(os.path.join(d, f"{symbol}_{cache_date}.json.gz"), "wt", encoding="utf-8") as f:
+            json.dump(raw_jsn, f)
+    except OSError as e:  # the raw copy is a safety net; never fail the fetch over it
+        _pg_log.warning(f"[Raw Cache] {symbol}: could not save the raw response ({e})")
+
+
+def load_raw(symbol: str, cache_date):
+    """The saved raw response for a symbol/date, or None."""
+    p = os.path.join(paths.symbol_raw_dir(), symbol, f"{symbol}_{cache_date}.json.gz")
+    if not os.path.exists(p):
+        return None
+    with gzip.open(p, "rt", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _allow_reauth: bool = True) -> PowerGauge:
@@ -1167,6 +1267,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
             else:
                 with open(os.path.join(symbol_dir, f"{symbol}_{cache_date}.json"), "w") as fw:
                     json.dump(data_jsn, fw)
+                _save_raw(symbol, cache_date, raw_jsn)
 
         elif response.status_code in (401, 403):
             if _allow_reauth:
@@ -1257,6 +1358,7 @@ def check_from_file(prefer_cache: bool, date=None):
                 pg_results[sym] = sentinel
     _pg_log.console(f"Fetch complete ({len(unique_syms)} symbols).")
     log_batch_failures(_pg_log, "[Chaikin fetch]", fetch_failed, len(unique_syms))
+    log_factor_coverage(pg_results)
 
     # ── Phase 3: serial compute + write ──
     ohlcv_cache: dict = {}
@@ -1643,10 +1745,12 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
                 pg_results[sym] = sentinel
     _pg_log.console(f"Fetch complete ({len(unique_syms)} symbols).")
     log_batch_failures(_pg_log, "[Chaikin fetch]", fetch_failed, len(unique_syms))
+    log_factor_coverage(pg_results)
 
     # ── Phase 3: serial compute + write ──────────────────────────────────────
     updated = 0
     skipped = 0
+    no_data: list[str] = []
     picks_data: list[dict] = []
     ohlcv_cache: dict = {}  # symbol → full JSON dict (Meta Data + Time Series)
 
@@ -1654,8 +1758,10 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         power_g = pg_results[symbol]
 
         if power_g.price == -1:
-            _pg_log.warning(f"[{n}/{total}] {symbol}: no market data - row skipped (existing values preserved)")
+            _pg_log.debug(f"[{n}/{total}] {symbol}: no market data - row skipped (existing values preserved)")
             skipped += 1
+            if symbol not in fetch_failed:
+                no_data.append(symbol)
             continue
 
         # Load full OHLCV JSON — cached per symbol; _append_ohlcv_entry reuses it to avoid re-read
@@ -1752,6 +1858,11 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
               f"rr={f['risk_ratio']}, setup={flag}, br={f['buying_ratio']}, "
               f"s10={f['short_score']}, l60={f['long_score']}")
         updated += 1
+
+    # One line per run for symbols Chaikin has no data for (PROD: the same 17, often
+    # delisted names, logged 2 warnings each on every refresh). ERROR if most had none.
+    log_batch_failures(_pg_log, "[Chaikin] no market data (rows kept; delisted or renamed?)",
+                       list(dict.fromkeys(no_data)), len(unique_syms))
 
     if picks_data:
         _write_picks_sheet(wb, picks_data, date)
