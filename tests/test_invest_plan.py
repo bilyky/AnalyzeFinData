@@ -50,9 +50,21 @@ class TestSteps(unittest.TestCase):
         mid = [_fill("2030-03-10", 4000)]                                 # covers the first step only
         self.assertEqual([x["state"] for x in ip.step_status(PLAN, D(2030, 3, 14), mid)], ["done", "overdue"])
 
-    def test_rounding_slack(self):
-        self.assertEqual(ip.step_status(PLAN, TODAY, [_fill("2030-03-06", 1999.5)])[0]["state"], "done")
-        self.assertEqual(ip.step_status(PLAN, TODAY, [_fill("2030-03-06", 1998.0)])[0]["state"], "due today")
+    def test_rounding_slack_is_one_percent_of_the_step(self):
+        # fractional shares leave a few dollars: 3.3 sh @ 600 = 1980 covers a 2000 step (1% = 20)
+        frac = {"date": "2030-03-06", "symbol": "SPY", "shares": 3.3, "price": 600.0}
+        self.assertEqual(ip.step_status(PLAN, TODAY, [frac])[0]["state"], "done")
+        self.assertEqual(ip.step_status(PLAN, TODAY, [_fill("2030-03-06", 1981.0)])[0]["state"], "done")
+        self.assertEqual(ip.step_status(PLAN, TODAY, [_fill("2030-03-06", 1979.0)])[0]["state"], "due today")
+        small = {**PLAN, "steps": [{"date": "2030-03-06", "amount": 50, "buy": "SPY"}]}     # $1 floor
+        self.assertEqual(ip.step_status(small, TODAY, [_fill("2030-03-06", 49.2)])[0]["state"], "done")
+        self.assertEqual(ip.step_status(small, TODAY, [_fill("2030-03-06", 48.5)])[0]["state"], "due today")
+
+    def test_a_partly_filled_step_buys_what_is_left(self):
+        r = ip.check({**PLAN, "fills": [_fill("2030-03-06", 1200.0)]}, TODAY, {"SPY": FLAT, "RSP": FLAT})
+        self.assertEqual(r["steps"][0]["left"], 800.0)
+        self.assertIn("BUY step 2030-03-06: $800 left of $2,000 SPY", r["actions"][0])
+        self.assertEqual(ip.step_status(PLAN, TODAY, [])[0]["left"], 2000)
 
     def test_step_on_a_market_holiday(self):
         plan = {**PLAN, "steps": [{"date": "2026-11-26", "amount": 1000, "buy": "SPY"}]}   # Thanksgiving

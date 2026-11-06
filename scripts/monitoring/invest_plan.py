@@ -13,7 +13,9 @@ values, not a real plan):
 
 Each day it says, from the cached daily bars:
   - which step is due (or overdue). A step is covered only by fills dated on or after it,
-    taken in order; a step dated on a market holiday is "due next session";
+    taken in order, to within $1 or 1% of the step (fractional shares leave a few dollars);
+    a partly covered step shows the amount left; a step dated on a market holiday is "due
+    next session";
   - "wait a day" when the market (SPY) fell by wait_if_market_day or more on the last
     session (the owner's rule after a big drop);
   - whether RSP is stretched (position-watch's replacement_timing: more than 5% above its
@@ -46,6 +48,7 @@ from aether import market_calendar  # noqa: E402
 
 INDEX_FUNDS = {"SPY", "RSP"}
 SLACK = 1.0          # dollars of rounding slack when fills cover a step
+SLACK_PCT = 0.01     # ...or 1% of the step, whichever is larger: fractional shares leave a few dollars
 
 
 def _out(msg: str = "") -> None:
@@ -80,13 +83,14 @@ def step_status(plan: dict, today: datetime.date, fills: list) -> list:
     out = []
     for s in sorted(plan.get("steps", []), key=lambda x: x["date"]):
         need = s["amount"]
+        slack = max(SLACK, SLACK_PCT * s["amount"])
         for p in pool:
-            if p[0] >= s["date"] and p[1] > 0 and need > SLACK:
+            if p[0] >= s["date"] and p[1] > 0 and need > slack:
                 take = min(p[1], need)
                 p[1] -= take
                 need -= take
         d = datetime.date.fromisoformat(s["date"])
-        if need <= SLACK:
+        if need <= slack:
             state = "done"
         elif d == today:
             state = "due today" if market_calendar.is_session(d) else "due next session"
@@ -94,7 +98,7 @@ def step_status(plan: dict, today: datetime.date, fills: list) -> list:
             state = "overdue"
         else:
             state = "later"
-        out.append({**s, "state": state})
+        out.append({**s, "state": state, "left": 0.0 if state == "done" else need})
     return out
 
 
@@ -132,15 +136,17 @@ def check(plan: dict, today: datetime.date, bars: dict) -> dict:
         if s["state"] == "due next session":
             notes.append(f"step {s['date']} falls on a market holiday: buy at the next session")
         elif s["state"] in ("due today", "overdue"):
+            left = s["left"]
+            amt = f"${left:,.0f}" if left >= s["amount"] else f"${left:,.0f} left of ${s['amount']:,.0f}"
             if wait:
                 actions.append(f"WAIT a day: SPY fell {spy_ret:+.1%} on {last_day}; step {s['date']} "
-                               f"(${s['amount']:,.0f} {s['buy']}) moves to the next session")
+                               f"({amt} {s['buy']}) moves to the next session")
             elif "RSP" in s["buy"] and rsp_timing and not rsp_timing["entry_ok"]:
-                actions.append(f"BUY step {s['date']}: ${s['amount']:,.0f}; RSP is stretched "
+                actions.append(f"BUY step {s['date']}: {amt}; RSP is stretched "
                                f"(RSI {rsp_timing['rsi14']:.0f}, {rsp_timing['stretch_50']:+.1%} vs 50-day): "
                                f"use SPY now or hold the RSP part for a later step")
             else:
-                actions.append(f"BUY step {s['date']}: ${s['amount']:,.0f} {s['buy']} (limit order)")
+                actions.append(f"BUY step {s['date']}: {amt} {s['buy']} (limit order)")
     fstat = fill_status(fills, prices, rules.get("index_stop", -0.08))
     for f in fstat:
         if f["stopped"]:
