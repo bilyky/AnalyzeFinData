@@ -77,6 +77,9 @@ _SCHTASKS_TIMEOUT_S = 60
 WATCHDOG_LOCK_MAX_AGE_MIN = 120
 SYNC_TIMEOUT_S = 1500  # robocopy timeout for sync_data_folder (600 s timed out on PROD 11-04 and 11-05). Only the
                        # 22:10 backup task syncs; its 150-min limit covers the 120-min wait plus this.
+CORE_SYNC_TIMEOUT_S = 300  # the top-level Data/ files (state, ledgers, workbook, config), copied before
+                           # the full tree; the full sync timed out 11-04 → 11-08 (PROD review 11-09).
+CORE_MAX_BYTES = 50 * 1024 * 1024  # the core pass skips larger files; the state files are a few MB at most
 
 SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 
@@ -691,9 +694,12 @@ def _record_backup_status(result):
     """Record a sync_data_folder() outcome; keeps the time of the last success."""
     status = _read_json(BACKUP_STATUS_FILE) or {}
     now = datetime.datetime.now().isoformat()
-    status.update(last_attempt=now, last_result=result)
-    if result == "ok":
-        status["last_success"] = now
+    if result == "core_ok":     # the core pass only; the full pass records last_attempt/last_result
+        status["last_core_success"] = now
+    else:
+        status.update(last_attempt=now, last_result=result)
+        if result == "ok":
+            status["last_success"] = now
     try:
         _write_json(BACKUP_STATUS_FILE, status)
     except OSError as e:
@@ -717,8 +723,14 @@ def check_backup_health():
     except ValueError:
         return [f"WARNING: backup status is unreadable (last_success={last_ok!r})."]
     if age.days >= BACKUP_STALE_DAYS:
+        core = status.get("last_core_success") or "never"
+        if last_result == "timeout":
+            cause = (f"The full sync ran out of time ({SYNC_TIMEOUT_S}s). "
+                     f"Core state files last copied: {core}.")
+        else:
+            cause = f"The backup share may be unreachable. Core state files last copied: {core}."
         return [f"WARNING: last successful Data backup was {age.days} days ago ({last_ok}); "
-                f"last result: {last_result}. The backup share may be unreachable."]
+                f"last result: {last_result}. {cause}"]
     return []
 
 
@@ -847,11 +859,28 @@ def sync_data_folder() -> bool:
             return True # Not a failure of sync itself, just offline
             
         dst_path.mkdir(parents=True, exist_ok=True)
+        # 1. Core state first: the top-level files only (no /E), without logs and without files over
+        # CORE_MAX_BYTES (archives such as Symbol.zip), so a full-tree timeout no longer leaves the
+        # game state, ledgers and workbook unbacked. The full pass below still copies the rest.
+        core_cmd = ["robocopy", str(src), dst, "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS",
+                    f"/MAX:{CORE_MAX_BYTES}", "/XF", "*.log"]
+        try:
+            core = subprocess.run(core_cmd, capture_output=True, text=True, errors="replace",
+                                  timeout=CORE_SYNC_TIMEOUT_S)
+            if core.returncode < 8:
+                _log.info(f"✅ Core state files copied to {dst}.")
+                _record_backup_status("core_ok")
+            else:
+                _log.error(f"❌ Core state copy failed (rc={core.returncode}). Stderr: {core.stderr.strip()}")
+        except subprocess.TimeoutExpired:
+            _log.error(f"❌ Core state copy timed out ({CORE_SYNC_TIMEOUT_S}s limit reached).")
+
+        # 2. The full tree (caches included).
         _log.console(f"🔄 Syncing Data folder to: {dst} ...")
         # Use /E (recursive copy, NO DELETIONS) instead of /MIR to prevent data loss on backup drive.
         # Exclude only the live chrome profile: robocopy locks/fails on its open files
         # (Default/Crashpad/GPUPersistentCache). The Symbol/Symbol_full caches stay in the
-        # backup — the raised 600s timeout (PR #64) absorbs their volume.
+        # backup; SYNC_TIMEOUT_S is sized for their volume.
         cmd = [
             "robocopy", str(src), dst, "/E", "/R:1", "/W:1", "/MT:8", "/NFL", "/NDL", "/NJH", "/NJS",
             "/XD", "etrade_chrome_profile"
@@ -866,7 +895,7 @@ def sync_data_folder() -> bool:
             _record_backup_status("error")
             return False
     except subprocess.TimeoutExpired:
-        _log.warning("⚠️ Data folder sync timed out (600s limit reached). This is an incomplete backup.")
+        _log.warning(f"⚠️ Data folder sync timed out ({SYNC_TIMEOUT_S}s limit reached). This is an incomplete backup.")
         _record_backup_status("timeout")
         return False # Treat timeout as a failure, not a success, per mandatory backup policy
     except Exception as e:

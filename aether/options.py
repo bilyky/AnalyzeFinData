@@ -15,6 +15,7 @@ from aether import instruments, paths
 from aether.market_calendar import last_session_on_or_before
 from aether.config import CFG
 from aether.option_pricing import bs_price
+from aether.risk_utils import calculate_atr
 from aether.options_adviser import SHARES_PER_CONTRACT
 from aether.option_pricing import norm_cdf as norm_cdf  # re-export: single BS-math home
 from aether_logger import get_logger as _get_logger
@@ -284,24 +285,23 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
     except ValueError:
         sym_idx = 3
         _log.warning("[Option Write] Research sheet has no 'Symbol' header; falling back to column index 3 (may bind the wrong field).")
+    # ATR only from an exact "ATR" header. PROD's Research sheet has none, and the old fallback
+    # (index 23) is "Win% 10d", so ATR otherwise comes from the OHLCV cache (PROD review 11-09).
     atr_idx = next((i for i, h in enumerate(header_norm) if h == "atr"), None)
-    if atr_idx is None:
-        atr_idx = next((i for i, h in enumerate(header_norm) if "atr" in h), None)
-    if atr_idx is None:
-        atr_idx = 23
-        _log.warning("[Option Write] Research sheet has no 'ATR' header; falling back to column index 23 (may bind the wrong field).")
     # L60 (60-day conviction score) gates the flower exclusion below — high-conviction winners
     # are excluded from call-writing so their upside is not capped (R&D #26 follow-up, Item 1).
-    l60_idx = next((i for i, h in enumerate(header_norm) if h == "l60"), None)
+    # The workbook labels it "Long60".
+    l60_idx = next((i for i, h in enumerate(header_norm) if h in ("l60", "long60")), None)
     if l60_idx is None:
         l60_idx = 25
-        _log.warning("[Option Write] Research sheet has no 'L60' header; falling back to column index 25 (may bind the wrong field).")
+        _log.warning("[Option Write] Research sheet has no 'L60'/'Long60' header; falling back to column index 25 (may bind the wrong field).")
 
     atr_map, l60_map = {}, {}
     for row in ws_research.iter_rows(min_row=2, values_only=True):
         sym = str(row[sym_idx] or "").strip().upper() if sym_idx < len(row) else ""
         if sym:
-            atr_map[sym] = (row[atr_idx] if atr_idx < len(row) else None) or 0.0
+            if atr_idx is not None and atr_idx < len(row) and row[atr_idx]:
+                atr_map[sym] = row[atr_idx]
             try:
                 l60_map[sym] = float(row[l60_idx]) if l60_idx < len(row) and row[l60_idx] is not None else 0.0
             except (TypeError, ValueError):
@@ -334,7 +334,10 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
             continue
 
         if is_winner and is_risk_locked and not has_active_call and is_optionable and not is_high_conviction:
-            atr = atr_map.get(sym, current_px * 0.04) # fallback to 4% ATR
+            atr = atr_map.get(sym) or calculate_atr(sym)
+            if not atr or atr <= 0:
+                _log.warning(f"[Option Write] Skipping {sym}: no ATR (no 'ATR' column, no OHLCV cache); not guessing one.")
+                continue
 
             # Price the premium at the per-symbol ATR-implied vol (not the flat 0.30), and carry
             # that sigma onto the written_call so buy-to-close prices against the same model.

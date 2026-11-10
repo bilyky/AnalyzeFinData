@@ -225,5 +225,94 @@ class TestNotifyDays(unittest.TestCase):
             sys.argv = orig_argv
 
 
+_PT = cr.pytz.timezone("America/Los_Angeles")
+_UTC = datetime.timezone.utc
+
+
+def _pt(y, m, d, hh=8, mm=0):
+    return _PT.localize(datetime.datetime(y, m, d, hh, mm))
+
+
+class TestWeekdayRefreshDue(unittest.TestCase):
+    """The 7-day token kept expiring on Sunday evening; the Sunday reauth failed with no working day
+    left (PROD 11-08). Refresh on a weekday when the token would not outlive the next weekday run
+    plus a day; at the weekend only when it dies before Monday's run (PROD review 11-09)."""
+
+    EXP_1109 = datetime.datetime(2026, 11, 9, 1, 44, 50, tzinfo=_UTC)     # Sun 11-08 17:44 PT
+    EXP_1116 = datetime.datetime(2026, 11, 16, 14, 35, 43, tzinfo=_UTC)   # Mon 11-16 06:35 PT
+
+    def test_friday_refreshes_a_token_that_dies_over_the_weekend(self):
+        self.assertTrue(cr.weekday_refresh_due(self.EXP_1109, _pt(2026, 11, 6)))
+        self.assertTrue(cr.weekday_refresh_due(self.EXP_1116, _pt(2026, 11, 13)))
+
+    def test_thursday_waits_when_friday_still_has_a_day(self):
+        self.assertFalse(cr.weekday_refresh_due(self.EXP_1109, _pt(2026, 11, 5)))
+        self.assertFalse(cr.weekday_refresh_due(self.EXP_1116, _pt(2026, 11, 12)))
+
+    def test_the_one_day_margin_leaves_a_working_day_to_retry(self):
+        wed_0700 = _pt(2026, 11, 11, 7, 0).astimezone(_UTC)
+        self.assertTrue(cr.weekday_refresh_due(wed_0700, _pt(2026, 11, 9)))    # Mon: Tue is the retry
+        self.assertFalse(cr.weekday_refresh_due(_pt(2026, 11, 11, 9, 0).astimezone(_UTC), _pt(2026, 11, 9)))
+
+    def test_midweek_with_plenty_of_runway_waits(self):
+        self.assertFalse(cr.weekday_refresh_due(self.EXP_1116, _pt(2026, 11, 9)))
+
+    def test_weekend_only_as_a_last_resort(self):
+        self.assertTrue(cr.weekday_refresh_due(self.EXP_1116, _pt(2026, 11, 14)))     # dies Mon 06:35
+        later = datetime.datetime(2026, 11, 17, 18, 0, tzinfo=_UTC)                    # Tue 10:00 PT
+        self.assertFalse(cr.weekday_refresh_due(later, _pt(2026, 11, 14)))
+        # Dies Monday noon: Monday 08:00 can still renew it, so the weekend does not open a browser.
+        mon_noon = _pt(2026, 11, 16, 12, 0).astimezone(_UTC)
+        self.assertFalse(cr.weekday_refresh_due(mon_noon, _pt(2026, 11, 14)))
+
+    def test_expired_or_unknown_is_always_due(self):
+        self.assertTrue(cr.weekday_refresh_due(self.EXP_1109, _pt(2026, 11, 9)))
+        self.assertTrue(cr.weekday_refresh_due(None, _pt(2026, 11, 10)))
+
+
+class TestWeekdayAwareMain(unittest.TestCase):
+    def _run(self, now, exp):
+        orig_argv = sys.argv
+        sys.argv = ["chaikin_reauth.py", "--weekday-aware"]
+        try:
+            with mock.patch.object(cr.pg, "_load_session_from_file", return_value={"jwttoken": "x"}), \
+                 mock.patch.object(cr, "_decode_exp", return_value=exp), \
+                 mock.patch.object(cr.pg, "_probe_session", return_value="valid"), \
+                 mock.patch.object(cr, "_now_local", return_value=now), \
+                 mock.patch.object(cr, "_backup_session", lambda: None), \
+                 mock.patch.object(cr.pg, "_login_via_browser", return_value={}) as login, \
+                 mock.patch.object(cr, "_notify_manual_reauth"):
+                cr.main()
+        finally:
+            sys.argv = orig_argv
+        return login
+
+    def test_not_due_opens_no_browser(self):
+        self._run(_pt(2026, 11, 12), TestWeekdayRefreshDue.EXP_1116).assert_not_called()
+
+    def test_due_runs_the_headed_login(self):
+        self._run(_pt(2026, 11, 13), TestWeekdayRefreshDue.EXP_1116).assert_called_once_with(headless=False)
+
+
+class TestReminderNamesTheDeadline(unittest.TestCase):
+    def test_runway_watch_subject_names_the_expiry(self):
+        orig_argv = sys.argv
+        sys.argv = ["chaikin_reauth.py", "--notify-days", "2.5"]
+        exp = TestWeekdayRefreshDue.EXP_1116
+        now = datetime.datetime(2026, 11, 14, 15, 0, tzinfo=_UTC)
+        try:
+            with mock.patch.object(cr.pg, "_load_session_from_file", return_value={"jwttoken": "x"}), \
+                 mock.patch.object(cr, "_decode_exp", return_value=exp), \
+                 mock.patch.object(cr.pg, "_probe_session", return_value="valid"), \
+                 mock.patch.object(cr, "_now_utc", return_value=now), \
+                 mock.patch.object(cr, "_email_throttled", return_value=False), \
+                 mock.patch.object(cr, "_stamp_email_sent"), \
+                 mock.patch.object(cr, "send_email") as send:
+                cr.main()
+        finally:
+            sys.argv = orig_argv
+        self.assertIn("Mon 11-16 06:35 PT", send.call_args.kwargs["subject"])
+
+
 if __name__ == "__main__":
     unittest.main()

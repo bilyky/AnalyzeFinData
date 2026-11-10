@@ -1436,6 +1436,18 @@ MANUAL_TASKS = [
         "confirm": None,
         "category": "system",
     },
+    {
+        "id": "invest_plan",
+        "label": "OceanView — Plan Check",
+        "description": "Daily check of the dated investment plan: which step is due, wait-a-day after a "
+                       "2%+ market drop, each holding against its stop, days to the sell window. "
+                       "Recommend-only, writes nothing (scripts/monitoring/invest_plan.py).",
+        "script": "scripts/monitoring/invest_plan.py",
+        "args": [],
+        "admin_only": True,          # the plan is private
+        "confirm": None,
+        "category": "oceanview",
+    },
 ]
 
 
@@ -1574,11 +1586,10 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
     # ── 1. Live price ─────────────────────────────────────────────────────────
     price = None
     try:
-        _et = etrade.ETradeClient("production", role="auth")
-        tokens = _et.auth.get_tokens()
-        if tokens:
-            quotes = _et.market.quotes([sym], tokens)
-            price = quotes.get(sym)
+        # Read plane only: the cached token, no renew and no re-auth (a dashboard click must not
+        # multiply broker auth attempts). Without a usable token the Google fallback below runs.
+        _et = etrade.ETradeClient("production", role="data")
+        price = _et.market.quotes([sym]).get(sym)
     except Exception:
         pass
     if not price:

@@ -134,6 +134,10 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
     Assert the calls that prove the path ran (counts, arguments), and patch the module's own
     reference — never a shared library global (`datetime.datetime`, `time.time`) that unrelated code
     also reads.
+  - **Hermetic?** A test that reads the real data cache (prices, market history) runs a different path
+    on every machine and date. A fixture price read against real history can silently trip a guard.
+    Per-run verdicts kept in module globals leak between tests (and runs in one process); keep them
+    on the run's own state or context.
   - **A guard retired or replaced?** When a PR deletes a test, check or alert, or plans to rely on a
     new one later, measure what is left: run the mutants against the remaining guards alone and state
     what only the removed one caught.

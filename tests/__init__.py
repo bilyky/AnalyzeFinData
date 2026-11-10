@@ -167,6 +167,8 @@ _ledgers.TRADE_DNA_FILE = _ledger_tmp / "trade_history_dna.json"
 _ledgers.FAILURE_RULES_FILE = _ledger_tmp / "failure_dna_rules.json"
 _ledgers.RETRO_REPORT_FILE = _ledger_tmp / "retrospective_report.txt"
 _ledgers.PICK_LOG_FILE = _ledger_tmp / "pick_lists_log.jsonl"
+import aether.preflight_status as _preflight_status  # noqa: E402
+_preflight_status.STATUS_FILE = _ledger_tmp / "preflight_status.json"
 
 # ---------------------------------------------------------------------------
 # Singleton-lock / trash / run-guard guard. run_watchdog() and

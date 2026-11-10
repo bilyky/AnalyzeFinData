@@ -9,10 +9,29 @@ const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").
 // ── central aether wiki database (loaded dynamically) ───────────────
 let AETHER_WIKI = {};
 
+// Every call carries the login token when there is one: private routes (accounts, logs,
+// the personal plan) return 401 without it.
 async function api(path, opts) {
-    const r = await fetch(path, opts);
-    if (!r.ok) throw new Error(`${path} → ${r.status}`);
+    const o = opts || {};
+    const r = await fetch(path, { ...o, headers: { ...authHeaders(), ...(o.headers || {}) } });
+    if (!r.ok) {
+        const err = new Error(`${path} → ${r.status}`);
+        err.status = r.status;
+        throw err;
+    }
     return r.json();
+}
+
+const LOGIN_NEEDED = '<div class="text-center text-slate-400 py-6">🔒 Log in (top right) to see this.</div>';
+
+// Open a private page (served only with the login token) in a new tab.
+async function openPrivatePage(path) {
+    const r = await fetch(path, { headers: authHeaders() });
+    if (r.status === 401) { window.alert("Log in first (top right) to open this page."); return; }
+    if (!r.ok) { window.alert(`${path} → ${r.status}`); return; }
+    const url = URL.createObjectURL(await r.blob());
+    window.open(url, "_blank", "noopener");
+    setTimeout(() => URL.revokeObjectURL(url), 60000);   // the new tab has loaded it by then
 }
 
 // ── Auth state ─────────────────────────────────────────────────────────────
@@ -86,7 +105,7 @@ $("login-form").addEventListener("submit", async (e) => {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 let activeTab = "dashboard";
-const VALID_TABS = ["dashboard", "research", "accounts", "chat", "system", "development", "about"];
+const VALID_TABS = ["dashboard", "research", "accounts", "oceanview", "chat", "system", "development", "about"];
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
@@ -989,7 +1008,8 @@ async function fetchAndRenderLog() {
             st.textContent = `${entries.length} entries · aether.jsonl${lvlFilter ? " (" + lvlFilter + ")" : ""}`;
         }
     } catch (err) {
-        lv.textContent = "Error loading logs: " + err.message;
+        lv.textContent = err.status === 401 ? "🔒 Log in (top right) to see the logs."
+                                            : "Error loading logs: " + err.message;
     }
     // Auto-scroll only if already at the bottom
     if (lv.scrollHeight - lv.scrollTop < lv.clientHeight + 40)
@@ -1032,7 +1052,7 @@ $("log-auto-refresh").addEventListener("change", () => {
 // Category display names for the manual tasks grid
 const TASK_CATEGORY_LABELS = {
     pipeline: "Pipeline", ai_game: "AI Game", data: "Data",
-    research: "Research", monitoring: "Monitoring", system: "System",
+    research: "Research", monitoring: "Monitoring", system: "System", oceanview: "OceanView",
 };
 
 // ── Task output panel ────────────────────────────────────────────────────────
@@ -1057,7 +1077,7 @@ function _startPolling(runId) {
     const log = $("task-output-log");
     _pollTimer = setInterval(async () => {
         try {
-            const d = await api(`/api/tasks/output/${runId}?offset=${offset}`);
+            const d = await api(`/api/tasks/output/${runId}?offset=${offset}`, { headers: authHeaders() });
             if (d.lines) {
                 log.textContent += d.lines;
                 log.scrollTop = log.scrollHeight;
@@ -1069,7 +1089,12 @@ function _startPolling(runId) {
                 $("top-task-status").textContent = ok ? `done (exit 0)` : `failed (exit ${d.exit_code})`;
                 $("top-task-status").className = `text-xs px-2 py-0.5 rounded ${ok ? "bg-green-900/60 text-green-300" : "bg-red-900/60 text-red-400"}`;
             }
-        } catch { /* network blip — keep polling */ }
+        } catch (e) {
+            if (String(e).includes("→ 401")) {      // admin-only output: the login is gone
+                clearInterval(_pollTimer); _pollTimer = null;
+                $("top-task-status").textContent = "log in to see the output";
+            }                                       // otherwise a network blip — keep polling
+        }
     }, 800);
 }
 
@@ -1151,8 +1176,10 @@ function hideTooltip() {
 }
 
 async function loadSystem() {
+    // The logs need the login; logged out they come back empty instead of failing the whole tab.
     const [health, tasks, logs, manual] = await Promise.all([
-        api("/api/health"), api("/api/tasks"), api("/api/pipeline/logs?lines=100"),
+        api("/api/health"), api("/api/tasks"),
+        api("/api/pipeline/logs?lines=100").catch(() => ({ lines: [] })),
         api("/api/tasks/manual"),
     ]);
 
@@ -1404,9 +1431,15 @@ async function sendChatMessage(text) {
     try {
         const r = await fetch("/api/chat", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...authHeaders() },
             body: JSON.stringify(_chatHistory),
         });
+        if (r.status === 401) {
+            _removeThinking();
+            _chatHistory.pop();                     // not sent: don't keep it in the history
+            _appendMessage("assistant", "🔒 Log in (top right) to use the chat.");
+            return;
+        }
         const d = await r.json();
         _removeThinking();
         const reply = d.reply || "(no response)";
@@ -1892,11 +1925,139 @@ async function runBacktest() {
 $("bt-run").addEventListener("click", runBacktest);
 $("bt-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") runBacktest(); });
 
+// ── OceanView tab (private: the endpoint needs the login token) ─────────────
+const ovPct = (x, d = 1) => (x == null ? "—" : (x * 100).toFixed(d) + "%");
+const ovSigned = (x, d = 1) => (x == null ? "—" : (x >= 0 ? "+" : "") + (x * 100).toFixed(d) + "%");
+const OV_ACTION = { TRIM: "text-amber-300", HOLD: "text-emerald-300", WAIT: "text-sky-300" };
+
+function ovCard(title, inner) {
+    return `<div class="card mb-6"><div class="card-label mb-3">${esc(title)}</div>${inner}</div>`;
+}
+
+function ovToday(d) {
+    const t = d.today, c = t.concentration || {}, call = t.call || {}, m = t.metrics || {}, p = t.vs_peers || {};
+    const pct = c.pct, floor = d.floor_pct, width = pct == null ? 0 : Math.min(100, pct * 100 / 0.6);
+    const reasons = (call.reasons || []).map((r) => `<li>${esc(r)}</li>`).join("");
+    const doubts = (t.doubts || []).length
+        ? `<div class="mt-2 text-sm text-amber-300">Data doubts (a TRIM would be held back): ${t.doubts.map(esc).join("; ")}</div>` : "";
+    const repl = Object.entries(t.replacements || {}).map(([s, r]) =>
+        `<tr><td class="pr-4">${esc(s)}</td><td class="pr-4">${fmt$(r.close)}</td><td class="pr-4">${ovSigned(r.stretch_50)} vs 50-day</td>
+         <td class="pr-4">RSI ${r.rsi14 == null ? "—" : r.rsi14.toFixed(0)}</td>
+         <td class="${r.entry_ok ? "text-emerald-300" : "text-amber-300"}">${r.entry_ok ? "entry OK" : "stretched"}</td></tr>`).join("");
+    const lots = t.lots && t.lots.lots ? `<div class="mt-3 text-sm">Would sell ${t.lots.shares} sh (est. tax ${fmt$(t.lots.est_tax)}):
+        ${t.lots.lots.map((l) => `${esc(l.acquired)} ${l.sell_qty} sh @ ${fmt$(l.price)} (${esc(l.term)})`).join(", ")}</div>` : "";
+    return ovCard("Today", `
+        <div class="flex flex-wrap items-baseline gap-6">
+            <div class="text-3xl font-bold ${OV_ACTION[call.action] || ""}">${esc(call.action || "—")}
+                ${call.action === "TRIM" ? `<span class="text-base text-slate-300">~${fmt$(call.tranche_usd)} into ${esc(call.replacement)}</span>` : ""}</div>
+            <div class="text-sm text-slate-400">price ${fmt$(t.price)} (${esc(t.price_source)}) · bar ${esc(t.as_of_bar)} · account snapshot ${esc(t.pack_health || "—")} · rules ${esc(t.rules)}</div>
+        </div>
+        <ul class="list-disc ml-5 mt-2 text-sm">${reasons}</ul>${doubts}
+        <div class="mt-4 text-sm">Share of total <b>${ovPct(pct)}</b> · floor ${ovPct(floor, 0)} · above the floor ${c.headroom_usd == null ? "—" : fmt$(c.headroom_usd)}</div>
+        <div class="relative h-3 mt-1 rounded bg-slate-800">
+            <div class="absolute h-3 rounded bg-emerald-500/70" style="width:${width}%"></div>
+            <div class="absolute h-3 w-0.5 bg-amber-300" style="left:${floor * 100 / 0.6}%" title="floor"></div>
+        </div>
+        <div class="text-xs text-slate-500 mt-1">bar scale 0–60% · amber line = floor</div>
+        <div class="mt-4 text-sm">vs peers: beta ${p.beta == null ? "—" : p.beta.toFixed(2)} · own move 20d ${ovSigned(p.resid_20)} (z ${p.z_20 == null ? "—" : p.z_20.toFixed(2)}) ·
+            trend vs 50-day ${ovSigned(m.vs_sma50)}, 200-day ${ovSigned(m.vs_sma200)} · from 52w high ${ovSigned(m.drawdown_52w)}</div>
+        <table class="mt-3 text-sm">${repl}</table>${lots}
+        ${t.wash_window_today ? `<div class="mt-2 text-sm text-sky-300">Inside a wash-sale window today: no loss sales.</div>` : ""}`);
+}
+
+function ovRetro(d) {
+    const r = (d.today || {}).retro || {};
+    const scored = Object.fromEntries((r.scored || []).map((s) => [s.date, s]));
+    const rows = (d.journal || []).slice().reverse().map((e) => {
+        const s = scored[e.date];
+        const verdict = s ? `<span class="${s.good ? "text-emerald-300" : "text-red-300"}">${s.good ? "good" : "bad"}</span>
+            (${ovSigned(s.symbol_ret)} vs ${ovSigned(s.replacement_ret)})` : `<span class="text-slate-500">not scored yet</span>`;
+        const lessons = (e.lessons || []).map((l) => `<div class="text-xs text-slate-400">💡 ${esc(l)}</div>`).join("");
+        return `<tr class="border-t border-slate-800 align-top"><td class="py-1 pr-4">${esc(e.date)}</td>
+            <td class="pr-4 ${OV_ACTION[e.action] || ""}">${esc(e.action)}</td><td class="pr-4">${fmt$(e.price)}</td>
+            <td class="pr-4">${ovPct(e.pct)}</td><td class="pr-4">${verdict}${lessons}</td></tr>`;
+    }).join("");
+    const hit = r.hit_rate == null ? "—" : ovPct(r.hit_rate, 0) + ` over ${(r.scored || []).length} call(s)`;
+    return ovCard(`RETRO · hit rate ${hit}`, `<div class="overflow-x-auto"><table class="w-full text-sm">
+        <tr class="text-slate-400 text-left"><th class="pr-4">Date</th><th class="pr-4">Call</th><th class="pr-4">Price</th><th class="pr-4">Share</th><th class="pr-4">Since then</th></tr>${rows}</table></div>`);
+}
+
+function ovTax(d) {
+    const lots = d.lots || [];
+    const sum = (f) => lots.filter(f).reduce((a, l) => a + l.gain, 0);
+    const soon = lots.filter((l) => l.term === "ST" && l.days_to_lt > 0 && l.days_to_lt <= 60);
+    const cal = (d.calendar || []).map((c) => `<tr class="border-t border-slate-800"><td class="py-1 pr-4">${esc(c.date)}</td>
+        <td class="pr-4">${esc(c.window_from)} → ${esc(c.window_to)}</td>
+        <td class="${c.status === "now" ? "text-sky-300" : c.status === "past" ? "text-slate-500" : ""}">${esc(c.status)}</td></tr>`).join("");
+    const lotRows = lots.map((l) => `<tr class="border-t border-slate-800"><td class="pr-4">${esc(l.acquired)}</td><td class="pr-4">${l.qty}</td>
+        <td class="pr-4">${fmt$(l.price)}</td><td class="pr-4 ${l.gain >= 0 ? "" : "text-red-300"}">${fmt$(l.gain)}</td>
+        <td class="pr-4">${esc(l.term)}${l.term === "ST" ? ` (${l.days_to_lt} d to LT)` : ""}</td></tr>`).join("");
+    return ovCard("Tax & calendar", `
+        <div class="text-sm mb-3">Lots ${lots.length} · long-term gain ${fmt$(sum((l) => l.term === "LT" && l.gain > 0))} ·
+            short-term gain ${fmt$(sum((l) => l.term === "ST" && l.gain > 0))} · losses ${fmt$(sum((l) => l.gain < 0))}
+            ${soon.length ? ` · <span class="text-amber-300">${soon.length} lot(s) turn long-term within 60 days</span>` : ""}</div>
+        <div class="card-label mb-1">Vest / ESPP dates and wash-sale windows (±30 days)</div>
+        <table class="text-sm mb-4">${cal}</table>
+        <details><summary class="cursor-pointer text-sm text-slate-300">All lots</summary>
+            <div class="overflow-x-auto"><table class="w-full text-sm mt-2">
+            <tr class="text-slate-400 text-left"><th class="pr-4">Acquired</th><th class="pr-4">Qty</th><th class="pr-4">Basis</th><th class="pr-4">Gain now</th><th class="pr-4">Term</th></tr>${lotRows}</table></div></details>
+        <div class="text-xs text-slate-500 mt-2">Estimates only: confirm with your CPA.</div>`);
+}
+
+function ovPlan(d) {
+    const p = d.plan;
+    if (!p) return "";
+    const money = (x) => (x == null ? "—" : "$" + Math.round(x).toLocaleString());
+    const steps = (p.steps || []).map((s) => `<tr class="border-t border-slate-800"><td class="pr-4">${esc(s.date)}</td>
+        <td class="pr-4">${money(s.amount)}</td><td class="pr-4">${esc(s.buy)}</td>
+        <td class="${s.state === "done" ? "text-emerald-300" : s.state === "later" ? "text-slate-400" : "text-amber-300"}">${esc(s.state)}</td></tr>`).join("");
+    const fills = (p.fills || []).map((f) => `<tr class="border-t border-slate-800"><td class="pr-4">${esc(f.symbol)}</td>
+        <td class="pr-4">${f.shares} @ ${Number(f.price).toFixed(2)}</td><td class="pr-4">${f.last == null ? "—" : Number(f.last).toFixed(2)}</td>
+        <td class="pr-4 ${f.pnl_pct >= 0 ? "pos" : "neg"}">${ovSigned(f.pnl_pct)}</td>
+        <td class="${f.stopped ? "text-red-400" : ""}">${f.stop ? Number(f.stop).toFixed(2) : "—"}${f.stopped ? " STOPPED" : ""}</td></tr>`).join("");
+    const lines = (p.doubts || []).map((x) => `<li class="text-amber-300">not sure: ${esc(x)}</li>`)
+        .concat((p.actions || []).map((x) => `<li><b>${esc(x)}</b></li>`), (p.notes || []).map((x) => `<li class="text-slate-400">${esc(x)}</li>`)).join("");
+    return ovCard(`Plan: ${p.name || "investment plan"} (bars to ${p.last_bar})`,
+        `<ul class="text-sm list-disc ml-5 mb-3">${lines}</ul>
+        <div class="text-sm mb-2">invested ${money(p.invested)} · P/L <span class="${p.pnl >= 0 ? "pos" : "neg"}">${p.pnl >= 0 ? "+" : "−"}${money(Math.abs(p.pnl))}</span>${p.return_by ? ` · return by ${esc(p.return_by)}` : ""}</div>
+        <table class="text-sm mb-3"><tr class="text-slate-400 text-left"><th class="pr-4">step</th><th class="pr-4">amount</th><th class="pr-4">buy</th><th>state</th></tr>${steps}</table>
+        ${fills ? `<table class="text-sm"><tr class="text-slate-400 text-left"><th class="pr-4">holding</th><th class="pr-4">bought</th><th class="pr-4">last</th><th class="pr-4">P/L</th><th>stop</th></tr>${fills}</table>` : ""}`);
+}
+
+function ovResearch(d) {
+    const items = (d.research || []).map((r) => {
+        const rows = (r.rows || []).map((x) => `<tr class="border-t border-slate-800"><td class="pr-4">${esc(x.group)}</td><td class="pr-4">${x.n ?? "—"}</td>
+            <td class="pr-4">${ovSigned(x.mean, 2)}</td><td class="pr-4">${ovSigned(x.median, 2)}</td><td>${x.t == null ? "—" : x.t.toFixed(2)}</td></tr>`).join("");
+        return `<div class="mb-4"><div class="text-sm"><b>${esc(r.id)}</b> ${esc(r.title)} · <span class="text-amber-300">${esc(r.verdict || "")}</span>
+            ${r.verdict_2 ? ` · second test: <span class="text-amber-300">${esc(r.verdict_2)}</span>` : ""}</div>
+            <table class="text-sm mt-1"><tr class="text-slate-400 text-left"><th class="pr-4">group</th><th class="pr-4">n</th><th class="pr-4">60d ${esc(r.mean_basis || "mean")}</th><th class="pr-4">median</th><th class="pr-4">t</th></tr>${rows}</table></div>`;
+    }).join("");
+    return ovCard("Research (excess return vs the market, 60 sessions)", items || `<div class="text-sm text-slate-500">No study results on this machine.</div>`);
+}
+
+async function loadOceanView() {
+    const body = $("ov-body");
+    try {
+        const d = await api("/api/oceanview/summary", { headers: authHeaders() });
+        $("ov-symbol").textContent = d.symbol;
+        $("ov-asof").textContent = `as of ${d.as_of} · recommend-only`;
+        body.innerHTML = ovToday(d) + ovPlan(d) + ovRetro(d) + ovTax(d) + ovResearch(d);
+    } catch (e) {
+        body.innerHTML = e.status === 401
+            ? '<div class="text-center text-slate-400 py-6">🔒 Log in (top right) to see OceanView.</div>'
+            : `<div class="text-center text-red-300 py-6">Could not load OceanView: ${esc(e.message)}</div>`;
+    }
+}
+
 // ── Per-tab loader ───────────────────────────────────────────────────────────
 function loadTab(tab) {
     if (tab === "dashboard") loadDashboard();
     else if (tab === "research") loadResearch();
-    else if (tab === "accounts") loadAccounts();
+    else if (tab === "accounts") loadAccounts().catch((e) => {
+        if (e.status === 401) $("accounts-container").innerHTML = LOGIN_NEEDED;
+        else console.error(e);
+    });
+    else if (tab === "oceanview") loadOceanView();
     else if (tab === "chat") setTimeout(() => $("chat-input").focus(), 50);
     else if (tab === "system") { loadSystem(); _startLogRefresh(); }
     else if (tab === "about") { loadRoadmap(); loadIntelIdeas(); }
@@ -2744,7 +2905,9 @@ async function requalify(sym, cost, triggerBtn) {
             body: JSON.stringify({ symbol: sym, cost }),
         });
     } catch (err) {
-        const errHtml = `<div class="px-4 py-2 text-xs text-red-400">Error: ${esc(err.message)}</div>`;
+        const errHtml = err.status === 401
+            ? `<div class="px-4 py-2 text-xs text-slate-400">🔒 Log in (top right) to requalify.</div>`
+            : `<div class="px-4 py-2 text-xs text-red-400">Error: ${esc(err.message)}</div>`;
         if (resultRow) resultRow.firstElementChild.innerHTML = errHtml;
         if (smRq) smRq.innerHTML = errHtml;
         if (triggerBtn) { triggerBtn.disabled = false; }
