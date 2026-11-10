@@ -41,7 +41,7 @@ import decision_eval
 import instruments
 from aether import options
 from aether.scenario import runners
-from aether.market_calendar import NYSE_HOLIDAYS, last_session_on_or_before
+from aether.market_calendar import NYSE_HOLIDAYS, is_session, last_session_on_or_before
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
@@ -637,7 +637,7 @@ def is_market_open():
     
     if now.weekday() >= 5:
         return False, "Market is closed (Weekend)."
-    if now.date().isoformat() in NYSE_HOLIDAYS:
+    if not is_session(now.date()):
         return False, f"Market is closed (NYSE holiday {now.date().isoformat()})."
 
     market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
