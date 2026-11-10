@@ -267,6 +267,9 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
                 if tight_stop > cur_stop and tight_stop < live_price:
                     if "original_stop_loss" not in pos:
                         pos["original_stop_loss"] = cur_stop
+                    elif cur_stop != pos.get("breaker_stop_loss"):
+                        # A ratchet raised the stop since the last tightening: restore that one later.
+                        pos["original_stop_loss"] = max(pos["original_stop_loss"], cur_stop)
                     pos["stop_loss"] = tight_stop
                     pos["breaker_stop_loss"] = tight_stop
                     tightened_symbols.append(sym)

@@ -52,6 +52,15 @@ class BreakerRestoreTest(unittest.TestCase):
         _run(state, False, {"LUV": 47.0})
         self.assertEqual(state["positions"]["LUV"]["stop_loss"], 40.0)
 
+    def test_ratchet_between_two_breaker_days_is_kept(self):
+        state = self._state()
+        _run(state, True, {"LUV": 45.0})                                  # 43.0
+        state["positions"]["LUV"]["stop_loss"] = 44.0                     # profit-lock raised it
+        _run(state, True, {"LUV": 48.0})                                  # re-tightened to 46.0
+        self.assertEqual(state["positions"]["LUV"]["stop_loss"], 46.0)
+        _run(state, False, {"LUV": 48.0})
+        self.assertEqual(state["positions"]["LUV"]["stop_loss"], 44.0)    # not back to 40.0
+
 
 if __name__ == "__main__":
     unittest.main()
