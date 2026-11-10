@@ -43,6 +43,8 @@ function, and avoids a top-level import cycle once the root becomes a facade.
 """
 from __future__ import annotations
 
+from aether import preflight_status
+
 
 def _pkg():
     """Return the ``ai_portfolio_game`` module, resolved lazily at call time.
@@ -241,6 +243,28 @@ def price_and_settle(state, all_syms, symbols_to_check, today):
     state["equity"] = round(game._live_equity(state["balance"], state["positions"], prices), 0)
 
     return prices
+
+
+def apply_preflight_gate(state, queued, today, force):
+    """No buys after a failed morning pre-flight, unless the run was started by hand with --force.
+
+    Reads today's verdict (:mod:`aether.preflight_status`). On a FAIL it sets the buy freeze that
+    :func:`deploy_capital` honours (new buys, after-hours queueing, scale-ins) and drops queued BUY
+    orders; queued SELLs, stops and exits still run. An active breaker reason is kept. Runs after
+    :func:`price_and_settle`, whose breaker sets or clears the same key. Returns the queue to execute.
+
+    PROD 2026-11-09: the pipeline aborted on an expired Chaikin session and the 07:00 run still bought
+    ATI and added to COMP and AU (owner decision, PROD review 11-09).
+    """
+    game = _pkg()
+    if force or not preflight_status.failed_on(today):
+        return queued
+    reason = "Today's morning pre-flight FAILED (see morning_pipeline.log); rerun by hand with --run --force"
+    state.setdefault(game.circuit_breaker.FREEZE_KEY, reason)
+    dropped = [q["symbol"] for q in queued if q.get("type") == "BUY"]
+    game._log.warning(f"🛑 [Pre-flight Gate] [SKIPPED] new buys and scale-ins this run: {reason}."
+                      + (f" Dropped queued BUYs: {', '.join(dropped)}." if dropped else ""))
+    return [q for q in queued if q.get("type") != "BUY"]
 
 
 def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new_transactions):

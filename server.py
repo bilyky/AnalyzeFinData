@@ -42,6 +42,7 @@ from fastapi.staticfiles import StaticFiles
 from config import CFG
 from external_intel import dedup_rd_topics
 import data_api
+import oceanview_api
 from aether import dev_progress
 import uvicorn
 import ai_portfolio_game
@@ -161,9 +162,11 @@ def create_app():
         return JSONResponse({"status": "AETHER API running", "docs": "/docs"})
 
     @app.get("/plan/intc", include_in_schema=False)
-    async def intc_plan():
+    async def intc_plan(authorization: str = Header(default="")):
         # Personal, printable income/protection plan. Lives in Data/ (gitignored, private),
         # so the page is served on demand and 404s cleanly on any checkout that lacks it.
+        # Login required: the dashboard listens on the network (web.host 0.0.0.0).
+        _require_admin(authorization)
         plan = _DIR / "Data" / "INTC_Income_Plan.html"
         if plan.exists():
             return FileResponse(str(plan))
@@ -328,8 +331,21 @@ def create_app():
 
     # ── Accounts (2 real + 1 game) ──────────────────────────────────────────────
 
+    @app.get("/api/oceanview/summary")
+    async def oceanview_summary(symbol: str = Query("", description="default: the position-watch config's symbol"),
+                                authorization: str = Header(default="")):
+        """The OceanView tab: position-watch's report (read-only, no journal write), the
+        journal and RETRO, lots, the vest/ESPP calendar and study results. Private: login."""
+        _require_admin(authorization)
+        sym = symbol.strip().upper()
+        if sym and not re.fullmatch(r"[A-Z.]{1,6}", sym):     # it becomes part of private file names
+            raise HTTPException(status_code=400, detail="symbol must be 1-6 letters")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, oceanview_api.summary, sym or None)
+
     @app.get("/api/accounts")
-    async def accounts():
+    async def accounts(authorization: str = Header(default="")):
+        _require_admin(authorization)          # real broker accounts: login required
         return data_api.read_accounts()
 
     # ── Requalify — live AI position analysis ────────────────────────────────
@@ -352,6 +368,7 @@ def create_app():
         body: dict = Body(...),
         authorization: str = Header(default=""),
     ):
+        _require_admin(authorization)          # live Chaikin, E*TRADE quotes and the strong AI tier
         """Phase 1: fetch live factors + run AI on factors only.
         Spawns a background thread for Phase 2 (news enrichment)."""
         symbol = (body.get("symbol") or "").upper().strip()
@@ -508,7 +525,7 @@ def create_app():
     # ── Multi-stock comparison ──────────────────────────────────────────────────
 
     @app.post("/api/compare")
-    async def compare(body: dict = Body(...)):
+    async def compare(body: dict = Body(...), authorization: str = Header(default="")):
         """Structured side-by-side comparison + deterministic ranking for a list of
         symbols. Pure data (no LLM) — the single source of truth any client (UI, chat,
         agent skill) summarizes. Body: {"symbols": ["TG","CC",...], "as_of"?: "YYYY-MM-DD",
@@ -518,6 +535,8 @@ def create_app():
         symbols = [s.upper().strip() for s in (body.get("symbols") or []) if str(s).strip()]
         if not symbols:
             return {"error": "symbols required"}
+        if body.get("summarize"):
+            _require_admin(authorization)      # the AI summary spends the provider's quota
         as_of = body.get("as_of")
         loop = asyncio.get_running_loop()
         data = await loop.run_in_executor(None, stock_compare.compare_data, symbols, as_of)
@@ -545,12 +564,14 @@ def create_app():
     # ── Pipeline log ──────────────────────────────────────────────────────────
 
     @app.get("/api/pipeline/logs")
-    async def pipeline_logs(lines: int = Query(100, ge=1, le=1000)):
+    async def pipeline_logs(lines: int = Query(100, ge=1, le=1000), authorization: str = Header(default="")):
+        _require_admin(authorization)          # logs: machine paths, auth events, trade decisions
         return {"lines": data_api.read_log_tail(lines)}
 
     @app.get("/api/logs/aether")
-    async def aether_log_txt(lines: int = Query(200, ge=1, le=2000)):
-        """Last N lines from Data/logs/aether.log (plain text, newest-last)."""
+    async def aether_log_txt(lines: int = Query(200, ge=1, le=2000), authorization: str = Header(default="")):
+        """Last N lines from Data/logs/aether.log (plain text, newest-last). Login required."""
+        _require_admin(authorization)
 
         p = _DIR / "Data" / "logs" / "aether.log"
         if not p.exists():
@@ -563,8 +584,10 @@ def create_app():
 
     @app.get("/api/logs/aether/json")
     async def aether_log_json(lines: int = Query(200, ge=1, le=2000),
-                              level: str = Query("", description="Filter by level: DEBUG INFO WARNING ERROR")):
-        """Last N JSONL entries from Data/logs/aether.jsonl, optionally filtered by level."""
+                              level: str = Query("", description="Filter by level: DEBUG INFO WARNING ERROR"),
+                              authorization: str = Header(default="")):
+        """Last N JSONL entries from Data/logs/aether.jsonl, optionally filtered by level. Login required."""
+        _require_admin(authorization)
 
 
         p = _DIR / "Data" / "logs" / "aether.jsonl"
@@ -620,6 +643,7 @@ def create_app():
         """Multi-turn chat with the configured AI provider, augmented with live
         AETHER context (portfolio state, regime, top picks, OHLCV freshness).
         messages: [{role: user|assistant, content: str}]"""
+        _require_admin(authorization)          # it spends the AI provider's quota: login required
         if not ai_client.primary():
             return {"reply": "No AI provider configured. Enable one in config.json under ai.providers.", "provider": None}
 
@@ -904,20 +928,25 @@ def create_app():
                     env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                 )
             with _runs_lock:
-                _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc}
+                _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc,
+                                 "admin_only": bool(task.get("admin_only"))}
             return {"status": "started", "pid": proc.pid, "run_id": run_id,
                     "task_id": task_id, "label": task["label"]}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
     @app.get("/api/tasks/output/{run_id}")
-    async def task_output(run_id: str, offset: int = Query(0, ge=0)):
+    async def task_output(run_id: str, offset: int = Query(0, ge=0), authorization: str = Header(default="")):
         """Stream lines from a task's log file starting at byte `offset`.
-        Returns {lines, offset, done} so the client can poll incrementally."""
+        Returns {lines, offset, done} so the client can poll incrementally.
+        An admin-only task's output needs the login too: it can hold private numbers, and
+        the run id alone was enough to read it."""
         with _runs_lock:
             run = _runs.get(run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
+        if run.get("admin_only", True):
+            _require_admin(authorization)
         log_path = run["log"]
         try:
             with open(log_path, "r", encoding="utf-8", errors="replace") as f:
@@ -965,7 +994,7 @@ def create_app():
             with open(log_path, "w", encoding="utf-8") as lf:
                 proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, cwd=str(_DIR))
             with _runs_lock:
-                _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc}
+                _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc, "admin_only": True}
             return {"status": "started", "pid": proc.pid, "run_id": run_id,
                     "bootstrap": bootstrap, "label": "E*TRADE re-authenticate"}
         except Exception as e:
