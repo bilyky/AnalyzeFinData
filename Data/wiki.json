@@ -232,7 +232,7 @@
   },
   "circuit_breaker": {
     "title": "Systemic Crash Circuit Breaker & Elastic Memory",
-    "summary": "Enforces a multi-factor systemic risk gate that automatically freezes buying and tightens stop-losses to a tight 1.0x ATR floor during black swans. Features an <b>Elastic Memory</b> restorer to dynamically relax stops back to normal when market panic stabilizes.",
+    "summary": "Enforces a multi-factor systemic risk gate that automatically freezes buying and tightens stop-losses to a tight 1.0x ATR floor during black swans. Features an <b>Elastic Memory</b> restorer to dynamically relax stops back to normal when market panic stabilizes, unless a ratchet raised a stop in the meantime.",
     "origin": "Quantitative Risk Management (QRM) & Black Swan Protection standards.",
     "body": "Erects an indestructible defensive shield around your portfolio during market panic. Features Two-Factor Confirmation (SPY return and VXX Volatility ETF surge), a 30-minute opening stabilization window, dynamic 1.0x ATR stop tightening, and a self-healing 'Elastic Memory' stop-loss restorer upon market recovery.",
     "config": [

@@ -53,6 +53,8 @@ def run_daily_management(force=False, manual_profile=None):
         # The root reads the queue here, between assembly and the price fetch.
         queued = state.get("queued_orders", [])
         prices = steps.price_and_settle(state, universe["all_syms"], universe["symbols_to_check"], today)
+        # After pricing: the breaker in price_and_settle sets or clears the freeze key first.
+        queued = steps.apply_preflight_gate(state, queued, today, force)
 
         steps.execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new_transactions)
         symbols_to_sell = steps.decide_exits(state, prices, rules, ws, today, now_time, new_transactions)
