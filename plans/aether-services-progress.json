@@ -2,7 +2,7 @@
   "project": "AETHER Services (R&D #78)",
   "plan": "plans/aether-services.md",
   "adr": "docs/adr/README.md",
-  "updated": "2026-11-05",
+  "updated": "2026-11-09",
   "statuses": ["todo", "in_progress", "in_review", "done", "blocked", "decision"],
   "services": [
     {"id": "market_data", "title": "Market data", "owns": "prices (E*TRADE, Google, OHLCV cache), OHLCV bars, freshness and heal, calendar and session", "status": "todo", "step": "S5"},
@@ -14,7 +14,7 @@
   ],
   "steps": [
     {"id": "S0", "title": "Plan + ADRs; R&D #44 superseded", "status": "done", "pr": 241, "prod": false},
-    {"id": "S0b", "title": "Development > Project Model page", "status": "in_review", "pr": 242, "prod": false},
+    {"id": "S0b", "title": "Development > Project Model page", "status": "done", "pr": 242, "prod": false},
     {"id": "S1", "title": "Golden split (behaviour + audit logs); must still catch the 56 mutants", "status": "todo", "pr": null, "prod": false},
     {"id": "S1b", "title": "CI job runs the unit, contract and architecture suites", "status": "todo", "pr": null, "prod": false},
     {"id": "S2", "title": "Delete dead code (scenario prices/schema/helpers, unused CLI bits)", "status": "todo", "pr": null, "prod": false},
@@ -34,7 +34,7 @@
   "fixes": [
     {"id": "F1", "title": "Save aborts if the backup fails; atomic write", "trading": false, "evidence": "unit tests", "status": "todo", "pr": null},
     {"id": "F2", "title": "No silent fresh $10k state on a corrupt file", "trading": false, "evidence": "unit tests", "status": "todo", "pr": null},
-    {"id": "F3", "title": "Run gate respects market holidays (early, before 2026-11-26)", "trading": true, "evidence": "red test on a holiday", "status": "todo", "pr": null},
+    {"id": "F3", "title": "Run gate respects market holidays (early, before 2026-11-26)", "trading": true, "evidence": "red test on a holiday", "status": "in_progress", "pr": null},
     {"id": "F4", "title": "Remove the 4 doubled log lines", "trading": false, "evidence": "audit log test", "status": "todo", "pr": null},
     {"id": "F5", "title": "Dashboard regime equals the traded regime", "trading": false, "evidence": "unit test", "status": "todo", "pr": null},
     {"id": "F6", "title": "Research column 23 is not ATR (options fallback)", "trading": true, "evidence": "red test", "status": "todo", "pr": null},

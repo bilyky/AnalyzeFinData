@@ -631,13 +631,15 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
 
 
 def is_market_open():
-    """Check if current time is within US Market hours (9:30 AM - 4:00 PM EST)."""
+    """US market session gate: weekday, not an NYSE full-day holiday, 9:30 AM - 4:00 PM ET."""
     tz = pytz.timezone("America/New_York")
     now = datetime.datetime.now(tz)
     
     if now.weekday() >= 5:
         return False, "Market is closed (Weekend)."
-    
+    if now.date().isoformat() in NYSE_HOLIDAYS:
+        return False, f"Market is closed (NYSE holiday {now.date().isoformat()})."
+
     market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
     market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
     
