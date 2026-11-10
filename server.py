@@ -42,6 +42,7 @@ from fastapi.staticfiles import StaticFiles
 from config import CFG
 from external_intel import dedup_rd_topics
 import data_api
+import oceanview_api
 from aether import dev_progress
 import uvicorn
 import ai_portfolio_game
@@ -329,6 +330,18 @@ def create_app():
         return data_api.read_ai_buildout(theme)
 
     # ── Accounts (2 real + 1 game) ──────────────────────────────────────────────
+
+    @app.get("/api/oceanview/summary")
+    async def oceanview_summary(symbol: str = Query("", description="default: the position-watch config's symbol"),
+                                authorization: str = Header(default="")):
+        """The OceanView tab: position-watch's report (read-only, no journal write), the
+        journal and RETRO, lots, the vest/ESPP calendar and study results. Private: login."""
+        _require_admin(authorization)
+        sym = symbol.strip().upper()
+        if sym and not re.fullmatch(r"[A-Z.]{1,6}", sym):     # it becomes part of private file names
+            raise HTTPException(status_code=400, detail="symbol must be 1-6 letters")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, oceanview_api.summary, sym or None)
 
     @app.get("/api/accounts")
     async def accounts(authorization: str = Header(default="")):
