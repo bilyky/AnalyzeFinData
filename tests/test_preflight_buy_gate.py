@@ -54,6 +54,10 @@ class PreflightStatusFileTest(unittest.TestCase):
         self.file.write_text("{not json", encoding="utf-8")
         self.assertTrue(preflight_status.failed_on(TODAY))
 
+    def test_a_record_without_a_verdict_blocks(self):
+        self.file.write_text(json.dumps({"date": TODAY}), encoding="utf-8")
+        self.assertTrue(preflight_status.failed_on(TODAY))
+
     def test_record_contents(self):
         preflight_status.record(False, TODAY)
         rec = json.loads(self.file.read_text(encoding="utf-8"))
