@@ -1971,13 +1971,33 @@ function ovTax(d) {
         <div class="text-xs text-slate-500 mt-2">Estimates only: confirm with your CPA.</div>`);
 }
 
+function ovPlan(d) {
+    const p = d.plan;
+    if (!p) return "";
+    const money = (x) => (x == null ? "—" : "$" + Math.round(x).toLocaleString());
+    const steps = (p.steps || []).map((s) => `<tr class="border-t border-slate-800"><td class="pr-4">${esc(s.date)}</td>
+        <td class="pr-4">${money(s.amount)}</td><td class="pr-4">${esc(s.buy)}</td>
+        <td class="${s.state === "done" ? "text-emerald-300" : s.state === "later" ? "text-slate-400" : "text-amber-300"}">${esc(s.state)}</td></tr>`).join("");
+    const fills = (p.fills || []).map((f) => `<tr class="border-t border-slate-800"><td class="pr-4">${esc(f.symbol)}</td>
+        <td class="pr-4">${f.shares} @ ${Number(f.price).toFixed(2)}</td><td class="pr-4">${f.last == null ? "—" : Number(f.last).toFixed(2)}</td>
+        <td class="pr-4 ${f.pnl_pct >= 0 ? "pos" : "neg"}">${ovSigned(f.pnl_pct)}</td>
+        <td class="${f.stopped ? "text-red-400" : ""}">${f.stop ? Number(f.stop).toFixed(2) : "—"}${f.stopped ? " STOPPED" : ""}</td></tr>`).join("");
+    const lines = (p.doubts || []).map((x) => `<li class="text-amber-300">not sure: ${esc(x)}</li>`)
+        .concat((p.actions || []).map((x) => `<li><b>${esc(x)}</b></li>`), (p.notes || []).map((x) => `<li class="text-slate-400">${esc(x)}</li>`)).join("");
+    return ovCard(`Plan: ${p.name || "investment plan"} (bars to ${p.last_bar})`,
+        `<ul class="text-sm list-disc ml-5 mb-3">${lines}</ul>
+        <div class="text-sm mb-2">invested ${money(p.invested)} · P/L <span class="${p.pnl >= 0 ? "pos" : "neg"}">${p.pnl >= 0 ? "+" : "−"}${money(Math.abs(p.pnl))}</span>${p.return_by ? ` · return by ${esc(p.return_by)}` : ""}</div>
+        <table class="text-sm mb-3"><tr class="text-slate-400 text-left"><th class="pr-4">step</th><th class="pr-4">amount</th><th class="pr-4">buy</th><th>state</th></tr>${steps}</table>
+        ${fills ? `<table class="text-sm"><tr class="text-slate-400 text-left"><th class="pr-4">holding</th><th class="pr-4">bought</th><th class="pr-4">last</th><th class="pr-4">P/L</th><th>stop</th></tr>${fills}</table>` : ""}`);
+}
+
 function ovResearch(d) {
     const items = (d.research || []).map((r) => {
         const rows = (r.rows || []).map((x) => `<tr class="border-t border-slate-800"><td class="pr-4">${esc(x.group)}</td><td class="pr-4">${x.n ?? "—"}</td>
             <td class="pr-4">${ovSigned(x.mean, 2)}</td><td class="pr-4">${ovSigned(x.median, 2)}</td><td>${x.t == null ? "—" : x.t.toFixed(2)}</td></tr>`).join("");
         return `<div class="mb-4"><div class="text-sm"><b>${esc(r.id)}</b> ${esc(r.title)} · <span class="text-amber-300">${esc(r.verdict || "")}</span>
             ${r.verdict_2 ? ` · second test: <span class="text-amber-300">${esc(r.verdict_2)}</span>` : ""}</div>
-            <table class="text-sm mt-1"><tr class="text-slate-400 text-left"><th class="pr-4">group</th><th class="pr-4">n</th><th class="pr-4">60d mean</th><th class="pr-4">median</th><th class="pr-4">t</th></tr>${rows}</table></div>`;
+            <table class="text-sm mt-1"><tr class="text-slate-400 text-left"><th class="pr-4">group</th><th class="pr-4">n</th><th class="pr-4">60d ${esc(r.mean_basis || "mean")}</th><th class="pr-4">median</th><th class="pr-4">t</th></tr>${rows}</table></div>`;
     }).join("");
     return ovCard("Research (excess return vs the market, 60 sessions)", items || `<div class="text-sm text-slate-500">No study results on this machine.</div>`);
 }
@@ -1988,7 +2008,7 @@ async function loadOceanView() {
         const d = await api("/api/oceanview/summary", { headers: authHeaders() });
         $("ov-symbol").textContent = d.symbol;
         $("ov-asof").textContent = `as of ${d.as_of} · recommend-only`;
-        body.innerHTML = ovToday(d) + ovRetro(d) + ovTax(d) + ovResearch(d);
+        body.innerHTML = ovToday(d) + ovPlan(d) + ovRetro(d) + ovTax(d) + ovResearch(d);
     } catch (e) {
         body.innerHTML = String(e.message).includes("401")
             ? '<div class="text-center text-slate-400 py-6">🔒 Log in (top right) to see OceanView.</div>'

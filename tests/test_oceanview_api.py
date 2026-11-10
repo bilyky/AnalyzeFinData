@@ -60,6 +60,41 @@ class TestResearchAndSummary(unittest.TestCase):
         self.assertEqual((len(r), r[0]["verdict"]), (1, "INCONCLUSIVE"))
         self.assertEqual(r[0]["rows"], [{"group": "all", "n": 10, "mean": 0.01, "median": -0.01, "t": 1.2}])
 
+    def test_research_shows_the_monthly_mean_the_verdict_uses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "insider_buy_study_2026-11-05_132039.json"), "w", encoding="utf-8") as f:
+                json.dump({"verdict": "INCONCLUSIVE", "all": {"x60": {"n": 10, "mean": 0.05, "month_mean": -0.01,
+                                                                       "median": 0.0, "t_nw": -0.3}}}, f)
+            with open(os.path.join(tmp, "gap_drift_study.json"), "w", encoding="utf-8") as f:
+                json.dump({"all": {"x60": {"n": 5, "mean": 0.02, "median": 0.01, "t_month": 0.4}}}, f)
+            with mock.patch.object(ov.paths, "data_dir", return_value=tmp):
+                r = ov.research()
+        self.assertEqual([(x["mean_basis"], x["rows"][0]["mean"]) for x in r],
+                         [("monthly mean", -0.01), ("per-event mean", 0.02)])
+
+    def test_plan_check_without_the_account(self):
+        days = ["2030-03-04", "2030-03-05"]
+        bars = {"days": days, "idx": {d: i for i, d in enumerate(days)}, "c": [100.0, 101.0], "o": [100.0, 101.0],
+                "h": [100.0, 101.0], "l": [100.0, 101.0], "v": [1.0, 1.0]}
+        plan = {"name": "example", "total": 4000, "return_by": "2030-04-30",
+                "steps": [{"date": "2030-03-04", "amount": 2000, "buy": "SPY"},
+                          {"date": "2030-03-13", "amount": 2000, "buy": "RSP"}],
+                "rules": {"index_stop": -0.08}, "fills": [{"date": "2030-03-04", "symbol": "SPY", "shares": 20,
+                                                           "price": 100.0, "stop": None, "account": "x1234"}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(ov.pw, "watch_dir", return_value=tmp):
+                self.assertIsNone(ov.plan(D(2030, 3, 6)))                     # no plan file: no card
+                with open(os.path.join(tmp, "invest_plan.json"), "w", encoding="utf-8") as f:
+                    json.dump(plan, f)
+                with mock.patch.object(ov.pw, "load_bars", return_value=bars):
+                    p = ov.plan(D(2030, 3, 6))
+                with mock.patch.object(ov.pw, "load_bars", return_value=None):
+                    self.assertIsNone(ov.plan(D(2030, 3, 6)))                 # no SPY bars: no card
+        self.assertEqual([s["state"] for s in p["steps"]], ["done", "later"])
+        self.assertNotIn("account", p["fills"][0])
+        self.assertAlmostEqual(p["pnl"], 20.0)
+        self.assertEqual((p["name"], p["return_by"], p["actions"]), ("example", "2030-04-30", ["Nothing to do today."]))
+
     def test_summary_runs_position_watch_without_writing_the_journal(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "INTC_lots.json"), "w", encoding="utf-8") as f:
@@ -78,6 +113,8 @@ class TestResearchAndSummary(unittest.TestCase):
         self.assertEqual(s["lots"][0]["gain"], 10.0)
         self.assertNotIn("account", s["lots"][0])
         self.assertEqual(s["calendar"][0]["date"], "2026-11-30")
+        self.assertIn("plan", s)                                             # no plan file here: None
+        self.assertIsNone(s["plan"])
 
 
 class TestTrimDayAndFileShape(unittest.TestCase):

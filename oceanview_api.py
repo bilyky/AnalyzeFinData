@@ -9,11 +9,13 @@ One call, summary(symbol), returns everything the tab shows for a concentrated h
     lots a TRIM would sell today with the estimated tax;
   - calendar: vest/ESPP dates with their wash-sale windows (+/-30 days) and whether today is
     inside one;
-  - research: the latest results of the studies that bear on the plan.
+  - research: the latest results of the studies that bear on the plan;
+  - plan: the dated investment plan's daily check (invest_plan.py), when the private plan
+    file exists.
 
 Private inputs (Data/position_watch/: config, lots, journal) stay on the machine. The lots'
-"account" field is never returned, neither in `lots` nor in a TRIM day's `today.lots`. The
-server route that calls this requires the login.
+"account" field is never returned, neither in `lots`, a TRIM day's `today.lots`, nor the
+plan's fills. The server route that calls this requires the login.
 """
 import datetime
 import glob
@@ -24,6 +26,7 @@ import sys
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_ROOT, "scripts", "monitoring"))
 
+import invest_plan as ip  # noqa: E402
 import position_watch as pw  # noqa: E402
 from aether import paths  # noqa: E402
 
@@ -73,19 +76,36 @@ def research() -> list:
     files = sorted(glob.glob(os.path.join(paths.data_dir(), "insider_buy_study_*.json")))
     r = _read_json(files[-1]) if files else None
     if r:
+        # The monthly mean: the verdict and its t-stat are computed on it (#240 review).
         out.append({"id": "R&D #80", "title": "Insider open-market buys vs trims", "run": r.get("run"),
-                    "verdict": r.get("verdict"), "verdict_2": r.get("verdict_drop"),
-                    "rows": [{"group": k, "n": _x60(r, k).get("n"), "mean": _x60(r, k).get("mean"),
+                    "verdict": r.get("verdict"), "verdict_2": r.get("verdict_drop"), "mean_basis": "monthly mean",
+                    "rows": [{"group": k, "n": _x60(r, k).get("n"),
+                              "mean": _x60(r, k).get("month_mean", _x60(r, k).get("mean")),
                               "median": _x60(r, k).get("median"), "t": _x60(r, k).get("t_nw")}
                              for k in ("all", "trim_setup", "opp_after_drop", "opp_after_shock") if _x60(r, k)]})
     g = _read_json(os.path.join(paths.data_dir(), "gap_drift_study.json"))
     if g:
         out.append({"id": "gap drift", "title": "After a 15%+ gap-down: sell at once, or wait?", "run": None,
-                    "verdict": "no clear edge either way", "verdict_2": None,
+                    "verdict": "no clear edge either way", "verdict_2": None, "mean_basis": "per-event mean",
                     "rows": [{"group": k, "n": _x60(g, k).get("n"), "mean": _x60(g, k).get("mean"),
                               "median": _x60(g, k).get("median"), "t": _x60(g, k).get("t_month")}
                              for k in ("all", "large") if _x60(g, k)]})
     return out
+
+
+def plan(today: datetime.date) -> dict | None:
+    """invest_plan.py's check of Data/position_watch/invest_plan.json on the cached bars, or None
+    when there is no plan (or no SPY bars to check it with). Fills lose their account field."""
+    p = _read_json(os.path.join(pw.watch_dir(), "invest_plan.json"))
+    if not p:
+        return None
+    syms = {"SPY", "RSP"} | {f["symbol"] for f in p.get("fills", [])}
+    bars = {s: pw.load_bars(s) for s in syms}
+    if not bars.get("SPY"):
+        return None
+    r = ip.check(p, today, bars)
+    r["fills"] = [{k: v for k, v in f.items() if k != "account"} for f in r["fills"]]
+    return {**r, "name": p.get("name"), "total": p.get("total"), "return_by": p.get("return_by")}
 
 
 def summary(symbol: str | None = None) -> dict:
@@ -104,4 +124,4 @@ def summary(symbol: str | None = None) -> dict:
             "tranche_pct": cfg["tranche_pct"], "today": rep,
             "journal": journal, "lots": lots_table(lots_raw, rep["price"], today),
             "calendar": calendar(cfg.get("acquisition_dates") or [], today),
-            "research": research()}
+            "research": research(), "plan": plan(today)}
