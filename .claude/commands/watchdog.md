@@ -40,8 +40,9 @@ go to Step 1b: many real failures raise no exception.
 - **Search for the failing check's own message, not just ERROR level.** A gate can fail by returning
   `False` / `FAIL` / `WAIVED` and logging at INFO or console level. Grep the job's log for the check's
   name and the verdict line, then read the lines just before it.
-- **Logs from another host:** ask for that host's log folder (zipped). Don't read config or token files
-  you don't need, and never print secrets; check a config key's *presence*, not its value. Some job
+- **Logs from another host:** ask for that host's log folder (zipped), copied into a drop folder, not
+  over local data (a full snapshot review is `prod-review.md`). Don't read config or token files you
+  don't need, and never print secrets; check a config key's *presence*, not its value. Some job
   logs are UTF-16 (shell redirects on Windows), so plain grep finds nothing until you decode them.
 - **Establish which code version ran there.** The host may not have pulled the latest fix. Compare
   distinctive log messages with what each version of the code prints.
