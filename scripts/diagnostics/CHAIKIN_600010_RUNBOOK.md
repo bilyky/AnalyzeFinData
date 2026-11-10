@@ -63,8 +63,9 @@ python powergauge.py            # interactive/TTY → headed by default; solve T
 
 ### 3. Run the re-auth Scheduled Task HEADED, in an interactive desktop session
 `scripts/utils/register_agent_tasks.ps1` registers **`AETHER_Chaikin_Reauth`**
-(Weekly, **Sunday 8:00 AM**, `venv_new\Scripts\python.exe
-scripts/monitoring/chaikin_reauth.py`) with an **Interactive** principal
+(Daily **8:00 AM**, `venv_new\Scripts\python.exe
+scripts/monitoring/chaikin_reauth.py --weekday-aware`; it mints on a weekday before the token
+lapses, and at the weekend only as a last resort) with an **Interactive** principal
 (`-LogonType Interactive -RunLevel Limited`) so headed Chrome has a desktop for
 Turnstile. On the failing PC:
 ```

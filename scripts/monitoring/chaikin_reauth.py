@@ -34,6 +34,8 @@ import sys
 import time
 import urllib.request
 
+import pytz
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import powergauge as pg
@@ -50,6 +52,54 @@ _MEMBERS_LOGIN_URL = "https://members.chaikinanalytics.com/login"
 # Throttle state for reminder emails (kind -> last-sent epoch seconds).
 _NOTIFY_STATE = os.path.join(os.path.dirname(os.path.abspath(pg.SESSION_FILE)),
                              "chaikin_reauth_notify.json")
+
+
+# --weekday-aware: the reauth task runs daily at this local time (scheduled_tasks.json).
+_TZ = pytz.timezone("America/Los_Angeles")
+_RUN_AT = (8, 0)
+_WEEKDAY_MARGIN = datetime.timedelta(days=1)
+
+
+def _now_utc() -> datetime.datetime:
+    return datetime.datetime.now(tz=datetime.timezone.utc)
+
+
+def _now_local() -> datetime.datetime:
+    return _now_utc().astimezone(_TZ)
+
+
+def _next_weekday_run(now_local: datetime.datetime) -> datetime.datetime:
+    """The next weekday _RUN_AT strictly after today (Mon-Fri; holidays are working days here)."""
+    day = now_local.date()
+    while True:
+        day += datetime.timedelta(days=1)
+        if day.weekday() < 5:
+            return _TZ.localize(datetime.datetime(day.year, day.month, day.day, *_RUN_AT))
+
+
+def weekday_refresh_due(exp_utc: datetime.datetime | None, now_local: datetime.datetime) -> bool:
+    """Whether today's --weekday-aware run should mint a new token.
+
+    The 7-day token kept expiring on Sunday evening, and the Sunday reauth failed with no working day
+    left to fix it (PROD 11-08, review 11-09). So:
+    * weekday: refresh if the token dies before the next weekday run plus one day of margin
+      (a Friday refreshes a token that would die over the weekend or on Monday);
+    * weekend: refresh only as a last resort, if it dies before Monday's run;
+    * expired or undecodable: always.
+    """
+    if exp_utc is None or exp_utc <= now_local:
+        return True
+    next_run = _next_weekday_run(now_local)
+    if now_local.weekday() >= 5:
+        return exp_utc < next_run
+    return exp_utc < next_run + _WEEKDAY_MARGIN
+
+
+def _deadline_text(exp_utc: datetime.datetime | None) -> str:
+    """e.g. 'Mon 11-16 06:35 PT' (the local expiry the owner must beat)."""
+    if exp_utc is None:
+        return "unknown expiry"
+    return exp_utc.astimezone(_TZ).strftime("%a %m-%d %H:%M") + " PT"
 
 
 def _decode_exp(jwt_token: str) -> datetime.datetime | None:
@@ -285,6 +335,10 @@ def main() -> int:
                     help="Runway-watch mode: if the sessionToken has fewer than this many days of "
                          "runway, email a reminder to click the System login button. Never launches "
                          "a browser; throttled to at most one email/day.")
+    ap.add_argument("--weekday-aware", action="store_true",
+                    help="Daily-task mode: refresh on a weekday when the token would not outlive the "
+                         "next weekday run plus a day; at the weekend only if it dies before Monday's "
+                         "run. Replaces --min-days.")
     args = ap.parse_args()
 
     if args.cdp:
@@ -293,7 +347,7 @@ def main() -> int:
     session = pg._load_session_from_file()
     jwt = (session or {}).get("jwttoken") or ""
     exp = _decode_exp(jwt)
-    now = datetime.datetime.now(tz=datetime.timezone.utc)
+    now = _now_utc()
 
     if exp is not None:
         runway_days = (exp - now).total_seconds() / 86400.0
@@ -312,7 +366,8 @@ def main() -> int:
             else:
                 try:
                     send_email(
-                        subject="Chaikin token expiring soon - refresh it from the System page",
+                        subject=(f"Chaikin token expires {_deadline_text(exp)} - "
+                                 "refresh it from the System page"),
                         body=(f"The Chaikin sessionToken has {runway_days:.1f} days of runway left "
                               f"(threshold {args.notify_days:.1f}).\n\n"
                               "Open the AETHER dashboard System page and click "
@@ -331,7 +386,14 @@ def main() -> int:
     if args.check:
         return 0
 
-    needs_refresh = args.force or runway_days < args.min_days
+    if args.weekday_aware and not args.force:
+        if not weekday_refresh_due(exp, _now_local()):
+            _log.info("Token has %.2f days runway (expires %s) — outlives the next weekday run; "
+                      "no re-auth today.", runway_days, _deadline_text(exp))
+            return 0
+        needs_refresh = True
+    else:
+        needs_refresh = args.force or runway_days < args.min_days
     if not needs_refresh:
         _log.info("Token has %.2f days runway (>= %.1f) — no re-auth needed.", runway_days, args.min_days)
         return 0
