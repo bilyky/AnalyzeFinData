@@ -152,6 +152,19 @@ class TestConfig(_Tmp):
         self.assertEqual(out["broker.user_number"], "<set>")
         self.assertEqual(out["broker.max_tokens"], 1024)
 
+    def test_a_number_is_shown_only_under_a_known_safe_key(self):
+        # Deny by default for numbers too: oracle.start_equity is a real account's baseline (PII per
+        # aether/config.py); limits, ports and timings may print.
+        p = os.path.join(self.dir, "config.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"oracle": {"start_equity": 123456.78}, "web": {"port": 8888},
+                       "system": {"max_trade_risk_pct": 1.5}, "ai": {"intel_deadline_sec": 30}}, f)
+        out = ps.config_keys(p, ["oracle.start_equity", "web.port", "system.max_trade_risk_pct",
+                                 "ai.intel_deadline_sec"])
+        self.assertEqual(out, {"oracle.start_equity": "<set>", "web.port": 8888,
+                               "system.max_trade_risk_pct": 1.5, "ai.intel_deadline_sec": 30})
+        self.assertNotIn("123456", json.dumps(out))
+
 
 class TestCli(_Tmp):
     def test_errors_command_prints_a_summary(self):

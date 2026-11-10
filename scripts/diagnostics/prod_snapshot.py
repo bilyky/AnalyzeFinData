@@ -7,7 +7,7 @@ summary, so a review reads tens of lines instead of megabytes of log.
     schedule   <agent_runs_dir> [--days N]        first log time per job per day (catches DST / missed runs)
     errors     <aether.jsonl> --since TS [--top N] WARNING/ERROR grouped by normalized message, first/last
     signatures <aether.jsonl> --since TS --sig LABEL=TEXT ...   which code ran: counts of distinctive lines
-    config     <config.json> --key a.b.c ...      value or presence of keys; text shown only for known-safe keys
+    config     <config.json> --key a.b.c ...      value or presence of keys; text and numbers shown only for known-safe keys
 
 TS is "YYYY-MM-DD HH:MM" in the log's local time. Run with `python -I` from outside the extracted folder.
 """
@@ -25,10 +25,12 @@ _NUM = re.compile(r"\d+(\.\d+)?")
 # ones at the end (ip, id), so "provider" or "ideal" are not caught.
 _SECRET_KEY = re.compile(r"key|token(?!s)|secret|pass|pwd|auth|cookie|session|account|acct|email|url|host|share|"
                          r"user|(ip|id|dir|path)$", re.I)
-# Text is printed only under these key names (deny by default): a login, a free-text note or any other
-# string under another name shows <set>. Numbers, booleans and null print unless the key looks secret.
+# Deny by default: text prints only under _SAFE_TEXT_KEY names and numbers only under _SAFE_NUM_KEY
+# names. A login, a note or a money value such as oracle.start_equity shows <set>. Booleans and null print.
 _SAFE_TEXT_KEY = re.compile(r"(type|model|primary|provider|mode|env|environment|level|profile|tier|strategy|"
                             r"reasoning_effort|timezone)$", re.I)
+_SAFE_NUM_KEY = re.compile(r"^(max|min)_|_(max|min|pct|ratio|limit|floor|sec|seconds|minutes|hours|days|per_run)$|"
+                           r"^port$|timeout|retries", re.I)
 _TS_LINE = re.compile(r"^\[?(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})")
 
 
@@ -122,8 +124,8 @@ def _looks_secret(value):
 
 
 def config_keys(config_path, keys):
-    """{dotted key: shown value}; a missing key shows <missing>. Text is shown only under a known-safe
-    key name (_SAFE_TEXT_KEY) and when it doesn't look secret; every other text value shows <set>."""
+    """{dotted key: shown value}; a missing key shows <missing>. Text and numbers are shown only under a
+    known-safe key name (_SAFE_TEXT_KEY, _SAFE_NUM_KEY) that doesn't look secret; anything else shows <set>."""
     with open(config_path, encoding="utf-8") as f:
         cfg = json.load(f)
     out = {}
@@ -142,9 +144,9 @@ def config_keys(config_path, keys):
         elif node is None or isinstance(node, bool):
             out[dotted] = node
         elif isinstance(node, (int, float)):
-            # A number is shown unless its key names an account, id or secret (4+ digits alone is
-            # too broad: max_tokens 1024, a port, a year).
-            out[dotted] = "<set>" if _SECRET_KEY.search(dotted.split(".")[-1]) else node
+            # Only limits, ports and timings print; a balance, an equity baseline or an id doesn't.
+            last = dotted.split(".")[-1]
+            out[dotted] = node if _SAFE_NUM_KEY.search(last) and not _SECRET_KEY.search(last) else "<set>"
         elif node == "":
             out[dotted] = "<empty>"
         else:
