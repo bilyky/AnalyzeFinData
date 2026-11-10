@@ -19,10 +19,9 @@ adds a journal entry. The lots' and the plan fills' account field is never sent 
 
 ## 1. Order
 
-#229 (position-watch), #240 (insider study) and #246 (plan check) are merged, so this can go
-any time. #243 (login on the other private routes) and #252 (plan-check button) can go before
-or after; this page sends the login itself. Whichever of #243 / #244 / #252 lands later may
-need a small `web/app.js` merge.
+Everything this needs is merged: #229 (position-watch), #240 (insider study), #246 (plan
+check), #243 (login on the private routes) and #252 (plan-check button). This PR already
+includes them, so it can go any time.
 
 ## 2. Private files on PROD
 
