@@ -223,14 +223,24 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
     if not is_active:
         # AETHER Elastic Memory: If the breaker is inactive, restore original wide stops cleanly!
         restored_symbols = []
+        # Restore only a stop the breaker still owns. If a ratchet (profit-lock, breakeven) raised it
+        # after the tightening, keep that higher stop: restoring would loosen it (PROD review 11-09).
+        # A position without breaker_stop_loss predates this record and is restored as before.
+        kept_symbols = []
         for sym, pos in positions.items():
             if "original_stop_loss" in pos:
                 original = pos.pop("original_stop_loss")
+                tightened = pos.pop("breaker_stop_loss", None)
+                if tightened is not None and pos.get("stop_loss", 0.0) > tightened:
+                    kept_symbols.append(sym)
+                    continue
                 pos["stop_loss"] = original
                 restored_symbols.append(sym)
-                
+
         if restored_symbols:
             _log.info(f"  [Breaker Recovery] Market stabilized. Restored stop-losses to original levels on: {', '.join(restored_symbols)}")
+        if kept_symbols:
+            _log.info(f"  [Breaker Recovery] Kept stops raised after the tightening (not restored): {', '.join(kept_symbols)}")
         return []
         
     _log.warning(f"CIRCUIT BREAKER TRIGGERED! Reason: {reason}")
@@ -258,6 +268,7 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
                     if "original_stop_loss" not in pos:
                         pos["original_stop_loss"] = cur_stop
                     pos["stop_loss"] = tight_stop
+                    pos["breaker_stop_loss"] = tight_stop
                     tightened_symbols.append(sym)
                     
         if tightened_symbols:
