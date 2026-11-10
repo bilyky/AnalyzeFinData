@@ -133,8 +133,8 @@
                 <div id="research-regime" class="text-sm mut"></div>
             </div>
 
-            <!-- Personal plan quick-link (served from private Data/ via /plan/intc; 404s if absent) -->
-            <a href="/plan/intc" target="_blank" rel="noopener"
+            <!-- Personal plan quick-link (served from private Data/ via /plan/intc; login required, 404s if absent) -->
+            <a href="/plan/intc" onclick="event.preventDefault(); openPrivatePage('/plan/intc');"
                class="block mb-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 transition px-4 py-3">
                 <div class="flex items-center gap-3">
                     <span class="text-2xl">🌳</span>

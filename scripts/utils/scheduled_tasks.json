@@ -122,13 +122,13 @@
     },
     {
       "name": "AETHER_Chaikin_Reauth",
-      "schedule": {"type": "weekly", "at": "08:00", "day": "Sunday"},
-      "script": "scripts/monitoring/chaikin_reauth.py", "args": "",
+      "schedule": {"type": "daily", "at": "08:00"},
+      "script": "scripts/monitoring/chaikin_reauth.py", "args": "--weekday-aware",
       "time_limit_min": 15,
       "log": "chaikin_reauth_agent.log",
       "interactive": true,
-      "summary": "Weekly Chaikin token re-mint (headed browser).",
-      "description": "Re-mints the Chaikin PGR session token (about a 7-day JWT) before it lapses, using the persistent Chrome profile, with no human input.",
+      "summary": "Daily check; Chaikin token re-mint on a weekday before it lapses (headed browser).",
+      "description": "Re-mints the Chaikin PGR session token (about a 7-day JWT) before it lapses, using the persistent Chrome profile, with no human input. Mints on a weekday when the token would not outlive the next weekday run plus a day (a Friday renews a token that would die over the weekend); at the weekend only if it dies before Monday 08:00. Most days it exits without opening a browser.",
       "notes": "Runs only when the user is logged on (Interactive principal): headed Chrome needs a desktop; a hidden/S4U session has no display and Turnstile would fail. See plans/chaikin_api.md."
     },
     {
