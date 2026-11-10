@@ -34,7 +34,7 @@
   "fixes": [
     {"id": "F1", "title": "Save aborts if the backup fails; atomic write", "trading": false, "evidence": "unit tests", "status": "todo", "pr": null},
     {"id": "F2", "title": "No silent fresh $10k state on a corrupt file", "trading": false, "evidence": "unit tests", "status": "todo", "pr": null},
-    {"id": "F3", "title": "Run gate respects market holidays (early, before 2026-11-26)", "trading": true, "evidence": "red test on a holiday", "status": "in_progress", "pr": null},
+    {"id": "F3", "title": "Run gate respects market holidays (early, before 2026-11-26)", "trading": true, "evidence": "red test on a holiday", "status": "in_review", "pr": 250},
     {"id": "F4", "title": "Remove the 4 doubled log lines", "trading": false, "evidence": "audit log test", "status": "todo", "pr": null},
     {"id": "F5", "title": "Dashboard regime equals the traded regime", "trading": false, "evidence": "unit test", "status": "todo", "pr": null},
     {"id": "F6", "title": "Research column 23 is not ATR (options fallback)", "trading": true, "evidence": "red test", "status": "todo", "pr": null},
