@@ -22,6 +22,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SPY_FILE = Path(paths.ohlcv_dir()) / "SPY_daily.json"   # $AETHER_CACHE_DIR-aware (aether.paths)
 VXX_FILE = Path(paths.ohlcv_dir()) / "VXX_daily.json"
 
+# Transient key on the run's state: the breaker's verdict for the buy stage (deploy_capital), so it
+# acts on the same check with no second market-data read. finalize_run removes it before saving.
+FREEZE_KEY = "_breaker_freeze"
+
 def load_spy_history() -> list[dict]:
     """Load sorted daily price series for the SPY ETF from the local cache."""
     if not SPY_FILE.exists():
@@ -211,18 +215,32 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
     """
     is_active, reason = check_systemic_risk(prices)
     positions = state.get("positions", {})
+    if is_active:
+        state[FREEZE_KEY] = reason     # the buy stage freezes new buys and scale-ins on this
+    else:
+        state.pop(FREEZE_KEY, None)
     
     if not is_active:
         # AETHER Elastic Memory: If the breaker is inactive, restore original wide stops cleanly!
         restored_symbols = []
+        # Restore only a stop the breaker still owns. If a ratchet (profit-lock, breakeven) raised it
+        # after the tightening, keep that higher stop: restoring would loosen it (PROD review 11-09).
+        # A position without breaker_stop_loss predates this record and is restored as before.
+        kept_symbols = []
         for sym, pos in positions.items():
             if "original_stop_loss" in pos:
                 original = pos.pop("original_stop_loss")
+                tightened = pos.pop("breaker_stop_loss", None)
+                if tightened is not None and pos.get("stop_loss", 0.0) > tightened:
+                    kept_symbols.append(sym)
+                    continue
                 pos["stop_loss"] = original
                 restored_symbols.append(sym)
-                
+
         if restored_symbols:
             _log.info(f"  [Breaker Recovery] Market stabilized. Restored stop-losses to original levels on: {', '.join(restored_symbols)}")
+        if kept_symbols:
+            _log.info(f"  [Breaker Recovery] Kept stops raised after the tightening (not restored): {', '.join(kept_symbols)}")
         return []
         
     _log.warning(f"CIRCUIT BREAKER TRIGGERED! Reason: {reason}")
@@ -249,7 +267,11 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
                 if tight_stop > cur_stop and tight_stop < live_price:
                     if "original_stop_loss" not in pos:
                         pos["original_stop_loss"] = cur_stop
+                    elif cur_stop != pos.get("breaker_stop_loss"):
+                        # A ratchet raised the stop since the last tightening: restore that one later.
+                        pos["original_stop_loss"] = max(pos["original_stop_loss"], cur_stop)
                     pos["stop_loss"] = tight_stop
+                    pos["breaker_stop_loss"] = tight_stop
                     tightened_symbols.append(sym)
                     
         if tightened_symbols:

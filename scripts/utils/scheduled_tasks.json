@@ -87,7 +87,7 @@
       "time_limit_min": 420,
       "log": "aftermarket_report_agent.log",
       "summary": "Evening report, then the OHLCV recovery pass.",
-      "description": "daily_task: 5-day history backfill, workbook refresh, the evening report email, the Data sync, then the RapidAPI OHLCV recovery pass. Exits 1 and marks the report STEP FAILURE when a step fails.",
+      "description": "daily_task: 5-day history backfill, workbook refresh, the evening report email, then the RapidAPI OHLCV recovery pass (the Data backup is its own 22:10 task). Exits 1 and marks the report STEP FAILURE when a step fails.",
       "notes": "The limit must cover daily_task.worst_case_runtime_seconds() (a test checks it)."
     },
     {
@@ -122,13 +122,13 @@
     },
     {
       "name": "AETHER_Chaikin_Reauth",
-      "schedule": {"type": "weekly", "at": "08:00", "day": "Sunday"},
-      "script": "scripts/monitoring/chaikin_reauth.py", "args": "",
+      "schedule": {"type": "daily", "at": "08:00"},
+      "script": "scripts/monitoring/chaikin_reauth.py", "args": "--weekday-aware",
       "time_limit_min": 15,
       "log": "chaikin_reauth_agent.log",
       "interactive": true,
-      "summary": "Weekly Chaikin token re-mint (headed browser).",
-      "description": "Re-mints the Chaikin PGR session token (about a 7-day JWT) before it lapses, using the persistent Chrome profile, with no human input.",
+      "summary": "Daily check; Chaikin token re-mint on a weekday before it lapses (headed browser).",
+      "description": "Re-mints the Chaikin PGR session token (about a 7-day JWT) before it lapses, using the persistent Chrome profile, with no human input. Mints on a weekday when the token would not outlive the next weekday run plus a day (a Friday renews a token that would die over the weekend); at the weekend only if it dies before Monday 08:00. Most days it exits without opening a browser.",
       "notes": "Runs only when the user is logged on (Interactive principal): headed Chrome needs a desktop; a hidden/S4U session has no display and Turnstile would fail. See plans/chaikin_api.md."
     },
     {

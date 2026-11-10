@@ -40,6 +40,7 @@ sys.path.insert(0, BASE_DIR)
 
 import numpy as np
 
+import console_safe
 from aether import market_calendar, patterns, paths
 from bar_provenance import real_dates
 from aether.etrade.client import ETradeClient
@@ -457,19 +458,27 @@ def print_report(rep: dict) -> None:
              f"hit rate {rr['hit_rate']:.0%} over {len(rr['scored'])} calls")
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
+    # Pattern tags carry arrows (RBR↑): on a cp1252 console they crashed the report after the
+    # journal entry was written (2026-11-06). UTF-8 output, '?' for anything still unprintable.
+    console_safe.install()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--symbol", default=None)
     ap.add_argument("--live", action="store_true", help="use a live E*TRADE quote (read-only) for today's price")
     ap.add_argument("--no-journal", action="store_true", help="don't append today's call to the journal")
     ap.add_argument("--lesson", default=None, help="attach a lesson to the latest journal entry and exit")
     ap.add_argument("--json", action="store_true", help="print the full report as JSON")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     cfg = load_config()
     sym = (a.symbol or cfg["symbol"]).upper()
     if a.lesson:
         ok = add_lesson(os.path.join(watch_dir(), f"{sym}_journal.jsonl"), a.lesson)
         _out("lesson saved" if ok else "no journal entry yet")
-        sys.exit(0 if ok else 1)
+        return 0 if ok else 1
     rep = run(sym, live=a.live, journal=not a.no_journal)
     _out(json.dumps(rep, indent=1, default=str)) if a.json else print_report(rep)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

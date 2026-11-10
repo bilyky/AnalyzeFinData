@@ -45,9 +45,10 @@ CONTEXT_PACK_SLACK_S = 300     # OceanView pack build: a few broker reads + loca
 
 def worst_case_runtime_seconds():
     """Longest daily_task.main() can legitimately run: every bounded step at its timeout
-    (run_history, main.py, the backup sync, the recovery pass) plus slack for the steps
-    that have none. The Evening task's scheduler limit must be at least this."""
-    return (RUN_HISTORY_TIMEOUT_S + MAIN_TIMEOUT_S + watchdog.SYNC_TIMEOUT_S + rapidapi.pass_timeout_seconds()
+    (run_history, main.py, the recovery pass) plus slack for the steps that have none.
+    The Evening task's scheduler limit must be at least this. The Data backup is not a
+    step here: the separate 22:10 backup task (run_data_backup.py) is the only sync."""
+    return (RUN_HISTORY_TIMEOUT_S + MAIN_TIMEOUT_S + rapidapi.pass_timeout_seconds()
             + UNBOUNDED_STEPS_SLACK_S + CONTEXT_PACK_SLACK_S)
 
 
@@ -78,7 +79,7 @@ def build_context_pack():
 def run_ohlcv_recovery():
     """OHLCV recovery pass — repair missing/stale/placeholder Symbol_full bars via RapidAPI.
 
-    Runs LAST in main() (after the report and the backup sync, even if the report failed)
+    Runs LAST in main() (after the report, even if the report failed)
     because a full pass is long: its timeout covers the whole per-run fetch budget
     (rapidapi.pass_timeout_seconds), since the old 600 s default killed every pass after
     ~42 of ~500 symbols (PROD logs 2026-09-16..30). Running it first would push the
@@ -110,10 +111,25 @@ def run_command(command_list, timeout=STEP_TIMEOUT_S):
         else:
             _log.info("Command completed successfully.")
         return result.stdout
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
         _failed_steps.append(f"{step}: timed out after {timeout}s")
-        _log.error(f"🚨 Command timed out after {timeout}s: {' '.join(command_list)}")
+        # The child's last output says where it stopped (PROD 11-04: run_history.py hung for
+        # 30 min and the log showed only the timeout).
+        tail = _output_tail(e.stdout, e.stderr)
+        _log.error(f"🚨 Command timed out after {timeout}s: {' '.join(command_list)}"
+                   + (f"\nLast output before the kill:\n{tail}" if tail else "\nNo output before the kill."))
         return ""
+
+
+def _output_tail(stdout, stderr, lines=15) -> str:
+    """The last `lines` lines of a killed child's stdout + stderr (str or bytes, either may be None)."""
+    parts = []
+    for out in (stdout, stderr):
+        if isinstance(out, bytes):
+            out = out.decode("utf-8", errors="replace")
+        if out:
+            parts.append(out.rstrip())
+    return "\n".join("\n".join(parts).splitlines()[-lines:])
 
 
 def _step_failure_banner(failed: list[str]) -> str:

@@ -1,5 +1,12 @@
 # Plan: Decompose `ai_portfolio_game.py` into an `aether/scenario/` package (entities + action ports + composable scenarios)
 
+> **SUPERSEDED (2026-11-05)** by [aether-services.md](./aether-services.md) (R&D #78). Kept for history.
+> What this plan delivered: the daily run split into 11 tested stages (`aether/scenario/steps.py`), a golden
+> snapshot, and the switch (#228). What it left behind: stages that reach back into `ai_portfolio_game` through
+> `_pkg()` (130 `game.X` calls); a 1,531-line root file; about 940 unused lines (`prices.py`, `schema.py`,
+> `helpers.py`); 38 magic `row[N]` indexes; a golden that pins every log line; and a "reuse by backtest/advisory"
+> goal that nothing consumes. The new plan replaces the design, not the verified behaviour.
+
 > Reference plan saved 2026-09-16. Status: **partly built, not used yet** — the game doesn't call `aether/scenario/`. See R&D #44 in [`plans/roadmap.md`](./roadmap.md) for which stages are merged.
 > Origin: request to refactor `ai_portfolio_game.py` ("that is total mess") into **objects for entities** and **interfaces for actions**, with the script becoming a **starting place for different scenarios** — "even maybe split it on smaller scenario-specific entry points." Refined through dialogue: mirror the existing `aether/etrade/` schema ("we have etrade schema to follow already"), **build-then-replace** ("build object and functionality and then replace it inside ai_portfolio_game script"), **prepare everything first, then refactor in small verifiable steps**, and keep it **generic** — use `scenario`, not "game."
 

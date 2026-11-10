@@ -52,6 +52,7 @@
             <button data-tab="accounts"  class="tab-btn px-4 py-2 border-b-2 border-transparent">Accounts</button>
             <button data-tab="chat"      class="tab-btn px-4 py-2 border-b-2 border-transparent">Chat</button>
             <button data-tab="system"    class="tab-btn px-4 py-2 border-b-2 border-transparent">System</button>
+            <button data-tab="development" class="tab-btn px-4 py-2 border-b-2 border-transparent">Development</button>
             <button data-tab="about"     class="tab-btn px-4 py-2 border-b-2 border-transparent">About</button>
         </nav>
     </header>
@@ -439,6 +440,30 @@
                     </div>
                 </div>
             </div>
+        </section>
+
+        <!-- ======================= DEVELOPMENT TAB ======================= -->
+        <section id="tab-development" class="tab-panel hidden">
+            <div class="flex items-baseline justify-between mb-4">
+                <h2 class="text-lg font-semibold">Project Model &mdash; <span id="pm-project" class="text-slate-300">AETHER Services</span></h2>
+                <div class="text-xs text-slate-500">Progress file updated <span id="pm-updated">&ndash;</span> &middot; metrics measured live from the code</div>
+            </div>
+            <div id="pm-metrics" class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6"></div>
+            <div class="card mb-6">
+                <div class="card-label">Services</div>
+                <div id="pm-services" class="mt-2 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">Loading…</div>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div class="card">
+                    <div class="card-label">Migration steps <span id="pm-steps-summary" class="text-slate-500 normal-case"></span></div>
+                    <div class="overflow-x-auto"><table class="w-full text-sm mt-2"><tbody id="pm-steps"></tbody></table></div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Fixes <span id="pm-fixes-summary" class="text-slate-500 normal-case"></span></div>
+                    <div class="overflow-x-auto"><table class="w-full text-sm mt-2"><tbody id="pm-fixes"></tbody></table></div>
+                </div>
+            </div>
+            <div class="text-xs text-slate-500 mt-4">Plan: <code>plans/aether-services.md</code> &middot; decisions: <code>docs/adr/</code> &middot; roadmap: R&amp;D #78</div>
         </section>
 
         <!-- ======================= SYSTEM TAB ======================= -->
