@@ -313,6 +313,7 @@ class TestCoreSatelliteAllocation(unittest.TestCase):
 
 
 class TestAfterHoursOrderQueuing(unittest.TestCase):
+    @mock.patch("circuit_breaker.check_systemic_risk", new=mock.MagicMock(return_value=(False, "")))  # no real SPY cache: fixture prices read as a crash
     @mock.patch("ai_portfolio_game._cache_stale", return_value=False)  # isolate the buy-loop from OHLCV freshness
     @mock.patch("ai_portfolio_game.is_market_hours", return_value=False)
     @mock.patch("ai_portfolio_game.get_live_prices")
@@ -351,6 +352,7 @@ class TestMissingWorkbookSRFallsThrough(unittest.TestCase):
     A prior over-broad "Structural Data Integrity Gate" rejected these before
     the ATR fallback could apply; this pins the intended behavior."""
 
+    @mock.patch("circuit_breaker.check_systemic_risk", new=mock.MagicMock(return_value=(False, "")))  # no real SPY cache: fixture prices read as a crash
     @mock.patch("ai_portfolio_game._cache_stale", return_value=False)  # isolate the buy-loop from OHLCV freshness
     @mock.patch("ai_portfolio_game.is_market_hours", return_value=False)
     @mock.patch("ai_portfolio_game.get_live_prices")
@@ -411,6 +413,7 @@ class TestZeroTrustFreshnessGate(unittest.TestCase):
         # one attempt, no retry loop on the buy path).
         mock_heal.assert_called_once_with("CDW")
 
+    @mock.patch("circuit_breaker.check_systemic_risk", new=mock.MagicMock(return_value=(False, "")))  # no real SPY cache: fixture prices read as a crash
     @mock.patch("ai_portfolio_game._heal_symbol_cache", return_value=True)             # heal REFRESHES the cache
     @mock.patch("ai_portfolio_game._cache_stale", side_effect=[True, False, False, False])  # stale, then fresh after heal
     @mock.patch("ai_portfolio_game.is_market_hours", return_value=False)
