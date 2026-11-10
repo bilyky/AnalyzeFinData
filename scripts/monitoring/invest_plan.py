@@ -43,6 +43,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
+import console_safe  # noqa: E402
 import position_watch as pw  # noqa: E402
 from aether import market_calendar  # noqa: E402
 
@@ -169,6 +170,7 @@ def check(plan: dict, today: datetime.date, bars: dict) -> dict:
 
 
 def main(argv=None) -> int:
+    console_safe.install()          # step labels are free text: a non-cp1252 character must not crash
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--plan", default=os.path.join(pw.watch_dir(), "invest_plan.json"))
     ap.add_argument("--json", action="store_true")

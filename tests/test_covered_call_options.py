@@ -324,6 +324,45 @@ class TestCoveredCallOptions(unittest.TestCase):
         # Ledger invariant: total booked pnl equals the net cash the premium put on the balance.
         self.assertAlmostEqual(sum(t["pnl"] for t in state["history"]), state["balance"])
 
+    def test_real_research_header_does_not_read_win_pct_as_atr(self):
+        """PROD's Research sheet has no ATR column; index 23 is 'Win% 10d' (~0.53). The ATR must come
+        from the OHLCV cache, not from that column (PROD review 2026-11-09)."""
+        header = [None, 99, None, None, "Industry", "Prev PGR", "PGR", "Ind Strength", None, "Stop",
+                  "Price", "Target", "R/R", "Prev Move%", "Prev %", "Change%", None, "LT Trend",
+                  "Money Flow", "OB/OS", "Setup", "BR Score", "Seasonal", "Win% 10d", "Short10",
+                  "Long60", "Patterns"]
+        row = [None] * 27
+        row[3], row[23], row[25] = "AAPL", 0.531, 1.3
+        state = {"balance": 0.0, "positions": {"AAPL": {"qty": 100, "cost": 100.0, "stop_loss": 100.0}},
+                 "history": []}
+        with mock.patch.object(options, "calculate_atr", return_value=4.0) as atr:
+            options.execute_weekly_covered_call_pass(state, "2026-08-17", {"AAPL": 110.0},
+                                                     _FakeWS(header, [row]))
+        atr.assert_called_with("AAPL")
+        call = state["positions"]["AAPL"]["written_call"]
+        self.assertAlmostEqual(call["sigma"], options.atr_implied_vol(4.0, 110.0))
+
+    def test_no_atr_anywhere_skips_the_write(self):
+        """No ATR column and no OHLCV ATR: skip the write rather than guess one."""
+        header = [None, None, None, None, "Win% 10d", "Long60"]
+        state = {"balance": 0.0, "positions": {"AAPL": {"qty": 100, "cost": 100.0, "stop_loss": 100.0}},
+                 "history": []}
+        with mock.patch.object(options, "calculate_atr", return_value=None):
+            written = options.execute_weekly_covered_call_pass(
+                state, "2026-08-17", {"AAPL": 110.0}, _FakeWS(header, [[None, None, None, "AAPL", 0.5, 1.0]]))
+        self.assertEqual(written, [])
+        self.assertNotIn("written_call", state["positions"]["AAPL"])
+        self.assertEqual(state["balance"], 0.0)
+
+    def test_long60_header_drives_the_flower_exclusion(self):
+        """The real sheet labels L60 'Long60'; a high value there must still block the write."""
+        header = [None, None, None, None, "ATR", "Long60"]
+        state = {"balance": 0.0, "positions": {"AAPL": {"qty": 100, "cost": 100.0, "stop_loss": 100.0}},
+                 "history": []}
+        written = options.execute_weekly_covered_call_pass(
+            state, "2026-08-17", {"AAPL": 110.0}, _FakeWS(header, [[None, None, None, "AAPL", 4.0, 9.9]]))
+        self.assertEqual(written, [])
+
     def test_execute_weekly_pass_skips_excluded_instruments(self):
         """A leveraged/inverse/crypto instrument must NOT get a Covered Call written even when it is
         a risk-locked winner: flat-IV Black-Scholes is meaningless for that cohort (Aug-8 exclusion)."""
