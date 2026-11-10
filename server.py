@@ -904,20 +904,25 @@ def create_app():
                     env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                 )
             with _runs_lock:
-                _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc}
+                _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc,
+                                 "admin_only": bool(task.get("admin_only"))}
             return {"status": "started", "pid": proc.pid, "run_id": run_id,
                     "task_id": task_id, "label": task["label"]}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
     @app.get("/api/tasks/output/{run_id}")
-    async def task_output(run_id: str, offset: int = Query(0, ge=0)):
+    async def task_output(run_id: str, offset: int = Query(0, ge=0), authorization: str = Header(default="")):
         """Stream lines from a task's log file starting at byte `offset`.
-        Returns {lines, offset, done} so the client can poll incrementally."""
+        Returns {lines, offset, done} so the client can poll incrementally.
+        An admin-only task's output needs the login too: it can hold private numbers, and
+        the run id alone was enough to read it."""
         with _runs_lock:
             run = _runs.get(run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
+        if run.get("admin_only", True):
+            _require_admin(authorization)
         log_path = run["log"]
         try:
             with open(log_path, "r", encoding="utf-8", errors="replace") as f:
@@ -965,7 +970,7 @@ def create_app():
             with open(log_path, "w", encoding="utf-8") as lf:
                 proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, cwd=str(_DIR))
             with _runs_lock:
-                _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc}
+                _runs[run_id] = {"log": log_path, "pid": proc.pid, "proc": proc, "admin_only": True}
             return {"status": "started", "pid": proc.pid, "run_id": run_id,
                     "bootstrap": bootstrap, "label": "E*TRADE re-authenticate"}
         except Exception as e:

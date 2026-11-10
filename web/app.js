@@ -1032,7 +1032,7 @@ $("log-auto-refresh").addEventListener("change", () => {
 // Category display names for the manual tasks grid
 const TASK_CATEGORY_LABELS = {
     pipeline: "Pipeline", ai_game: "AI Game", data: "Data",
-    research: "Research", monitoring: "Monitoring", system: "System",
+    research: "Research", monitoring: "Monitoring", system: "System", oceanview: "OceanView",
 };
 
 // ── Task output panel ────────────────────────────────────────────────────────
@@ -1057,7 +1057,7 @@ function _startPolling(runId) {
     const log = $("task-output-log");
     _pollTimer = setInterval(async () => {
         try {
-            const d = await api(`/api/tasks/output/${runId}?offset=${offset}`);
+            const d = await api(`/api/tasks/output/${runId}?offset=${offset}`, { headers: authHeaders() });
             if (d.lines) {
                 log.textContent += d.lines;
                 log.scrollTop = log.scrollHeight;
@@ -1069,7 +1069,12 @@ function _startPolling(runId) {
                 $("top-task-status").textContent = ok ? `done (exit 0)` : `failed (exit ${d.exit_code})`;
                 $("top-task-status").className = `text-xs px-2 py-0.5 rounded ${ok ? "bg-green-900/60 text-green-300" : "bg-red-900/60 text-red-400"}`;
             }
-        } catch { /* network blip — keep polling */ }
+        } catch (e) {
+            if (String(e).includes("→ 401")) {      // admin-only output: the login is gone
+                clearInterval(_pollTimer); _pollTimer = null;
+                $("top-task-status").textContent = "log in to see the output";
+            }                                       // otherwise a network blip — keep polling
+        }
     }, 800);
 }
 
