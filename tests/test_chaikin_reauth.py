@@ -261,6 +261,9 @@ class TestWeekdayRefreshDue(unittest.TestCase):
         self.assertTrue(cr.weekday_refresh_due(self.EXP_1116, _pt(2026, 11, 14)))     # dies Mon 06:35
         later = datetime.datetime(2026, 11, 17, 18, 0, tzinfo=_UTC)                    # Tue 10:00 PT
         self.assertFalse(cr.weekday_refresh_due(later, _pt(2026, 11, 14)))
+        # Dies Monday noon: Monday 08:00 can still renew it, so the weekend does not open a browser.
+        mon_noon = _pt(2026, 11, 16, 12, 0).astimezone(_UTC)
+        self.assertFalse(cr.weekday_refresh_due(mon_noon, _pt(2026, 11, 14)))
 
     def test_expired_or_unknown_is_always_due(self):
         self.assertTrue(cr.weekday_refresh_due(self.EXP_1109, _pt(2026, 11, 9)))
