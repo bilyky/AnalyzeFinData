@@ -1,0 +1,44 @@
+# PROD review 2026-11-09: actions
+
+Code: branch `fix/prod-review-1109`. Source: PROD logs from 11-06 07:03 to 11-09 08:00, from
+`Data/prod_copy/2026-11-09/logs.zip`. Every other file in that drop was byte-identical to the 11-06 drop, so
+the game state, backup status and OceanView pack in it are 11-06 copies. This review uses the logs only.
+
+## Deploy state on 11-09
+- **#247 live** since about 11-07: the backup ran 22:10 → 22:35 (1500 s) on 11-07 and 11-08. The breaker freeze
+  hasn't fired since, so it isn't proven on PROD yet.
+- **Not done:** the Groq patch. Groq logged "ran out of tokens" or fell back 30 times.
+
+## Findings
+| # | Finding | Status |
+|---|---|---|
+| 1 | **Buys after a failed pre-flight.** The 05:30 pipeline aborted (Chaikin session expired 11-08 17:44 PT). At 07:00 the trade run bought ATI and added 95 COMP and 6 AU on Sunday's workbook; cash went from 35.8% to 20.1%. | **This PR:** no scheduled buys, scale-ins or queued BUYs after today's pre-flight FAILED; exits still run. `ai_portfolio_game.py --run --force` by hand may buy. |
+| 2 | **Chaikin expiry on Sunday.** The weekly Sunday 08:00 reauth failed (`Page.fill` timeout); the token died 17:44 PT, before Monday's pipeline. The new token expires **Mon 11-16 06:35 PT**. | **This PR:** the reauth task runs daily 08:00 with `--weekday-aware`; it mints on a weekday (Friday 11-13 for the current token). Reminder subjects name the expiry. |
+| 3 | **Covered calls read Win% as ATR.** The Research sheet has no ATR column; the fallback column 23 is `Win% 10d`. Latent: it only matters at 100 shares (COMP is at 96). | **This PR:** ATR from the OHLCV cache; no ATR means no write. |
+| 4 | **Breaker recovery could lower a ratcheted stop.** It restored the pre-tightening stop every time. | **This PR:** a stop raised after the tightening is kept. |
+| 5 | **Backup failed 5 nights** (11-04 → 11-08), the last success 11-03 22:12. The message still said 600 s. | **This PR:** the top-level `Data/` files are copied first (300 s, `last_core_success`), then the full tree. The cause of the full-sync timeout is still unknown (step 4). |
+| 6 | Intraday monitor: 13 emails on 11-06, 30 weekend runs. Weekend oracle E*TRADE logins. Regime whipsaw to AGGRESSIVE. Stop fills past stops (−$154 since 10-01, $92 of it an ATI gap). | Planned (P1/P2 in `plans/prod_review_2026-11-09.md` on the dev machine). |
+
+## Steps
+1. **Pull.** Trading change: after a failed morning pre-flight the 07:00 run buys nothing. To trade that day
+   after fixing the cause, run by hand: `venv_new\Scripts\python.exe ai_portfolio_game.py --run --force`.
+   The first morning after the pull writes `Data/preflight_status.json`.
+2. **Re-register the tasks** (AETHER_Chaikin_Reauth changes from weekly Sunday to daily 08:00):
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\utils\register_agent_tasks.ps1
+   ```
+   The task needs a logged-on desktop session (headed Chrome). If Friday's mint fails, renew by hand
+   from the System page before **Mon 11-16 06:35 PT**.
+3. **Groq patch** (from #238, still not applied):
+   ```powershell
+   venv_new\Scripts\python.exe docs\prod-notes\patch_groq_reasoning_2026_11_04.py           # dry run
+   venv_new\Scripts\python.exe docs\prod-notes\patch_groq_reasoning_2026_11_04.py --apply
+   ```
+4. **Backup timing:** outside market hours (the sync skips 06:30–13:15 PT), run one sync by hand and time it,
+   and send the file count per `Data/` folder:
+   ```powershell
+   Measure-Command { venv_new\Scripts\python.exe scripts\utils\run_data_backup.py }
+   Get-ChildItem Data -Directory | ForEach-Object { "{0} {1}" -f $_.Name, (Get-ChildItem $_.FullName -Recurse -File | Measure-Object).Count }
+   ```
+5. **Next drop:** copy the JSON state files fresh (game, decision log, backup status, OceanView pack), not only
+   `logs.zip`.
