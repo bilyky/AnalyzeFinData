@@ -9,7 +9,7 @@ import openpyxl
 import notify
 from watchdog import is_market_hours
 import html
-from aether import pick_eval, pick_lists, trash
+from aether import pick_eval, pick_lists, preflight_status, trash
 from aether.run_guard import DailyRunGuard, RunSkipped
 from config import CFG
 from pathlib import Path
@@ -478,6 +478,7 @@ def main():
     # Actively test connections and fail-loud early before doing any write operations
     if not report_only:
         preflight_passed = run_preflight_diagnostics()
+        preflight_status.record(preflight_passed)   # the 07:00 trade run reads it (no buys after a FAIL)
         if not preflight_passed:
             log("❌ [Pre-flight Failure] One or more critical system gateways are offline! Aborting daily pipeline run to prevent corrupt states.")
             try:
