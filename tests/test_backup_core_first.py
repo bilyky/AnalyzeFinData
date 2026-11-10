@@ -45,6 +45,7 @@ class BackupCoreFirstTest(unittest.TestCase):
             self.assertTrue(watchdog.sync_data_folder())
         core_cmd, full_cmd = run.call_args_list[0].args[0], run.call_args_list[1].args[0]
         self.assertNotIn("/E", core_cmd)
+        self.assertIn(f"/MAX:{watchdog.CORE_MAX_BYTES}", core_cmd)        # archives wait for the full pass
         self.assertIn("/E", full_cmd)
         self.assertEqual(run.call_args_list[0].kwargs["timeout"], watchdog.CORE_SYNC_TIMEOUT_S)
         st = self._status()
