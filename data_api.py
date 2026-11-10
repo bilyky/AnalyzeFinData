@@ -1436,6 +1436,18 @@ MANUAL_TASKS = [
         "confirm": None,
         "category": "system",
     },
+    {
+        "id": "invest_plan",
+        "label": "OceanView — Plan Check",
+        "description": "Daily check of the dated investment plan: which step is due, wait-a-day after a "
+                       "2%+ market drop, each holding against its stop, days to the sell window. "
+                       "Recommend-only, writes nothing (scripts/monitoring/invest_plan.py).",
+        "script": "scripts/monitoring/invest_plan.py",
+        "args": [],
+        "admin_only": True,          # the plan is private
+        "confirm": None,
+        "category": "oceanview",
+    },
 ]
 
 
