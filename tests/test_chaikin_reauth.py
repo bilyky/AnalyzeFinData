@@ -249,6 +249,11 @@ class TestWeekdayRefreshDue(unittest.TestCase):
         self.assertFalse(cr.weekday_refresh_due(self.EXP_1109, _pt(2026, 11, 5)))
         self.assertFalse(cr.weekday_refresh_due(self.EXP_1116, _pt(2026, 11, 12)))
 
+    def test_the_one_day_margin_leaves_a_working_day_to_retry(self):
+        wed_0700 = _pt(2026, 11, 11, 7, 0).astimezone(_UTC)
+        self.assertTrue(cr.weekday_refresh_due(wed_0700, _pt(2026, 11, 9)))    # Mon: Tue is the retry
+        self.assertFalse(cr.weekday_refresh_due(_pt(2026, 11, 11, 9, 0).astimezone(_UTC), _pt(2026, 11, 9)))
+
     def test_midweek_with_plenty_of_runway_waits(self):
         self.assertFalse(cr.weekday_refresh_due(self.EXP_1116, _pt(2026, 11, 9)))
 
