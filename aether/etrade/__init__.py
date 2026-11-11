@@ -216,7 +216,7 @@ def _probe_token_auth(tokens, env="production"):
               destroy the token on a transient failure.
 
     Uses accounts/list (an authenticated GET that truthfully returns 200/401/403) and
-    the same proxy/verify settings as every other brokerage call in this module. The
+    the same proxy settings as every other brokerage call in this module (TLS verified). The
     old market-clock probe hit a path that 404s on this host, so it could never see a
     200 and always reported "inconclusive" even for valid tokens.
     """
@@ -224,7 +224,7 @@ def _probe_token_auth(tokens, env="production"):
         ck, cs, _, _ = _load_config(env)
         url = _ACCTLIST_URL.get(env, _ACCTLIST_URL["production"])
         session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
-        resp = session.get(url, proxies=_proxies(), verify=False, timeout=10)
+        resp = session.get(url, proxies=_proxies(), timeout=10)
         if resp.status_code == 200:
             return True
         if resp.status_code in (401, 403):
@@ -256,7 +256,7 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
         ck, cs, _, _ = _load_config(env)
         session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
         try:
-            r = session.get(_RENEW_URL[env], proxies=_proxies(), verify=False, timeout=10)
+            r = session.get(_RENEW_URL[env], proxies=_proxies(), timeout=10)
             if r.ok:
                 tokens["saved_at"] = time.time()
                 # A successful renewal across midnight officially promotes the token to the new day
@@ -315,7 +315,7 @@ def revoke_tokens(tokens, env="sandbox") -> bool:
     ck, cs, _, _ = _load_config(env)
     session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
     try:
-        r = session.get(_REVOKE_URL[env], proxies=_proxies(), verify=False, timeout=10)
+        r = session.get(_REVOKE_URL[env], proxies=_proxies(), timeout=10)
         if r.ok:
             trash.soft_delete(_TOKEN_PATH, reason="revoked")   # soft-delete (recoverable)
             _log.console("Tokens revoked and cache cleared.")
@@ -1884,7 +1884,7 @@ def is_market_open_now(tokens, env="production") -> bool | None:
     try:
         # Factor 1: Official Market Clock API
         clock_url = "https://api.etrade.com/v1/market/clock.json"
-        clock_r = session.get(clock_url, verify=False, timeout=10)
+        clock_r = session.get(clock_url, timeout=10)
         if clock_r.ok:
             clock_data = clock_r.json()
             status = clock_data.get("ClockResponse", {}).get("currentStatus")
@@ -1893,7 +1893,7 @@ def is_market_open_now(tokens, env="production") -> bool | None:
         
         # Factor 2: Empirical SPY Quote Timestamp Check
         quote_url = "https://api.etrade.com/v1/market/quote/SPY.json"
-        quote_r = session.get(quote_url, verify=False, timeout=10)
+        quote_r = session.get(quote_url, timeout=10)
         if quote_r.ok:
             quote_data = quote_r.json().get("QuoteResponse", {}).get("QuoteData", [])
             if quote_data:
