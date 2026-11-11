@@ -12,7 +12,7 @@ import html
 
 import ai_portfolio_game
 import data_api
-from aether import pick_eval, pick_lists, sell_rules
+from aether import margin_watch, pick_eval, pick_lists, sell_rules
 from aether.config import CFG
 from aether.risk_utils import calculate_atr, is_elite_breakout_candidate
 from aether_logger import get_logger as _get_logger
@@ -382,16 +382,32 @@ def _unavailable_html() -> str:
     )
 
 
+def margin_section() -> str:
+    """Margin watch for every real account (R&D #39), not only the Oracle's one: a margined account
+    the Oracle doesn't trade can still be near a call. Live broker data only; never raises."""
+    try:
+        vs = margin_watch.views(data_api.read_accounts(), CFG.accounts_real, margin_watch.load_requirements(),
+                                CFG.oracle_margin_rate_pct)
+        for v in vs:
+            if v["call_drop"] is None or v["call_drop"] <= 0:
+                _oracle_log.warning(f"[Margin watch] Account ...{str(v['id'])[-4:]} is at or under its maintenance "
+                                    f"requirement (excess ${v['excess']:,.0f}).")
+        return margin_watch.render_html(vs)
+    except Exception as e:
+        _oracle_log.warning(f"[Margin watch] skipped: {e}")
+        return ""
+
+
 def run_oracle_advisory():
     """Main entry point to fetch and compile the Oracle advisory report."""
     try:
         acct = get_oracle_account()
         if acct is None:
-            return _unavailable_html()
+            return _unavailable_html() + margin_section()
         sells, holds = audit_oracle_portfolio(acct)
         buys = get_oracle_buy_candidates(acct)
         pick_eval.log_picks(pick_lists.ORACLE_BUYS, buys[:3])    # what the email shows
-        return generate_oracle_html(acct, sells, holds, buys)
+        return generate_oracle_html(acct, sells, holds, buys) + margin_section()
     except Exception as e:
         _oracle_log.error("Fatal failure running AETHER Oracle advisory", exc_info=True)
         return f"<div style='color:#ff7b72; padding:20px; border:1px solid #f85149; background:#1c1313;'>AETHER Oracle Advisory failed to run today: {e}</div>"
