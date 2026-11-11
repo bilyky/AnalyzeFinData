@@ -51,5 +51,71 @@ class TestTokenHost(unittest.TestCase):
             self.assertEqual(self.fs.load_any_date(ENV)["oauth_token"], "t")
 
 
+class TestNoAutomatedLoginOnAForeignToken(unittest.TestCase):
+    """With another machine's token skipped, the automated doors must not log this machine in: a new
+    session on the shared app key can end the other machine's. A person may still log in."""
+
+    def setUp(self):
+        self.calls = []
+        self.addCleanup(lambda: os.path.exists(etrade._TOKEN_PATH) and os.remove(etrade._TOKEN_PATH))
+        patches = [
+            mock.patch.object(store.socket, "gethostname", return_value="DEV-PC"),
+            mock.patch.object(etrade, "_login_headless", side_effect=lambda *a, **k: self.calls.append("login")),
+            mock.patch.object(etrade, "_probe_token_auth", side_effect=lambda *a, **k: self.calls.append("probe") or True),
+            mock.patch.object(etrade, "renew_tokens", side_effect=lambda t, e: self.calls.append("renew") or t),
+            mock.patch.object(etrade, "_load_config", return_value=("ck", "cs", "u", "p")),
+            mock.patch.object(etrade.CFG, "etrade_totp_secret", "x", create=True),
+            mock.patch.object(etrade, "_et_is_weekend", return_value=False),
+        ]
+        for pt in patches:
+            pt.start()
+            self.addCleanup(pt.stop)
+
+    def _write(self, host):
+        tok = {"oauth_token": "t", "oauth_token_secret": "s", "env": ENV, "saved_at": 0,
+               "issued_date_et": etrade._et_today(), "host": host}
+        with open(etrade._TOKEN_PATH, "w") as f:
+            json.dump(tok, f)
+
+    def test_get_tokens_does_not_log_in_automatically(self):
+        self._write("prod-pc")
+        self.assertIsNone(etrade.get_tokens(ENV, allow_browser=False))
+        self.assertEqual(self.calls, [])
+
+    def test_get_tokens_own_token_still_renews(self):
+        self._write("dev-pc")
+        self.assertEqual(etrade.get_tokens(ENV, allow_browser=False)["oauth_token"], "t")
+        self.assertEqual(self.calls, ["probe", "renew"])
+
+    def test_own_old_token_that_fails_to_renew_still_logs_in(self):
+        # This machine's own file keeps the normal ladder: a failed renew goes on to the automated login.
+        tok = {"oauth_token": "t", "oauth_token_secret": "s", "env": ENV, "saved_at": 0,
+               "issued_date_et": "2000-01-03", "host": "dev-pc"}
+        with open(etrade._TOKEN_PATH, "w") as f:
+            json.dump(tok, f)
+        with mock.patch.object(etrade, "renew_tokens", side_effect=lambda t, e: self.calls.append("renew")):
+            etrade.get_tokens(ENV, allow_browser=False)
+        self.assertEqual(self.calls, ["renew", "login"])
+
+    def test_a_person_may_still_log_in(self):
+        self._write("prod-pc")
+        try:
+            etrade.get_tokens(ENV, allow_browser=True)
+        except RuntimeError:
+            pass                                   # no TTY for the interactive step after the mint
+        self.assertIn("login", self.calls)
+
+    def test_scheduled_reauth_stops_with_a_reason(self):
+        self._write("prod-pc")
+        r = etrade.scheduled_reauth(ENV, weekend_mint=False)
+        self.assertEqual((r["ok"], r["reason"]), (False, etrade.AuthReason.FOREIGN_TOKEN))
+        self.assertNotIn("login", self.calls)
+
+    def test_the_manual_door_may_still_log_in(self):
+        self._write("prod-pc")
+        etrade.scheduled_reauth(ENV)               # manual callers keep weekend_mint=True
+        self.assertIn("login", self.calls)
+
+
 if __name__ == "__main__":
     unittest.main()

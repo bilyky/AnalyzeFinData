@@ -248,6 +248,19 @@ class FileTokenStore(TokenStore):
         p._log.info(f"Cached tokens found ({age_min:.0f} min old, issued today ET).")
         return tokens
 
+    def foreign_host(self, env: str) -> Optional[str]:
+        """The machine that saved the token file, when it isn't this one (else None). Read-only."""
+        p = _pkg()
+        try:
+            with open(p._TOKEN_PATH) as f:
+                tokens = json.load(f)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(tokens, dict) or tokens.get("env") != env:
+            return None
+        host = tokens.get("host")
+        return host if host and str(host).lower() != _this_host() else None
+
     def load_any_date(self, env: str) -> Optional[dict]:
         """Load cached tokens regardless of issue date — for renewal attempts (this machine's only)."""
         p = _pkg()
