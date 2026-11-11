@@ -389,7 +389,10 @@ def margin_section() -> str:
         vs = margin_watch.views(data_api.read_accounts(), CFG.accounts_real, margin_watch.load_requirements(),
                                 CFG.oracle_margin_rate_pct)
         for v in vs:
-            if v["call_drop"] is None or v["call_drop"] <= 0:
+            if v.get("open_calls"):
+                due = ", ".join(f"{k} ${a:,.2f}" for k, a in v["open_calls"].items())
+                _oracle_log.warning(f"[Margin watch] Account ...{str(v['id'])[-4:]} has an open call per the broker: {due}.")
+            elif v["call_drop"] is None or v["call_drop"] <= 0:
                 _oracle_log.warning(f"[Margin watch] Account ...{str(v['id'])[-4:]} is at or under its maintenance "
                                     f"requirement (excess ${v['excess']:,.0f}).")
         return margin_watch.render_html(vs)

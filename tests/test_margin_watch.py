@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 import aether_oracle
+import data_api
 from aether import margin_watch as mw
 
 
@@ -65,6 +66,48 @@ class TestAccountView(unittest.TestCase):
 
     def test_no_debt_no_view(self):
         self.assertIsNone(mw.account_view(acct([("BBB", 10, 100.0, 0.0)], equity=1000.0), {}))
+
+
+class TestBrokerFields(unittest.TestCase):
+    def test_margin_fields_parse_with_none_for_missing(self):
+        comp = {"marginBalance": -2000.5, "regtEquity": "1000.25", "regtEquityPercent": 33.3,
+                "OpenCalls": {"houseCall": -120.4, "fedCall": 0, "minEquityCall": "", "cashCall": "x"}}
+        self.assertEqual(data_api._margin_fields(comp),
+                         {"margin_balance": -2000.5, "margin_equity": 1000.25, "margin_equity_pct": 33.3,
+                          "house_call": -120.4, "fed_call": 0.0, "min_equity_call": None, "cash_call": None})
+        self.assertEqual(set(data_api._margin_fields({}).values()), {None})
+
+    def test_broker_figures_replace_the_computed_ones_and_show_the_call(self):
+        # the broker's balance differs from holdings - equity (accrued interest): the broker's wins
+        a = {**A, "margin": {"margin_balance": -2150.0, "margin_equity": 900.0, "house_call": -150.0,
+                             "fed_call": 0.0, "min_equity_call": None, "cash_call": None}}
+        v = mw.account_view(a, REQS)
+        self.assertEqual((v["debt"], v["equity"], v["source"]), (2150.0, 900.0, "broker"))
+        self.assertEqual(v["open_calls"], {"house_call": 150.0})          # only negative calls, as amounts due
+        self.assertIn("OPEN CALL per the broker: house call $150", mw.render_html([v]))
+
+    def test_broker_reports_no_loan_means_no_view(self):
+        # live 2026-11-10: a cash account came back with no marginBalance, and holdings - net value
+        # was a few dollars of price-override noise, shown as a "debt"
+        a = {**A, "margin": {k: None for k in ("margin_balance", "margin_equity", "house_call")}}
+        self.assertIsNone(mw.account_view(a, REQS))
+        b = {**A, "margin": {"margin_balance": 0.0, "margin_equity": 1000.0}}
+        self.assertIsNone(mw.account_view(b, REQS))                    # zero balance: no loan
+
+    def test_without_broker_figures_it_says_computed(self):
+        v = mw.account_view(A, REQS)
+        self.assertEqual((v["source"], v["open_calls"]), ("computed", {}))
+
+    def test_oracle_logs_the_broker_call(self):
+        a = {**A, "margin": {"margin_balance": -2100.0, "margin_equity": 900.0, "house_call": -150.0}}
+        with mock.patch.object(aether_oracle.data_api, "read_accounts",
+                               return_value={"broker_status": "live", "accounts": [a]}), \
+                mock.patch.object(aether_oracle.CFG, "accounts_real", ["9999"]), \
+                mock.patch.object(aether_oracle.CFG, "oracle_margin_rate_pct", None, create=True), \
+                mock.patch.object(aether_oracle.margin_watch, "load_requirements", return_value=REQS), \
+                self.assertLogs(aether_oracle._oracle_log.name, level="WARNING") as cm:
+            aether_oracle.margin_section()
+        self.assertIn("open call per the broker: house_call $150.00", cm.output[0])
 
 
 class TestViewsAndFile(unittest.TestCase):

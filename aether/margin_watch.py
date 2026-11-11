@@ -15,6 +15,9 @@ computes, per account, from the broker's live figures only:
     DEFAULT_REQ and the report says how much of the requirement is assumed;
   - excess (equity - requirement), and the uniform fall of the holdings that reaches the call;
   - interest per month at the owner's rate (config oracle.margin_rate_pct), when it is set;
+  - the broker's own figures when the account carries them (data_api's "margin": marginBalance,
+    regtEquity, OpenCalls.*): they replace the computed debt / equity, and an open call (a negative
+    houseCall, fedCall, minEquityCall or cashCall) is shown as the broker states it;
   - the pay-down order: sales that free the most requirement per dollar first (a 100% name frees
     $1 per $1 sold, a 30% name $0.30), losses before gains (they also harvest a tax loss).
 
@@ -48,8 +51,12 @@ def account_view(acct: dict, reqs: dict, rate_pct: float | None = None) -> dict 
     """Margin view of one account dict from data_api.read_accounts(), or None without debt."""
     holds = [h for h in acct.get("holdings", []) if _value(h) > 0]
     value = sum(_value(h) for h in holds)
-    equity = float(acct.get("equity") or 0)
-    debt = value - equity
+    m = acct.get("margin") or {}
+    if "margin" in acct and m.get("margin_balance") is None:
+        return None      # the broker answered and reports no margin loan (a cash account): nothing to watch.
+        #                  Computing holdings - net value there only measures the dashboard's price overrides.
+    equity = m["margin_equity"] if m.get("margin_equity") is not None else float(acct.get("equity") or 0)
+    debt = -m["margin_balance"] if m.get("margin_balance") is not None else value - equity
     if debt <= 0.5:                          # no margin loan: nothing to watch
         return None
     table = reqs.get(str(acct.get("id")), {})
@@ -70,7 +77,10 @@ def account_view(acct: dict, reqs: dict, rate_pct: float | None = None) -> dict 
     monthly = debt * rate_pct / 100 / 12 if rate_pct else None
     for x in order:
         x["interest_saved_month"] = x["value"] * rate_pct / 100 / 12 if rate_pct else None
+    calls = {k: m.get(k) for k in ("house_call", "fed_call", "min_equity_call", "cash_call")}
+    open_calls = {k: -v for k, v in calls.items() if v is not None and v < 0}
     return {"id": acct.get("id"), "holdings_value": value, "debt": debt, "equity": equity,
+            "source": "broker" if m.get("margin_equity") is not None else "computed", "open_calls": open_calls,
             "equity_pct": equity / value if value else None, "requirement": requirement,
             "requirement_assumed": assumed, "excess": excess, "call_drop": call_drop,
             "interest_month": monthly, "pay_down": order[:5]}
@@ -99,7 +109,10 @@ def render_html(vs: list) -> str:
         return ""
     cards = []
     for v in vs:
-        if v["call_drop"] is None or v["call_drop"] <= 0:
+        if v.get("open_calls"):
+            due = ", ".join(f"{k.replace('_', ' ')} {_money(a)}" for k, a in v["open_calls"].items())
+            status = f"<span style='color:#f85149;'>OPEN CALL per the broker: {due}</span>"
+        elif v["call_drop"] is None or v["call_drop"] <= 0:
             status = f"<span style='color:#f85149;'>AT/UNDER the requirement (excess {_money(v['excess'])})</span>"
         elif v["call_drop"] < 0.10:
             status = f"<span style='color:#d29922;'>thin: a {v['call_drop']:.1%} fall reaches the call</span>"

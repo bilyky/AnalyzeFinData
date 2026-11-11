@@ -10,7 +10,7 @@ margin loan (`accounts.real` in config), not only the Oracle's own account. For 
 - **pay down first**: the five sales that free the most requirement per dollar (100% names first),
   losses before gains.
 
-It uses the broker's live figures only. On a day the broker can't be read it shows nothing. It
+It uses the broker's live figures only. Debt, margin equity and any open call (house, Fed, minimum-equity, cash) come straight from E*TRADE's balance data (`marginBalance`, `regtEquity`, `OpenCalls`), and an account the broker reports without a margin loan is left out. On a day the broker can't be read it shows nothing. It
 places no orders. The log also gets a WARNING when an account is at or under its requirement.
 
 ## 1. Private files on PROD (never in git)
