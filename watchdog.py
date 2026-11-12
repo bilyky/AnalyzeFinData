@@ -49,6 +49,16 @@ def _tasks() -> list[str]:
     except (OSError, ValueError) as e:
         _log.error(f"🛑 [Scheduler Audit] Task manifest is unreadable or invalid: {e}")
         return []
+
+
+def _retired_tasks() -> list[str]:
+    """Retired task paths (known, never audited). Empty when TASKS is set or the manifest is bad."""
+    if TASKS is not None:
+        return []
+    try:
+        return scheduled_tasks.retired_names()
+    except (OSError, ValueError):
+        return []
 # LastRunTime of each failed task already reported, so a task that keeps failing is reported
 # once per failed run instead of in every hourly cycle (PROD 10-09..10-11: hourly emails).
 SCHEDULER_AUDIT_STATE = BASE_DIR / "Data" / "scheduler_audit_state.json"
@@ -612,7 +622,8 @@ def purge_stray_tasks():
             # Whitelist = the full \AETHER_Agents\ paths of the audited tasks, nothing else. A task
             # with the same name at the root or in another folder is a duplicate (the 10-12 double
             # 05:30 / 07:00 runs), as are the old root tasks (AnalyzeFinData_*, Project_AETHER_Watchdog).
-            whitelist = {t.lower() for t in _tasks()}
+            # Retired tasks are known, not strays: the registrar disables them.
+            whitelist = {t.lower() for t in _tasks() + _retired_tasks()}
             stray_tasks = [name for name in aether_tasks if name.lower() not in whitelist]
 
             if stray_tasks:

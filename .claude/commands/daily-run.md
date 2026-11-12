@@ -9,6 +9,10 @@ the qualitative picks/rotations, and sends an email summary.
 > (`ai_portfolio_game.py --run`) at 07:00; this qualitative `AETHER_DailyDriver` runs
 > just after. The two share the `portfolio_state` mutex (`aether/run_guard.py`), so the
 > pipeline waits for the executor to finish rather than racing it on the workbook.
+>
+> **Retired as a scheduled task (2026-11-02):** on PROD the Gemini CLI gets HTTP 403, so
+> `AETHER_DailyDriver` is marked `"retired"` in `scripts/utils/scheduled_tasks.json`; the
+> registrar disables it. Run this skill by hand.
 
 ## Run
 
