@@ -56,6 +56,7 @@ import abc
 import contextlib
 import json
 import os
+import socket
 import time
 from typing import Optional
 
@@ -224,15 +225,39 @@ class LockProvider(abc.ABC):
 # free functions are thin shims over these adapters, see module docstring)
 # ===========================================================================
 
+def _this_host() -> str:
+    return socket.gethostname().lower()
+
+
+_warned_hosts: set = set()   # foreign hosts already warned about in this process
+
+
+def _from_another_host(tokens: dict) -> bool:
+    """True when the token file was saved on another machine. A backup copy of PROD's Data/
+    brought PROD's live token onto dev (2026-11-05 and 2026-11-10); dev and PROD share one app
+    key, so using or renewing that token from dev can end PROD's session. Files saved before
+    the host was recorded have no "host" and are used as before. The warning is logged once per
+    process per host: every load (and every price fetch) checks."""
+    host = tokens.get("host")
+    if not host or str(host).lower() == _this_host():
+        return False
+    if str(host).lower() in _warned_hosts:
+        return True
+    _warned_hosts.add(str(host).lower())
+    _pkg()._log.warning(f"E*TRADE token file was saved on another machine ({host}), not this one "
+                        f"({_this_host()}): ignoring it. Log in on this machine to get its own token.")
+    return True
+
+
 class FileTokenStore(TokenStore):
     def load(self, env: str) -> Optional[dict]:
-        """Return cached tokens if issued today (ET), otherwise None."""
+        """Return cached tokens if issued today (ET) on this machine, otherwise None."""
         p = _pkg()
         if not p.os.path.exists(p._TOKEN_PATH):
             return None
         with open(p._TOKEN_PATH) as f:
             tokens = json.load(f)
-        if tokens.get("env") != env:
+        if tokens.get("env") != env or _from_another_host(tokens):
             return None
         if tokens.get("issued_date_et") != p._et_today():
             p._log.info("Cached tokens are from a previous trading day — re-authenticating...")
@@ -241,15 +266,28 @@ class FileTokenStore(TokenStore):
         p._log.info(f"Cached tokens found ({age_min:.0f} min old, issued today ET).")
         return tokens
 
+    def foreign_host(self, env: str) -> Optional[str]:
+        """The machine that saved the token file, when it isn't this one (else None). Read-only."""
+        p = _pkg()
+        try:
+            with open(p._TOKEN_PATH) as f:
+                tokens = json.load(f)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(tokens, dict) or tokens.get("env") != env:
+            return None
+        host = tokens.get("host")
+        return host if host and str(host).lower() != _this_host() else None
+
     def load_any_date(self, env: str) -> Optional[dict]:
-        """Load cached tokens regardless of issue date — for renewal attempts."""
+        """Load cached tokens regardless of issue date — for renewal attempts (this machine's only)."""
         p = _pkg()
         if not p.os.path.exists(p._TOKEN_PATH):
             return None
         try:
             with open(p._TOKEN_PATH) as f:
                 tokens = json.load(f)
-            return tokens if tokens.get("env") == env else None
+            return tokens if tokens.get("env") == env and not _from_another_host(tokens) else None
         except Exception:
             return None
 
@@ -258,6 +296,7 @@ class FileTokenStore(TokenStore):
         tokens["env"] = env
         tokens["saved_at"]       = p.time.time()
         tokens["issued_date_et"] = p._et_today()
+        tokens["host"]           = _this_host()
         p.os.makedirs(p.os.path.dirname(p._TOKEN_PATH), exist_ok=True)
         with open(p._TOKEN_PATH, "w") as f:
             json.dump(tokens, f, indent=2)

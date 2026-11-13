@@ -197,7 +197,7 @@ _run_guard._DATA_DIR = _lock_tmp
 for _mod_name, _attrs in (("watchdog", ("WATCHDOG_LOCK_FILE", "SELF_HEAL_LOCK", "SELF_HEAL_PROMPT_FILE",
                                        "DATA_SENTINEL_FILE", "BACKUP_STATUS_FILE", "DATA_ALERT_MARKER",
                                        "PACK_STATUS_FILE", "SCHEDULER_AUDIT_STATE",
-                                       "LOG_ERROR_STATE")),
+                                       "LOG_ERROR_STATE", "TRADE_RUN_STAMP")),
                           ("autonomous_pipeline", ("PIPELINE_LOCK_FILE",))):
     try:
         _mod = _importlib.import_module(_mod_name)
