@@ -57,7 +57,7 @@ class TestManifest(unittest.TestCase):
             self.assertIn(want, problems)
 
     def test_readable_schedule_and_command(self):
-        by = {t["name"]: t for t in st.tasks()}
+        by = {t["name"]: t for t in st.load()["tasks"]}   # every entry, retired ones too
         self.assertEqual(st.schedule_text(by["AETHER_Watchdog"]), "Hourly, 24/7")
         self.assertEqual(st.schedule_text(by["AETHER_StopMonitor"]), "Daily 06:45, every 30 min for 7 h")
         self.assertEqual(st.schedule_text(by["AETHER_RD_Scientist"]), "Weekly Saturday 10:00")
@@ -92,7 +92,8 @@ class TestEveryConsumerReadsTheManifest(unittest.TestCase):
         with mock.patch.object(data_api, "_live_task_states", return_value={
                 "AETHER_Watchdog": {"status": "Ready", "last_run": "x", "next_run": "y", "last_result": "0"}}):
             rows = data_api.read_scheduled_tasks()
-        self.assertEqual([r["name"] for r in rows], [t["name"] for t in st.tasks()])
+        # The System page lists every manifest entry, retired ones too (they show their reason).
+        self.assertEqual([r["name"] for r in rows], [t["name"] for t in st.load()["tasks"]])
         wd = rows[0]
         self.assertEqual((wd["status"], wd["schedule"], wd["time_limit_min"]), ("Ready", "Hourly, 24/7", 15))
         for key in ("description", "command", "log", "run_as", "manual_run", "summary"):
@@ -102,7 +103,7 @@ class TestEveryConsumerReadsTheManifest(unittest.TestCase):
     def test_api_without_task_scheduler_still_lists_the_manifest(self):
         with mock.patch.object(data_api, "_live_task_states", return_value=None):
             rows = data_api.read_scheduled_tasks()
-        self.assertEqual(len(rows), len(st.tasks()))
+        self.assertEqual(len(rows), len(st.load()["tasks"]))
         self.assertTrue(all(r["status"] == "N/A" for r in rows))
 
 
@@ -171,7 +172,9 @@ class TestRegistrarDryRun(unittest.TestCase):
                              stdin=subprocess.DEVNULL)
         if res.returncode != 0:
             raise AssertionError(res.stderr)
-        cls.built = {d["name"]: d for d in (json.loads(l) for l in res.stdout.splitlines() if l.strip())}
+        # Retired tasks print an {"action": "disable"} line instead (tests/test_retired_tasks.py).
+        cls.built = {d["name"]: d for d in (json.loads(l) for l in res.stdout.splitlines() if l.strip())
+                     if "execute" in d}
 
     @staticmethod
     def _dry_run(*extra):
