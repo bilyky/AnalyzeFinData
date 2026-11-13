@@ -1902,7 +1902,9 @@ def is_market_open_now(tokens, env="production") -> bool | None:
     Antifragile market status check. Uses a two-factor verification:
     1. Queries the official E*TRADE /v1/market/clock.json API.
     2. Empirically verifies that the SPY ETF has traded today.
-    Returns True (Open), False (Closed/Holiday), or None on network failure.
+    Returns True (Open), False (Closed/Holiday), or None when neither check could be read
+    (network failure, an expired token's 401, a 5xx): "open" needs at least one check confirming
+    it. It used to fall through to True when both calls failed (found 2026-11-11 with a dead token).
     """
     ck, cs, _, _ = _load_config(env)
     session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
@@ -1911,11 +1913,13 @@ def is_market_open_now(tokens, env="production") -> bool | None:
         # Factor 1: Official Market Clock API
         clock_url = "https://api.etrade.com/v1/market/clock.json"
         clock_r = session.get(clock_url, timeout=10)
+        confirmed = False
         if clock_r.ok:
             clock_data = clock_r.json()
             status = clock_data.get("ClockResponse", {}).get("currentStatus")
             if status and status != "REGULAR":
                 return False  # Clock explicitly says closed, pre-market, or after-hours
+            confirmed = status == "REGULAR"
         
         # Factor 2: Empirical SPY Quote Timestamp Check
         quote_url = "https://api.etrade.com/v1/market/quote/SPY.json"
@@ -1931,9 +1935,10 @@ def is_market_open_now(tokens, env="production") -> bool | None:
                     # If the trade did NOT happen today, the market is closed (e.g. holiday)
                     if trade_time.date() != now_ny.date():
                         return False
-                        
-        # If both checks pass (Clock is REGULAR and SPY traded today), the market is truly open!
-        return True
+                    confirmed = True
+
+        # Open only when a check confirmed it and neither said closed; nothing readable -> unknown.
+        return True if confirmed else None
     except Exception:
         return None
 
