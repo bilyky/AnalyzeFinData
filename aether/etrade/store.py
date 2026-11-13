@@ -11,9 +11,11 @@ Today every piece of E*TRADE state lives in a raw JSON file under ``Data/``:
 That is fine for a single process on one box, but it blocks (a) a clean migration
 to a shared database and (b) running the auth plane and a scaled data plane as
 separate k8s pods. This module defines **ports** (abstract interfaces) for each
-kind of state plus a **file adapter** (today's behaviour) and a seam where a
-``store_db`` adapter can be dropped in later — selected by ``make_etrade_store``
-via the explicit ``AETHER_ETRADE_STORE=db`` opt-in with *zero* call-site changes.
+kind of state plus a **file adapter** (the default) and the ``store_db`` adapter — selected
+by ``make_etrade_store`` via the explicit ``AETHER_ETRADE_STORE=db`` opt-in with *zero*
+call-site changes. With the opt-in, every machine shares one E*TRADE login (token, re-auth
+counters, locks) through ``database.url``, and falls back to its own files when the database
+can't be reached (``_with_file_fallback``; PROD review 2026-11-13).
 
 DESIGN NOTES
 ------------
