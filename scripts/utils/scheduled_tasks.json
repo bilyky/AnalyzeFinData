@@ -45,6 +45,7 @@
     },
     {
       "name": "AETHER_DailyDriver",
+      "retired": "Retired 2026-11-12 (disabling was first recommended 2026-11-02): the Gemini CLI gets HTTP 403 (organization policy) on PROD; the data refresh is AETHER_AftermarketReport. See docs/prod-notes/2026-11-02-prod-review-actions.md section 2.",
       "schedule": {"type": "daily", "at": "07:05"},
       "prompt": "Execute the automated skill defined in .claude/commands/daily-run.md",
       "time_limit_min": 15,
@@ -54,6 +55,7 @@
     },
     {
       "name": "AETHER_PostMarketSync",
+      "retired": "Retired 2026-11-12 (disabling was first recommended 2026-11-02): the Gemini CLI gets HTTP 403 (organization policy) on PROD; the data refresh is AETHER_AftermarketReport. See docs/prod-notes/2026-11-02-prod-review-actions.md section 2.",
       "schedule": {"type": "daily", "at": "13:30"},
       "prompt": "Execute the automated skill defined in .claude/commands/post-market-sync.md",
       "time_limit_min": 15,
@@ -63,6 +65,7 @@
     },
     {
       "name": "AETHER_PostMarketReporter",
+      "retired": "Retired 2026-11-12 (disabling was first recommended 2026-11-02): the Gemini CLI gets HTTP 403 (organization policy) on PROD; the data refresh is AETHER_AftermarketReport. See docs/prod-notes/2026-11-02-prod-review-actions.md section 2.",
       "schedule": {"type": "daily", "at": "14:00"},
       "prompt": "Execute the automated skill defined in .claude/commands/status.md",
       "time_limit_min": 15,
@@ -112,6 +115,7 @@
     },
     {
       "name": "AETHER_RD_Scientist",
+      "retired": "Retired 2026-11-12: the Gemini CLI gets HTTP 403 (organization policy) on PROD (11-07 run); the 2026-11-04 PROD note listed it with the other Gemini tasks. Run its skills by hand.",
       "schedule": {"type": "weekly", "at": "10:00", "day": "Saturday"},
       "prompt": "Execute the automated R&D skills defined in .claude/commands/pattern-discover.md and .claude/commands/failure-dna.md",
       "time_limit_min": 15,

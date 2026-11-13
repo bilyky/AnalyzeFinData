@@ -47,6 +47,10 @@ if ($Only) {
     }
     $Tasks = @($Tasks | Where-Object { $_.name -in $Only })
 }
+# A retired task ("retired": "<reason>") is never registered; one that exists is disabled. PROD
+# 2026-11-11: re-running this script re-created three tasks the 11-02 runbook had disabled.
+$Retired = @($Tasks | Where-Object { $_.retired })
+$Tasks = @($Tasks | Where-Object { -not $_.retired })
 
 if (-not $DryRun) {
     if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
@@ -157,6 +161,25 @@ foreach ($T in $Tasks) {
     }
     catch {
         Write-Error "  [FAILED] to register task $($T.name). Reason: $_"
+    }
+}
+
+foreach ($T in $Retired) {
+    if ($DryRun) {
+        [pscustomobject]@{ name = $T.name; action = "disable"; retired = $T.retired } | ConvertTo-Json -Compress
+        continue
+    }
+    $Existing = Get-ScheduledTask -TaskName $T.name -TaskPath $Folder -ErrorAction SilentlyContinue
+    if ($Existing) {
+        try {
+            Disable-ScheduledTask -TaskName $T.name -TaskPath $Folder -ErrorAction Stop | Out-Null
+            Write-Host "Retired task $($T.name): disabled, not registered. $($T.retired)" -ForegroundColor DarkYellow
+        }
+        catch {
+            Write-Error "  [FAILED] to disable retired task $($T.name). Reason: $_"
+        }
+    } else {
+        Write-Host "Retired task $($T.name): not registered (not present)." -ForegroundColor DarkGray
     }
 }
 
