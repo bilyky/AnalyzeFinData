@@ -13,7 +13,7 @@ import notify
 from aether import etrade
 import powergauge
 from pathlib import Path
-from aether import oceanview_context, paths, scheduled_tasks, trash
+from aether import market_calendar, oceanview_context, paths, scheduled_tasks, trash
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("watchdog")
@@ -49,6 +49,16 @@ def _tasks() -> list[str]:
     except (OSError, ValueError) as e:
         _log.error(f"🛑 [Scheduler Audit] Task manifest is unreadable or invalid: {e}")
         return []
+
+
+def _retired_tasks() -> list[str]:
+    """Retired task paths (known, never audited). Empty when TASKS is set or the manifest is bad."""
+    if TASKS is not None:
+        return []
+    try:
+        return scheduled_tasks.retired_names()
+    except (OSError, ValueError):
+        return []
 # LastRunTime of each failed task already reported, so a task that keeps failing is reported
 # once per failed run instead of in every hourly cycle (PROD 10-09..10-11: hourly emails).
 SCHEDULER_AUDIT_STATE = BASE_DIR / "Data" / "scheduler_audit_state.json"
@@ -63,6 +73,10 @@ DATA_ALERT_MARKER = BASE_DIR / "Data" / "data_alert_sent.json"     # once-a-day 
 SENTINEL_DIRS = ("Symbol", "Symbol_full")
 SENTINEL_MAX_DROP = 0.20     # alert when a cache loses more than 20% of its entries between runs
 BACKUP_STALE_DAYS = 3        # alert when no backup has succeeded for this long
+# The scheduled 07:00 trade run writes this day-stamp on a clean exit (aether.run_guard,
+# stamp="trade_execution"); a manual --force run writes none. Checked from 07:30 PT on a session day.
+TRADE_RUN_STAMP = BASE_DIR / "Data" / "run_stamps" / "trade_execution.date"
+TRADE_RUN_DUE = (7, 30)
 PACK_STATUS_STALE_H = 30     # the evening pipeline rebuilds the OceanView pack daily; older = missed
 # Where the pack writes its verdict (same folder as the pack's own default, paths.data_dir()).
 PACK_STATUS_FILE = Path(paths.data_dir()) / oceanview_context.STATUS_NAME
@@ -612,7 +626,8 @@ def purge_stray_tasks():
             # Whitelist = the full \AETHER_Agents\ paths of the audited tasks, nothing else. A task
             # with the same name at the root or in another folder is a duplicate (the 10-12 double
             # 05:30 / 07:00 runs), as are the old root tasks (AnalyzeFinData_*, Project_AETHER_Watchdog).
-            whitelist = {t.lower() for t in _tasks()}
+            # Retired tasks are known, not strays: the registrar disables them.
+            whitelist = {t.lower() for t in _tasks() + _retired_tasks()}
             stray_tasks = [name for name in aether_tasks if name.lower() not in whitelist]
 
             if stray_tasks:
@@ -732,6 +747,25 @@ def check_backup_health():
         return [f"WARNING: last successful Data backup was {age.days} days ago ({last_ok}); "
                 f"last result: {last_result}. {cause}"]
     return []
+
+
+def check_trade_run_today(now=None):
+    """Alert when an NYSE session day has no scheduled trade run by TRADE_RUN_DUE (Pacific).
+
+    PROD 2026-11-11: the 07:00 run never happened and nothing said so (PROD review 11-12)."""
+    now = now or datetime.datetime.now(pytz.timezone("America/Los_Angeles"))
+    today = now.date()
+    if not market_calendar.is_session(today) or (now.hour, now.minute) < TRADE_RUN_DUE:
+        return []
+    try:
+        last = TRADE_RUN_STAMP.read_text(encoding="utf-8").strip() if TRADE_RUN_STAMP.exists() else ""
+    except OSError as e:
+        last = f"unreadable ({e})"
+    if last == today.isoformat():
+        return []
+    return [f"WARNING: no scheduled trade run today ({today.isoformat()}); the last one was "
+            f"{last or 'never'}. Check the AETHER_ExecuteTrades task and execute_trades_agent.log. "
+            "To trade today, run: ai_portfolio_game.py --run --force"]
 
 
 def check_context_pack_health():
@@ -1067,7 +1101,7 @@ def run_watchdog():
     data_issue = check_data_freshness()
     # 1a. Data-loss sentinel + backup health. They alert on their own: the recovery report
     #     below is only sent for healing actions or log errors, so a data issue never emailed.
-    data_alerts = check_data_sentinel() + check_backup_health()
+    data_alerts = check_data_sentinel() + check_backup_health() + check_trade_run_today()
     send_data_alerts(data_alerts)
     # 1a'. OceanView context pack health gate (pack rebuilt by the evening daily_task).
     send_data_alerts(check_context_pack_health(),

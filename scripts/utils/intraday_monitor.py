@@ -39,6 +39,10 @@ _CLEAR_MARGIN_PCT = 0.02
 # the stop is probably out of date (PROD: hand-set stops 22% to 10x above the price).
 _STALE_STOP_PCT = 0.20
 
+def _today() -> str:
+    return str(datetime.date.today())
+
+
 def load_state() -> dict:
     """Load the last active stop-breach state from disk."""
     if STATE_FILE.exists():
@@ -109,7 +113,17 @@ def monitor():
     symbols = [p["symbol"] for p in monitored]
     quotes = get_live_prices(symbols)
 
+    # Load previous state. "alerted" remembers what each email already reported, so a
+    # breach is emailed once, not again each time the price crosses back over the stop
+    # (PROD 2026-11-03: 7 emails in one day, the same 9-12 breaches in each).
+    state = load_state()
+    last_breached = state.get("last_breached", {})
+    alerted = dict(state.get("alerted", last_breached))
+    alerted_before = dict(alerted)   # as of the last run; `alerted` is updated below
+    blind_alerted = state.get("blind_alerted", "")
+
     current_breaches = {}
+    missing = []
     for p in monitored:
         sym = p["symbol"]
         stop = p["stop"]
@@ -118,15 +132,29 @@ def monitor():
             if last_price <= stop:
                 current_breaches[sym] = {"stop": stop, "price": last_price}
         else:
-            _log.warning(f"Could not fetch live price for {sym}")
+            missing.append(sym)
+            # No quote is not a recovery: keep a known breach as it was, so it is neither
+            # "cleared" now nor re-sent as new once quotes return.
+            if sym in last_breached:
+                current_breaches[sym] = last_breached[sym]
 
-    # Load previous state. "alerted" remembers what each email already reported, so a
-    # breach is emailed once, not again each time the price crosses back over the stop
-    # (PROD 2026-11-03: 7 emails in one day, the same 9-12 breaches in each).
-    state = load_state()
-    last_breached = state.get("last_breached", {})
-    alerted = dict(state.get("alerted", last_breached))
-    alerted_before = dict(alerted)   # as of the last run; `alerted` is updated below
+    # One line for all missing quotes, and one email a day when most are missing (PROD 11-09
+    # 11:15-12:16: DNS failed, and each run logged a warning per position and alerted no one).
+    if missing:
+        shown = ", ".join(missing[:8]) + (f" (+{len(missing) - 8} more)" if len(missing) > 8 else "")
+        _log.warning(f"Could not fetch live price for {len(missing)}/{len(monitored)} positions: {shown}")
+        today = _today()
+        if len(missing) * 2 >= len(monitored) and blind_alerted != today:
+            try:
+                notify.send_email(
+                    f"AETHER ALERT: stop monitor has no prices ({len(missing)}/{len(monitored)} positions)",
+                    f"The intraday stop monitor got no live price for {len(missing)} of {len(monitored)} "
+                    "monitored positions, so their stops are not being checked. Check E*TRADE access "
+                    "and the network on the PROD machine (the run's log shows the error).\n\n"
+                    f"Missing: {', '.join(missing)}")
+                blind_alerted = today
+            except Exception as e:
+                _log.error(f"Could not send the no-prices alert: {e}")
 
     # Alert a breach that is new, whose stop moved (e.g. a trailing/ratchet adjustment), or
     # whose price made a new low at least _MATERIAL_DROP_PCT below what we last alerted on.
@@ -231,7 +259,10 @@ def monitor():
         _log.info("No stop breaches detected.")
 
     # Save the current state for the next run
-    save_state({"last_breached": current_breaches, "alerted": alerted})
+    saved = {"last_breached": current_breaches, "alerted": alerted}
+    if blind_alerted:
+        saved["blind_alerted"] = blind_alerted   # the day the no-prices email went out
+    save_state(saved)
 
 if __name__ == "__main__":
     monitor()
