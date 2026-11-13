@@ -17,6 +17,8 @@ ENV = "production"
 class TestTokenHost(unittest.TestCase):
     def setUp(self):
         self.fs = store.FileTokenStore()
+        store._warned_hosts.clear()
+        self.addCleanup(store._warned_hosts.clear)
         self.addCleanup(lambda: os.path.exists(etrade._TOKEN_PATH) and os.remove(etrade._TOKEN_PATH))
 
     def _write(self, **extra):
@@ -40,6 +42,17 @@ class TestTokenHost(unittest.TestCase):
             self.assertIsNone(self.fs.load(ENV))
             self.assertIsNone(self.fs.load_any_date(ENV))              # nor renewed from here
         self.assertIn("saved on another machine (prod-pc)", cm.output[0])
+        self.assertEqual(len(cm.output), 1)                             # two loads, one warning
+
+    def test_warned_once_per_host_but_still_ignored(self):
+        self._write(host="prod-pc")
+        with mock.patch.object(store.socket, "gethostname", return_value="DEV-PC"),                 self.assertLogs(etrade._log.name, level="WARNING") as cm:
+            for _ in range(3):
+                self.assertIsNone(self.fs.load(ENV))
+            self._write(host="other-pc")
+            self.assertIsNone(self.fs.load(ENV))
+        self.assertEqual(len(cm.output), 2)                             # prod-pc once, other-pc once
+        self.assertIn("(other-pc)", cm.output[1])
 
     def test_host_match_ignores_case_and_old_files_still_load(self):
         self._write(host="Dev-PC")

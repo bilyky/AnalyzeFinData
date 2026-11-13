@@ -218,14 +218,21 @@ def _this_host() -> str:
     return socket.gethostname().lower()
 
 
+_warned_hosts: set = set()   # foreign hosts already warned about in this process
+
+
 def _from_another_host(tokens: dict) -> bool:
     """True when the token file was saved on another machine. A backup copy of PROD's Data/
     brought PROD's live token onto dev (2026-11-05 and 2026-11-10); dev and PROD share one app
     key, so using or renewing that token from dev can end PROD's session. Files saved before
-    the host was recorded have no "host" and are used as before."""
+    the host was recorded have no "host" and are used as before. The warning is logged once per
+    process per host: every load (and every price fetch) checks."""
     host = tokens.get("host")
     if not host or str(host).lower() == _this_host():
         return False
+    if str(host).lower() in _warned_hosts:
+        return True
+    _warned_hosts.add(str(host).lower())
     _pkg()._log.warning(f"E*TRADE token file was saved on another machine ({host}), not this one "
                         f"({_this_host()}): ignoring it. Log in on this machine to get its own token.")
     return True
