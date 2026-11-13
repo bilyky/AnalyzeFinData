@@ -67,10 +67,50 @@ class TestHit(unittest.TestCase):
         with ds.live_index(rows, []):
             r = ds.hit_test(per, "oos")
             d = ds.digit_by_day(per)
-        self.assertEqual((r["signals"], r["days"]), (2, 2))     # $13 fires nothing
+        self.assertEqual((r["signals"], r["days"], r["bullish_share"]), (2, 2, 0.0))     # $13 fires nothing; bearish
         self.assertAlmostEqual(r["excess_hit_pct"], 50.0)       # bearish call, down day: -(0 - 0.5)
         self.assertEqual(d["X"]["2023-01-03"], 0.0)             # prior close $11 -> digit 2: no signal
         self.assertEqual(d["X"]["2023-01-04"], -1.0)            # prior close $12 -> digit 3
+
+
+class TestSamePeriodBase(unittest.TestCase):
+    def test_market_drift_is_not_a_hit(self):
+        """Bullish signals in a period with more up days than the old base: a hit against the old
+        base, nothing against the same period's base."""
+        rows = [{"symbol": "X", "type": "CLOSE", "digit": 3, "z": 3.0, "temporal": "consistent",
+                 "has_flip": False, "is_sparse": False}]
+        recs = [(f"2023-01-{k + 2:02d}", 12.0, int(k % 10 < 7), 11.0) for k in range(20)]   # every day fires
+        per = {"X": {"base": 0.5, "oos": recs, "ins": []}}
+        with ds.live_index(rows, []):
+            old = ds.hit_test(per, "oos")
+            same = ds.hit_test(per, "oos", same_period=True)
+        self.assertEqual((old["signals"], old["bullish_share"]), (20, 1.0))
+        self.assertAlmostEqual(old["excess_hit_pct"], 20.0)                      # 70% up vs a 50% base
+        self.assertAlmostEqual(same["excess_hit_pct"], 0.0)                      # vs its own 70%
+        self.assertEqual(same["base"], "same period")
+
+
+class TestTemporalCheckSeesOnlyPreCutoffBars(unittest.TestCase):
+    def test_window_analysis_gets_no_post_cutoff_bar(self):
+        """The temporal check decides which buckets the live gate keeps: post-cutoff bars must not
+        reach it."""
+        import json
+        import tempfile
+        from unittest import mock
+        ts = series(1600, start=datetime.date(2019, 1, 1), up=lambda i: i % 3 != 0, price=lambda i: 10.0)
+        seen = []
+
+        def spy(dg, z, bars, fn, typ):
+            seen.append(max(bars))
+            return {"temporal": "consistent", "coverage": 1.0, "has_flip": False, "is_sparse": False}
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "X_daily.json"), "w", encoding="utf-8") as f:
+                json.dump({"Time Series (Daily)": ts}, f)
+            with mock.patch.object(ds.su, "window_analysis", side_effect=spy), \
+                    mock.patch.object(ds, "_z", return_value=3.0):
+                ds.symbol_job(("X", tmp))
+        self.assertTrue(seen)
+        self.assertLess(max(seen), ds.CUTOFF)
 
 
 class TestScoresAndReturns(unittest.TestCase):

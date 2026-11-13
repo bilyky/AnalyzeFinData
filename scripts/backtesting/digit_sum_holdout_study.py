@@ -18,7 +18,9 @@ the digit sum is of the traded price.
 Out of sample, 2023-01-01 on (#72's three measures):
   (a) hit rate, reported: for each signal the index fires (prior close's bucket), the next
       session up minus the symbol's in-sample base rate, signed by the score; mean per date,
-      Newey-West t lag 1; next to the same measure in sample (how much the index shrinks).
+      Newey-West t lag 1; next to the same measure in sample (how much the index shrinks), and
+      out of sample against each symbol's own up rate over the same period (added after the
+      first run, when an old base turned the 2023-26 market's up drift into an apparent hit).
   (b) rank IC: per date among today's gated candidates (rule_walkforward CURRENT mask on the
       replay scores, digit off), Spearman IC of S10 + digit vs the 20-day forward return minus
       IC of S10 alone; Newey-West t lag 19 (rank_ic_study's machinery).
@@ -166,19 +168,27 @@ def live_index(rows_int, rows_full):
         scoring._digit_index, scoring._digit_full_index = saved
 
 
-def hit_test(per_sym: dict, key: str) -> dict:
-    """(a): per date, mean of sign(score) * (next up - in-sample base) over fired signals."""
-    by_day = {}
+def hit_test(per_sym: dict, key: str, same_period: bool = False) -> dict:
+    """(a): per date, mean of sign(score) * (next up - base) over fired signals. base = the symbol's
+    in-sample (pre-cutoff) up rate, or with same_period its up rate over the same records: in a
+    rising market an old base makes mostly-bullish signals look right (market drift, not digits)."""
+    by_day, bullish = {}, 0
     for sym, data in per_sym.items():
-        base = data["base"]
-        for day, close, up, _prev in data[key]:
+        recs = data[key]
+        if same_period and not recs:
+            continue
+        base = sum(u for _d, _c, u, _p in recs) / len(recs) if same_period else data["base"]
+        for day, close, up, _prev in recs:
             s = scoring.digit_sum_score(sym, close)
             if s:
+                bullish += s > 0
                 by_day.setdefault(day, []).append((1 if s > 0 else -1) * (up - base))
     days = sorted(by_day)
     means = [sum(by_day[d]) / len(by_day[d]) for d in days]
     t = sg._t_hac(means, 1)
-    return {"signals": sum(len(v) for v in by_day.values()), "days": len(days),
+    n = sum(len(v) for v in by_day.values())
+    return {"signals": n, "days": len(days), "bullish_share": round(bullish / n, 3) if n else None,
+            "base": "same period" if same_period else "pre-cutoff",
             "excess_hit_pct": round(100 * float(np.mean(means)), 3) if means else None,
             "t_hac": round(t, 2) if t is not None else None}
 
@@ -237,6 +247,7 @@ def main(argv=None) -> int:
     ap.add_argument("--draws", type=int, default=50)
     ap.add_argument("--wf-panel", default=os.path.join(tempfile.gettempdir(), "rnd72_rule_wf_panel.pkl"))
     ap.add_argument("--max-symbols", type=int, default=None, help="smoke test on a slice (don't read results)")
+    ap.add_argument("--hit-only", action="store_true", help="measure (a) only (both bases); skip (b) and (c)")
     a = ap.parse_args(argv)
     ohlcv_dir, cache = paths.ohlcv_dir(), paths.cache_dir()
     symbols = sorted(os.path.basename(f)[:-len("_daily.json")] for f in glob.glob(os.path.join(ohlcv_dir, "*_daily.json")))
@@ -254,7 +265,14 @@ def main(argv=None) -> int:
                         "buckets_tested": len(rows_int) + len(rows_full)}
         rep["a_hit_in_sample"] = hit_test(per_sym, "ins")
         rep["a_hit_out_of_sample"] = hit_test(per_sym, "oos")
+        rep["a_hit_out_of_sample_same_period_base"] = hit_test(per_sym, "oos", same_period=True)
         dmap = digit_by_day(per_sym)
+    if a.hit_only:
+        out = os.path.join(paths.data_dir(), f"digit_sum_holdout_hit_{datetime.datetime.now():%Y-%m-%d_%H%M%S}.json")
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(rep, f, indent=1)
+        sys.stdout.write(json.dumps(rep, indent=1) + f"\nwrote {out}\n")
+        return 0
     if a.max_symbols:                        # a slice: never touch the full caches
         sym_dir = os.path.join(cache, "Symbol")
         wf_rows = [r for s in symbols if os.path.isdir(os.path.join(sym_dir, s))
