@@ -175,6 +175,68 @@ class TestTlsFailureIsNotADeadToken(unittest.TestCase):
         result, calls, _ = self._run(requests.exceptions.ConnectionError("refused"))
         self.assertIn("LOGIN", calls)                    # the failure belonged to the first call only
 
+    def test_another_threads_call_cannot_clear_this_calls_tls_failure(self):
+        """#257 recheck: the failure record was one module-level list that every get_tokens() call
+        cleared. Thread A's check and renew fail TLS; just before A reaches its guard, thread B runs a
+        whole get_tokens() (a plain network error there). With a shared list, B's clear let A log in."""
+        import json
+        import tempfile
+        import threading
+        from unittest import mock
+        import requests
+        from aether import etrade
+        calls = []
+        thread_a = {}
+
+        class Session:
+            def __init__(self, *a, **k):
+                pass
+
+            def get(self, url, **k):
+                if threading.current_thread() is thread_a.get("t"):
+                    raise requests.exceptions.SSLError("CERTIFICATE_VERIFY_FAILED")
+                raise requests.exceptions.ConnectionError("refused")
+
+        def login(*a, **k):
+            calls.append(("LOGIN", threading.current_thread().name))
+            return None
+
+        real_warning = etrade._log.warning
+
+        def warning(msg, *a, **k):
+            # A's last step before the guard: run B's whole call right here.
+            if "today's token renewal failed" in str(msg) and threading.current_thread() is thread_a.get("t") \
+                    and not thread_a.get("b_done"):
+                thread_a["b_done"] = True
+                b = threading.Thread(target=lambda: etrade.get_tokens("production"), name="B")
+                b.start()
+                b.join(10)
+            return real_warning(msg, *a, **k)
+
+        tmp = tempfile.mkdtemp()
+        tok = {"oauth_token": "t", "oauth_token_secret": "s", "env": "production", "saved_at": 0,
+               "issued_date_et": etrade._et_today()}
+        with open(etrade._TOKEN_PATH, "w") as f:
+            json.dump(tok, f)
+        self.addCleanup(lambda: os.path.exists(etrade._TOKEN_PATH) and os.remove(etrade._TOKEN_PATH))
+        result = {}
+        with mock.patch.object(etrade, "OAuth1Session", Session), \
+                mock.patch.object(etrade, "_load_config", return_value=("ck", "cs", "u", "p")), \
+                mock.patch.object(etrade, "_login_headless", side_effect=login), \
+                mock.patch.object(etrade, "_reauth_cooldown_remaining", return_value=0), \
+                mock.patch.object(etrade, "_DATA_DIR", tmp), \
+                mock.patch.object(etrade, "_REAUTH_LOCK_PATH", os.path.join(tmp, "reauth.lock")), \
+                mock.patch.object(etrade.CFG, "etrade_totp_secret", "x", create=True), \
+                mock.patch.object(etrade._log, "warning", side_effect=warning):
+            a = threading.Thread(target=lambda: result.update(a=etrade.get_tokens("production")), name="A")
+            thread_a["t"] = a
+            a.start()
+            a.join(20)
+        self.assertTrue(thread_a.get("b_done"))                        # B really ran inside A's call
+        self.assertIn(("LOGIN", "B"), calls)                           # B (no TLS failure) may log in
+        self.assertNotIn(("LOGIN", "A"), calls)                        # A (TLS failure) must not
+        self.assertIsNone(result.get("a"))
+
     def test_a_person_may_still_log_in(self):
         import requests
         result, calls, _ = self._run(requests.exceptions.SSLError("CERTIFICATE_VERIFY_FAILED"), allow_browser=True)

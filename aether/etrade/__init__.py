@@ -3,6 +3,7 @@ import json
 import os
 import re as _re
 import sys
+import threading
 import time
 from zoneinfo import ZoneInfo
 
@@ -212,11 +213,20 @@ def _load_tokens(env):
 # A TLS certificate failure is not a dead token: it means this machine can't verify E*TRADE's
 # certificate (a proxy or antivirus intercepting HTTPS). get_tokens() must not answer it with an
 # automated login, which a browser (own certificate store) might complete, once an hour.
-_tls_failures: list = []
+# Per thread: the dashboard's worker threads call get_tokens() concurrently, and one call must not
+# clear or see another's failures (the token check and the renew run on the caller's thread).
+_tls_seen = threading.local()
+
+
+def _tls_failures() -> list:
+    """The TLS failures noted by the current get_tokens() call on this thread."""
+    if getattr(_tls_seen, "failures", None) is None:
+        _tls_seen.failures = []
+    return _tls_seen.failures
 
 
 def _note_tls_failure(where: str, exc: Exception) -> None:
-    _tls_failures.append(where)
+    _tls_failures().append(where)
     _log.error(f"E*TRADE: TLS certificate check failed in {where} ({exc}). Not a token problem: fix the "
                f"certificate chain (REQUESTS_CA_BUNDLE) or the proxy; see scripts/diagnostics/tls_precheck.py.")
 
@@ -1292,7 +1302,7 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     Only the interactive allow_browser=True path can raise (headless-environment guard).
     """
     ck, cs, username, password = _load_config(env)
-    _tls_failures.clear()               # TLS failures seen during THIS call (see _note_tls_failure)
+    _tls_seen.failures = []             # TLS failures seen during THIS call on this thread
 
     # Try today's tokens (fast path — no browser)
     cached = _load_tokens(env)
@@ -1349,9 +1359,10 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
 
     # A TLS failure in the token check or the renew is a certificate problem, not a dead token:
     # stop before the automated login (a person may still log in with allow_browser=True).
-    if _tls_failures and not allow_browser:
+    tls_failed = _tls_failures()
+    if tls_failed and not allow_browser:
         _log.error("E*TRADE: skipping automated re-auth: TLS certificate check failed "
-                   f"({', '.join(dict.fromkeys(_tls_failures))}). Returning None.")
+                   f"({', '.join(dict.fromkeys(tls_failed))}). Returning None.")
         return None
 
     # Silent renewal exhausted — try headless Playwright with saved browser state.
