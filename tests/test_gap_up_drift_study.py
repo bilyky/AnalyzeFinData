@@ -42,6 +42,12 @@ class TestEvents(unittest.TestCase):
         o[55], v[55] = 11.5, 400.0                                   # 25 later: counted
         self.assertEqual(gs.find_events(bars(c, o, v)), [30, 55])
 
+    def test_volume_baseline_excludes_the_gap_day(self):
+        """3.2x the 20 sessions before t: an event. If the baseline included day t itself it would be
+        (19*100 + 320) / 20 = 111, and 320 < 3 x 111 (review of #262)."""
+        c, o, v = gap_at(60, 30, vol=320.0)
+        self.assertEqual(gs.find_events(bars(c, o, v)), [30])
+
     def test_needs_volume_history(self):
         c, o, v = gap_at(60, 10)
         self.assertEqual(gs.find_events(bars(c, o, v)), [])          # fewer than 21 prior bars
