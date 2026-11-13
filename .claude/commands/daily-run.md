@@ -6,13 +6,13 @@ the qualitative picks/rotations, and sends an email summary.
 
 > **Scope (post scheduler-split):** this driver does **not** place trades. Deterministic
 > buy/sell execution and stop checks run in the separate `AETHER_ExecuteTrades` task
-> (`ai_portfolio_game.py --run`) at 07:00; this qualitative `AETHER_DailyDriver` runs
-> just after. The two share the `portfolio_state` mutex (`aether/run_guard.py`), so the
-> pipeline waits for the executor to finish rather than racing it on the workbook.
+> (`ai_portfolio_game.py --run`) at 07:00. This driver used to run just after it as the
+> scheduled `AETHER_DailyDriver` task; a manual run shares the `portfolio_state` mutex
+> (`aether/run_guard.py`), so it waits for the executor instead of racing it on the workbook.
 >
-> **Retired as a scheduled task (2026-11-02):** on PROD the Gemini CLI gets HTTP 403, so
-> `AETHER_DailyDriver` is marked `"retired"` in `scripts/utils/scheduled_tasks.json`; the
-> registrar disables it. Run this skill by hand.
+> **Retired as a scheduled task (2026-11-12):** on PROD the Gemini CLI gets HTTP 403 (disabling
+> it was first recommended 2026-11-02), so `AETHER_DailyDriver` is marked `"retired"` in
+> `scripts/utils/scheduled_tasks.json` and the registrar disables it. Run this skill by hand.
 
 ## Run
 
