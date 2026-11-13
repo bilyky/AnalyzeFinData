@@ -34,7 +34,7 @@ from typing import Optional
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from sqlalchemy import Column, Float, Integer, MetaData, String, Table, Text, create_engine, delete, insert, select, update
+from sqlalchemy import Column, Float, Integer, MetaData, String, Table, Text, create_engine, delete, insert, select, text, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from aether.etrade.store import (
@@ -203,6 +203,16 @@ class DbReauthStateStore(ReauthStateStore):
         self.save({"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}, env)
 
 
+def _db_epoch(conn) -> float:
+    """The database's clock in epoch seconds. Leases are written and checked against it, so two
+    machines whose clocks differ can't take over each other's live lease (#268 review)."""
+    if conn.dialect.name == "postgresql":
+        return float(conn.execute(text("SELECT EXTRACT(EPOCH FROM clock_timestamp())")).scalar())
+    if conn.dialect.name == "sqlite":
+        return float(conn.execute(text("SELECT (julianday('now') - 2440587.5) * 86400.0")).scalar())
+    return time.time()
+
+
 class DbLockProvider(LockProvider):
     """Row-lease lock: one row per lock name, reclaimed once its lease (``ttl``) has expired. A
     crashed holder therefore blocks others for at most ``ttl`` seconds, as with the file lock."""
@@ -211,10 +221,10 @@ class DbLockProvider(LockProvider):
         self._db = db
 
     def acquire(self, name: str, ttl: int = _DEFAULT_LOCK_TTL) -> Optional[LockHandle]:
-        owner = f"{_owner()}:{time.time():.6f}"
-        now = time.time()
+        owner = f"{_owner()}:{time.time():.6f}"   # unique per attempt; not used as a clock
 
         def take(c):
+            now = _db_epoch(c)
             try:
                 with c.begin_nested():
                     c.execute(insert(LOCKS).values(name=name, owner=owner, expires_at=now + ttl))
@@ -237,9 +247,8 @@ class DbLockProvider(LockProvider):
                                                               LOCKS.c.owner == handle.owner)))
 
     def is_held(self, name: str) -> bool:
-        now = time.time()
         return bool(self._db.run(lambda c: c.execute(
-            select(LOCKS.c.name).where(LOCKS.c.name == name, LOCKS.c.expires_at >= now)).first()))
+            select(LOCKS.c.name).where(LOCKS.c.name == name, LOCKS.c.expires_at >= _db_epoch(c))).first()))
 
 
 def make_db_store(database_url: str, key_secret: str = "") -> EtradeStore:

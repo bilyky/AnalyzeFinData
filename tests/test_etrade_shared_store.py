@@ -61,6 +61,7 @@ class _Base(unittest.TestCase):
         for p in self._common:
             p.start()
         store._WARNED.clear()
+        store._shared_down_until = 0.0     # the per-process outage window
 
     def tearDown(self):
         for p in reversed(self._common):
@@ -68,6 +69,7 @@ class _Base(unittest.TestCase):
         for url in [u for u in store_db._ENGINES if u.startswith("sqlite")]:
             store_db._ENGINES.pop(url).dispose()
         store._WARNED.clear()
+        store._shared_down_until = 0.0     # the per-process outage window
         self._td.cleanup()
 
     def db(self, key=_SECRET):
@@ -138,6 +140,64 @@ class DbAdapterTest(_Base):
         self.assertIsInstance(self.db().browser_state, store.FileBrowserStateStore)
 
 
+class _DownTokenStore(store.TokenStore):
+    """A shared store that is down: every call counts and raises StoreUnavailable."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def _down(self, *_a, **_k):
+        self.calls += 1
+        raise StoreUnavailable("down")
+
+    load = load_any_date = save = delete = _down
+
+
+class OutageWindowTest(_Base):
+    """#268 review: during a NAS outage each call waited ~5 s for the connect timeout before falling
+    back. After one StoreUnavailable the process must use its files directly for a while."""
+
+    def test_an_outage_is_tried_once_per_window(self):
+        down = _DownTokenStore()
+        tokens = store._FallbackTokenStore(down, store.FileTokenStore())
+        with _Machine(self.root, "a"):
+            store.FileTokenStore().save(self.tok(1), "production")
+            for _ in range(3):
+                self.assertEqual(tokens.load("production")["oauth_token"], "tok1")
+        self.assertEqual(down.calls, 1)
+
+    def test_the_database_is_tried_again_after_the_window(self):
+        down = _DownTokenStore()
+        tokens = store._FallbackTokenStore(down, store.FileTokenStore())
+        with _Machine(self.root, "a"):
+            store.FileTokenStore().save(self.tok(1), "production")
+            tokens.load("production")
+            with mock.patch.object(store.time, "monotonic", return_value=store.time.monotonic() + store.SHARED_RETRY_S + 1):
+                tokens.load("production")
+        self.assertEqual(down.calls, 2)
+
+    def test_one_window_for_tokens_locks_and_reauth_state(self):
+        down = _DownTokenStore()
+        with _Machine(self.root, "a"):
+            store._FallbackTokenStore(down, store.FileTokenStore()).load("production")
+            lock = mock.Mock(spec=store.LockProvider)
+            fb = store._FallbackLockProvider(lock, store.FileLockProvider(lock_dir=et._DATA_DIR))
+            h = fb.acquire("etrade_reauth.lock", ttl=30)
+            fb.release(h)
+        lock.acquire.assert_not_called()                  # the window from the token outage applies
+
+
+class ClockSkewTest(_Base):
+    def test_a_machine_with_a_fast_clock_cannot_take_a_live_lease(self):
+        """#268 review: leases used each machine's own clock, so a clock running ahead by more than a
+        lease could take over the other machine's live lock. Leases use the database's clock."""
+        s = self.db()
+        self.assertIsNotNone(s.lock.acquire("etrade_reauth.lock", ttl=300))        # machine A
+        with mock.patch.object(store_db.time, "time", return_value=store_db.time.time() + 1000):
+            self.assertIsNone(s.lock.acquire("etrade_reauth.lock", ttl=300))      # machine B, clock +1000 s
+            self.assertTrue(s.lock.is_held("etrade_reauth.lock"))
+
+
 class FallbackTest(_Base):
     def test_unreachable_db_uses_the_local_file_and_warns_once(self):
         with _Machine(self.root, "a"), \
@@ -148,7 +208,7 @@ class FallbackTest(_Base):
             self.assertEqual(et._load_tokens("production")["oauth_token"], "tok1")
             self.assertTrue(Path(et._TOKEN_PATH).exists())
         warns = [m for m in logs.output if "shared store unavailable" in m]
-        self.assertEqual(len(warns), 2, warns)          # one for "token save", one for "token load"
+        self.assertEqual(len(warns), 1, warns)          # the save fails; the loads skip the DB (outage window)
 
     def test_a_token_minted_during_an_outage_is_shared_once_the_db_is_back(self):
         with _Machine(self.root, "a"):

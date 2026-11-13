@@ -56,6 +56,7 @@ import abc
 import contextlib
 import json
 import os
+import time
 from typing import Optional
 
 
@@ -405,12 +406,32 @@ def _file_store() -> EtradeStore:
 
 _WARNED: set = set()   # one fallback warning per operation per process
 
+# After a StoreUnavailable this process uses its files directly for SHARED_RETRY_S, then tries the
+# database again. Without it, every call during a NAS / Tailscale outage first waited the ~5 s connect
+# timeout (#268 review: three get_tokens() calls took 5.1 s, 5.0 s, 5.0 s).
+SHARED_RETRY_S = 300
+_shared_down_until = 0.0   # time.monotonic() until which the shared store is skipped
+
 
 def _fallback_warning(what: str, err: Exception) -> None:
     if what in _WARNED:
         return
     _WARNED.add(what)
-    _pkg()._log.warning(f"E*TRADE shared store unavailable ({what}: {err}); using this machine's files.")
+    _pkg()._log.warning(f"E*TRADE shared store unavailable ({what}: {err}); using this machine's files"
+                        f" (the database is tried again in {SHARED_RETRY_S // 60} min).")
+
+
+def _try_shared(what: str, fn):
+    """``(True, fn())`` from the shared store, or ``(False, None)`` when it is down or inside the outage window."""
+    global _shared_down_until
+    if time.monotonic() < _shared_down_until:
+        return False, None
+    try:
+        return True, fn()
+    except StoreUnavailable as e:
+        _shared_down_until = time.monotonic() + SHARED_RETRY_S
+        _fallback_warning(what, e)
+        return False, None
 
 
 class _FallbackTokenStore(TokenStore):
@@ -421,41 +442,25 @@ class _FallbackTokenStore(TokenStore):
         self._shared, self._local = shared, local
 
     def load(self, env: str) -> Optional[dict]:
-        try:
-            tokens = self._shared.load(env)
-        except StoreUnavailable as e:
-            _fallback_warning("token load", e)
-            return self._local.load(env)
-        if tokens:
+        ok, tokens = _try_shared("token load", lambda: self._shared.load(env))
+        if ok and tokens:
             return tokens
-        # Nothing shared today: this machine may hold one minted while the database was down.
-        tokens = self._local.load(env)
-        if tokens:
-            try:
-                self._shared.save(dict(tokens), env)
-            except StoreUnavailable as e:
-                _fallback_warning("token save", e)
-        return tokens
+        local = self._local.load(env)
+        if ok and local:
+            # Nothing shared today: this machine may hold one minted while the database was down.
+            _try_shared("token save", lambda: self._shared.save(dict(local), env))
+        return local
 
     def load_any_date(self, env: str) -> Optional[dict]:
-        try:
-            return self._shared.load_any_date(env) or self._local.load_any_date(env)
-        except StoreUnavailable as e:
-            _fallback_warning("token load", e)
-            return self._local.load_any_date(env)
+        ok, tokens = _try_shared("token load", lambda: self._shared.load_any_date(env))
+        return tokens if ok and tokens else self._local.load_any_date(env)
 
     def save(self, tokens: dict, env: str) -> None:
         self._local.save(tokens, env)
-        try:
-            self._shared.save(dict(tokens), env)
-        except StoreUnavailable as e:
-            _fallback_warning("token save", e)
+        _try_shared("token save", lambda: self._shared.save(dict(tokens), env))
 
     def delete(self, env: Optional[str] = None, if_token: Optional[str] = None) -> None:
-        try:
-            self._shared.delete(env=env, if_token=if_token)
-        except StoreUnavailable as e:
-            _fallback_warning("token delete", e)
+        _try_shared("token delete", lambda: self._shared.delete(env=env, if_token=if_token))
 
 
 class _FallbackReauthStateStore(ReauthStateStore):
@@ -463,18 +468,12 @@ class _FallbackReauthStateStore(ReauthStateStore):
         self._shared, self._local = shared, local
 
     def load(self, env: str = "production") -> dict:
-        try:
-            return self._shared.load(env)
-        except StoreUnavailable as e:
-            _fallback_warning("re-auth state load", e)
-            return self._local.load(env)
+        ok, state = _try_shared("re-auth state load", lambda: self._shared.load(env))
+        return state if ok else self._local.load(env)
 
     def save(self, state: dict, env: str = "production") -> None:
         self._local.save(state, env)
-        try:
-            self._shared.save(state, env)
-        except StoreUnavailable as e:
-            _fallback_warning("re-auth state save", e)
+        _try_shared("re-auth state save", lambda: self._shared.save(state, env))
 
     def reset(self, env: str = "production") -> None:
         self.save({"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}, env)
@@ -487,11 +486,8 @@ class _FallbackLockProvider(LockProvider):
         self._shared, self._local = shared, local
 
     def acquire(self, name: str, ttl: int = _DEFAULT_LOCK_TTL) -> Optional[LockHandle]:
-        try:
-            return self._shared.acquire(name, ttl)
-        except StoreUnavailable as e:
-            _fallback_warning("lock", e)
-            return self._local.acquire(name, ttl)
+        ok, handle = _try_shared("lock", lambda: self._shared.acquire(name, ttl))
+        return handle if ok else self._local.acquire(name, ttl)
 
     def release(self, handle: Optional[LockHandle]) -> None:
         if handle is None:
@@ -499,16 +495,12 @@ class _FallbackLockProvider(LockProvider):
         if handle.path:                       # a file lock (taken during a fallback)
             self._local.release(handle)
             return
-        try:
-            self._shared.release(handle)
-        except StoreUnavailable as e:         # the lease expires on its own after its ttl
-            _fallback_warning("lock release", e)
+        # If the database is down now, the lease expires on its own after its ttl.
+        _try_shared("lock release", lambda: self._shared.release(handle))
 
     def is_held(self, name: str) -> bool:
-        try:
-            return self._shared.is_held(name)
-        except StoreUnavailable:
-            return os.path.exists(self._local._resolve(name))
+        ok, held = _try_shared("lock", lambda: self._shared.is_held(name))
+        return held if ok else os.path.exists(self._local._resolve(name))
 
 
 def _with_file_fallback(shared: EtradeStore) -> EtradeStore:
