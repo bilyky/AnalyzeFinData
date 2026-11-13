@@ -4,7 +4,8 @@ Run it before deploying the change that turned verification back on (PROD note
 2026-11-11-prod-tls-verify.md). Any HTTP status, even 401 or 404, means the certificate check
 passed. An SSLError means something between this machine and the host intercepts TLS: don't
 deploy until REQUESTS_CA_BUNDLE points at that proxy's CA. Read-only: one GET per host, no
-credentials. Exit 0 when every host verified, 1 otherwise. It trusts the same roots as AETHER
+credentials. Exit 0 when every host verified, 1 when a certificate check failed, 2 when a host
+didn't answer (its certificate wasn't checked). It trusts the same roots as AETHER
 at runtime (importing aether turns on the OS trust store when `truststore` is installed).
 """
 import os
