@@ -1,4 +1,4 @@
-"""Patch the `ai` block of Data/config.json 2026-10-20: replace the two free OpenRouter models (the fallback was removed from OpenRouter; the primary returns 404).
+"""Patch the `ai` block of config.json (repo root, the file aether/config.py loads) 2026-10-20: replace the two free OpenRouter models (the fallback was removed from OpenRouter; the primary returns 404).
 
 Run from the repo root on PROD, any time (config only, no deploy needed):
     venv_new\\Scripts\\python.exe docs\\prod-notes\\patch_ai_models_2026_10_20.py            # dry run: prints the plan
@@ -18,6 +18,10 @@ import json
 import os
 import shutil
 import sys
+
+# The live config is the repo-root config.json (aether/config.py _CFG_PATH). Data\config.json is
+# not read by the code (unless config.json is a link to it), so patch the root file (review 2026-11-13).
+DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config.json")
 
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 PRIMARY_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
@@ -68,7 +72,7 @@ def patch(cfg: dict) -> list[str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default=os.path.join("Data", "config.json"))
+    ap.add_argument("--config", default=DEFAULT_CONFIG)
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
