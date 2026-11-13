@@ -204,6 +204,14 @@ class TwoMachinesTest(_Base):
             self.assertFalse(Path(et._TOKEN_PATH).exists())          # B's own file went to the trash
             self.assertEqual(et._load_tokens("production")["oauth_token"], "tok2")   # and B now uses A's
 
+    def test_a_rejected_current_token_is_removed_from_the_shared_store(self):
+        """Otherwise the next load returns the same dead token from the database, again and again."""
+        with _Machine(self.root, "b"):
+            et._save_tokens(self.tok(1), "production")
+            et._discard_rejected_token(self.tok(1), "production", "rejected-401")
+            self.assertIsNone(et._load_tokens("production"))
+        self.assertIsNone(self.db().tokens.load_any_date("production"))
+
     def test_two_machines_never_hold_the_reauth_lock_together(self):
         with _Machine(self.root, "a"):
             ha = et._token_lock_provider().acquire("etrade_reauth.lock", ttl=300)
