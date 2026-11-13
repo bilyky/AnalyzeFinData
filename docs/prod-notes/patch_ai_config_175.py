@@ -1,4 +1,4 @@
-"""Patch the `ai` block of Data/config.json for PR #175 (free OpenRouter models, reasoning off).
+"""Patch the `ai` block of config.json (repo root, the file aether/config.py loads) for PR #175 (free OpenRouter models, reasoning off).
 
 Run from the repo root on PROD, AFTER #175 is deployed:
     venv_new\\Scripts\\python.exe docs\\prod-notes\\patch_ai_config_175.py            # dry run: prints the plan
@@ -18,6 +18,11 @@ import json
 import os
 import shutil
 import sys
+
+# The live config is the repo-root config.json (aether/config.py _CFG_PATH). Data\config.json is
+# not read by the code (unless config.json is a link to it), so patch the root file (review 2026-11-13).
+DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config.json")
+BACKUP_ROOT = os.path.join(os.path.dirname(DEFAULT_CONFIG), "Data", "Backup")   # the backup policy's folder, wherever the config is
 
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 PRIMARY_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
@@ -68,7 +73,7 @@ def patch(cfg: dict) -> list[str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default=os.path.join("Data", "config.json"))
+    ap.add_argument("--config", default=DEFAULT_CONFIG)
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
@@ -82,7 +87,7 @@ def main() -> int:
         return 0
 
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_dir = os.path.join(os.path.dirname(args.config) or ".", "Backup", f"{stamp}_config_ai175")
+    backup_dir = os.path.join(BACKUP_ROOT, f"{stamp}_config_ai175")
     os.makedirs(backup_dir, exist_ok=True)
     backup = os.path.join(backup_dir, os.path.basename(args.config))
     shutil.copy2(args.config, backup)

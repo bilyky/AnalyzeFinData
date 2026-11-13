@@ -7,7 +7,7 @@ Back up first (CLAUDE.md backup rule):
 
 ```powershell
 $ts = Get-Date -Format yyyyMMdd_HHmmss; $b = "Data\Backup\${ts}_prod_review_1102"; New-Item -ItemType Directory $b | Out-Null
-Copy-Item Data\config.json, Data\ai_portfolio_game.json, Data\decision_log.jsonl $b
+Copy-Item config.json, Data\ai_portfolio_game.json, Data\decision_log.jsonl $b
 ```
 
 ## 0. URGENT: every scheduled task runs an hour early since DST ended (11-01)

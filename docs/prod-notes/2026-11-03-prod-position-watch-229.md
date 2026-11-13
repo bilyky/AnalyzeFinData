@@ -2,7 +2,7 @@
 
 PR #229 adds the `/position-watch` skill and `scripts/monitoring/position_watch.py`. It is
 recommend-only: it never places an order and never opens a browser. No scheduled task and no
-change to `Data/config.json`. Nothing runs on its own, so nothing breaks if you skip these steps.
+change to `config.json`. Nothing runs on its own, so nothing breaks if you skip these steps.
 
 ## 1. Pick the machine you run it on
 

@@ -60,6 +60,10 @@ The last line must print `True`.
 
 ## 1. Find the config file the app actually reads
 
+> **Update 2026-11-13:** the notes and the patch scripts now use only the root `config.json` (the file
+> `aether\config.py` loads). `Data\config.json` is a stray copy unless `config.json` is a link to it;
+> see `2026-11-13-prod-config-root-only.md`.
+
 `aether\config.py` loads **`config.json` in the repo root**. The 10-08 notes edited
 **`Data\config.json`**. Check whether they are the same file before changing either:
 
