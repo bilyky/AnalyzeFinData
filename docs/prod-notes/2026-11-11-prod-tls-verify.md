@@ -13,10 +13,11 @@ warning and uses the cached data, labelled stale, as it does for any other fetch
 
 ## 1. Before you deploy: check certificates from PROD
 
-If certificate checks fail on PROD, the E*TRADE token check and renew fail, and the automated
-login takes over. The browser trusts its own certificate store, so that login can succeed, and the
-cycle repeats about once an hour. So check **before** pulling: after a pull, scheduled jobs run the
-new code on their next run even without a restart. Fetch only, and run the check from the fetched
+If certificate checks fail on PROD, every E*TRADE, Chaikin and EDGAR call fails: no prices, no
+token renew. (The token code no longer answers a certificate failure with an automated login; it
+logs "TLS certificate check failed" and stops, so there is no login loop, but nothing works until
+the certificates are fixed.) So check **before** pulling: after a pull, scheduled jobs run the new
+code on their next run even without a restart. Fetch only, and run the check from the fetched
 commit (it changes nothing in the working tree):
 
 ```powershell
