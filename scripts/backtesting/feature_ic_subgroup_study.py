@@ -15,9 +15,13 @@ bars ahead). Inputs known at the day's close:
   money_flow, lt_trend, industry_str, rel_strength   Chaikin checklist: Strong +1, Neutral 0, Weak -1
   obos                    Chaikin overbought/oversold: Optimal +2, Early +1, Neutral 0, Wait -1 (the
                           app's own reading of entry quality; an ordinal assumption, stated)
-  mom60, dist_sma20, ret3 price: 60-session return, close vs the 20-session mean, 3-session return
-Outcome: the 20-session forward return. Within a date every stock shares SPY's move, so ranks of the
-raw return equal ranks of the excess return.
+  mom60, dist_sma20, ret3 price: 60-session return, close vs the 20-session mean, 3-session return,
+                          from split-adjusted closes up to the day (price_features)
+Outcome: the 20-session return from the NEXT session's close (c[j+1] -> c[j+21]), so it shares no
+price with any input. Within a date every stock shares SPY's move, so ranks of the raw return equal
+ranks of the excess return. (Changed after the first run, on review: that run used the snapshot
+price as both the inputs' end and the outcome's start, which builds in a negative IC; disclosed in
+the roadmap with both results.)
 
 Groups: ALL; sector (GICS industry -> sector, standard GICS 2023 map below; ETFs and unmapped names
 dropped); regime (SPY close above / below its 200-session mean that day); size (market-cap terciles
@@ -58,8 +62,10 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "monitoring"))
 
 import backtest_ratings as br  # noqa: E402
+import position_watch as pw  # noqa: E402
 import setup_s10_gate_study as sg  # noqa: E402
 from aether import paths  # noqa: E402
 
@@ -114,6 +120,21 @@ def _num(x):
         return None
 
 
+def price_features(c: list, j: int) -> dict | None:
+    """Price inputs and the outcome from split-adjusted closes `c` around day j.
+
+    Inputs use closes up to and including day j: mom60 = c[j]/c[j-60] - 1, dist_sma20 = c[j] / the
+    mean of the 20 closes before j - 1, ret3 = c[j]/c[j-3] - 1. The outcome starts at the NEXT close:
+    f20 = c[j+21]/c[j+1] - 1, 20 sessions that share no price with the inputs. (The first version
+    used the snapshot's own price at both ends, so any error in it raised one side and lowered the
+    other: a built-in negative IC. Review of #263.)"""
+    if j < 60 or j + 21 >= len(c) or min(c[j - 60], c[j - 3], c[j], c[j + 1]) <= 0:
+        return None
+    sma20 = sum(c[j - 20:j]) / 20
+    return {"mom60": c[j] / c[j - 60] - 1, "dist_sma20": c[j] / sma20 - 1 if sma20 > 0 else None,
+            "ret3": c[j] / c[j - 3] - 1, "f20": c[j + 21] / c[j + 1] - 1}
+
+
 def _symbol_rows(job):
     sym, sym_dir, ohlcv_dir = job
     ts = sg._load(ohlcv_dir, sym)
@@ -122,6 +143,9 @@ def _symbol_rows(job):
     dates = sorted(ts)
     pos = {d: i for i, d in enumerate(dates)}
     seas = br.precompute_seasonality(ts)
+    adj = pw.bars_from_series(ts)            # split-adjusted, placeholder bars dropped
+    if not adj:
+        return []
     rows, prev = [], None
     for path in sorted(glob.glob(os.path.join(sym_dir, sym, f"{sym}_*.json"))):
         day = Path(path).stem[len(sym) + 1:]
@@ -142,13 +166,12 @@ def _symbol_rows(job):
         price = _num(meta.get("Last") or cl.get("lastPrice")) or 0.0
         i = pos[day]
         close = float(ts[day].get("4. close", 0))
-        if (sector is None or price <= 0 or i < 60 or i + 20 >= len(dates)
+        pf = price_features(adj["c"], adj["idx"][day]) if day in adj["idx"] else None
+        if (sector is None or price <= 0 or i < 60 or pf is None
                 or (close > 0 and abs(price - close) / close > 0.1)):
             prev = data
             continue
         r = br.compute_br(data, prev, price, i, dates, ts, seas)
-        c = lambda k: float(ts[dates[k]]["4. close"])  # noqa: E731
-        sma20 = sum(c(k) for k in range(i - 20, i)) / 20
         rows.append({
             "day": day, "sym": sym, "sector": sector, "mcap": _num(meta.get("marketCap")),
             "s10": r[1], "l60": r[2], "br": r[0], "pgr": float(br.extract_pgr_corr(data)),
@@ -157,8 +180,7 @@ def _symbol_rows(job):
             "industry_str": LEVEL.get(str(cl.get("industry") or "").strip()),
             "rel_strength": LEVEL.get(str(cl.get("relativeStrength") or "").strip()),
             "obos": OBOS.get(str(cl.get("overboughtOversold") or "").strip()),
-            "mom60": price / c(i - 60) - 1, "dist_sma20": price / sma20 - 1, "ret3": price / c(i - 3) - 1,
-            "f20": c(i + 20) / price - 1,
+            **pf,
         })
         prev = data
     return rows

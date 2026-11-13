@@ -17,6 +17,35 @@ def _spearman(x, y):
     return float(np.corrcoef(rx, ry)[0, 1])
 
 
+class TestPriceFeatures(unittest.TestCase):
+    """The row builder's price inputs and outcome (review of #263: the first version used the
+    snapshot price at both ends, a built-in negative IC; and the definitions had no test)."""
+
+    def test_definitions(self):
+        c = [100.0 + k for k in range(100)]                      # c[k] = 100 + k
+        j = 60
+        f = fs.price_features(c, j)
+        self.assertAlmostEqual(f["mom60"], c[60] / c[0] - 1)
+        self.assertAlmostEqual(f["ret3"], c[60] / c[57] - 1)
+        self.assertAlmostEqual(f["dist_sma20"], c[60] / (sum(c[40:60]) / 20) - 1)   # 20 closes before j
+        self.assertAlmostEqual(f["f20"], c[81] / c[61] - 1)       # next close -> 20 sessions on
+
+    def test_outcome_shares_no_price_with_the_inputs(self):
+        c = [100.0] * 100
+        base = fs.price_features(c, 60)
+        bumped = list(c)
+        bumped[60] = 130.0                                        # a wrong price on the day itself
+        f = fs.price_features(bumped, 60)
+        self.assertGreater(f["ret3"], base["ret3"])               # the inputs see it
+        self.assertEqual(f["f20"], base["f20"])                   # the outcome doesn't
+
+    def test_needs_history_and_future(self):
+        c = [100.0] * 100
+        self.assertIsNone(fs.price_features(c, 59))               # < 60 sessions of history
+        self.assertIsNone(fs.price_features(c, 79))               # c[j+21] missing
+        self.assertIsNotNone(fs.price_features(c, 78))
+
+
 class TestDailyIC(unittest.TestCase):
     def test_matches_spearman_per_day_and_group(self):
         rng = np.random.default_rng(1)
