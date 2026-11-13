@@ -220,6 +220,10 @@ class _Config:
         self.oracle_bubble_limit = float(os.environ.get("ORACLE_BUBBLE_LIMIT") or oracle.get("bubble_limit", 2.5))
         self.oracle_min_rr_ratio = float(os.environ.get("ORACLE_MIN_RR_RATIO") or oracle.get("min_rr_ratio", 1.5))
         self.oracle_decay_limit = float(os.environ.get("ORACLE_DECAY_LIMIT") or oracle.get("decay_limit", -2.0))
+        # The owner's margin interest rate (% a year), for the margin watch's interest line (R&D #39).
+        # Private: config only. Unset -> the report leaves interest out rather than guessing a rate.
+        _rate = os.environ.get("ORACLE_MARGIN_RATE_PCT") or oracle.get("margin_rate_pct")
+        self.oracle_margin_rate_pct = float(_rate) if _rate not in (None, "") else None
 
         # ── Legacy PostgreSQL (database.py — unused in normal operation) ────────
         db = raw.get("database") or {}

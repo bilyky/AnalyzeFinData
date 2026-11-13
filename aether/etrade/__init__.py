@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pyetrade
 import pyotp
 import pytz
+import requests
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 from requests_oauthlib import OAuth1Session
@@ -146,7 +147,8 @@ class AuthReason:
     """The E*TRADE auth-state vocabulary, defined once.
 
     Shared by auth_status() and scheduled_reauth() so neither hardcodes a divergent string. The
-    outcome values (renewed/reauthed/sms_required/unseeded/breaker/blocked/in_progress/weekend/failed)
+    outcome values (renewed/reauthed/sms_required/unseeded/breaker/blocked/in_progress/weekend/
+    foreign_token/failed)
     double as scheduled_reauth's `reason` field, so both paths speak one language.
     """
     RENEWED       = "renewed"        # a live same-day token was refreshed via ban-free HTTP renew
@@ -157,6 +159,7 @@ class AuthReason:
     BLOCKED       = "blocked"        # hard-blocked after N consecutive failures — needs a human re-auth
     IN_PROGRESS   = "in_progress"    # a mint is already in flight (single-flight loser) — no 2nd browser
     WEEKEND       = "weekend"        # scheduled caller on an ET weekend: renewed only, no login
+    FOREIGN_TOKEN = "foreign_token"  # the token file came from another machine: no automated login here
     FAILED        = "failed"         # an automated browser re-auth attempt failed
     LIVE          = "live"           # token present and valid (local record, or probe-confirmed)
     EXPIRED       = "expired"        # token dead (overnight/midnight-ET) or broker-rejected (401/403)
@@ -206,6 +209,18 @@ def _load_tokens(env):
     return FileTokenStore().load(env)
 
 
+# A TLS certificate failure is not a dead token: it means this machine can't verify E*TRADE's
+# certificate (a proxy or antivirus intercepting HTTPS). get_tokens() must not answer it with an
+# automated login, which a browser (own certificate store) might complete, once an hour.
+_tls_failures: list = []
+
+
+def _note_tls_failure(where: str, exc: Exception) -> None:
+    _tls_failures.append(where)
+    _log.error(f"E*TRADE: TLS certificate check failed in {where} ({exc}). Not a token problem: fix the "
+               f"certificate chain (REQUESTS_CA_BUNDLE) or the proxy; see scripts/diagnostics/tls_precheck.py.")
+
+
 def _probe_token_auth(tokens, env="production"):
     """Live-probe cached tokens against E*TRADE's accounts-list endpoint.
 
@@ -216,7 +231,7 @@ def _probe_token_auth(tokens, env="production"):
               destroy the token on a transient failure.
 
     Uses accounts/list (an authenticated GET that truthfully returns 200/401/403) and
-    the same proxy/verify settings as every other brokerage call in this module. The
+    the same proxy settings as every other brokerage call in this module (TLS verified). The
     old market-clock probe hit a path that 404s on this host, so it could never see a
     200 and always reported "inconclusive" even for valid tokens.
     """
@@ -224,11 +239,14 @@ def _probe_token_auth(tokens, env="production"):
         ck, cs, _, _ = _load_config(env)
         url = _ACCTLIST_URL.get(env, _ACCTLIST_URL["production"])
         session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
-        resp = session.get(url, proxies=_proxies(), verify=False, timeout=10)
+        resp = session.get(url, proxies=_proxies(), timeout=10)
         if resp.status_code == 200:
             return True
         if resp.status_code in (401, 403):
             return False
+        return None
+    except requests.exceptions.SSLError as e:
+        _note_tls_failure("the token check", e)
         return None
     except Exception:
         return None
@@ -256,7 +274,7 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
         ck, cs, _, _ = _load_config(env)
         session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
         try:
-            r = session.get(_RENEW_URL[env], proxies=_proxies(), verify=False, timeout=10)
+            r = session.get(_RENEW_URL[env], proxies=_proxies(), timeout=10)
             if r.ok:
                 tokens["saved_at"] = time.time()
                 # A successful renewal across midnight officially promotes the token to the new day
@@ -264,6 +282,8 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
                 _save_tokens(tokens, env)
                 return tokens
             _log.warning(f"Renew failed: HTTP {r.status_code} — {r.text[:120]}")
+        except requests.exceptions.SSLError as e:
+            _note_tls_failure("the renew", e)
         except Exception as e:
             _log.warning(f"Renew error: {e}")
         return None
@@ -315,7 +335,7 @@ def revoke_tokens(tokens, env="sandbox") -> bool:
     ck, cs, _, _ = _load_config(env)
     session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
     try:
-        r = session.get(_REVOKE_URL[env], proxies=_proxies(), verify=False, timeout=10)
+        r = session.get(_REVOKE_URL[env], proxies=_proxies(), timeout=10)
         if r.ok:
             trash.soft_delete(_TOKEN_PATH, reason="revoked")   # soft-delete (recoverable)
             _log.console("Tokens revoked and cache cleared.")
@@ -1272,6 +1292,7 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     Only the interactive allow_browser=True path can raise (headless-environment guard).
     """
     ck, cs, username, password = _load_config(env)
+    _tls_failures.clear()               # TLS failures seen during THIS call (see _note_tls_failure)
 
     # Try today's tokens (fast path — no browser)
     cached = _load_tokens(env)
@@ -1326,6 +1347,13 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
                     check_etrade_cookie_freshness()
                     return renewed
 
+    # A TLS failure in the token check or the renew is a certificate problem, not a dead token:
+    # stop before the automated login (a person may still log in with allow_browser=True).
+    if _tls_failures and not allow_browser:
+        _log.error("E*TRADE: skipping automated re-auth: TLS certificate check failed "
+                   f"({', '.join(dict.fromkeys(_tls_failures))}). Returning None.")
+        return None
+
     # Silent renewal exhausted — try headless Playwright with saved browser state.
     # Uses the same cross-process file lock as renew_tokens() to guarantee only ONE
     # process opens a browser even when multiple tasks fire simultaneously.
@@ -1333,7 +1361,14 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     # mint) OR a configured TOTP secret (the headless VIP mint needs no saved browser state). Left
     # as file-only, a trashed/rotated browser_state.json would silently disable the proven TOTP
     # path even though it would work fine.
-    if os.path.exists(_BROWSER_STATE_PATH) or bool(getattr(CFG, "etrade_totp_secret", "")):
+    # A token file saved on another machine (a copy of PROD's Data/) was skipped above. Logging this
+    # machine in automatically would open a new session on the shared app key, which can end the
+    # other machine's session. A person (allow_browser=True) may still log in here.
+    foreign = None if allow_browser else FileTokenStore().foreign_host(env)
+    if foreign:
+        _log.warning(f"E*TRADE: the token file was saved on another machine ({foreign}); no automated "
+                     "login on this one. Log in here by hand if this machine should trade.")
+    if not foreign and (os.path.exists(_BROWSER_STATE_PATH) or bool(getattr(CFG, "etrade_totp_secret", ""))):
         # Anti-ban circuit breaker (single source of truth = etrade_reauth_state.json,
         # enforced inside _login_headless). Fast-fail here for a clean log + to skip the
         # renewer setup while the breaker is cooling down; _login_headless self-gates too,
@@ -1681,7 +1716,8 @@ def scheduled_reauth(env: str = "production", *, weekend_mint: bool = True) -> d
     do not open a second browser.
 
     Returns a JSON-serializable dict: {ok, env, reason, browser_opened, ...}. `reason` is one of:
-    renewed | reauthed | sms_required | unseeded | breaker | blocked | in_progress | weekend | failed.
+    renewed | reauthed | sms_required | unseeded | breaker | blocked | in_progress | weekend |
+    foreign_token | failed.
     (`in_progress` = another mint held the single-flight lock, so this call opened no browser;
     `blocked` = the hard-block threshold was hit, so a human must re-auth — distinct from the
     self-elapsing `breaker` cooldown.)
@@ -1699,6 +1735,13 @@ def scheduled_reauth(env: str = "production", *, weekend_mint: bool = True) -> d
     # 1b. Scheduled caller on an ET weekend: renew only, don't log in.
     if not weekend_mint and _et_is_weekend():
         result["reason"] = AuthReason.WEEKEND
+        result["breaker_state"] = _breaker_summary(env)
+        return result
+
+    # 1c. Scheduled caller, and the token file came from another machine: no automated login here
+    # (a new session on the shared app key can end the other machine's). The manual door may log in.
+    if not weekend_mint and FileTokenStore().foreign_host(env):
+        result["reason"] = AuthReason.FOREIGN_TOKEN
         result["breaker_state"] = _breaker_summary(env)
         return result
 
@@ -1876,7 +1919,9 @@ def is_market_open_now(tokens, env="production") -> bool | None:
     Antifragile market status check. Uses a two-factor verification:
     1. Queries the official E*TRADE /v1/market/clock.json API.
     2. Empirically verifies that the SPY ETF has traded today.
-    Returns True (Open), False (Closed/Holiday), or None on network failure.
+    Returns True (Open), False (Closed/Holiday), or None when neither check could be read
+    (network failure, an expired token's 401, a 5xx): "open" needs at least one check confirming
+    it. It used to fall through to True when both calls failed (found 2026-11-11 with a dead token).
     """
     ck, cs, _, _ = _load_config(env)
     session = OAuth1Session(ck, cs, tokens["oauth_token"], tokens["oauth_token_secret"])
@@ -1884,16 +1929,18 @@ def is_market_open_now(tokens, env="production") -> bool | None:
     try:
         # Factor 1: Official Market Clock API
         clock_url = "https://api.etrade.com/v1/market/clock.json"
-        clock_r = session.get(clock_url, verify=False, timeout=10)
+        clock_r = session.get(clock_url, timeout=10)
+        confirmed = False
         if clock_r.ok:
             clock_data = clock_r.json()
             status = clock_data.get("ClockResponse", {}).get("currentStatus")
             if status and status != "REGULAR":
                 return False  # Clock explicitly says closed, pre-market, or after-hours
+            confirmed = status == "REGULAR"
         
         # Factor 2: Empirical SPY Quote Timestamp Check
         quote_url = "https://api.etrade.com/v1/market/quote/SPY.json"
-        quote_r = session.get(quote_url, verify=False, timeout=10)
+        quote_r = session.get(quote_url, timeout=10)
         if quote_r.ok:
             quote_data = quote_r.json().get("QuoteResponse", {}).get("QuoteData", [])
             if quote_data:
@@ -1905,9 +1952,10 @@ def is_market_open_now(tokens, env="production") -> bool | None:
                     # If the trade did NOT happen today, the market is closed (e.g. holiday)
                     if trade_time.date() != now_ny.date():
                         return False
-                        
-        # If both checks pass (Clock is REGULAR and SPY traded today), the market is truly open!
-        return True
+                    confirmed = True
+
+        # Open only when a check confirmed it and neither said closed; nothing readable -> unknown.
+        return True if confirmed else None
     except Exception:
         return None
 

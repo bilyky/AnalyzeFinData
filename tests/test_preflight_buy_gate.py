@@ -84,6 +84,17 @@ class GateStageTest(unittest.TestCase):
         self.assertNotIn(circuit_breaker.FREEZE_KEY, state)
         self.assertEqual(out, self.QUEUE)
 
+    def test_a_force_bypass_of_a_failed_preflight_is_logged(self):
+        """PROD 11-11: a manual --force run bought after a FAIL and left no trace (review 11-12)."""
+        with self.assertLogs("aether.ai_game", level="WARNING") as logs:
+            self._gate(True, True)
+        self.assertTrue(any("[Pre-flight Gate] bypassed by --force" in m for m in logs.output), logs.output)
+
+    def test_force_after_a_passed_preflight_logs_nothing(self):
+        with mock.patch.object(steps._pkg()._log, "warning") as warn:
+            self._gate(False, True)
+        warn.assert_not_called()
+
     def test_passed_preflight_changes_nothing(self):
         state, out = self._gate(False, False)
         self.assertNotIn(circuit_breaker.FREEZE_KEY, state)
