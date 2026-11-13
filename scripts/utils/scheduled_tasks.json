@@ -115,6 +115,7 @@
     },
     {
       "name": "AETHER_RD_Scientist",
+      "retired": "Retired 2026-11-12: the Gemini CLI gets HTTP 403 (organization policy) on PROD (11-07 run); the 2026-11-04 PROD note listed it with the other Gemini tasks. Run its skills by hand.",
       "schedule": {"type": "weekly", "at": "10:00", "day": "Saturday"},
       "prompt": "Execute the automated R&D skills defined in .claude/commands/pattern-discover.md and .claude/commands/failure-dna.md",
       "time_limit_min": 15,

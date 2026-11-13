@@ -19,7 +19,8 @@ from aether import scheduled_tasks as st
 
 _REPO = Path(__file__).resolve().parent.parent
 _PS1 = _REPO / "scripts" / "utils" / "register_agent_tasks.ps1"
-_RETIRED = {"AETHER_DailyDriver", "AETHER_PostMarketSync", "AETHER_PostMarketReporter"}
+_RETIRED = {"AETHER_DailyDriver", "AETHER_PostMarketSync", "AETHER_PostMarketReporter",
+            "AETHER_RD_Scientist"}
 
 
 def _task(name, **extra):
