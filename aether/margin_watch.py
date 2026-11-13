@@ -19,17 +19,43 @@ reach a call unseen. This module computes, per account, from the broker's live f
     regtEquity, OpenCalls.*): they replace the computed debt / equity, and an open call (a negative
     houseCall, fedCall, minEquityCall or cashCall) is shown as the broker states it;
   - the pay-down order: sales that free the most requirement per dollar first (a 100% name frees
-    $1 per $1 sold, a 30% name $0.30), losses before gains (they also harvest a tax loss).
+    $1 per $1 sold, a 30% name $0.30), losses before gains (they also harvest a tax loss). A loss
+    on a symbol bought within WASH_DAYS (a vest or ESPP purchase, from position-watch's private
+    config) would be a wash sale and harvest nothing: such rows are flagged and go last.
 
 Recommend-only. It never places an order. With no live broker data it returns nothing: the
 Oracle never advises against unverified balances.
 """
+import datetime
 import json
 import os
 
 from aether import paths
 
 DEFAULT_REQ = 0.30
+WASH_DAYS = 30
+
+
+def load_purchases(path: str | None = None) -> dict:
+    """{SYMBOL: [purchase dates]} from position-watch's private config (vests / ESPP), or {}."""
+    path = path or os.path.join(paths.data_dir(), "position_watch", "config.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        return {str(cfg["symbol"]).upper(): [str(d) for d in cfg.get("acquisition_dates", [])]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def in_wash_window(day: datetime.date, dates: list) -> bool:
+    """A sale on `day` within WASH_DAYS of a purchase (either side)."""
+    out = False
+    for d in dates:
+        try:
+            out |= abs((day - datetime.date.fromisoformat(d)).days) <= WASH_DAYS
+        except ValueError:
+            continue
+    return out
 
 
 def load_requirements(path: str | None = None) -> dict:
@@ -47,8 +73,11 @@ def _value(h: dict) -> float:
     return float(h.get("qty") or 0) * float(h.get("current") or 0)
 
 
-def account_view(acct: dict, reqs: dict, rate_pct: float | None = None) -> dict | None:
-    """Margin view of one account dict from data_api.read_accounts(), or None without debt."""
+def account_view(acct: dict, reqs: dict, rate_pct: float | None = None, purchases: dict | None = None,
+                 today: datetime.date | None = None) -> dict | None:
+    """Margin view of one account dict from data_api.read_accounts(), or None without debt.
+    purchases: {SYMBOL: [dates]} for the wash-sale flag (load_purchases())."""
+    today = today or datetime.date.today()
     holds = [h for h in acct.get("holdings", []) if _value(h) > 0]
     value = sum(_value(h) for h in holds)
     m = acct.get("margin") or {}
@@ -68,12 +97,14 @@ def account_view(acct: dict, reqs: dict, rate_pct: float | None = None) -> dict 
             r = DEFAULT_REQ
             assumed += r * _value(h)
         v = _value(h)
-        rows.append({"symbol": sym, "value": v, "req": r, "freed": r * v, "pnl": float(h.get("pnl") or 0)})
+        pnl = float(h.get("pnl") or 0)
+        wash = pnl < 0 and in_wash_window(today, (purchases or {}).get(sym, []))
+        rows.append({"symbol": sym, "value": v, "req": r, "freed": r * v, "pnl": pnl, "wash": wash})
     requirement = sum(x["freed"] for x in rows)
     excess = equity - requirement
     denom = value - requirement
     call_drop = (1 - debt / denom) if denom > 0 else None   # <= 0: already at or under the requirement
-    order = sorted(rows, key=lambda x: (-x["req"], x["pnl"]))
+    order = sorted(rows, key=lambda x: (x["wash"], -x["req"], x["pnl"]))
     monthly = debt * rate_pct / 100 / 12 if rate_pct else None
     for x in order:
         x["interest_saved_month"] = x["value"] * rate_pct / 100 / 12 if rate_pct else None
@@ -87,14 +118,15 @@ def account_view(acct: dict, reqs: dict, rate_pct: float | None = None) -> dict 
             "interest_month": monthly, "pay_down": order[:5]}
 
 
-def views(accounts_data: dict, real_ids: list, reqs: dict, rate_pct: float | None = None) -> list:
+def views(accounts_data: dict, real_ids: list, reqs: dict, rate_pct: float | None = None,
+          purchases: dict | None = None) -> list:
     """Views for the real accounts, only when the broker data is live."""
     if (accounts_data or {}).get("broker_status") != "live":
         return []
     out = []
     for a in accounts_data.get("accounts", []):
         if str(a.get("id")) in {str(x) for x in real_ids}:
-            v = account_view(a, reqs, rate_pct)
+            v = account_view(a, reqs, rate_pct, purchases)
             if v:
                 out.append(v)
     return out
@@ -132,7 +164,8 @@ def render_html(vs: list) -> str:
             note = (f"<br><i>{_money(v['requirement_assumed'])} of the requirement is assumed at "
                     f"{DEFAULT_REQ:.0%}: add the broker's figures to Data/margin_requirements.json.</i>")
         rows = "".join(
-            f"<tr><td>{x['symbol']}</td><td>{_money(x['value'])}</td><td>{x['req']:.0%}</td>"
+            f"<tr><td>{x['symbol']}{' (wash window: a loss sale harvests nothing)' if x.get('wash') else ''}</td>"
+            f"<td>{_money(x['value'])}</td><td>{x['req']:.0%}</td>"
             f"<td>{_money(x['freed'])}</td><td>{_money(x['pnl'])}</td>"
             f"<td>{_money(x['interest_saved_month'])}</td></tr>" for x in v["pay_down"])
         cards.append(

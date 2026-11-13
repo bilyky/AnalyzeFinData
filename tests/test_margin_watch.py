@@ -105,6 +105,7 @@ class TestBrokerFields(unittest.TestCase):
                 mock.patch.object(aether_oracle.CFG, "accounts_real", ["9999"]), \
                 mock.patch.object(aether_oracle.CFG, "oracle_margin_rate_pct", None, create=True), \
                 mock.patch.object(aether_oracle.margin_watch, "load_requirements", return_value=REQS), \
+                mock.patch.object(aether_oracle.margin_watch, "load_purchases", return_value={}), \
                 self.assertLogs(aether_oracle._oracle_log.name, level="WARNING") as cm:
             aether_oracle.margin_section()
         self.assertIn("open call per the broker: house_call $150.00", cm.output[0])
@@ -144,6 +145,7 @@ class TestOracleSection(unittest.TestCase):
                 mock.patch.object(aether_oracle.CFG, "accounts_real", ["9999"]), \
                 mock.patch.object(aether_oracle.CFG, "oracle_margin_rate_pct", None, create=True), \
                 mock.patch.object(aether_oracle.margin_watch, "load_requirements", return_value=REQS), \
+                mock.patch.object(aether_oracle.margin_watch, "load_purchases", return_value={}), \
                 self.assertLogs(aether_oracle._oracle_log.name, level="WARNING"):
             html = aether_oracle.margin_section()
         self.assertIn("Margin watch", html)
@@ -174,6 +176,7 @@ class TestOracleSection(unittest.TestCase):
                 mock.patch.object(aether_oracle.CFG, "accounts_real", ["9999"]), \
                 mock.patch.object(aether_oracle.CFG, "oracle_margin_rate_pct", None, create=True), \
                 mock.patch.object(aether_oracle.margin_watch, "load_requirements", return_value=REQS), \
+                mock.patch.object(aether_oracle.margin_watch, "load_purchases", return_value={}), \
                 mock.patch.object(aether_oracle, "audit_oracle_portfolio", return_value=([], [])), \
                 mock.patch.object(aether_oracle, "get_oracle_buy_candidates", return_value=[]), \
                 mock.patch.object(aether_oracle.pick_eval, "log_picks"), \
@@ -183,6 +186,36 @@ class TestOracleSection(unittest.TestCase):
         self.assertEqual(ra.call_count, 1)
         self.assertTrue(html.startswith("<ORACLE>"))
         self.assertIn("...9999", html)
+
+
+class TestWashWindow(unittest.TestCase):
+    """A loss sale within 30 days of a purchase of the same symbol is a wash sale: flagged, last."""
+    TODAY = __import__("datetime").date(2026, 12, 10)
+
+    def test_loss_in_window_flagged_and_moved_last(self):
+        v = mw.account_view(A, REQS, purchases={"AAA": ["2026-11-30"]}, today=self.TODAY)
+        order = [x["symbol"] for x in v["pay_down"]]
+        self.assertEqual(order[-1], "AAA")                       # 100% name, biggest loss, but wash: last
+        self.assertTrue(v["pay_down"][-1]["wash"])
+        self.assertIn("AAA (wash window", mw.render_html([v]))
+        plain = mw.account_view(A, REQS, today=self.TODAY)
+        self.assertEqual(plain["pay_down"][0]["symbol"], "AAA")  # no purchases known: today's order
+
+    def test_gains_and_edges(self):
+        v = mw.account_view(A, REQS, purchases={"BBB": ["2026-12-01"]}, today=self.TODAY)
+        self.assertFalse(next(x for x in v["pay_down"] if x["symbol"] == "BBB")["wash"])   # a gain: no wash
+        self.assertTrue(mw.in_wash_window(self.TODAY, ["2026-11-10"]))       # day 30
+        self.assertFalse(mw.in_wash_window(self.TODAY, ["2026-11-09"]))      # day 31
+        self.assertTrue(mw.in_wash_window(self.TODAY, ["2027-01-09"]))       # 30 days ahead (planned vest)
+        self.assertFalse(mw.in_wash_window(self.TODAY, ["bad-date"]))
+
+    def test_purchases_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "config.json")
+            self.assertEqual(mw.load_purchases(p), {})
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"symbol": "aaa", "acquisition_dates": ["2026-11-30"]}, f)
+            self.assertEqual(mw.load_purchases(p), {"AAA": ["2026-11-30"]})
 
 
 class TestUnpriced(unittest.TestCase):
@@ -203,6 +236,7 @@ class TestUnpriced(unittest.TestCase):
         with mock.patch.object(aether_oracle.CFG, "accounts_real", ["9999"]), \
                 mock.patch.object(aether_oracle.CFG, "oracle_margin_rate_pct", None, create=True), \
                 mock.patch.object(aether_oracle.margin_watch, "load_requirements", return_value=REQS), \
+                mock.patch.object(aether_oracle.margin_watch, "load_purchases", return_value={}), \
                 self.assertLogs(aether_oracle._oracle_log.name, level="WARNING") as cm:
             html = aether_oracle.margin_section(data)
         self.assertIn("holdings unpriced", html)

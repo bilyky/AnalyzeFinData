@@ -402,7 +402,7 @@ def margin_section(accts_data=None) -> str:
         if accts_data is None:
             accts_data = data_api.read_accounts()
         vs = margin_watch.views(accts_data, CFG.accounts_real, margin_watch.load_requirements(),
-                                CFG.oracle_margin_rate_pct)
+                                CFG.oracle_margin_rate_pct, margin_watch.load_purchases())
         for v in vs:
             if v.get("unpriced"):
                 _oracle_log.warning(f"[Margin watch] Account ...{str(v['id'])[-4:]} has debt but no priced holdings: "
