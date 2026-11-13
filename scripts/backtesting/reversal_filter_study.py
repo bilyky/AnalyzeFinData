@@ -2,10 +2,11 @@
 Short-term reversal in the portfolio (R&D #86, follow-up to #85): does skipping stocks that just
 ran up help today's rules, and does a plain "buy the 3-day losers" sleeve beat SPY?
 
-R&D #85 (feature IC by subgroup) found one confirmed input: the 3-session return orders the next
-20 sessions' returns with a NEGATIVE sign (test IC -0.081, t -4.32): stocks up most over 3 days lag
-over the next 20 sessions. An IC is not a portfolio: this asks whether it survives the rules,
-sizing, stops and costs.
+R&D #85's first run reported one confirmed input: the 3-session return ordering the next 20
+sessions' returns with a NEGATIVE sign (test IC -0.081, t -4.32). That number was later retracted:
+the feature and the outcome shared the snapshot price (#85's corrected rerun: test -0.016, t -1.73,
+nothing confirmed). This study computes the return from closes, so it doesn't depend on it. An IC is
+not a portfolio: this asks whether a reversal survives the rules, sizing, stops and costs.
 
 The 3-session return (ret3) on day d = close_d / close_{d-3} - 1, split-adjusted
 (portfolio_backtest.bars_from_series), known at d's close. Ranked across the symbols scored on d
