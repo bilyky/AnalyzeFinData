@@ -147,7 +147,8 @@ class AuthReason:
     """The E*TRADE auth-state vocabulary, defined once.
 
     Shared by auth_status() and scheduled_reauth() so neither hardcodes a divergent string. The
-    outcome values (renewed/reauthed/sms_required/unseeded/breaker/blocked/in_progress/weekend/failed)
+    outcome values (renewed/reauthed/sms_required/unseeded/breaker/blocked/in_progress/weekend/
+    foreign_token/failed)
     double as scheduled_reauth's `reason` field, so both paths speak one language.
     """
     RENEWED       = "renewed"        # a live same-day token was refreshed via ban-free HTTP renew
@@ -158,6 +159,7 @@ class AuthReason:
     BLOCKED       = "blocked"        # hard-blocked after N consecutive failures — needs a human re-auth
     IN_PROGRESS   = "in_progress"    # a mint is already in flight (single-flight loser) — no 2nd browser
     WEEKEND       = "weekend"        # scheduled caller on an ET weekend: renewed only, no login
+    FOREIGN_TOKEN = "foreign_token"  # the token file came from another machine: no automated login here
     FAILED        = "failed"         # an automated browser re-auth attempt failed
     LIVE          = "live"           # token present and valid (local record, or probe-confirmed)
     EXPIRED       = "expired"        # token dead (overnight/midnight-ET) or broker-rejected (401/403)
@@ -1359,7 +1361,14 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
     # mint) OR a configured TOTP secret (the headless VIP mint needs no saved browser state). Left
     # as file-only, a trashed/rotated browser_state.json would silently disable the proven TOTP
     # path even though it would work fine.
-    if os.path.exists(_BROWSER_STATE_PATH) or bool(getattr(CFG, "etrade_totp_secret", "")):
+    # A token file saved on another machine (a copy of PROD's Data/) was skipped above. Logging this
+    # machine in automatically would open a new session on the shared app key, which can end the
+    # other machine's session. A person (allow_browser=True) may still log in here.
+    foreign = None if allow_browser else FileTokenStore().foreign_host(env)
+    if foreign:
+        _log.warning(f"E*TRADE: the token file was saved on another machine ({foreign}); no automated "
+                     "login on this one. Log in here by hand if this machine should trade.")
+    if not foreign and (os.path.exists(_BROWSER_STATE_PATH) or bool(getattr(CFG, "etrade_totp_secret", ""))):
         # Anti-ban circuit breaker (single source of truth = etrade_reauth_state.json,
         # enforced inside _login_headless). Fast-fail here for a clean log + to skip the
         # renewer setup while the breaker is cooling down; _login_headless self-gates too,
@@ -1707,7 +1716,8 @@ def scheduled_reauth(env: str = "production", *, weekend_mint: bool = True) -> d
     do not open a second browser.
 
     Returns a JSON-serializable dict: {ok, env, reason, browser_opened, ...}. `reason` is one of:
-    renewed | reauthed | sms_required | unseeded | breaker | blocked | in_progress | weekend | failed.
+    renewed | reauthed | sms_required | unseeded | breaker | blocked | in_progress | weekend |
+    foreign_token | failed.
     (`in_progress` = another mint held the single-flight lock, so this call opened no browser;
     `blocked` = the hard-block threshold was hit, so a human must re-auth — distinct from the
     self-elapsing `breaker` cooldown.)
@@ -1725,6 +1735,13 @@ def scheduled_reauth(env: str = "production", *, weekend_mint: bool = True) -> d
     # 1b. Scheduled caller on an ET weekend: renew only, don't log in.
     if not weekend_mint and _et_is_weekend():
         result["reason"] = AuthReason.WEEKEND
+        result["breaker_state"] = _breaker_summary(env)
+        return result
+
+    # 1c. Scheduled caller, and the token file came from another machine: no automated login here
+    # (a new session on the shared app key can end the other machine's). The manual door may log in.
+    if not weekend_mint and FileTokenStore().foreign_host(env):
+        result["reason"] = AuthReason.FOREIGN_TOKEN
         result["breaker_state"] = _breaker_summary(env)
         return result
 
