@@ -94,6 +94,10 @@ class TestShift(unittest.TestCase):
         far = [f"{y}-05-06" for y in range(2001, 2041)]                       # 46 days from Mar 21 / Jun 21
         self.assertEqual(gs.season_test(far)["p_binom"], 1.0)
 
+    def test_chance_rate_counts_both_window_edges(self):
+        """+/-7 days is 15 calendar days per date (the date itself included): 4 x 15 / 365 (review of #265)."""
+        self.assertEqual(gs.season_test(["2010-05-06"])["chance_share"], round(4 * 15 / 365, 3))
+
     def test_binom_tail(self):
         self.assertAlmostEqual(gs.binom_tail(2, 2, 0.5), 0.25)
         self.assertAlmostEqual(gs.binom_tail(1, 2, 0.5), 0.75)
