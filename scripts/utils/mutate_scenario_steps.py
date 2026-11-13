@@ -285,9 +285,9 @@ sys.stdout.write(json.dumps({"failed": failed, "run": res.testsRun}) + "\n")
 """
 
 
-def _run_tests():
+def _run_tests(modules=None):
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-    out = subprocess.run([sys.executable, "-c", _RUNNER, *MODULES], cwd=ROOT, env=env,
+    out = subprocess.run([sys.executable, "-c", _RUNNER, *(modules or MODULES)], cwd=ROOT, env=env,
                          capture_output=True, text=True, encoding="utf-8", errors="replace")
     lines = [ln for ln in out.stdout.splitlines() if ln.startswith("{")]
     if not lines:
@@ -295,7 +295,7 @@ def _run_tests():
     return json.loads(lines[-1])
 
 
-def _all_test_ids():
+def _all_test_ids(modules=None):
     sys.path.insert(0, str(ROOT))
     def walk(suite):
         for t in suite:
@@ -303,7 +303,7 @@ def _all_test_ids():
                 yield from walk(t)
             else:
                 yield t.id()
-    return sorted(walk(unittest.defaultTestLoader.loadTestsFromNames(MODULES)))
+    return sorted(walk(unittest.defaultTestLoader.loadTestsFromNames(modules or MODULES)))
 
 
 def _steps_is_clean():
@@ -330,7 +330,11 @@ def main(argv=None):
                                  "(rewrites steps.py while it runs; restores it byte for byte).")
     ap.add_argument("--allow-main-checkout", action="store_true",
                     help="run in the main checkout (only if no live process imports steps.py)")
+    ap.add_argument("--modules", nargs="+", metavar="TEST",
+                    help="test modules/classes to run against each mutant (default: the stage test modules); "
+                         "e.g. tests.test_scenario_runner.TestRunnerMatchesRoot for a golden-only sweep")
     args = ap.parse_args(argv)
+    modules = args.modules or MODULES
     # The script rewrites aether/scenario/steps.py with deliberate bugs while it runs.
     # Once the REPLACE phase wires steps.py into the live game, doing that in the main
     # checkout would put buggy code under live processes, so it only runs in a worktree.
@@ -346,7 +350,7 @@ def main(argv=None):
     digest = hashlib.sha256(original).hexdigest()
     text = original.decode("utf-8")
 
-    baseline = _run_tests()
+    baseline = _run_tests(modules)
     if baseline["failed"]:
         sys.stderr.write(f"baseline is not green: {baseline['failed']}\n")
         return 2
@@ -360,7 +364,7 @@ def main(argv=None):
                 sys.stdout.write(f"ANCHOR   {label}  (matches {text.count(old)}x — update the mutant)\n")
                 continue
             STEPS.write_bytes(text.replace(old, new).encode("utf-8"))
-            failed = _run_tests()["failed"]
+            failed = _run_tests(modules)["failed"]
             for test_id in failed:
                 caught_by.setdefault(test_id, []).append(label)
             if failed:
@@ -373,7 +377,7 @@ def main(argv=None):
     if hashlib.sha256(STEPS.read_bytes()).hexdigest() != digest:
         raise RuntimeError("steps.py was not restored byte-for-byte")
 
-    never = [t for t in _all_test_ids() if t not in caught_by]
+    never = [t for t in _all_test_ids(modules) if t not in caught_by]
     sys.stdout.write(f"\n{len(MUTANTS) - len(survived) - len(broken)}/{len(MUTANTS)} mutants caught; "
                      f"{len(survived)} survived; {len(broken)} stale anchors.\n")
     sys.stdout.write(f"{len(never)} stage tests never failed under any mutant:\n")
