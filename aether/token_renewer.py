@@ -201,8 +201,12 @@ class TokenRenewer:
     """
 
     def __init__(self, lock_path: str, renew_fn, load_fn,
-                 lock_ttl: int = 30, wait_timeout: int = 15):
+                 lock_ttl: int = 30, wait_timeout: int = 15, lock_provider=None):
+        # lock_provider: an aether.etrade.store LockProvider (e.g. the shared DB row lease) used
+        # instead of the O_EXCL file at lock_path; the lock name is lock_path's basename.
         self._lock_path    = lock_path
+        self._lock_provider = lock_provider
+        self._lock_name    = os.path.basename(lock_path)
         self._renew_fn     = renew_fn     # () -> token | None
         self._load_fn      = load_fn      # () -> token | None  (re-reads from disk)
         self._lock_ttl     = lock_ttl
@@ -262,13 +266,25 @@ class TokenRenewer:
         # Wait outside thread lock so other threads are not stalled
         _log.debug("Waiting for another process to renew token...")
         deadline = time.monotonic() + self._wait_timeout
-        while os.path.exists(self._lock_path) and time.monotonic() < deadline:
+        while self._held() and time.monotonic() < deadline:
             time.sleep(0.5)
         return self._load_fn() or current_token
 
-    def _acquire(self) -> int | None:
-        """Atomically create the lock file. Returns fd if won, None if held."""
+    def _acquire(self):
+        """Take the cross-process lock. Returns a handle (file fd or provider handle) if won, None if held."""
+        if self._lock_provider is not None:
+            return self._lock_provider.acquire(self._lock_name, self._lock_ttl)
         return _acquire_lock(self._lock_path, self._lock_ttl)
 
-    def _release(self, fd: int):
-        _release_lock(self._lock_path, fd)
+    def _release(self, handle):
+        if self._lock_provider is not None:
+            self._lock_provider.release(handle)
+            return
+        _release_lock(self._lock_path, handle)
+
+    def _held(self) -> bool:
+        """Whether another process still holds the lock (the loser waits while it does)."""
+        if self._lock_provider is not None:
+            is_held = getattr(self._lock_provider, "is_held", None)
+            return bool(is_held(self._lock_name)) if is_held else False
+        return os.path.exists(self._lock_path)
