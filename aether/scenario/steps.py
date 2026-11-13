@@ -257,7 +257,13 @@ def apply_preflight_gate(state, queued, today, force):
     ATI and added to COMP and AU (owner decision, PROD review 11-09).
     """
     game = _pkg()
-    if force or not preflight_status.failed_on(today):
+    if not preflight_status.failed_on(today):
+        return queued
+    if force:
+        # Allowed (owner decision), but never silent: PROD 11-11's manual run bought after a FAIL
+        # and left no trace of the bypass (PROD review 11-12).
+        game._log.warning("⚠️ [Pre-flight Gate] bypassed by --force: today's morning pre-flight FAILED; "
+                          "this manual run may buy.")
         return queued
     reason = "Today's morning pre-flight FAILED (see morning_pipeline.log); rerun by hand with --run --force"
     state.setdefault(game.circuit_breaker.FREEZE_KEY, reason)

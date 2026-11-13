@@ -8,10 +8,12 @@ function body before the switch. Every case must match it on:
 
 * the state passed to ``save_game`` and the transactions passed to
   ``update_excel_log``;
-* every call on the game logger, in order;
 * the decision log, the closed-trade DNA, the alert emails and the
   covered-call pass calls;
 * the exception raised, if any.
+
+The logger stream is not in the golden (ADR 0005, R&D #78 S1). The audit lines it used to
+guard, and the edge cases only it used to show, are in ``tests/test_daily_run_audit_logs.py``.
 
 The cases cover every path out of the root: market closed, missing workbook,
 stale workbook, no prices, an unexpected error, and full runs in and out of
@@ -103,13 +105,18 @@ class _Run:
     """Patch the world, run one entry point, and record what it did."""
 
     def __init__(self, *, market_open=True, market_hours=True, exists=True, stale=None,
-                 prices=None, load_error=None, manual_profile="BALANCED", force=True, extra=None):
+                 prices=None, load_error=None, manual_profile="BALANCED", force=True, extra=None,
+                 regime="BALANCED", stale_ohlcv=()):
         self.market_open, self.market_hours = market_open, market_hours
         self.exists, self.stale = exists, stale
+        self.stale_ohlcv = set(stale_ohlcv)  # symbols whose OHLCV cache reads as stale
         self.prices = _PRICES if prices is None else prices
         self.load_error, self.manual_profile, self.force = load_error, manual_profile, force
-        # extra = {"positions": {...}, "rows": [...], "prices": {...}} added on top of the fixture
+        # extra = {"positions": {...}, "rows": [...], "prices": {...}, "state": {...}} added on top of
+        # the fixture ("state" replaces top-level state keys, e.g. balance or history).
         self.extra = extra or {}
+        self.regime = regime
+        self.last = {}  # the mocks of the most recent call, for audit tests
 
     def __call__(self, entry):
         log = mock.MagicMock()
@@ -118,6 +125,8 @@ class _Run:
         path.exists.return_value = self.exists
         state = _state()
         state["positions"].update(copy.deepcopy(self.extra.get("positions", {})))
+        state.update(copy.deepcopy(self.extra.get("state", {})))
+        heal = mock.MagicMock(return_value=False)
         rows = _ROWS + list(self.extra.get("rows", []))
         live = {**self.prices, **self.extra.get("prices", {})} if self.prices else {}
         load = mock.MagicMock(side_effect=self.load_error, return_value=state)
@@ -138,10 +147,10 @@ class _Run:
             mock.patch.object(game.notify, "send_email", email),
             mock.patch.object(game.openpyxl, "load_workbook", side_effect=lambda *a, **k: research_workbook(*rows)),
             mock.patch.object(game, "get_live_prices", return_value=dict(live)),
-            mock.patch.object(game, "get_market_regime", return_value="BALANCED"),
+            mock.patch.object(game, "get_market_regime", return_value=self.regime),
             mock.patch.object(game, "_has_strong_setups_today", return_value=False),
-            mock.patch.object(game, "_cache_stale", return_value=False),
-            mock.patch.object(game, "_heal_symbol_cache", return_value=False),
+            mock.patch.object(game, "_cache_stale", side_effect=lambda s, **k: s in self.stale_ohlcv),
+            mock.patch.object(game, "_heal_symbol_cache", heal),
             mock.patch.object(game, "is_bottom_confirmed", return_value=(False, "")),
             mock.patch.object(game, "backtrack_verify", return_value=(True, "3-day trend ok (test)")),
             mock.patch.object(game, "_load_symbol_today_cache", return_value=None),
@@ -154,6 +163,7 @@ class _Run:
             mock.patch.object(game.options, "execute_weekly_covered_call_pass", calls),
             mock.patch("ai_client.evaluate", return_value=""),
         ]
+        self.last = {"log": log, "heal": heal, "save": save}
         raised = None
         with ExitStack() as stack:
             for p in patches:
@@ -184,6 +194,10 @@ class _Run:
 _GOLDEN_FILE = Path(__file__).resolve().parent / "fixtures" / "scenario_runner_golden.json"
 _UPDATE_GOLDEN = os.environ.get("AETHER_UPDATE_GOLDEN") == "1"
 _RECORDED = {}
+# The logger stream is not part of the behaviour golden (ADR 0005): moving code or fixing a log
+# line must not churn it. The audit lines it used to guard are asserted in
+# tests/test_daily_run_audit_logs.py, with the edge cases only the log used to show.
+_NOT_IN_GOLDEN = {"log"}
 
 
 def _jsonable(result):
@@ -223,10 +237,11 @@ class TestRunnerMatchesRoot(unittest.TestCase):
         case = self._testMethodName
         if _UPDATE_GOLDEN:
             if mine == root:  # never record a case the runner doesn't match
-                _RECORDED[case] = root
+                _RECORDED[case] = {k: v for k, v in root.items() if k not in _NOT_IN_GOLDEN}
         else:
             golden = _golden()
             self.assertIn(case, golden, f"no golden entry for {case}; regenerate on purpose")
+            self.assertFalse(_NOT_IN_GOLDEN & set(golden[case]), "the golden must not pin the logger stream")
             for key in golden[case]:
                 with self.subTest(golden=key):
                     self.assertEqual(mine[key], golden[case][key])
