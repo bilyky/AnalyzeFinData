@@ -3,14 +3,11 @@ name: CI
 # First CI gate for AETHER. Deliberately dependency-free so it is fast, green, and
 # portable on a Linux runner.
 #
-# NOTE ON THE TEST SUITE: `python -m unittest discover tests` is intentionally NOT run
-# here yet. Discovery imports every test module, and the app has top-level imports of
-# MetaTrader5 (Windows-only — cannot pip-install on Linux) plus other heavy/native deps
-# (pyetrade, playwright, sqlalchemy, pandas, numpy) that no committed manifest pins
-# (requirements_web.txt is only fastapi+uvicorn). Running the suite in CI first needs a
-# curated requirements-ci.txt + guarded native imports (Linux), or a windows-latest
-# runner. Tracked as a follow-up. Until then, the two gates below run on every PR, and
-# the identical validator still runs locally via the git pre-commit hook.
+# The unit suite runs in the `tests` job on windows-latest: the app imports MetaTrader5,
+# which only installs on Windows, and requirements-ci.txt pins the exact package set the
+# suite passes on locally (R&D #78 S1b). The tests are hermetic (tests/__init__.py
+# redirects Data/ paths and blocks network, browsers and process kills), so no secrets or
+# live data are needed. `quality-gate` and `lint` stay dependency-free on Linux.
 
 on:
   pull_request:
@@ -92,3 +89,24 @@ jobs:
 
       - name: Ruff check (config in pyproject.toml)
         run: ruff check .
+
+  # The full unit suite: behaviour golden, audit logs, stage tests, everything under tests/.
+  tests:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: Install the pinned test dependencies
+        run: python -m pip install -r requirements-ci.txt
+
+      - name: Unit suite
+        run: python -m unittest discover -s tests
