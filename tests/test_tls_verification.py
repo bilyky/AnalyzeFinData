@@ -98,5 +98,87 @@ class TestPrecheck(unittest.TestCase):
         self.assertNotIn("All certificate checks passed.", out)
 
 
+class TestTlsFailureIsNotADeadToken(unittest.TestCase):
+    """#257 review: with an SSLError in the token check and the renew, get_tokens() used to fall
+    through to the automated headless login (['GET list', 'GET renew', 'LOGIN']). A certificate
+    failure isn't a dead token: no automated login. A plain network error keeps today's path, and
+    a person (allow_browser=True) may still log in."""
+
+    def _run(self, exc, allow_browser=False, only_url=None, saved_at=0):
+        import json
+        import tempfile
+        from unittest import mock
+        import requests
+        from aether import etrade
+        calls = []
+
+        class Session:
+            def __init__(self, *a, **k):
+                pass
+
+            def get(self, url, **k):
+                calls.append("GET")
+                if only_url and only_url not in url:
+                    return mock.Mock(status_code=200)
+                raise exc
+
+        def login(*a, **k):
+            calls.append("LOGIN")
+            return None
+        tmp = tempfile.mkdtemp()
+        tok = {"oauth_token": "t", "oauth_token_secret": "s", "env": "production", "saved_at": saved_at,
+               "issued_date_et": etrade._et_today()}
+        with open(etrade._TOKEN_PATH, "w") as f:
+            json.dump(tok, f)
+        self.addCleanup(lambda: os.path.exists(etrade._TOKEN_PATH) and os.remove(etrade._TOKEN_PATH))
+        with mock.patch.object(etrade, "OAuth1Session", Session),                 mock.patch.object(etrade, "_load_config", return_value=("ck", "cs", "u", "p")),                 mock.patch.object(etrade, "_login_headless", side_effect=login),                 mock.patch.object(etrade, "_reauth_cooldown_remaining", return_value=0),                 mock.patch.object(etrade, "_DATA_DIR", tmp),                 mock.patch.object(etrade, "_REAUTH_LOCK_PATH", os.path.join(tmp, "reauth.lock")),                 mock.patch.object(etrade.CFG, "etrade_totp_secret", "x", create=True),                 mock.patch.object(etrade.sys.stdin, "isatty", return_value=False):
+            try:
+                result = etrade.get_tokens("production", allow_browser=allow_browser)
+            except RuntimeError:                     # interactive path refuses without a terminal
+                result = "interactive"
+        return result, calls, requests
+
+    def test_certificate_failure_stops_before_the_automated_login(self):
+        import requests
+        with self.assertLogs("aether.etrade", level="ERROR") as cm:
+            result, calls, _ = self._run(requests.exceptions.SSLError("CERTIFICATE_VERIFY_FAILED"))
+        self.assertIsNone(result)
+        self.assertNotIn("LOGIN", calls)
+        self.assertTrue(any("skipping automated re-auth: TLS" in line for line in cm.output))
+
+    def test_the_token_check_alone_counts(self):
+        import time
+        import requests
+        with self.assertLogs("aether.etrade", level="ERROR") as cm:   # a fresh token: no renew call
+            result, calls, _ = self._run(requests.exceptions.SSLError("x"), saved_at=time.time())
+        self.assertEqual(calls, ["GET"])                  # no login; the fresh token is kept, as for any blip
+        self.assertEqual(result["oauth_token"], "t")
+        self.assertTrue(any("TLS certificate check failed in the token check" in line for line in cm.output))
+
+    def test_the_renew_alone_counts(self):
+        import requests
+        with self.assertLogs("aether.etrade", level="ERROR"):     # the check answers 200; the renew fails TLS
+            result, calls, _ = self._run(requests.exceptions.SSLError("x"), only_url="renew")
+        self.assertNotIn("LOGIN", calls)
+        self.assertIsNone(result)
+
+    def test_a_network_error_keeps_todays_path(self):
+        import requests
+        result, calls, _ = self._run(requests.exceptions.ConnectionError("refused"))
+        self.assertIn("LOGIN", calls)
+
+    def test_an_earlier_tls_failure_does_not_block_a_later_call(self):
+        import requests
+        with self.assertLogs("aether.etrade", level="ERROR"):
+            self._run(requests.exceptions.SSLError("x"))
+        result, calls, _ = self._run(requests.exceptions.ConnectionError("refused"))
+        self.assertIn("LOGIN", calls)                    # the failure belonged to the first call only
+
+    def test_a_person_may_still_log_in(self):
+        import requests
+        result, calls, _ = self._run(requests.exceptions.SSLError("CERTIFICATE_VERIFY_FAILED"), allow_browser=True)
+        self.assertIn("LOGIN", calls)
+
+
 if __name__ == "__main__":
     unittest.main()
