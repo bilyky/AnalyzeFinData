@@ -152,9 +152,62 @@ class TestOracleSection(unittest.TestCase):
             self.assertEqual(aether_oracle.margin_section(), "")
 
     def test_advisory_appends_the_section_even_when_the_oracle_account_is_unavailable(self):
-        with mock.patch.object(aether_oracle, "get_oracle_account", return_value=None), \
-                mock.patch.object(aether_oracle, "margin_section", return_value="<MW>"):
+        data = {"broker_status": "live", "accounts": []}
+        with mock.patch.object(aether_oracle, "_read_accounts", return_value=data), \
+                mock.patch.object(aether_oracle, "get_oracle_account", return_value=None), \
+                mock.patch.object(aether_oracle, "margin_section", return_value="<MW>") as ms:
             self.assertTrue(aether_oracle.run_oracle_advisory().endswith("<MW>"))
+        ms.assert_called_once_with(data)
+
+    def test_a_failed_read_is_not_retried_for_the_section(self):
+        with mock.patch.object(aether_oracle.data_api, "read_accounts", side_effect=RuntimeError("down")) as ra, \
+                mock.patch.object(aether_oracle.CFG, "oracle_account", "9999", create=True), \
+                self.assertLogs(aether_oracle._oracle_log.name, level="WARNING"):
+            html = aether_oracle.run_oracle_advisory()
+        self.assertEqual(ra.call_count, 1)
+        self.assertNotIn("Margin watch", html)
+
+    def test_one_broker_read_per_run(self):
+        data = {"broker_status": "live", "accounts": [A]}
+        with mock.patch.object(aether_oracle.data_api, "read_accounts", return_value=data) as ra, \
+                mock.patch.object(aether_oracle.CFG, "oracle_account", "9999", create=True), \
+                mock.patch.object(aether_oracle.CFG, "accounts_real", ["9999"]), \
+                mock.patch.object(aether_oracle.CFG, "oracle_margin_rate_pct", None, create=True), \
+                mock.patch.object(aether_oracle.margin_watch, "load_requirements", return_value=REQS), \
+                mock.patch.object(aether_oracle, "audit_oracle_portfolio", return_value=([], [])), \
+                mock.patch.object(aether_oracle, "get_oracle_buy_candidates", return_value=[]), \
+                mock.patch.object(aether_oracle.pick_eval, "log_picks"), \
+                mock.patch.object(aether_oracle, "generate_oracle_html", return_value="<ORACLE>"), \
+                self.assertLogs(aether_oracle._oracle_log.name, level="WARNING"):
+            html = aether_oracle.run_oracle_advisory()
+        self.assertEqual(ra.call_count, 1)
+        self.assertTrue(html.startswith("<ORACLE>"))
+        self.assertIn("...9999", html)
+
+
+class TestUnpriced(unittest.TestCase):
+    """Debt but no priced holdings: say so, don't crash the section or blame the requirement."""
+    A_UNPRICED = {**acct([("AAA", 100, None, 0.0)], equity=0.0), "margin": {"margin_balance": -1000.0}}
+
+    def test_view_and_render(self):
+        v = mw.account_view(self.A_UNPRICED, REQS)
+        self.assertTrue(v["unpriced"])
+        self.assertEqual((v["debt"], v["holdings_value"], v["equity_pct"], v["call_drop"]), (1000.0, 0, None, None))
+        html = mw.render_html([v])
+        self.assertIn("holdings unpriced", html)
+        self.assertNotIn("AT/UNDER", html)
+        self.assertFalse(mw.account_view(A, REQS)["unpriced"])
+
+    def test_section_logs_the_real_cause(self):
+        data = {"broker_status": "live", "accounts": [self.A_UNPRICED]}
+        with mock.patch.object(aether_oracle.CFG, "accounts_real", ["9999"]), \
+                mock.patch.object(aether_oracle.CFG, "oracle_margin_rate_pct", None, create=True), \
+                mock.patch.object(aether_oracle.margin_watch, "load_requirements", return_value=REQS), \
+                self.assertLogs(aether_oracle._oracle_log.name, level="WARNING") as cm:
+            html = aether_oracle.margin_section(data)
+        self.assertIn("holdings unpriced", html)
+        self.assertTrue(any("no priced holdings" in line for line in cm.output))
+        self.assertFalse(any("at or under" in line for line in cm.output))
 
 
 if __name__ == "__main__":

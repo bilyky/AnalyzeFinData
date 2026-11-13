@@ -1,14 +1,14 @@
 """
 margin_watch.py — margin health of each real account, for the Oracle's daily advisory (R&D #39).
 
-The Oracle audited one configured account; a margined real account could go unwatched (on
-2026-11-10 the owner's margined account had a house call that no report showed). This module
-computes, per account, from the broker's live figures only:
+The Oracle audits one configured account, so a margined real account it doesn't trade could
+reach a call unseen. This module computes, per account, from the broker's live figures only:
 
-  - debt = holdings value - net account value. On 2026-11-10 this reproduced E*TRADE's "Margin
-    Balance" to the cent. The cash field is left out: for the margined account it held a small
-    positive amount while the broker showed no cash, which would have overstated the debt. An
-    account with idle cash comes out <= 0 and is skipped (no loan);
+  - debt = holdings value - net account value, which matched the broker's "Margin Balance" when
+    checked. The cash field is left out: it can hold a small positive amount while the broker shows
+    no cash, which would overstate the debt. An account with idle cash comes out <= 0 and is
+    skipped (no loan); when no holding has a price, the requirement can't be computed and the view
+    says so ("unpriced") instead of guessing;
   - the maintenance requirement: each holding's value times its requirement. Requirements come
     from a private, owner-maintained file (Data/margin_requirements.json, copied from the broker's
     margin page: {"<last4>": {"SYMBOL": 0.30, ...}}); a holding missing from it is assumed at
@@ -80,6 +80,7 @@ def account_view(acct: dict, reqs: dict, rate_pct: float | None = None) -> dict 
     calls = {k: m.get(k) for k in ("house_call", "fed_call", "min_equity_call", "cash_call")}
     open_calls = {k: -v for k, v in calls.items() if v is not None and v < 0}
     return {"id": acct.get("id"), "holdings_value": value, "debt": debt, "equity": equity,
+            "unpriced": not holds and bool(acct.get("holdings")),
             "source": "broker" if m.get("margin_equity") is not None else "computed", "open_calls": open_calls,
             "equity_pct": equity / value if value else None, "requirement": requirement,
             "requirement_assumed": assumed, "excess": excess, "call_drop": call_drop,
@@ -109,6 +110,14 @@ def render_html(vs: list) -> str:
         return ""
     cards = []
     for v in vs:
+        if v.get("unpriced"):
+            cards.append(
+                f"<div style='border:1px solid #30363d; border-radius:6px; padding:12px; margin:10px 0;'>"
+                f"<b>Account ...{str(v['id'])[-4:]}</b>: debt {_money(v['debt'])}; "
+                f"<span style='color:#d29922;'>holdings unpriced, so the requirement can't be computed.</span>"
+                f"{' Open call per the broker: ' + ', '.join(f'{k} {_money(a)}' for k, a in v['open_calls'].items()) if v.get('open_calls') else ''}"
+                f"</div>")
+            continue
         if v.get("open_calls"):
             due = ", ".join(f"{k.replace('_', ' ')} {_money(a)}" for k, a in v["open_calls"].items())
             status = f"<span style='color:#f85149;'>OPEN CALL per the broker: {due}</span>"

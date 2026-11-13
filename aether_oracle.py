@@ -20,9 +20,20 @@ from aether_logger import get_logger as _get_logger
 _oracle_log = _get_logger("oracle")
 
 
-def get_oracle_account():
+def _read_accounts():
+    """One live read of every account (balances and portfolios through E*TRADE's auth path), or None."""
+    try:
+        return data_api.read_accounts()
+    except Exception as e:
+        _oracle_log.warning(f"Failed to load E*TRADE accounts for Oracle: {e}")
+        return None
+
+
+def get_oracle_account(accts_data=None):
     """Return live data for the configured real account, or None if unavailable.
 
+    accts_data: an earlier data_api.read_accounts() result to reuse (one broker read per run);
+    read here when not given.
     Zero-Trust: never fabricate balances. When the account cannot be read, callers
     render a "data unavailable" state rather than advising against a made-up equity.
     """
@@ -31,8 +42,9 @@ def get_oracle_account():
         _oracle_log.warning("Oracle has no configured account (config oracle.account / accounts.real).")
         return None
     try:
-        accts_data = data_api.read_accounts()
-        for acct in accts_data.get("accounts", []):
+        if accts_data is None:
+            accts_data = _read_accounts()
+        for acct in (accts_data or {}).get("accounts", []):
             if acct.get("id") == target:
                 return acct
         _oracle_log.warning(f"Oracle account {target} not found in live E*TRADE accounts.")
@@ -382,17 +394,23 @@ def _unavailable_html() -> str:
     )
 
 
-def margin_section() -> str:
+def margin_section(accts_data=None) -> str:
     """Margin watch for every real account (R&D #39), not only the Oracle's one: a margined account
-    the Oracle doesn't trade can still be near a call. Live broker data only; never raises."""
+    the Oracle doesn't trade can still be near a call. Live broker data only; never raises.
+    accts_data: the run's data_api.read_accounts() result (read here when not given)."""
     try:
-        vs = margin_watch.views(data_api.read_accounts(), CFG.accounts_real, margin_watch.load_requirements(),
+        if accts_data is None:
+            accts_data = data_api.read_accounts()
+        vs = margin_watch.views(accts_data, CFG.accounts_real, margin_watch.load_requirements(),
                                 CFG.oracle_margin_rate_pct)
         for v in vs:
+            if v.get("unpriced"):
+                _oracle_log.warning(f"[Margin watch] Account ...{str(v['id'])[-4:]} has debt but no priced holdings: "
+                                    f"the requirement can't be computed.")
             if v.get("open_calls"):
                 due = ", ".join(f"{k} ${a:,.2f}" for k, a in v["open_calls"].items())
                 _oracle_log.warning(f"[Margin watch] Account ...{str(v['id'])[-4:]} has an open call per the broker: {due}.")
-            elif v["call_drop"] is None or v["call_drop"] <= 0:
+            elif not v.get("unpriced") and (v["call_drop"] is None or v["call_drop"] <= 0):
                 _oracle_log.warning(f"[Margin watch] Account ...{str(v['id'])[-4:]} is at or under its maintenance "
                                     f"requirement (excess ${v['excess']:,.0f}).")
         return margin_watch.render_html(vs)
@@ -404,13 +422,16 @@ def margin_section() -> str:
 def run_oracle_advisory():
     """Main entry point to fetch and compile the Oracle advisory report."""
     try:
-        acct = get_oracle_account()
+        data = _read_accounts()                 # one broker read, shared by the audit and the margin watch
+        if data is None:                        # the read failed: no second attempt, no advice
+            return _unavailable_html()
+        acct = get_oracle_account(data)
         if acct is None:
-            return _unavailable_html() + margin_section()
+            return _unavailable_html() + margin_section(data)
         sells, holds = audit_oracle_portfolio(acct)
         buys = get_oracle_buy_candidates(acct)
         pick_eval.log_picks(pick_lists.ORACLE_BUYS, buys[:3])    # what the email shows
-        return generate_oracle_html(acct, sells, holds, buys) + margin_section()
+        return generate_oracle_html(acct, sells, holds, buys) + margin_section(data)
     except Exception as e:
         _oracle_log.error("Fatal failure running AETHER Oracle advisory", exc_info=True)
         return f"<div style='color:#ff7b72; padding:20px; border:1px solid #f85149; background:#1c1313;'>AETHER Oracle Advisory failed to run today: {e}</div>"
