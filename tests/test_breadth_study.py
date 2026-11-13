@@ -75,6 +75,16 @@ class TestVerdicts(unittest.TestCase):
         mixed = draws(5, train, train) + draws(5, {**train, "breadth_10": 2.0}, {**train, "breadth_10": 2.0})
         self.assertEqual(bs.verdicts(summary(train, train, mixed))["breadth"]["verdict"], "INCONCLUSIVE")
 
+    def test_breadth_helps_needs_both_halves(self):
+        """breadth_20 wins every train draw but loses every test draw: not BREADTH_HELPS (review of #261)."""
+        train = {"aether_rules": 0.5, "breadth_10": 0.6, "breadth_20": 0.9, "breadth_40": 0.7,
+                 "score_tilt_q": 0.4, "spy_buy_hold": 1.2}
+        test_half = {**train, "breadth_20": 0.1}
+        v = bs.verdicts(summary(train, test_half, draws(10, train, test_half)))
+        self.assertEqual(v["breadth"]["picked"], "breadth_20")
+        self.assertEqual(v["breadth"]["win_vs_aether"], {"train": 1.0, "test": 0.0})
+        self.assertEqual(v["breadth"]["verdict"], "INCONCLUSIVE")
+
     def test_beats_spy_needs_both_halves(self):
         train = {"aether_rules": 0.5, "breadth_10": 0.6, "breadth_20": 1.5, "breadth_40": 0.7,
                  "score_tilt_q": 0.4, "spy_buy_hold": 1.0}
