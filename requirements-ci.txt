@@ -1,5 +1,5 @@
 # Exact package set the unit suite is run with in CI (.github/workflows/ci.yml, job 'tests').
-# Frozen from the dev venv (Python 3.14, Windows) the suite passes on; ruff is pinned in the lint job.
+# Frozen from the dev venv (Python 3.14, Windows) the suite passes on. ruff is pinned in ci.yml (lint and tests jobs).
 # Refresh after adding a dependency: pip freeze, then drop ruff.
 annotated-doc==0.0.4
 annotated-types==0.7.0

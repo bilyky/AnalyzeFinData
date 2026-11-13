@@ -106,7 +106,8 @@ jobs:
           cache-dependency-path: requirements-ci.txt
 
       - name: Install the pinned test dependencies
-        run: python -m pip install -r requirements-ci.txt
+        # ruff too (same pin as the lint job): test_executables lints daily_task.py with it.
+        run: python -m pip install -r requirements-ci.txt ruff==0.16.1
 
       - name: Unit suite
         run: python -m unittest discover -s tests
