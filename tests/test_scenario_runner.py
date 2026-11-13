@@ -106,9 +106,10 @@ class _Run:
 
     def __init__(self, *, market_open=True, market_hours=True, exists=True, stale=None,
                  prices=None, load_error=None, manual_profile="BALANCED", force=True, extra=None,
-                 regime="BALANCED"):
+                 regime="BALANCED", stale_ohlcv=()):
         self.market_open, self.market_hours = market_open, market_hours
         self.exists, self.stale = exists, stale
+        self.stale_ohlcv = set(stale_ohlcv)  # symbols whose OHLCV cache reads as stale
         self.prices = _PRICES if prices is None else prices
         self.load_error, self.manual_profile, self.force = load_error, manual_profile, force
         # extra = {"positions": {...}, "rows": [...], "prices": {...}, "state": {...}} added on top of
@@ -148,7 +149,7 @@ class _Run:
             mock.patch.object(game, "get_live_prices", return_value=dict(live)),
             mock.patch.object(game, "get_market_regime", return_value=self.regime),
             mock.patch.object(game, "_has_strong_setups_today", return_value=False),
-            mock.patch.object(game, "_cache_stale", return_value=False),
+            mock.patch.object(game, "_cache_stale", side_effect=lambda s, **k: s in self.stale_ohlcv),
             mock.patch.object(game, "_heal_symbol_cache", heal),
             mock.patch.object(game, "is_bottom_confirmed", return_value=(False, "")),
             mock.patch.object(game, "backtrack_verify", return_value=(True, "3-day trend ok (test)")),

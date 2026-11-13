@@ -126,6 +126,26 @@ class TestBehaviourEdges(unittest.TestCase):
         run, _ = _run()  # nothing is stale in the fixture
         run.last["heal"].assert_not_called()
 
+    def test_a_stale_held_position_is_healed_before_the_exit_decisions(self):
+        run, _ = _run(stale_ohlcv={"WIN"})
+        self.assertIn("WIN", [c.args[0] for c in run.last["heal"].call_args_list])
+
+    def test_a_stale_buy_candidate_is_healed_then_rejected(self):
+        # Heal returns False (no fresh data), so the Zero-Trust freshness gate rejects NEW1.
+        run, out = _run(stale_ohlcv={"NEW1"})
+        self.assertIn("NEW1", [c.args[0] for c in run.last["heal"].call_args_list])
+        self.assertNotIn(("BUY", "NEW1"), _buys(out))
+        self.assertTrue(_has(out, "warning", "AI BUY REJECTED (Zero-Trust Freshness): NEW1"))
+
+    def test_a_stale_queued_buy_is_healed_then_skipped(self):
+        # QSTALE is queued but not on the Research sheet, so only the queued-order path can heal it.
+        extra = {"state": {"queued_orders": [{"type": "BUY", "symbol": "QSTALE", "reason": "operator"}]},
+                 "prices": {"QSTALE": 40.0}}
+        run, out = _run(stale_ohlcv={"QSTALE"}, extra=extra)
+        self.assertEqual([c.args[0] for c in run.last["heal"].call_args_list], ["QSTALE"])
+        self.assertNotIn(("BUY", "QSTALE"), _buys(out))
+        self.assertTrue(_has(out, "warning", "QUEUED BUY SKIPPED (Zero-Trust Freshness): QSTALE"))
+
     def test_profit_lock_ratchet_never_lowers_a_stop(self):
         # LOCK's stop (78) is above the trail the ratchet would compute (80 - 2.5 x ATR 2 = 75).
         extra = {"positions": {"LOCK": {"qty": 10, "cost": 50.0, "stop_loss": 78.0, "highest_close_since_acq": 80.0}},
