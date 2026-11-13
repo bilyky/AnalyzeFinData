@@ -47,17 +47,29 @@ def validate(data: dict) -> list[str]:
             out.append(f"{n}: schedule needs 'at'")
         if s.get("type") == "weekly" and s.get("day") not in _DAYS:
             out.append(f"{n}: weekly schedule needs a day")
+        if "retired" in t and not (isinstance(t["retired"], str) and t["retired"].strip()):
+            out.append(f"{n}: 'retired' must be the reason, as text")
     return out
 
 
+# A retired task keeps its manifest entry (the System page still shows it and why), but the
+# registrar never registers it and disables one that exists, and the watchdog doesn't audit it.
+# PROD 2026-11-11: re-registering re-created three tasks the 11-02 runbook had disabled.
 def tasks(path: Path | None = None) -> list[dict]:
-    return load(path)["tasks"]
+    """The active (not retired) tasks."""
+    return [t for t in load(path)["tasks"] if not t.get("retired")]
 
 
 def full_names(path: Path | None = None) -> list[str]:
-    """Task Scheduler paths, e.g. \\AETHER_Agents\\AETHER_Watchdog."""
+    """Task Scheduler paths of the active tasks, e.g. \\AETHER_Agents\\AETHER_Watchdog."""
     data = load(path)
-    return [f"{data['folder']}{t['name']}" for t in data["tasks"]]
+    return [f"{data['folder']}{t['name']}" for t in data["tasks"] if not t.get("retired")]
+
+
+def retired_names(path: Path | None = None) -> list[str]:
+    """Task Scheduler paths of the retired tasks."""
+    data = load(path)
+    return [f"{data['folder']}{t['name']}" for t in data["tasks"] if t.get("retired")]
 
 
 def schedule_text(task: dict) -> str:
@@ -85,6 +97,7 @@ def describe(task: dict) -> dict:
         "description": task["description"],
         "notes": task.get("notes", ""),
         "kind": "python" if "script" in task else "agent",
+        "retired": task.get("retired", ""),
         "schedule": schedule_text(task),
         "command": command_text(task),
         "time_limit_min": task["time_limit_min"],
