@@ -74,6 +74,7 @@ class TestPrecheck(unittest.TestCase):
         rc, out = self._run(lambda u, timeout: mock.Mock(status_code=401))
         self.assertEqual(rc, 0)
         self.assertIn("All certificate checks passed.", out)
+        self.assertIn("Trusting:", out)
 
     def test_a_certificate_error_fails(self):
         import requests
@@ -178,6 +179,92 @@ class TestTlsFailureIsNotADeadToken(unittest.TestCase):
         import requests
         result, calls, _ = self._run(requests.exceptions.SSLError("CERTIFICATE_VERIFY_FAILED"), allow_browser=True)
         self.assertIn("LOGIN", calls)
+
+
+class TestPrecheckStandalone(unittest.TestCase):
+    """The PROD note copies tls_precheck.py out of the repo and runs it there (before the pull):
+    it must import without aether and still report the trust it uses."""
+
+    def test_imports_outside_the_repo(self):
+        import shutil
+        import sys
+        import tempfile
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        shutil.copy(os.path.join(ROOT, "scripts", "diagnostics", "tls_precheck.py"), tmp)
+        code = ("import importlib.util as u; s = u.spec_from_file_location('p', 'tls_precheck.py'); "
+                "m = u.module_from_spec(s); s.loader.exec_module(m); print(m.trust_source())")
+        r = subprocess.run([sys.executable, "-I", "-c", code], cwd=tmp, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(r.stdout.strip(), ("certifi", "system trust store (truststore)"))
+        r0 = subprocess.run([sys.executable, "-I", "-c", code], cwd=tmp, capture_output=True, text=True,
+                            env={**os.environ, "AETHER_TLS_TRUSTSTORE": "0"})
+        self.assertEqual(r0.stdout.strip(), "certifi")
+
+
+class TestSystemTrustStore(unittest.TestCase):
+    """aether/tls.py: the OS trust store when truststore is installed; certifi without it or when
+    opted out. Verification stays on in every case."""
+
+    def setUp(self):
+        from aether import tls
+        self.tls = tls
+        saved = dict(tls.STATE)
+        self.addCleanup(lambda: tls.STATE.update(saved))
+
+    def test_uses_truststore_when_present(self):
+        from unittest import mock
+        fake = mock.Mock()
+        with mock.patch.object(self.tls, "_truststore", fake), mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AETHER_TLS_TRUSTSTORE", None)
+            self.assertTrue(self.tls.use_system_trust_store())
+        fake.inject_into_ssl.assert_called_once_with()
+        self.assertIn("system trust store", self.tls.trust_source())
+
+    def test_missing_package_keeps_certifi(self):
+        from unittest import mock
+        with mock.patch.object(self.tls, "_truststore", None):
+            self.assertFalse(self.tls.use_system_trust_store())
+        self.assertEqual(self.tls.trust_source(), "certifi")
+
+    def test_opt_out(self):
+        from unittest import mock
+        fake = mock.Mock()
+        with mock.patch.object(self.tls, "_truststore", fake),                 mock.patch.dict(os.environ, {"AETHER_TLS_TRUSTSTORE": "0"}):
+            self.assertFalse(self.tls.use_system_trust_store())
+        fake.inject_into_ssl.assert_not_called()
+        self.assertEqual(self.tls.trust_source(), "certifi")
+
+
+class TestChaikinSessionKeepsCaBundle(unittest.TestCase):
+    """Direct mode sets trust_env=False (ignore stray proxies), which also drops REQUESTS_CA_BUNDLE:
+    the session must keep a bundle the owner set, or the PROD note's fix wouldn't reach Chaikin."""
+
+    def _session(self, proxy, env):
+        from unittest import mock
+        import powergauge
+        saved = powergauge._http_session
+        powergauge._http_session = None
+        self.addCleanup(setattr, powergauge, "_http_session", saved)
+        with mock.patch.object(powergauge, "_resolve_proxy", return_value=proxy),                 mock.patch.dict(os.environ, env, clear=False):
+            for k in ("REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+                if k not in env:
+                    os.environ.pop(k, None)
+            return powergauge._get_http_session()
+
+    def test_direct_mode_keeps_the_bundle(self):
+        s = self._session(None, {"REQUESTS_CA_BUNDLE": "C:/certs/corp.pem"})
+        self.assertFalse(s.trust_env)
+        self.assertEqual(s.verify, "C:/certs/corp.pem")
+
+    def test_direct_mode_without_a_bundle_still_verifies(self):
+        s = self._session(None, {})
+        self.assertIs(s.verify, True)
+
+    def test_proxy_mode_reads_the_environment_itself(self):
+        s = self._session("http://proxy.example:911", {"REQUESTS_CA_BUNDLE": "C:/certs/corp.pem"})
+        self.assertTrue(s.trust_env)                    # requests merges REQUESTS_CA_BUNDLE per request
+        self.assertIs(s.verify, True)
 
 
 if __name__ == "__main__":

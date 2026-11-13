@@ -11,6 +11,13 @@ change them. They carried credentials:
 All of them now verify certificates. EDGAR no longer falls back: on a certificate error it logs a
 warning and uses the cached data, labelled stale, as it does for any other fetch failure.
 
+**Which certificates are trusted:** with the `truststore` package installed (new in
+`requirements.txt`), AETHER trusts the Windows certificate store, the same roots the browser
+trusts, including a corporate or antivirus root that inspects HTTPS. That's the most likely reason
+certificate checks would fail on a machine, so installing it first removes most of the risk.
+Without the package, AETHER uses Python's certifi bundle, as before. Verification is on either way.
+To go back to certifi without a code change, set `AETHER_TLS_TRUSTSTORE=0`.
+
 ## 1. Before you deploy: check certificates from PROD
 
 If certificate checks fail on PROD, every E*TRADE, Chaikin and EDGAR call fails: no prices, no
@@ -21,10 +28,15 @@ code on their next run even without a restart. Fetch only, and run the check fro
 commit (it changes nothing in the working tree):
 
 ```powershell
+venv_new\Scripts\python.exe -m pip install "truststore>=0.10"
 git fetch origin
 git show origin/main:scripts/diagnostics/tls_precheck.py | Out-File -Encoding utf8 $env:TEMP\tls_precheck.py
 venv_new\Scripts\python.exe $env:TEMP\tls_precheck.py
 ```
+
+The first line of the output says which roots it trusted (`Trusting: system trust store
+(truststore)` or `Trusting: certifi`); the runtime trusts the same. If pip can't install the
+package, the check still runs, against certifi.
 
 - `All certificate checks passed.` (exit 0): go on to step 2. Any status code, even 401 or 404,
   counts as a pass.
@@ -53,8 +65,10 @@ EDGAR answered 200.
 ## If a call fails with SSLError
 
 That means something between the machine and the host is intercepting TLS (for example a
-proxy that inspects traffic). Don't turn verification off again. Point `REQUESTS_CA_BUNDLE` at
-the proxy's CA certificate instead, or use a network path that doesn't intercept.
+proxy that inspects traffic). Don't turn verification off again. First install `truststore` (step
+1) if the check said `Trusting: certifi`: the Windows store usually already holds that proxy's
+root. Otherwise point `REQUESTS_CA_BUNDLE` at the proxy's CA certificate; every call honors it,
+including Chaikin's direct-mode session (it ignores proxy variables, but keeps a CA bundle).
 
 ## Roll back
 

@@ -367,6 +367,11 @@ def _get_http_session() -> requests.Session:
             # Explicit direct: ignore any stray HTTPS_PROXY/HTTP_PROXY the E*TRADE client
             # may have exported into the environment, so off-Intel runs stay direct.
             _http_session.trust_env = False
+            # trust_env=False also drops REQUESTS_CA_BUNDLE, the documented fix for a network
+            # that inspects HTTPS (PROD note 2026-11-11): keep a CA bundle the owner set.
+            ca_bundle = os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE")
+            if ca_bundle:
+                _http_session.verify = ca_bundle
     return _http_session
 
 
