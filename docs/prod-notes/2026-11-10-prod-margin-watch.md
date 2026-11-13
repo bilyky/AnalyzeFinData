@@ -8,10 +8,15 @@ margin loan (`accounts.real` in config), not only the Oracle's own account. For 
   (red: at or under the requirement; amber: within 10%);
 - interest per month, if you set your rate;
 - **pay down first**: the five sales that free the most requirement per dollar (100% names first),
-  losses before gains.
+  losses before gains. A loss on a symbol bought in the last 30 days (a vest or ESPP purchase, from
+  position-watch's private config) is marked "wash window" and listed last: that sale would harvest
+  nothing;
+- an account with debt but no priced holdings says "holdings unpriced" instead of a requirement.
 
 It uses the broker's live figures only. Debt, margin equity and any open call (house, Fed, minimum-equity, cash) come straight from E*TRADE's balance data (`marginBalance`, `regtEquity`, `OpenCalls`), and an account the broker reports without a margin loan is left out. On a day the broker can't be read it shows nothing. It
-places no orders. The log also gets a WARNING when an account is at or under its requirement.
+places no orders. The Oracle reads the accounts once per run and shares that read with its own
+audit; when the read fails, it doesn't retry. The log gets a WARNING for an open call, for an
+account at or under its requirement, and for debt with unpriced holdings.
 
 ## 1. Private files on PROD (never in git)
 
@@ -21,6 +26,8 @@ places no orders. The log also gets a WARNING when an account is at or under its
   requirement is assumed. Update the file when E*TRADE changes a rate or you buy a new name.
 - **Optional, `oracle.margin_rate_pct`** in `Data\config.json` (your margin rate, % a year, for
   example `10.8`). Without it the interest line is left out.
+- **Already there if position-watch is set up:** `Data\position_watch\config.json` (its `symbol`
+  and `acquisition_dates`) feeds the wash-window mark. Without it, nothing is marked.
 
 ## 2. Deploy
 
@@ -29,7 +36,7 @@ Merge, then pull. No restart: the email job imports it on its next run.
 ## 3. Check
 
 The next daily email's Oracle section ends with "Margin watch". Compare the debt with E*TRADE's
-"Margin Balance" for the account: they should match. On 2026-11-10 they matched to the cent.
+"Margin Balance" for the account: they should match (they did when checked on dev).
 
 ## Roll back
 
