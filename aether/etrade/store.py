@@ -67,6 +67,11 @@ def _pkg():
     return _p
 
 
+class StoreUnavailable(RuntimeError):
+    """The shared (DB) store can't be reached or used. The fallback wrapper turns it into a
+    local-file operation plus one warning; nothing else catches it."""
+
+
 # ===========================================================================
 # Ports (abstract interfaces) + their record schemas
 # ===========================================================================
@@ -97,8 +102,9 @@ class TokenStore(abc.ABC):
         """Persist tokens, stamping env / saved_at / issued_date_et."""
 
     @abc.abstractmethod
-    def delete(self) -> None:
-        """Remove the cached token (e.g. on explicit 401/403 rejection)."""
+    def delete(self, env: Optional[str] = None, if_token: Optional[str] = None) -> None:
+        """Remove the cached token (e.g. on explicit 401/403 rejection). A shared store deletes only
+        while it still holds ``if_token``, so one machine never deletes another's newer token."""
 
 
 class BrowserStateStore(abc.ABC):
@@ -156,12 +162,14 @@ class LockHandle:
     caller never inspects the handle, so the shape is adapter-private.
     """
 
-    __slots__ = ("name", "path", "fd")
+    __slots__ = ("name", "path", "fd", "owner")
 
-    def __init__(self, name: str, path: Optional[str] = None, fd: Optional[int] = None):
+    def __init__(self, name: str, path: Optional[str] = None, fd: Optional[int] = None,
+                 owner: Optional[str] = None):
         self.name = name
         self.path = path
         self.fd = fd
+        self.owner = owner   # DB row-lease adapter: the lease owner it must match on release
 
 
 class LockProvider(abc.ABC):
@@ -261,7 +269,7 @@ class FileTokenStore(TokenStore):
         except Exception as exc:
             p._log.debug("etrade: clear_reauth_alert best-effort failed: %s", exc)
 
-    def delete(self) -> None:
+    def delete(self, env: Optional[str] = None, if_token: Optional[str] = None) -> None:
         p = _pkg()
         if p.os.path.exists(p._TOKEN_PATH):
             p.os.remove(p._TOKEN_PATH)
@@ -389,6 +397,131 @@ def _file_store() -> EtradeStore:
     )
 
 
+# ===========================================================================
+# Shared store with a file fallback (AETHER_ETRADE_STORE=db)
+# ===========================================================================
+
+_WARNED: set = set()   # one fallback warning per operation per process
+
+
+def _fallback_warning(what: str, err: Exception) -> None:
+    if what in _WARNED:
+        return
+    _WARNED.add(what)
+    _pkg()._log.warning(f"E*TRADE shared store unavailable ({what}: {err}); using this machine's files.")
+
+
+class _FallbackTokenStore(TokenStore):
+    """Shared token first; this machine's file when the database can't be reached. Every save also
+    goes to the file, so a fallback starts from the latest token this machine saw."""
+
+    def __init__(self, shared: TokenStore, local: TokenStore):
+        self._shared, self._local = shared, local
+
+    def load(self, env: str) -> Optional[dict]:
+        try:
+            tokens = self._shared.load(env)
+        except StoreUnavailable as e:
+            _fallback_warning("token load", e)
+            return self._local.load(env)
+        if tokens:
+            return tokens
+        # Nothing shared today: this machine may hold one minted while the database was down.
+        tokens = self._local.load(env)
+        if tokens:
+            try:
+                self._shared.save(dict(tokens), env)
+            except StoreUnavailable as e:
+                _fallback_warning("token save", e)
+        return tokens
+
+    def load_any_date(self, env: str) -> Optional[dict]:
+        try:
+            return self._shared.load_any_date(env) or self._local.load_any_date(env)
+        except StoreUnavailable as e:
+            _fallback_warning("token load", e)
+            return self._local.load_any_date(env)
+
+    def save(self, tokens: dict, env: str) -> None:
+        self._local.save(tokens, env)
+        try:
+            self._shared.save(dict(tokens), env)
+        except StoreUnavailable as e:
+            _fallback_warning("token save", e)
+
+    def delete(self, env: Optional[str] = None, if_token: Optional[str] = None) -> None:
+        try:
+            self._shared.delete(env=env, if_token=if_token)
+        except StoreUnavailable as e:
+            _fallback_warning("token delete", e)
+
+
+class _FallbackReauthStateStore(ReauthStateStore):
+    def __init__(self, shared: ReauthStateStore, local: ReauthStateStore):
+        self._shared, self._local = shared, local
+
+    def load(self, env: str = "production") -> dict:
+        try:
+            return self._shared.load(env)
+        except StoreUnavailable as e:
+            _fallback_warning("re-auth state load", e)
+            return self._local.load(env)
+
+    def save(self, state: dict, env: str = "production") -> None:
+        self._local.save(state, env)
+        try:
+            self._shared.save(state, env)
+        except StoreUnavailable as e:
+            _fallback_warning("re-auth state save", e)
+
+    def reset(self, env: str = "production") -> None:
+        self.save({"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}, env)
+
+
+class _FallbackLockProvider(LockProvider):
+    """The shared row lease; this machine's file lock when the database can't be reached."""
+
+    def __init__(self, shared: LockProvider, local: LockProvider):
+        self._shared, self._local = shared, local
+
+    def acquire(self, name: str, ttl: int = _DEFAULT_LOCK_TTL) -> Optional[LockHandle]:
+        try:
+            return self._shared.acquire(name, ttl)
+        except StoreUnavailable as e:
+            _fallback_warning("lock", e)
+            return self._local.acquire(name, ttl)
+
+    def release(self, handle: Optional[LockHandle]) -> None:
+        if handle is None:
+            return
+        if handle.path:                       # a file lock (taken during a fallback)
+            self._local.release(handle)
+            return
+        try:
+            self._shared.release(handle)
+        except StoreUnavailable as e:         # the lease expires on its own after its ttl
+            _fallback_warning("lock release", e)
+
+    def is_held(self, name: str) -> bool:
+        try:
+            return self._shared.is_held(name)
+        except StoreUnavailable:
+            return os.path.exists(self._local._resolve(name))
+
+
+def _with_file_fallback(shared: EtradeStore) -> EtradeStore:
+    p = _pkg()
+    local = _file_store()
+    local.lock = FileLockProvider(lock_dir=p._DATA_DIR)
+    return EtradeStore(
+        tokens=_FallbackTokenStore(shared.tokens, local.tokens),
+        browser_state=shared.browser_state,
+        reauth=_FallbackReauthStateStore(shared.reauth, local.reauth),
+        lock=_FallbackLockProvider(shared.lock, local.lock),
+        backend="db",
+    )
+
+
 def make_etrade_store(config=None) -> EtradeStore:
     """Select the persistence backend.
 
@@ -406,18 +539,18 @@ def make_etrade_store(config=None) -> EtradeStore:
     backend = (os.environ.get("AETHER_ETRADE_STORE") or "file").strip().lower()
     if backend != "db":
         return _file_store()
-    db_url = os.environ.get("DATABASE_URL")
-    if not db_url:
-        if config is None:
-            try:
-                from aether.config import CFG
-                config = CFG
-            except Exception:
-                config = None
-        db_url = getattr(config, "database_url", None) if config is not None else None
+    if config is None:
+        try:
+            from aether.config import CFG
+            config = CFG
+        except Exception:
+            config = None
+    db_url = os.environ.get("DATABASE_URL") or (getattr(config, "database_url", None) if config is not None else None)
     if not db_url:
         raise ValueError("AETHER_ETRADE_STORE=db but no DATABASE_URL / database.url is configured.")
+    # The token blob is encrypted with a key derived from the production consumer secret.
+    key_secret = (getattr(config, "etrade_production_secret", "") or "") if config is not None else ""
     # DB backend requested — kept isolated so importing it (and SQLAlchemy) is
     # only paid for when actually selected.
     from aether.etrade.store_db import make_db_store
-    return make_db_store(db_url)
+    return _with_file_fallback(make_db_store(db_url, key_secret))

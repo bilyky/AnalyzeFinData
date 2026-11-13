@@ -157,11 +157,12 @@ class TestBundleWiring(unittest.TestCase):
         self.assertIsInstance(store.lock, LockProvider)
         self.assertEqual(store.backend, "file")
 
-    def test_db_store_lock_is_stub(self):
+    def test_db_store_builds_without_connecting_and_reports_an_unreachable_db(self):
+        from aether.etrade.store import StoreUnavailable
         from aether.etrade.store_db import make_db_store
-        store = make_db_store("postgresql://example/db")
+        store = make_db_store("sqlite:///Z:/no/such/dir/etrade.db", key_secret="s")   # no connection yet
         self.assertEqual(store.backend, "db")
-        with self.assertRaises(NotImplementedError):
+        with self.assertRaises(StoreUnavailable):
             store.lock.acquire("x")
 
 

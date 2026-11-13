@@ -191,19 +191,35 @@ def _proxies():
 
 
 def _save_tokens(tokens, env):
-    """Shim → ``store.FileTokenStore().save``; the I/O body lives in the store adapter.
-
-    (``FileTokenStore`` is imported at module scope from the bottom store import.)
-    """
-    FileTokenStore().save(tokens, env)
+    """Shim → ``make_etrade_store().tokens.save``: the file adapter by default; with
+    ``AETHER_ETRADE_STORE=db`` the shared store plus this machine's file (PROD review 11-13)."""
+    make_etrade_store().tokens.save(tokens, env)
 
 
 def _load_tokens(env):
     """Return cached tokens if issued today (ET), otherwise None.
 
-    Shim → ``store.FileTokenStore().load``; the I/O body lives in the store adapter.
+    Shim → ``make_etrade_store().tokens.load``: with the shared store, a token another machine
+    minted today is found here, so this machine doesn't log in again.
     """
-    return FileTokenStore().load(env)
+    return make_etrade_store().tokens.load(env)
+
+
+def _discard_rejected_token(tokens, env, reason):
+    """Move this machine's token file to the trash (recoverable) and, with the shared store, delete
+    the shared token only while it is still the one that was rejected: another machine may already
+    have saved a newer one."""
+    trash.soft_delete(_TOKEN_PATH, reason=reason)
+    store = make_etrade_store()
+    if store.backend == "db":
+        store.tokens.delete(env=env, if_token=(tokens or {}).get("oauth_token"))
+
+
+def _token_lock_provider():
+    """The cross-process lock for renew / re-auth: the shared row lease with the shared store
+    (so two machines never mint at once), else None = today's O_EXCL file lock."""
+    store = make_etrade_store()
+    return store.lock if store.backend == "db" else None
 
 
 def _probe_token_auth(tokens, env="production"):
@@ -270,7 +286,7 @@ def renew_tokens(tokens, env="sandbox") -> dict | None:
 
     lock_path = os.path.join(_DATA_DIR, "etrade_renew.lock")
     renewer = _TokenRenewer(lock_path, _do_renew, lambda: _load_tokens(env),
-                            lock_ttl=30, wait_timeout=15)
+                            lock_ttl=30, wait_timeout=15, lock_provider=_token_lock_provider())
     return renewer.ensure(current_token=tokens)
 
 
@@ -317,7 +333,7 @@ def revoke_tokens(tokens, env="sandbox") -> bool:
     try:
         r = session.get(_REVOKE_URL[env], proxies=_proxies(), verify=False, timeout=10)
         if r.ok:
-            trash.soft_delete(_TOKEN_PATH, reason="revoked")   # soft-delete (recoverable)
+            _discard_rejected_token(tokens, env, "revoked")   # soft-delete (recoverable)
             _log.console("Tokens revoked and cache cleared.")
             return True
         _log.console(f"  [Token] Revoke failed: HTTP {r.status_code}")
@@ -1187,9 +1203,9 @@ def _get_tokens_via_playwright(auth_url, username, password, headless=False):
 def _load_tokens_any_date(env) -> dict | None:
     """Load cached tokens regardless of issue date — for renewal attempts.
 
-    Shim → ``store.FileTokenStore().load_any_date``; the I/O body lives in the store adapter.
+    Shim → ``make_etrade_store().tokens.load_any_date``.
     """
-    return FileTokenStore().load_any_date(env)
+    return make_etrade_store().tokens.load_any_date(env)
 
 
 def _get_failure_state():
@@ -1288,7 +1304,7 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
                 check_etrade_cookie_freshness()
                 return reactivated
             _log.warning("🚨 [E*TRADE ALERT] E*TRADE rejected the cached token (401/403) even after a renew. Moving it to trash (recoverable)...")
-            trash.soft_delete(_TOKEN_PATH, reason="rejected-401")
+            _discard_rejected_token(cached, env, "rejected-401")
             cached = None
         else:
             renewed = renew_tokens(cached, env)
@@ -1320,7 +1336,7 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
                         "(likely midnight-ET expiry). Soft-deleting to trash (recoverable) and "
                         "falling through to re-auth."
                     )
-                    trash.soft_delete(_TOKEN_PATH, reason="rejected-after-overnight-renew")
+                    _discard_rejected_token(renewed, env, "rejected-after-overnight-renew")
                 else:
                     _log.info("Previous-day token renewed and verified.")
                     check_etrade_cookie_freshness()
@@ -1362,6 +1378,7 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
                 # load and the caller's own soft-fail path. The winner still mints fully inline;
                 # ttl=300 (> browser worst case) guarantees the loser never opens a second browser.
                 wait_timeout=int(getattr(CFG, "etrade_reauth_wait_timeout_sec", 10) or 10),
+                lock_provider=_token_lock_provider(),
             )
             try:
                 tokens = reauth_renewer.ensure(current_token=cached)
