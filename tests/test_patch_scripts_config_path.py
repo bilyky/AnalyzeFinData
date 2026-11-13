@@ -3,6 +3,7 @@
 They used to default to Data\\config.json, which aether/config.py never loads (PROD review 2026-11-13).
 """
 import os
+import re
 import runpy
 import unittest
 from pathlib import Path
@@ -32,6 +33,21 @@ class PatchScriptsConfigPathTest(unittest.TestCase):
             with self.subTest(script=script.name):
                 self.assertNotIn('os.path.join("Data", "config.json")', script.read_text(encoding="utf-8"))
 
+
+    def test_live_prod_notes_name_the_root_config(self):
+        r"""A note that tells PROD to edit Data\config.json edits a file the code never reads. Historical
+        notes (10-08 ARCHIVE copies, the 10-12 note that explains the two files, and the 11-13 note that
+        removes the stray copy) may still name it."""
+        allowed = ("ARCHIVE", "2026-10-08-prod-audit-actions", "2026-10-12-ai-tiers-192-enable",
+                   "2026-11-13-prod-config-root-only")
+        stray = re.compile(r"Data[\\/]config\.json")
+        for note in _NOTES.glob("2026-*.md"):
+            if any(a in note.name for a in allowed):
+                continue
+            # Data\position_watch\config.json is a different, private file.
+            text = re.sub(r"Data[\\/]position_watch[\\/]config\.json", "", note.read_text(encoding="utf-8"))
+            with self.subTest(note=note.name):
+                self.assertIsNone(stray.search(text), stray.search(text) and text[stray.search(text).start() - 60:][:120])
 
 if __name__ == "__main__":
     unittest.main()
