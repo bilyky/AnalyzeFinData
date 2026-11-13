@@ -2,11 +2,17 @@
 
 They used to default to Data\\config.json, which aether/config.py never loads (PROD review 2026-11-13).
 """
+import importlib.util
+import io
+import json
 import os
 import re
 import runpy
+import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import aether.config as cfg
 
@@ -27,6 +33,28 @@ class PatchScriptsConfigPathTest(unittest.TestCase):
                 loaded = Path(cfg.__file__).resolve().parent.parent / "config.json"
                 self.assertEqual(os.path.normcase(os.path.abspath(g["DEFAULT_CONFIG"])),
                                  os.path.normcase(str(loaded)))
+
+    def test_the_backup_goes_to_data_backup_wherever_the_config_is(self):
+        """The backup used to be written next to the config (dirname + Backup), so patching the root
+        config.json would have put it in <repo>\\Backup instead of Data\\Backup (#267 PROD smoke)."""
+        scripts = ("patch_groq_reasoning_2026_11_04", "patch_ai_config_175", "patch_ai_models_2026_10_20")
+        repo = Path(cfg.__file__).resolve().parent.parent
+        fixture = {"ai": {"providers": {"groq": {"model": "m"}, "openrouter": {"api_key_source": "env:X"}}}}
+        for name in scripts:
+            with self.subTest(script=name), tempfile.TemporaryDirectory() as td:
+                spec = importlib.util.spec_from_file_location(f"_t_{name}", _NOTES / f"{name}.py")
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                self.assertEqual(Path(mod.BACKUP_ROOT), repo / "Data" / "Backup")
+                conf = Path(td, "cfgdir", "config.json")
+                conf.parent.mkdir()
+                conf.write_text(json.dumps(fixture), encoding="utf-8")
+                mod.BACKUP_ROOT = str(Path(td, "backroot"))           # hermetic: never the real Data\Backup
+                with mock.patch.object(sys, "argv", [name, "--config", str(conf), "--apply"]), \
+                     mock.patch.object(sys, "stdout", io.StringIO()):
+                    self.assertEqual(mod.main(), 0)            # a refusal (SystemExit) fails the test
+                self.assertFalse(Path(td, "cfgdir", "Backup").exists())
+                self.assertEqual(len(list(Path(td, "backroot").glob("*/config.json"))), 1)
 
     def test_no_prod_note_script_defaults_to_data_config(self):
         for script in _NOTES.glob("*.py"):

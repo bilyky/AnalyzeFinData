@@ -24,6 +24,7 @@ import sys
 # The live config is the repo-root config.json (aether/config.py _CFG_PATH). Data\config.json is
 # not read by the code (unless config.json is a link to it), so patch the root file (review 2026-11-13).
 DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config.json")
+BACKUP_ROOT = os.path.join(os.path.dirname(DEFAULT_CONFIG), "Data", "Backup")   # the backup policy's folder, wherever the config is
 
 MIN_MAX_TOKENS = 1024
 REASONING_EFFORT = "low"
@@ -64,7 +65,7 @@ def main() -> int:
         return 0
 
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_dir = os.path.join(os.path.dirname(args.config) or ".", "Backup", f"{stamp}_config_groq_1104")
+    backup_dir = os.path.join(BACKUP_ROOT, f"{stamp}_config_groq_1104")
     os.makedirs(backup_dir, exist_ok=True)
     backup = os.path.join(backup_dir, os.path.basename(args.config))
     shutil.copy2(args.config, backup)
