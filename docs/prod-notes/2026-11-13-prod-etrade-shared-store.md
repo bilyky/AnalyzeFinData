@@ -8,7 +8,9 @@ where the stop monitor fell back to Google prices. With the shared store both ma
 **What it stores:** the token (encrypted, with a key derived from the consumer secret, which is not in the database), the
 re-auth circuit-breaker counters, and the renew/re-auth locks. The browser cookies stay on each machine.
 **If the database can't be reached,** a machine uses its own files as today, may log in, and logs
-`E*TRADE shared store unavailable (...)` once per operation.
+`E*TRADE shared store unavailable (...)` once per operation. After a failure the process skips the database for 5 minutes,
+so an outage costs one ~5 s connect timeout, not 5 s per call. Lock leases use the database's clock, so the machines'
+clocks don't need to agree.
 **Without `AETHER_ETRADE_STORE=db`,** nothing changes.
 
 ## Steps (PROD first, then dev)
