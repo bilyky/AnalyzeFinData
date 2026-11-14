@@ -122,6 +122,10 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
   ("never opens a browser", "zero calls", "only a human may…"): those are the docs people trust. Also
   check that identifiers meant to be unique (e.g. roadmap item numbers) still are, and that a doc
   promising cross-references actually carries them both ways (reference §A, PR #84).
+  **Missing docs count too:** a new or removed user-visible feature (module, report or email section,
+  dashboard tab or endpoint, scheduled job, gate or alert) needs its feature-doc update in the same PR
+  (`AETHER_REFERENCE.md`, the `Data/wiki.json` entry and its About card; `.claude/commands/doc-sentry.md`),
+  or the body must say "No feature-doc change" with a reason that holds. Neither is a finding.
 - **Tests have value** — real behavior, not tautologies:
   - **Fully mocked?** Mocking the unit under test proves nothing; mock only expensive or
     non-deterministic IO (fs, network, clock) while the real code runs.
