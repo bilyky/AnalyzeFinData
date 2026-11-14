@@ -6,6 +6,12 @@ removal of any of these. Agent-agnostic. The full procedure (schema, card wiring
 [.skills/aether-documentation-sentry/SKILL.md](../../.skills/aether-documentation-sentry/SKILL.md);
 this page is the short version and the rule that ties it to every PR.
 
+## Before building: match it to the list
+
+Read the feature list (`Data/wiki.json` keys and summaries, `AETHER_REFERENCE.md`) and grep the code
+for anything that already does part of the new job. Extend or reuse it rather than adding a parallel
+feature; name what it builds on in the PR body. The list can lag the code, so search both.
+
 ## The rule: choose one, in the PR itself
 
 - **Feature docs updated** in the same PR, all three surfaces:

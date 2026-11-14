@@ -13,6 +13,12 @@ pre-flight (test command, linters, commit conventions) comes from the repo's own
 
 ## 1. Branch, validate, commit
 
+- **Before writing new functionality, match it to what exists.** Search the feature list
+  (`Data/wiki.json`, `AETHER_REFERENCE.md`) and the code for a feature that already does part of the
+  job (the same data read, calculation, gate, report section or job). Extend or reuse it instead of
+  building a parallel one; if a new piece is still right, say why. Name the existing features it
+  builds on in the PR body. The list can lag the code, so a grep of the code is part of the search.
+
 - **Start from the latest default branch, in its own worktree or branch** — never commit feature work
   to `main`: `git fetch origin && git switch -c feat/<slug> origin/main`. Use a conventional prefix
   (`feat/ fix/ chore/ refactor/ ci/ docs/ perf/`); the Auto-PR workflow keys off it. Pick a branch name
