@@ -10,7 +10,6 @@ import os
 import sys
 import tempfile
 import unittest
-import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -18,7 +17,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import openpyxl
 import requests
-import urllib3
 
 from aether import ai_buildout as ab
 
@@ -307,26 +305,23 @@ class TestEdgarBlock(unittest.TestCase):
             http.assert_not_called()
 
 
-class TestTlsFallback(unittest.TestCase):
-    def tearDown(self):
-        ab._tls_fallback[0] = False
+class TestTlsVerified(unittest.TestCase):
+    def test_certificate_error_is_not_retried_unverified(self):
+        calls = []
 
-    def test_insecure_warning_silenced_only_for_the_call(self):
-        def fake_get(url, headers=None, timeout=None, verify=True):
-            if verify:
-                raise requests.exceptions.SSLError("intercepted")
-            warnings.warn("unverified", urllib3.exceptions.InsecureRequestWarning, stacklevel=2)
-            return "resp"
+        def fake_get(url, **kw):
+            calls.append(kw)
+            raise requests.exceptions.SSLError("intercepted")
 
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            before = list(warnings.filters)
-            with mock.patch.object(ab.requests, "get", side_effect=fake_get):
-                self.assertEqual(ab._http_get("https://x"), "resp")
-            # filters unchanged right after the call: nothing added process-wide
-            self.assertEqual(warnings.filters, before)
-            self.assertFalse([w for w in caught
-                              if issubclass(w.category, urllib3.exceptions.InsecureRequestWarning)])
+        with mock.patch.object(ab.requests, "get", side_effect=fake_get):
+            with self.assertRaises(requests.exceptions.SSLError):
+                ab._http_get("https://x")
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("verify", calls[0])                        # verification left on (requests' default)
+
+    def test_fetch_returns_none_on_a_certificate_error(self):
+        with mock.patch.object(ab, "_http_get", side_effect=requests.exceptions.SSLError("x")),                 mock.patch.object(ab, "_REQUEST_GAP_S", 0), self.assertLogs(ab._log.name, level="WARNING"):
+            self.assertIsNone(ab._fetch("https://x"))
 
 
 class TestStaleSecLabel(unittest.TestCase):

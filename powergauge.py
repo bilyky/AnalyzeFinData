@@ -7,7 +7,6 @@ import json
 import os
 import shutil
 import time
-import urllib3
 import pytz
 try:
     from playwright_stealth import Stealth
@@ -16,7 +15,6 @@ except ImportError:
 from aether import paths
 from aether.batch_failures import log_batch_failures
 from aether.notify import send_email
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -362,7 +360,6 @@ def _get_http_session() -> requests.Session:
         adapter = HTTPAdapter(max_retries=_retry)
         _http_session.mount("https://", adapter)
         _http_session.mount("http://", adapter)
-        _http_session.verify = False
         proxy = _resolve_proxy()
         if proxy:
             _http_session.proxies.update({"http": proxy, "https": proxy})
@@ -370,6 +367,11 @@ def _get_http_session() -> requests.Session:
             # Explicit direct: ignore any stray HTTPS_PROXY/HTTP_PROXY the E*TRADE client
             # may have exported into the environment, so off-Intel runs stay direct.
             _http_session.trust_env = False
+            # trust_env=False also drops REQUESTS_CA_BUNDLE, the documented fix for a network
+            # that inspects HTTPS (PROD note 2026-11-11): keep a CA bundle the owner set.
+            ca_bundle = os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE")
+            if ca_bundle:
+                _http_session.verify = ca_bundle
     return _http_session
 
 

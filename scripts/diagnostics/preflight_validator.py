@@ -767,6 +767,18 @@ def run_preflight_diagnostics() -> bool:
 
     all_ok = overall_ok(checks)
 
+    # One logger line with the per-check verdict. The console summary above reaches a file only
+    # through the task's log redirect; PROD 11-11 05:30 failed with no record of which check
+    # failed (PROD review 11-12). This line lands in aether.log / aether.jsonl.
+    words = [(label, status_word(ok, kind)) for label, ok, kind in checks]
+    failed = [label for label, w in words if w in ("FAIL", "LOCKED")]
+    warned = [label for label, w in words if w == "WARN"]
+    summary = (f"Pre-flight summary: {'PASS' if all_ok else 'FAIL'} ({duration:.1f}s)"
+               + (f"; FAIL: {', '.join(failed)}" if failed else "")
+               + (f"; WARN: {', '.join(warned)}" if warned else "")
+               + "; " + ", ".join(f"{label}={w}" for label, w in words))
+    (_log.info if all_ok else _log.warning)(summary)
+
     # Send email status if the --email flag is set
     if "--email" in sys.argv:
         combined_warnings = watchdog_issues + task_issues + smoke_issues + [f"AI: {x}" for x in ai_issues]
