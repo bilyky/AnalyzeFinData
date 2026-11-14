@@ -186,6 +186,15 @@ breaker.
 - You can still log in by hand on a weekend (`aether etrade-login` or the web re-auth button). If
   Monday starts with an alert, do step 3 above.
 
+### A token file from another machine
+- Each saved token records the machine that saved it (`"host"`). A token file saved on another
+  machine (e.g. a copy of PROD's `Data/`) is not used or renewed, and the automated doors don't
+  log this machine in while it's there: `get_tokens(allow_browser=False)` returns None and
+  `scheduled_reauth(..., weekend_mint=False)` returns `reason=foreign_token`. Dev and PROD share one
+  app key, so a new session on one can end the other's.
+- If this machine should trade, log in by hand once (`aether etrade-login` or the web re-auth
+  button). Its own token replaces the copied file.
+
 ### If automated re-auth failed / a ban is suspected
 1. **Stop all automated E*TRADE contact** (scheduled tasks, `server.py`). Nothing should be hitting
    the login endpoint.
