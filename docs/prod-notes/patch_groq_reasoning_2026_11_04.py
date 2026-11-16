@@ -1,4 +1,4 @@
-"""Patch the Groq provider in Data/config.json 2026-11-04: stop the empty answers.
+"""Patch the Groq provider in config.json (repo root, the file aether/config.py loads) 2026-11-04: stop the empty answers.
 
 Groq's `openai/gpt-oss-120b` is a reasoning model. It spends max_tokens on reasoning before the
 answer, and our callers ask for 5-150 tokens, so 39 of 68 PROD calls (11-02..11-04) came back
@@ -20,6 +20,11 @@ import json
 import os
 import shutil
 import sys
+
+# The live config is the repo-root config.json (aether/config.py _CFG_PATH). Data\config.json is
+# not read by the code (unless config.json is a link to it), so patch the root file (review 2026-11-13).
+DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config.json")
+BACKUP_ROOT = os.path.join(os.path.dirname(DEFAULT_CONFIG), "Data", "Backup")   # the backup policy's folder, wherever the config is
 
 MIN_MAX_TOKENS = 1024
 REASONING_EFFORT = "low"
@@ -46,7 +51,7 @@ def patch(cfg: dict) -> list[str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default=os.path.join("Data", "config.json"))
+    ap.add_argument("--config", default=DEFAULT_CONFIG)
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
@@ -60,7 +65,7 @@ def main() -> int:
         return 0
 
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_dir = os.path.join(os.path.dirname(args.config) or ".", "Backup", f"{stamp}_config_groq_1104")
+    backup_dir = os.path.join(BACKUP_ROOT, f"{stamp}_config_groq_1104")
     os.makedirs(backup_dir, exist_ok=True)
     backup = os.path.join(backup_dir, os.path.basename(args.config))
     shutil.copy2(args.config, backup)
