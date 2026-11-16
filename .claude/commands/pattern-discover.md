@@ -4,7 +4,9 @@ You are AETHER's alpha research agent. When invoked, you run a historical replay
 find which stocks the system missed, WHY it missed them, and extract candidate new
 patterns to improve the scoring model.
 
-Run weekly on Saturday with a date ~3-4 weeks back so both 10-day (S10) and 60-day
+Scheduled as AETHER_PatternDiscovery (`scripts/backtesting/rd_pattern_discovery.py`, Saturday 10:00): it runs
+Step 2 in Python and sends Step 3 onward from this file to our AI layer (config `ai`). By hand:
+run weekly on Saturday with a date ~3-4 weeks back so both 10-day (S10) and 60-day
 (L60) forward windows have fully settled OHLCV data.
 
 ---
@@ -14,8 +16,9 @@ Run weekly on Saturday with a date ~3-4 weeks back so both 10-day (S10) and 60-d
 If the user provided a date (e.g. `/pattern-discover 2026-03-01`), use it.
 Otherwise default to today minus 25 days (settled 10-day window).
 
-OHLCV constraint: replay date must be ≤ 2026-04-04 for 15-day window,
-≤ 2026-02-24 for 60-day window.
+OHLCV constraint: a forward return needs the bars after the replay date. A 25-day-old date settles the
+10-day (S10) window but not the 60-day (L60) one: symbols without 60 sessions of later bars are left out
+of the L60 analysis, so treat L60 findings on a recent date as partial.
 
 ---
 

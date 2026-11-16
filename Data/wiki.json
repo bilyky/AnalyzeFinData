@@ -215,7 +215,7 @@
     "body": "Employs zero-trust risk safety principles. Operates a closed-loop retrospective feedback analyzer that dynamically clusters true losses (bad habits) into active rejections to immunize the portfolio against repeating errors.",
     "config": [
       "DNA Capture: Freezes PGR, scores, and Z-scores on purchase, logging completed trades to Data/trade_history_dna.json.",
-      "Retrospective Loop: retrospective_analyzer.py runs every Saturday, automatically filtering out market-panic days and statistically clustering failures into failure_dna_rules.json.",
+      "Retrospective Loop: retrospective_analyzer.py (run by hand; its weekly agent run is retired) filters out market-panic days and statistically clusters failures into failure_dna_rules.json.",
       "Action: Dynamic buy-rejection guard (check_failure_rules) blocks any new buy candidate matching our toxic clusters on autopilot."
     ]
   },

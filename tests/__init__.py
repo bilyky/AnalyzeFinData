@@ -20,6 +20,7 @@ _root_notify.send_email = _mock.MagicMock(return_value=True)
 
 # Globally redirect all test log outputs to a temporary directory
 # to prevent tests from writing to or polluting production logs.
+import sys
 import tempfile
 from pathlib import Path
 import aether.paths as _paths
@@ -167,6 +168,15 @@ _ledgers.TRADE_DNA_FILE = _ledger_tmp / "trade_history_dna.json"
 _ledgers.FAILURE_RULES_FILE = _ledger_tmp / "failure_dna_rules.json"
 _ledgers.RETRO_REPORT_FILE = _ledger_tmp / "retrospective_report.txt"
 _ledgers.PICK_LOG_FILE = _ledger_tmp / "pick_lists_log.jsonl"
+# The weekly R&D runner writes Data/pattern_discovery_<date>_ai.md (scripts/backtesting, not on sys.path).
+_sys_path_rd = str(Path(__file__).resolve().parent.parent / "scripts" / "backtesting")
+if _sys_path_rd not in sys.path:
+    sys.path.insert(0, _sys_path_rd)
+try:
+    _rd_pattern_discovery = _importlib.import_module("rd_pattern_discovery")
+    _rd_pattern_discovery.OUT_DIR = _ledger_tmp
+except Exception:
+    pass
 import aether.preflight_status as _preflight_status  # noqa: E402
 _preflight_status.STATUS_FILE = _ledger_tmp / "preflight_status.json"
 
