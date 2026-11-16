@@ -1649,11 +1649,11 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
     return fields
 
 
-def _refresh_watch_lots(accounts_api) -> dict:
+def _refresh_watch_lots(accounts_api, positions=None) -> dict:
     """Refresh position-watch's lots file in the workbook's E*TRADE session (aether/lots_refresh.py).
     Never raises: the workbook update must not fail on it. Logs one line with the outcome."""
     try:
-        r = lots_refresh.refresh(accounts_api)
+        r = lots_refresh.refresh(accounts_api, positions=positions)
     except Exception as e:                       # belt and braces: refresh() already catches broker errors
         r = {"status": "error", "reason": str(e)}
     msg = f"[Lots] {r['status']}: {r.get('reason') or r.get('labels') or r.get('lots', '')}"
@@ -1902,7 +1902,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
         if _tok:
             _lk   = {p["symbol"]: p for p in picks_data}
             _pos  = _client.accounts.positions(_tok)
-            _refresh_watch_lots(_et.get_accounts(_tok, "production"))   # same session; never raises
+            _refresh_watch_lots(_et.get_accounts(_tok, "production"), _pos)   # reuses _pos; never raises
             _syms = list({p["symbol"] for p in _pos})
             _qts  = _client.market.quotes(_syms, _tok)
             _update_short_long_scores(wb, _lk, _qts, _pos, ohlcv_cache)

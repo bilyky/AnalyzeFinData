@@ -27,18 +27,6 @@ ET = ZoneInfo("America/New_York")
 QTY_TOL = 1e-3
 
 
-def _walk(o, key):
-    if isinstance(o, dict):
-        for k, v in o.items():
-            if k == key:
-                yield from (v if isinstance(v, list) else [v])
-            else:
-                yield from _walk(v, key)
-    elif isinstance(o, list):
-        for x in o:
-            yield from _walk(x, key)
-
-
 def et_date(ms) -> str | None:
     """The broker's epoch-milliseconds date as a US/Eastern calendar date."""
     try:
@@ -48,22 +36,23 @@ def et_date(ms) -> str | None:
     return datetime.datetime.fromtimestamp(ms / 1000, tz=ET).date().isoformat() if ms > 0 else None
 
 
-def fetch_position_lots(accounts_api, symbol: str, last4s: set) -> dict:
+def fetch_position_lots(accounts_api, symbol: str, last4s: set, positions: list) -> dict:
     """{last4: {"position_qty": float, "lots": [{acquired, price, qty}]}} for the mapped accounts that
-    hold `symbol`. accounts_api: a pyetrade ETradeAccounts (aether.etrade.get_accounts)."""
-    raw = accounts_api.list_accounts(resp_format="json")
+    hold `symbol`. accounts_api: a pyetrade ETradeAccounts (aether.etrade.get_accounts).
+    positions: etrade.fetch_positions() rows, the one reader of portfolios (the workbook update has
+    just made them); quantities come from there and only the lots are fetched here."""
+    raw = accounts_api.list_accounts(resp_format="json")          # last 4 digits -> account key
     out = {}
-    for acct in _walk(raw, "Account"):
+    for acct in etrade._walk(raw, "Account"):
         last4, key = str(acct.get("accountId", ""))[-4:], acct.get("accountIdKey")
         if last4 not in last4s or not key:
             continue
-        port = accounts_api.get_account_portfolio(key, resp_format="json")
-        qty = sum(float(p.get("quantity") or 0) for p in _walk(port, "Position")
-                  if str(p.get("symbolDescription", "")).strip().upper() == symbol)
+        qty = sum(float(p.get("qty") or 0) for p in positions
+                  if str(p.get("account_last4")) == last4 and str(p.get("symbol", "")).upper() == symbol)
         lots = []
         if qty > 0:
             resp = accounts_api.get_portfolio_position_lot(symbol, key, resp_format="json")
-            for lot in _walk(resp, "PositionLot"):
+            for lot in etrade._walk(resp, "PositionLot"):
                 q = float(lot.get("remainingQty", lot.get("originalQty", 0)) or 0)
                 if q > 0:
                     lots.append({"acquired": et_date(lot.get("acquiredDate")), "price": float(lot.get("price") or 0),
@@ -86,7 +75,7 @@ def merge(existing: list, fresh_by_label: dict) -> list:
 
 
 def refresh(accounts_api, *, symbol: str | None = None, cfg: dict | None = None, data_dir: str | None = None,
-            now: datetime.datetime | None = None, dry_run: bool = False) -> dict:
+            now: datetime.datetime | None = None, dry_run: bool = False, positions: list | None = None) -> dict:
     """Refresh the lots file for the mapped accounts. Returns {"status": ..., ...}; never raises on a
     broker or data problem (the caller is the workbook update, which must not fail on this)."""
     data_dir = data_dir or paths.data_dir()
@@ -109,8 +98,10 @@ def refresh(accounts_api, *, symbol: str | None = None, cfg: dict | None = None,
         existing = []
     except (OSError, ValueError) as e:
         return {"status": "error", "reason": f"can't read {os.path.basename(path)}: {e}"}
+    if positions is None:                      # quantities come only from etrade.fetch_positions()
+        return {"status": "error", "reason": "no positions given (pass etrade.fetch_positions() rows)"}
     try:
-        got = fetch_position_lots(accounts_api, symbol, set(sources.values()))
+        got = fetch_position_lots(accounts_api, symbol, set(sources.values()), positions)
     except Exception as e:                      # broker read failed: keep the file
         return {"status": "error", "reason": f"broker read failed: {e}"}
     fresh, problems = {}, []
@@ -156,7 +147,8 @@ def main(argv=None) -> int:
     if not tok:
         sys.stdout.write("No E*TRADE token for today on this machine; nothing done (no login is attempted).\n")
         return 1
-    r = refresh(etrade.get_accounts(tok, "production"), dry_run=not a.write)
+    r = refresh(etrade.get_accounts(tok, "production"), dry_run=not a.write,
+                positions=etrade.fetch_positions(tok, "production"))
     sys.stdout.write(json.dumps(r, indent=1) + "\n")
     return 0 if r["status"] in ("updated", "unchanged", "would_update", "skipped") else 1
 
