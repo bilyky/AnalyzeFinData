@@ -28,12 +28,10 @@ import datetime
 import json
 import os
 import time
-import warnings
 from pathlib import Path
 
 import openpyxl
 import requests
-import urllib3
 
 from aether import paths
 from aether.config import CFG
@@ -162,7 +160,6 @@ def _user_agent() -> str:
 
 
 _last_request = [0.0]
-_tls_fallback = [False]
 # SEC's Akamai front end answers 403 when it rate-blocks the caller (or the shared
 # corporate egress). After this many 403s in a row, stop requesting for the rest of
 # the run and use cached copies only, instead of sending hundreds more blocked requests.
@@ -175,21 +172,10 @@ _stale_served = set()
 
 
 def _http_get(url):
-    """GET with TLS verification. A TLS-intercepting corporate proxy breaks
-    verification; this is public read-only data, so on an SSL error fall back to
-    an unverified request (same trade-off as aether.etrade) and warn once."""
-    headers = {"User-Agent": _user_agent()}
-    if not _tls_fallback[0]:
-        try:
-            return requests.get(url, headers=headers, timeout=30)
-        except requests.exceptions.SSLError as e:
-            _log.warning(f"EDGAR TLS verification failed ({e.__class__.__name__}); "
-                         "using unverified requests for this run (public data).")
-            _tls_fallback[0] = True
-    with warnings.catch_warnings():
-        # Silence the insecure-request warning for this call only, not process-wide.
-        warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
-        return requests.get(url, headers=headers, timeout=30, verify=False)
+    """GET with TLS verification, always. A certificate error raises; _fetch logs it and the
+    caller serves the cache (labelled stale), so unverified data is never used. (It used to
+    fall back to an unverified request "as aether.etrade does"; aether.etrade now verifies.)"""
+    return requests.get(url, headers={"User-Agent": _user_agent()}, timeout=30)
 
 
 def _read_cache(cache_name: str):

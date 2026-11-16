@@ -682,6 +682,23 @@ def _get_streak_from_cache(sym: str) -> int:
         return None
 
 
+def _margin_fields(comp: dict) -> dict:
+    """The broker's own margin figures from BalanceResponse.Computed (names confirmed against a live
+    margined account, 2026-11-10): marginBalance (negative = debt), regtEquity / regtEquityPercent
+    (the page's "Margin Equity"), OpenCalls.houseCall / fedCall / minEquityCall / cashCall (negative =
+    amount due). Missing or non-numeric fields come back as None, never 0."""
+    def num(d, k):
+        try:
+            return float(d[k]) if d.get(k) not in (None, "") else None
+        except (TypeError, ValueError, KeyError):
+            return None
+    calls = comp.get("OpenCalls") or {}
+    return {"margin_balance": num(comp, "marginBalance"), "margin_equity": num(comp, "regtEquity"),
+            "margin_equity_pct": num(comp, "regtEquityPercent"),
+            "house_call": num(calls, "houseCall"), "fed_call": num(calls, "fedCall"),
+            "min_equity_call": num(calls, "minEquityCall"), "cash_call": num(calls, "cashCall")}
+
+
 def read_accounts() -> dict:
     """Return live E*TRADE account holdings and balances from the broker,
     with an automatic fallback to the local Excel sheet if offline."""
@@ -866,7 +883,8 @@ def read_accounts() -> dict:
                         "balance": cash,
                         "equity": val,
                         "holdings": holdings,
-                        "count": len(holdings)
+                        "count": len(holdings),
+                        "margin": _margin_fields(comp),
                     })
             except ValueError as ve:
                 _log.warning(f"Live broker feed failed: {ve}. Falling back to Excel.")
