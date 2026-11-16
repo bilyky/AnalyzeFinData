@@ -32,7 +32,7 @@ print(f'Positions: {len(pf[\"positions\"])}')
 ## Step 3 — Scheduled task health
 
 ```bash
-python -c "import data_api; [print(f'{t[\"name\"]}: {t[\"status\"]} (last: {t[\"last_run\"]})') for t in data_api.read_scheduled_tasks()]"
+python -c "import data_api; [print(f'{t[\"name\"]}: {t[\"status\"]} (last: {t[\"last_run\"]})') for t in data_api.read_scheduled_tasks() if not t.get(\"retired\")]"
 ```
 
 ## Step 4 — Recent errors

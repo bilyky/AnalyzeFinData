@@ -32,6 +32,7 @@ class ExtractTest(unittest.TestCase):
                 compile(c.code, c.label, "exec")                  # bash escaping undone: valid Python
         self.assertIn('pf["equity"]', checks[1].code)
         self.assertIn("f'Equity:  ${", checks[1].code)
+        self.assertIn('if not t.get("retired")', checks[2].code)   # retired tasks aren't reported as missing
 
     def test_only_python_dash_c_blocks_run(self):
         """A block that runs a script (e.g. daily-run's `python autonomous_pipeline.py`) is never run."""
