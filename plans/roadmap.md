@@ -333,3 +333,25 @@ A *family* of symbol-agnostic capital-preservation primitives, each placed in it
     3.  *Manual-judgment codes:* `F841` (unused-variable, 14), `E712` (true-false-comparison, 4), `B905` (zip-without-strict, 5), `B007` (unused-loop-var, 3), `S110` (try-except-pass, 2), `E731` (lambda-assignment, 1) — fix per-site, not blanket-ignore.
     4.  *`I001` (unsorted-imports, 176 across 113 files) LAST:* it's the churn bomb — do it as a dedicated `ruff check --fix` PR when the open-PR queue is near-empty, add nothing else to that PR, and land it fast to minimize the conflict window. Then remove `I001` and the parked block is gone.
     **Done = the `TEMPORARY` block in `pyproject.toml` is empty/deleted and `ruff check .` passes on the full strict rule set.** Do NOT add new codes to the parked block — a fresh violation must be fixed, not parked.
+
+
+## 💎 Winner-Detection Idea Backlog (owner, 2026-11-17)
+
+Raised while studying the 2026-11 tech stretch (#89-#93, in PRs #280/#282/#283/#284). Each item, when started, gets the same pre-registration as #89-#93 (rules pushed before the full run, out-of-sample check, placebo or FDR control). **Odds below are subjective priors, written down before any data so they can be scored later.** They are anchored on our record: of 14 pre-registered studies from #72 to #93b, none found an edge over SPY, and 2-3 gave a usable timing or risk finding (#89 regime, #92 RSI divergence entry, #93b energy &rarr; Fluor). So: P(beats SPY after costs) is low for everything; P(a usable finding) is the more useful number. Data: the EDGAR submissions cache (`Data/edgar_cache/sub_*.json`, 493 companies) lists every filing's form, filing date and 8-K item codes: 238,078 Form 4, 18,112 8-K item 2.02 (earnings), 10,399 item 5.02 (officer change), 444 new 13D, 5,812 new 13G; its "recent" lists start in 2017 for the median company (2008 at the 10th percentile; the list length may be capped, not checked).
+
+| # | Idea | Data | P(usable) | P(beats SPY) | Main risk |
+|---|---|---|---|---|---|
+| 94 | **RSI-divergence weight** (from #92): today's weights vs divergence doubled vs "after a stretch, buy only on a bullish divergence", on #62's draws | in hand | 15% | 5% | #92's gain was vs the stretch-day entry, not vs SPY |
+| 95 | **Remora trading test** (from #93b): energy &rarr; Fluor and any later survivors; entry at next open vs close; walk-forward rebuild weekly / monthly / yearly; costs | in hand | 10% | 5% | rho ~0.07: costs and the overnight gap may eat it |
+| 96 | **Resilient names**: on SPY &le; -2% days, stocks with the best market-adjusted return; next 60 sessions vs SPY | in hand | 25% | 10% | survivorship; overlaps low-volatility (#64) |
+| 97 | **Activist stakes**: new 13D vs new 13G (control), 60 sessions from the filing date | in hand | 15% | 8% | ~444 events, mostly after 2017: low power (INSUFFICIENT is likely) |
+| 98 | **Earnings-reaction drift**: after an 8-K 2.02 release, a big heavy-volume reaction; does it keep drifting? Also yields the earnings calendar #19 / #90(7) need | in hand | 20% | 8% | a widely known effect, likely arbitraged |
+| 99 | **Officer change** (8-K 5.02), split CEO/CFO where the text allows | in hand (codes); text needs fetches | 10% | 5% | the item mixes many kinds of change |
+| 100 | **Insider buying clusters**: several insiders buying on the open market within weeks | Form 4 list in hand; buy vs sell needs each filing (paced fetch) | 20% | 10% | effort; grants and sales dominate Form 4 |
+| 101 | **Coiled spring near highs**: volatility and volume contract near a 52-week high, then expand | in hand | 15% | 8% | #64 says the plain 52-week-high factor already works; this must add to it |
+| 102 | **Remora earnings trades**: on a shark's 2.02 date, its confirmed followers next session | needs #98's calendar + #93b's graph | 8% | 4% | few confirmed links |
+| 103 | **Moon phase** (esoteric): returns near new vs full moon | calendar math | 3% | 1% | expected null; closes the question |
+| 104 | **Ticker and price oddities** (esoteric): short tickers, alphabet position, stalling just under round prices ($50, $100) | in hand | 4% | 1% | expected null; round-number stalls are the likeliest of the three |
+| 105 | **Calendar quirks**: turn of month, pre-holiday, opex week | in hand | 10% | 3% | overlaps the live seasonality factor (#87 already flagged it for an out-of-sample check) |
+
+*How to use the odds:* run the bundle 103-105 together under one Benjamini-Hochberg control (cheap; with this many tests, one chance pass is expected otherwise). Start with 96 (data ready, timely), then 98 (its calendar feeds 102 and #90(7)), then 97. Score these priors against the verdicts as they land, so the next round of odds is calibrated on our own hit rate.
