@@ -82,6 +82,12 @@ class RunnerTest(unittest.TestCase):
             code = sr.main()
         return code, sp, step, send
 
+    def _main_no_email_patch(self, argv, ai):
+        def run(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+        with mock.patch.object(sr.subprocess, "run", side_effect=run),              mock.patch.object(sr.ai_step, "run", side_effect=ai),              mock.patch.object(sr, "_today", return_value=datetime.date(2026, 11, 16)),              mock.patch.object(sys, "argv", ["skill_report.py", *argv]):
+            return sr.main()
+
     def test_report_written_by_the_ai_is_emailed(self):
         ok = lambda name, system, user, **k: ai_step.StepResult("| Check | Result |", "groq", None)
         code, sp, step, send = self._main(["--skill", "status", "--title", "Portfolio status"], ok)
@@ -117,6 +123,12 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(sp.call_count, 1)                     # only the safe block ran
         self.assertEqual(sp.call_args.args[0][2], "print(1)")
         self.assertIn("REFUSED, not run", step.call_args.args[2])
+
+    def test_an_email_that_cannot_be_sent_exits_1(self):
+        ok = lambda name, system, user, **k: ai_step.StepResult("r", "groq", None)
+        with mock.patch.object(sr.notify, "send_email", side_effect=RuntimeError("Email not configured")),              self.assertLogs("aether.skill_report", level="ERROR"):
+            code = self._main_no_email_patch(["--skill", "status", "--title", "t"], ok)
+        self.assertEqual(code, 1)
 
     def test_sessions_only_skips_weekends(self):
         code, sp, step, send = self._main(["--skill", "status", "--title", "t", "--sessions-only"], None,

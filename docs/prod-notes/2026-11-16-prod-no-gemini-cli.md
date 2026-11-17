@@ -17,6 +17,8 @@ providers and tiers, the same Groq / Gemini API setup the rest of AETHER uses). 
 
 **New emails:** one R&D email each Saturday, and one status email each trading day at 14:00.
 
+**Failure-DNA rules are only proposed.** `pattern_discovery.py` runs `retrospective_analyzer.py` in Phase 7. Before this PR that run set the live `Data\failure_dna_rules.json` (which buys the game rejects); now it runs `--report-only`: the rules go to `Data\failure_dna_rules_proposed.json`, and the R&D email and `Data\retrospective_report.txt` say how they differ from the live rules. To adopt them, run `venv_new\Scripts\python.exe retrospective_analyzer.py` by hand. The game also matches the analyzer's z-score rule name now (`greater_equal_2.5`); PROD's live rules have no z-score rule today, so nothing changes until one is set.
+
 ## Steps
 1. **Pull.** No config change is needed if the `strong` and `cheap` tiers in `config.json` have a working provider (they do
    today: Groq first).
@@ -31,7 +33,8 @@ providers and tiers, the same Groq / Gemini API setup the rest of AETHER uses). 
    venv_new\Scripts\python.exe scripts\backtesting\rd_pattern_discovery.py --date 2026-10-22
    ```
    An email arrives with the findings, or with "AI analysis skipped" and the reason. Exit code 1 means the computation
-   itself failed (the email shows the error).
+   itself failed (the email shows the error). The live failure-DNA rules are not changed by this run; check that
+   `Data\failure_dna_rules.json` has the same timestamp afterwards.
 
 ## After deploy, check
 - Saturday 10:00+: `Data\logs\agent_runs\pattern_discovery_task.log` and the R&D email.

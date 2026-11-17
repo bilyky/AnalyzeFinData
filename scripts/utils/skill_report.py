@@ -102,6 +102,17 @@ def _run_check(check: Check) -> str:
     return out or "(no output)"
 
 
+def _send(subject: str, body: str) -> bool:
+    """Send the job's email; a failure is logged (no traceback) and returned, never raised, so the
+    files already written stay and the task exits 1 instead of crashing."""
+    try:
+        notify.send_email(subject, body)
+        return True
+    except Exception as e:
+        _log.error(f"Could not send '{subject}': {e}")
+        return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--skill", required=True, help="skill file name in .claude/commands, without .md")
@@ -121,11 +132,11 @@ def main() -> int:
                          "\n\nUse only the check outputs given; never invent a value. Say plainly when a check failed.",
                          f"Date: {today}\n\n{outputs}", tier=args.tier, max_tokens=1200, notify_on_skip=False)
     if result.text:
-        notify.send_email(f"AETHER {args.title}: {today}", f"{result.text}\n\n(written by {result.provider})")
+        sent = _send(f"AETHER {args.title}: {today}", f"{result.text}\n\n(written by {result.provider})")
     else:
-        notify.send_email(f"AETHER {args.title}: {today} (AI report skipped)",
-                          f"The checks ran; the AI report was skipped.\n\nReason: {result.skipped}\n\n{outputs}")
-    return 0
+        sent = _send(f"AETHER {args.title}: {today} (AI report skipped)",
+                     f"The checks ran; the AI report was skipped.\n\nReason: {result.skipped}\n\n{outputs}")
+    return 0 if sent else 1
 
 
 if __name__ == "__main__":

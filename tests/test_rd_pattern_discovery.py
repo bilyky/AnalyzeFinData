@@ -121,6 +121,15 @@ class RunnerTest(_Run):
         self.assertIn("HTTP 403", body)
         self.assertIn("S10: 1 missed, 1 false positives", body)          # the computed counts still go out
 
+    def test_an_email_that_cannot_be_sent_exits_1_and_keeps_the_files(self):
+        """The 11-17 smoke run: no email settings, so send_email raised and the job crashed."""
+        ok = lambda name, system, user, **k: ai_step.StepResult("FINDINGS TEXT", "groq", None)
+        with mock.patch.object(rd.subprocess, "run", side_effect=self._fake_compute()),              mock.patch.object(rd.ai_step, "run", side_effect=ok),              mock.patch.object(rd.notify, "send_email", side_effect=RuntimeError("Email not configured")),              mock.patch.object(sys, "argv", ["rd_pattern_discovery.py", "--date", "2026-10-22"]),              self.assertLogs("aether.rd_pattern_discovery", level="ERROR") as logs:
+            rc = rd.main()
+        self.assertEqual(rc, 1)
+        self.assertTrue((self.out / "pattern_discovery_2026-10-22_ai.md").exists())
+        self.assertIn("Email not configured", logs.output[-1])
+
     def test_the_skip_email_is_not_sent_twice(self):
         """ai_step is called with notify_on_skip=False: the runner's own email carries the reason."""
         skip = lambda name, system, user, **k: ai_step.StepResult(None, None, "down")
