@@ -13,6 +13,12 @@ pre-flight (test command, linters, commit conventions) comes from the repo's own
 
 ## 1. Branch, validate, commit
 
+- **Before writing new functionality, match it to what exists.** Search the feature list
+  (`Data/wiki.json`, `AETHER_REFERENCE.md`) and the code for a feature that already does part of the
+  job (the same data read, calculation, gate, report section or job). Extend or reuse it instead of
+  building a parallel one; if a new piece is still right, say why. Name the existing features it
+  builds on in the PR body. The list can lag the code, so a grep of the code is part of the search.
+
 - **Start from the latest default branch, in its own worktree or branch** — never commit feature work
   to `main`: `git fetch origin && git switch -c feat/<slug> origin/main`. Use a conventional prefix
   (`feat/ fix/ chore/ refactor/ ci/ docs/ perf/`); the Auto-PR workflow keys off it. Pick a branch name
@@ -65,6 +71,11 @@ git add <paths> && git commit -m "<type>: <summary>" && git push -u origin HEAD
   - **Land it** in order, or fold it: merge each child PR into its parent from the top, check the
     bottom's `^{tree}` equals the reviewed top head's, then sync with `main`. If a higher PR fixes a
     lower one's bug, say on the lower PR that they land together.
+- **Feature docs: choose one, in this PR.** If the change alters what the app does as a user sees it
+  (a new module, report or email section, dashboard tab or endpoint, scheduled job, gate or alert, or
+  removes one), update the feature docs in the same PR: `AETHER_REFERENCE.md`, the `Data/wiki.json`
+  entry and its About-tab card (`.claude/commands/doc-sentry.md`). Otherwise write **"No feature-doc
+  change"** in the body, with the reason (bug fix, study, refactor, tests). Reviewers check the choice.
 - **Keep title and body true.** When a later push changes the payload or the conclusion (a study's
   verdict, a scope cut), edit them: `gh pr edit <n> --title … --body-file …`.
 - **Several open PRs at once?** Each merge puts the others behind. Re-merge `main` into each, and when
