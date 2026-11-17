@@ -483,5 +483,58 @@
       "SHARED_RETRY_S = 300: after a database failure, skip it for 5 minutes",
       "Needs the cryptography package (requirements.txt)"
     ]
+  },
+  "dev_project_model": {
+    "title": "Development Tab: Project Model",
+    "summary": "A dashboard tab that shows the AETHER services redesign (R&amp;D #78): each step, fix and service with its status and PR, plus code metrics measured live from the source tree.",
+    "origin": "PR #242 (2026-11-06), step S0b of R&amp;D #78.",
+    "body": "<p>The progress comes from <code>plans/aether-services-progress.json</code>, which each R&amp;D #78 PR updates. The metrics are measured on every load, so they show the code as it is: lines in <code>ai_portfolio_game.py</code>, <code>aether/scenario</code> and <code>aether/services</code>, <code>game.X</code> calls and <code>_pkg()</code> shims in the new packages, and magic <code>row[N]</code> indexes. Read-only; no login needed.</p>",
+    "config": [
+      "Endpoint: GET /api/dev/project-model",
+      "Source: plans/aether-services-progress.json"
+    ]
+  },
+  "dashboard_login": {
+    "title": "Dashboard Login for Private Data",
+    "summary": "Pages and actions that show real accounts, logs or private plans, or that spend AI quota or touch E*TRADE, need the admin login. Market data and the paper game stay open.",
+    "origin": "PR #243 (2026-11-10); PR #252 added it to admin-only task output. The dashboard listens on the network.",
+    "body": "<p>Log in at the top right with an account from <code>web.admins</code>; a session lasts 12 hours. The login is required for real accounts, the private plan page, the OceanView tab, logs, chat, live requalify, an AI summary on Compare, running or healing tasks, E*TRADE status and re-auth, and the output of an admin-only task. Without <code>web.secret</code> in the config, sessions end when the server restarts.</p>",
+    "config": [
+      "web.admins: who can log in",
+      "web.secret: signing key (set it so sessions survive a restart)",
+      "Session length: 12 hours"
+    ]
+  },
+  "chaikin_session": {
+    "title": "Chaikin Session Renewal",
+    "summary": "The Chaikin login token lasts about 7 days. A daily task renews it on a weekday before it runs out, and a morning check emails a reminder when fewer than 2.5 days are left.",
+    "origin": "PR #251 (2026-11-10): the token kept expiring on Sunday evening, and the weekly Sunday renewal had nobody to fix a failure.",
+    "body": "<p><b>AETHER_Chaikin_Reauth</b> (daily 08:00; needs a logged-on desktop because it opens Chrome) renews on a weekday when the token wouldn't outlive the next weekday run plus a day, so a Friday renews a token that would die over the weekend. At the weekend it renews only if the token dies before Monday 08:00. <b>AETHER_Chaikin_Runway_Watch</b> (daily 07:00) never opens a browser: it emails a reminder, at most once a day, naming the expiry time. On the System page, <i>Check Token Runway</i> and <i>Login &amp; Refresh Token</i> run the same script (admin only).</p>",
+    "config": [
+      "Task: scripts/monitoring/chaikin_reauth.py --weekday-aware",
+      "Reminder: --notify-days 2.5",
+      "System page: --check, and --cdp --force"
+    ]
+  },
+  "preflight_buy_gate": {
+    "title": "Pre-Flight Buy Gate",
+    "summary": "After a failed morning pre-flight, the scheduled trade run makes no new buys, scale-ins or queued buys. Stops, exits and queued sells still run.",
+    "origin": "PR #251 (2026-11-10): on 2026-11-09 the pre-flight failed on an expired Chaikin session, yet the 07:00 run bought on stale data. PR #259 added the log lines.",
+    "body": "<p>The morning pipeline records its verdict in <code>Data/preflight_status.json</code>. A FAIL for today, or a record that can't be read, sets the same buy freeze the circuit breaker uses and drops queued BUY orders. A run started by hand with <code>--run --force</code> may still buy, and logs that it bypassed the gate. Each pre-flight logs one <i>Pre-flight summary</i> line naming any failed check.</p>",
+    "config": [
+      "Data/preflight_status.json (written by autonomous_pipeline.py)",
+      "Manual override: ai_portfolio_game.py --run --force"
+    ]
+  },
+  "system_watchdog": {
+    "title": "System Watchdog &amp; Alerts",
+    "summary": "An hourly health check: it emails on data loss, a stale backup, a missing scheduled trade run or a failing OceanView pack, reports missing scheduled tasks, and hands a pipeline crash to an AI agent for diagnosis.",
+    "origin": "Core infrastructure; the missed-run alert and retired tasks came in PR #259 (2026-11-13).",
+    "body": "<p><b>Alerts</b> (each at most once a day): a symbol cache that loses more than 20% of its entries between runs; no successful backup for 3 days; no scheduled trade run by 07:30 PT on an NYSE session day; an OceanView context pack that failed or is more than 30 hours old. The stop monitor separately emails once a day when it has no prices for half or more of the positions it watches.</p><p class=\"mt-2\"><b>Tasks:</b> the watchdog checks the tasks listed in <code>scripts/utils/scheduled_tasks.json</code> and reports missing ones, but never creates them (re-register with <code>register_agent_tasks.ps1</code>); tasks marked retired are left alone. <b>Crashes:</b> a pipeline traceback goes to an AI agent CLI, by default the Claude CLI with read-only tools, so it diagnoses rather than edits; a lock file stops repeat triggers until someone reviews it.</p>",
+    "config": [
+      "Schedule: AETHER_Watchdog, hourly",
+      "AETHER_HEALER_CMD overrides the healer command",
+      "Thresholds: cache drop 20%, backup 3 days, trade run due 07:30 PT, pack 30 h"
+    ]
   }
 }
