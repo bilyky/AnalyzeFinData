@@ -217,7 +217,7 @@ class TestReferenceBars(Base):
     them, so the check wants the bar of the session before the checked day."""
 
     def test_reference_list(self):
-        self.assertEqual(set(dc.REFERENCE_SYMBOLS), {"QQQ", "SMH", "SOXX", "XLK", "SPY", "RSP", "GDX"})
+        self.assertEqual(set(dc.REFERENCE_SYMBOLS), {"QQQ", "SMH", "SOXX", "XLK", "SPY", "RSP", "GDX", "VXX", "UVXY"})
 
     def test_missing_file_or_stale_bar_is_named(self):
         self.history(upto=7)

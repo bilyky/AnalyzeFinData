@@ -351,7 +351,7 @@ class TestRunSymbols(unittest.TestCase):
 
     def test_the_default_run_includes_every_reference_etf(self):
         syms = rapidapi.run_symbols([], set(), sheet=lambda: ["AAPL"])
-        self.assertTrue({"QQQ", "SMH", "SOXX", "XLK", "SPY", "RSP", "GDX"} <= set(syms))
+        self.assertTrue({"QQQ", "SMH", "SOXX", "XLK", "SPY", "RSP", "GDX", "VXX", "UVXY"} <= set(syms))
 
 
 class TestReferenceEtfsStayCurrent(unittest.TestCase):

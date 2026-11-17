@@ -46,7 +46,10 @@ KEEPS_UP = 0.8              # a screen symbol present in 80% of the prior sessio
 SIGNALS_RE = re.compile(r"^[01]{12}$")
 # Reference ETFs whose OHLCV bars are kept current whether or not they are on the Research
 # sheet: the rapidapi.py repair pass always fetches them, and check() alarms when one is behind.
-REFERENCE_SYMBOLS = ("QQQ", "SMH", "SOXX", "XLK", "SPY", "RSP", "GDX")
+# VXX/UVXY stand in for the VIX index, which Alpha Vantage's daily endpoint rejects
+# ("Invalid API call", checked 2026-11-17). Both reverse-split often: split_adjust_ohlcv
+# can mistake a real volatility spike with a gap open (close >= 1.8x) for a split.
+REFERENCE_SYMBOLS = ("QQQ", "SMH", "SOXX", "XLK", "SPY", "RSP", "GDX", "VXX", "UVXY")
 
 
 def _filled(v) -> bool:

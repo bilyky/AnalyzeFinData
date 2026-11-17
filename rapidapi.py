@@ -156,7 +156,7 @@ _SYMBOL_OVERRIDES = {
 # None are in the traded universe today; the set only documents intent. Do NOT add real
 # equity tickers here — e.g. COMP is Compass, Inc. (a live NYSE stock with real-volume
 # history in the universe), NOT the Nasdaq Composite; excluding it silently starves it of repair.
-_UNSUPPORTED_SYMBOLS = {"NDX", "SPX", "DJI"}
+_UNSUPPORTED_SYMBOLS = {"NDX", "SPX", "DJI", "VIX"}   # VIX: "Invalid API call" (2026-11-17)
 
 def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
     """Single Alpha Vantage HTTP call. Returns parsed JSON. Raises on error."""
