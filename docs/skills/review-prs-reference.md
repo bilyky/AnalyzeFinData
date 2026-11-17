@@ -154,6 +154,9 @@ Docs drift between PRs even when each review was careful. After a batch lands:
 2. List the merges since the last audit and, for each, the behavior it changed.
 3. Grep every doc surface (the skill's §3 *Documentation*) for each old behavior, plus status lines of tracked items
    ("UNBUILT" for something built) and duplicate identifiers.
+   Then the other direction: for each merge that **added or removed** a user-visible feature, confirm the
+   feature list carries it (an `AETHER_REFERENCE.md` line, a `Data/wiki.json` entry and its About card,
+   with a status that matches the code). A feature with no entry is as much drift as a stale one.
 4. Verify each replacement claim against code on `main` (callers, defaults, gates, thresholds) before
    writing it. A behavior gap you find (code doing something unintended) is reported for a decision,
    not silently "fixed" inside the docs PR.

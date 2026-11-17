@@ -703,9 +703,12 @@ def generate_report(replay_date: str, s10_result: dict, l60_result: dict,
     try:
         retro_path = os.path.join(BASE_DIR, "retrospective_analyzer.py")
         if os.path.exists(retro_path):
-            _log.info("\nPhase 7: Running Failure DNA Retrospective Analyzer...")
-            subprocess.run([sys.executable, retro_path], check=True, capture_output=True, encoding="utf-8", errors="replace")
-            _log.info("Failure DNA integration completed successfully -> Data/failure_dna_rules.json updated.")
+            _log.info("\nPhase 7: Running Failure DNA Retrospective Analyzer (report only)...")
+            # Report only: the live rules change which buys the game rejects, so a scheduled run
+            # proposes them (Data/failure_dna_rules_proposed.json) and a person sets them.
+            subprocess.run([sys.executable, retro_path, "--report-only"], check=True, capture_output=True,
+                           encoding="utf-8", errors="replace")
+            _log.info("Failure DNA rules proposed -> Data/failure_dna_rules_proposed.json (live rules unchanged).")
             
             # Read the newly generated report
             report_path = ledgers.RETRO_REPORT_FILE
@@ -813,6 +816,7 @@ def main():
     parser = argparse.ArgumentParser(description="AETHER Pattern Discovery — Historical Replay")
     parser.add_argument("--date",       required=True, help="Replay date YYYY-MM-DD")
     parser.add_argument("--top",        type=int, default=10, help="Top-N winners to analyze")
+    parser.add_argument("--no-email",   action="store_true", help="don't send the R&D email (the caller reports)")
     parser.add_argument("--symbols",    help="Comma-separated symbol list (default: all cached)")
     parser.add_argument("--validate",   action="store_true", help="Validate candidates across date range")
     parser.add_argument("--date-range", default="2025-06-01:2026-02-28",

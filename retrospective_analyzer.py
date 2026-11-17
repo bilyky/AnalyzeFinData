@@ -6,8 +6,13 @@ runs statistical pattern audits to isolate toxic clusters (bad-habit trades),
 writes them to 'Data/failure_dna_rules.json' as actionable rules for the autopilot,
 runs a meta-audit on Circuit Breaker triggers and un-triggered 'near-miss' design gaps,
 and outputs a rich, human-readable 'Data/retrospective_report.txt'.
+
+``--report-only`` (the weekly AETHER_PatternDiscovery run) writes the rules it would set to
+'Data/failure_dna_rules_proposed.json' instead, and the report lists how they differ from the live
+rules. The live rules change which buys the game rejects, so only a run by hand (no flag) sets them.
 """
 
+import argparse
 import json
 import datetime
 import circuit_breaker
@@ -16,8 +21,29 @@ from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("retrospective")
 
-def analyze():
-    _log.info("Launching automated Feedback & Pattern Analyzer...")
+def _read_rules(path) -> list:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            rules = json.load(f)
+        return rules if isinstance(rules, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def rules_diff(live: list, proposed: list) -> list:
+    """Plain lines saying how the proposed rules differ from the live ones (by rule id)."""
+    lv = {r.get("id"): r for r in live if isinstance(r, dict)}
+    pv = {r.get("id"): r for r in proposed if isinstance(r, dict)}
+    out = [f"  + would add {i}: {pv[i].get('field')} {pv[i].get('condition')}" for i in sorted(set(pv) - set(lv))]
+    out += [f"  - would remove {i}: {lv[i].get('field')} {lv[i].get('condition')}" for i in sorted(set(lv) - set(pv))]
+    out += [f"  ~ would change {i}: {lv[i].get('condition')} -> {pv[i].get('condition')}"
+            for i in sorted(set(lv) & set(pv)) if lv[i].get("condition") != pv[i].get("condition")]
+    return out or ["  = the proposed rules match the live rules"]
+
+
+def analyze(report_only: bool = False):
+    _log.info("Launching automated Feedback & Pattern Analyzer..." + (" (report only)" if report_only else ""))
+    rules_note = []
 
     dna_file = ledgers.TRADE_DNA_FILE
     if not dna_file.exists() or dna_file.stat().st_size == 0:
@@ -105,12 +131,18 @@ def analyze():
                 })
                 toxic_patterns_found.append(f"🔴 Buying Overextended Bubble Assets (Z-Score >= 2.5): {len(high_z_losses)} losses, {len(high_z_winners)} wins ({high_z_loss_rate}% loss rate)")
 
+        target = ledgers.FAILURE_RULES_PROPOSED_FILE if report_only else ledgers.FAILURE_RULES_FILE
+        live_before = _read_rules(ledgers.FAILURE_RULES_FILE)
         try:
-            with open(ledgers.FAILURE_RULES_FILE, "w", encoding="utf-8") as f:
+            with open(target, "w", encoding="utf-8") as f:
                 json.dump(toxic_rules, f, indent=4)
-            _log.info(f"Dynamically generated {len(toxic_rules)} toxic trade rules and wrote to rules file: {ledgers.FAILURE_RULES_FILE}")
+            _log.info(f"Dynamically generated {len(toxic_rules)} toxic trade rules and wrote to rules file: {target}")
         except Exception as e:
             _log.error(f"Failed to save dynamic rules file: {e}")
+        rules_note = ([f"REPORT ONLY: the live rules ({ledgers.FAILURE_RULES_FILE.name}) were not changed. "
+                       f"Proposed rules: {target.name}. Set them with: python retrospective_analyzer.py"]
+                      if report_only else [f"The live rules were set ({ledgers.FAILURE_RULES_FILE.name})."])
+        rules_note += rules_diff(live_before, toxic_rules)
 
     # Scan losers for sell dates where SPY was in the -1.2% to -2.0% "near-miss" band
     # (just below the -2.0% breaker threshold) to surface threshold calibration opportunities.
@@ -177,6 +209,10 @@ def analyze():
     else:
         report.append("  ✅ Excellent! No statistically recurring toxic patterns detected so far.")
     report.append("")
+    if rules_note:
+        report.append("RULES (proposed vs live):")
+        report.extend(rules_note)
+        report.append("")
     report.append("======================================================================")
     report.append("🌟 WINNING HABITS AUDIT (Primal Successes):")
 
@@ -212,4 +248,7 @@ def analyze():
         _log.error(f"Failed to generate Retrospective Report: {e}")
 
 if __name__ == "__main__":
-    analyze()
+    _ap = argparse.ArgumentParser(description="Failure-DNA retrospective: toxic patterns and the buy-time veto rules")
+    _ap.add_argument("--report-only", action="store_true",
+                     help="write the proposed rules to Data/failure_dna_rules_proposed.json, not the live rules")
+    analyze(report_only=_ap.parse_args().report_only)
