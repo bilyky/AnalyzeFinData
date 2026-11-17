@@ -24,7 +24,7 @@ account at or under its requirement, and for debt with unpriced holdings.
   margin page, per account: `{"<last 4 digits>": {"SYMBOL": 0.30, ...}}`. Copy the one from dev.
   A holding that isn't in the file is assumed at 30%, and the email says how much of the
   requirement is assumed. Update the file when E*TRADE changes a rate or you buy a new name.
-- **Optional, `oracle.margin_rate_pct`** in `Data\config.json` (your margin rate, % a year, for
+- **Optional, `oracle.margin_rate_pct`** in `config.json` (repo root; your margin rate, % a year, for
   example `10.8`). Without it the interest line is left out.
 - **Already there if position-watch is set up:** `Data\position_watch\config.json` (its `symbol`
   and `acquisition_dates`) feeds the wash-window mark. Without it, nothing is marked.

@@ -19,7 +19,7 @@ unchanged.
 
 ## 1. Before deploying
 
-Make sure you can log in to the dashboard (an `admins` entry in `Data\config.json` under
+Make sure you can log in to the dashboard (an `admins` entry in `config.json` under
 `web`). Without a working login you'll lose the Accounts tab, the System logs, chat and the
 plan link until it's fixed.
 
@@ -44,7 +44,7 @@ venv_new\Scripts\python.exe server.py restart
 
 ## Optional, not in this PR
 
-If nobody else needs the dashboard, setting `web.host` to `127.0.0.1` in `Data\config.json`
+If nobody else needs the dashboard, setting `web.host` to `127.0.0.1` in `config.json`
 limits it to the PROD machine itself. That's a config choice for you.
 
 ## Roll back
