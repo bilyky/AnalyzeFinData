@@ -82,6 +82,29 @@ def get_monitored_positions() -> list:
         _log.error(f"Error loading positions from workbook: {e}")
     return positions
 
+def one_stop_per_symbol(positions: list) -> list:
+    """One row per symbol, with its highest stop (the first to be hit), so the breach check and
+    the recovery check use the same stop.
+
+    PROD 2026-11-14..16: one symbol was on the Short_Long sheet twice, with two stops and the
+    price between them. The breach check went row by row (under the higher stop: breach) while
+    the recovery check took the last row's stop (2% over the lower one: recovered), so the name
+    was forgotten and re-sent as a new breach every other run: it was in all 8 alert emails on
+    Saturday 11-14."""
+    best, dups = {}, set()
+    for p in positions:
+        s = p["symbol"]
+        if s in best:
+            dups.add(s)
+            if p["stop"] <= best[s]["stop"]:
+                continue
+        best[s] = p
+    if dups:
+        _log.warning("Short_Long lists these symbols more than once; using the highest stop of each: "
+                     + ", ".join(f"{s} {best[s]['stop']}" for s in sorted(dups)))
+    return list(best.values())
+
+
 def generate_ai_analysis(sym: str, price: float, stop: float) -> str:
     """Generate a highly specific, professional quantitative analysis for the stop breach."""
     if not ai_client.primary():
@@ -103,7 +126,7 @@ def generate_ai_analysis(sym: str, price: float, stop: float) -> str:
 
 def monitor():
     _log.console(f"[{datetime.datetime.now()}] Starting Intraday Stop Monitor...")
-    monitored = get_monitored_positions()
+    monitored = one_stop_per_symbol(get_monitored_positions())
     if not monitored:
         _log.info("No positions with valid stops found to monitor.")
         return
