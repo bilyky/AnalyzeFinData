@@ -404,5 +404,17 @@
       "Expiry and settlement: the call expires on the last NYSE session on or before Friday (Thursday when Friday is a holiday) and settles on the first run after that session, at its close from Symbol_full; with no cached close it waits."
     ],
     "origin": "Project AETHER R&D #26 (Option Trading & Volatility Patterns). Base weekly writer plus two backtest-gated refinements (per-symbol ATR-implied vol; high-conviction flower exclusion) shipped September 2026 on the covered-call follow-up (PR #60)."
+  },
+  "etrade_shared_login": {
+    "title": "Shared E*TRADE Login (opt-in)",
+    "summary": "With <code>AETHER_ETRADE_STORE=db</code>, PROD and dev keep <b>one E*TRADE token</b> and one set of renew / re-auth locks in the shared database, so a login on one machine no longer ends the other's session.",
+    "origin": "PR #268 (2026-11). PROD and dev share one E*TRADE consumer key, and on 2026-11-11/12 each machine's login killed the other's token (the stop monitor then fell back to Google prices).",
+    "body": "<p><b>One token:</b> the token is stored as an encrypted blob (Fernet; the key is derived from the production consumer secret, which the database never sees). A machine whose token is gone loads the one the other machine minted instead of logging in, and only one machine holds the re-auth lock at a time. Lock leases use the database's clock, so two machines' clock differences don't matter. A rejected token is deleted only while the shared row still holds that token. Browser cookies stay per machine.</p><p class=\"mt-2\"><b>Outages:</b> if the database can't be reached, each machine uses its own token file (one warning per operation) and may log in as before; after a failure the process skips the database for 5 minutes, so calls don't each wait for a connect timeout. Tokens are always mirrored to the local file. Without the opt-in nothing changes.</p>",
+    "config": [
+      "AETHER_ETRADE_STORE=db turns it on; unset = this machine's files only, as before",
+      "database.url / DATABASE_URL: the shared Postgres (reached over Tailscale from dev)",
+      "SHARED_RETRY_S = 300: after a database failure, skip it for 5 minutes",
+      "Needs the cryptography package (requirements.txt)"
+    ]
   }
 }
