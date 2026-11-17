@@ -98,6 +98,10 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
     **copy-not-move** stages. A "verbatim extraction" claim is checkable: normalize (strip
     comments/indent/module prefix) and diff the body against the live source block by script; a copy
     that must track a live source needs a **parity test**. Recommend the seam the project already uses.
+  - **Reuse before new:** match new functionality against the feature list (`Data/wiki.json`,
+    `AETHER_REFERENCE.md`) and the code. A second implementation of something that exists (another
+    broker read, score, gate, backup, report section or scheduler for the same job) is a finding:
+    name the existing feature and recommend extending it, unless the PR says why a new one is needed.
   - **Check against PRODUCTION, not the repo's defaults.** Which backend a factory returns under
     production's real config (#144); and the environment facts the change relies on — scheduled-task
     names, time windows (token expiry, market close), data present on that machine. Production logs are
@@ -122,6 +126,10 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
   ("never opens a browser", "zero calls", "only a human may…"): those are the docs people trust. Also
   check that identifiers meant to be unique (e.g. roadmap item numbers) still are, and that a doc
   promising cross-references actually carries them both ways (reference §A, PR #84).
+  **Missing docs count too:** a new or removed user-visible feature (module, report or email section,
+  dashboard tab or endpoint, scheduled job, gate or alert) needs its feature-doc update in the same PR
+  (`AETHER_REFERENCE.md`, the `Data/wiki.json` entry and its About card; `.claude/commands/doc-sentry.md`),
+  or the body must say "No feature-doc change" with a reason that holds. Neither is a finding.
 - **Tests have value** — real behavior, not tautologies:
   - **Fully mocked?** Mocking the unit under test proves nothing; mock only expensive or
     non-deterministic IO (fs, network, clock) while the real code runs.
@@ -253,4 +261,6 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
 Goal and definition first (§0) · all three comment surfaces (§1) · suite run on the merged tree, not
 inferred (§3) · red-green or mutation, with a negative control for probes (§3–§4) · docs grepped for
 the old behavior (§3) · every consumer of a changed output traced (§3) · prod-readiness on both gates
-(§3) · every factual sentence re-checked now (§5) · PII masked (§6).
+(§3) · feature docs in this PR, or "No feature-doc change" with a reason that holds (§3) · new
+functionality matched to existing features, no parallel copy (§3) · every factual sentence re-checked
+now (§5) · PII masked (§6).

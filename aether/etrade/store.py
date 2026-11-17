@@ -11,9 +11,11 @@ Today every piece of E*TRADE state lives in a raw JSON file under ``Data/``:
 That is fine for a single process on one box, but it blocks (a) a clean migration
 to a shared database and (b) running the auth plane and a scaled data plane as
 separate k8s pods. This module defines **ports** (abstract interfaces) for each
-kind of state plus a **file adapter** (today's behaviour) and a seam where a
-``store_db`` adapter can be dropped in later — selected by ``make_etrade_store``
-via the explicit ``AETHER_ETRADE_STORE=db`` opt-in with *zero* call-site changes.
+kind of state plus a **file adapter** (the default) and the ``store_db`` adapter — selected
+by ``make_etrade_store`` via the explicit ``AETHER_ETRADE_STORE=db`` opt-in with *zero*
+call-site changes. With the opt-in, every machine shares one E*TRADE login (token, re-auth
+counters, locks) through ``database.url``, and falls back to its own files when the database
+can't be reached (``_with_file_fallback``; PROD review 2026-11-13).
 
 DESIGN NOTES
 ------------
@@ -55,6 +57,7 @@ import contextlib
 import json
 import os
 import socket
+import time
 from typing import Optional
 
 
@@ -66,6 +69,11 @@ def _pkg():
     """
     from aether import etrade as _p
     return _p
+
+
+class StoreUnavailable(RuntimeError):
+    """The shared (DB) store can't be reached or used. The fallback wrapper turns it into a
+    local-file operation plus one warning; nothing else catches it."""
 
 
 # ===========================================================================
@@ -98,8 +106,9 @@ class TokenStore(abc.ABC):
         """Persist tokens, stamping env / saved_at / issued_date_et."""
 
     @abc.abstractmethod
-    def delete(self) -> None:
-        """Remove the cached token (e.g. on explicit 401/403 rejection)."""
+    def delete(self, env: Optional[str] = None, if_token: Optional[str] = None) -> None:
+        """Remove the cached token (e.g. on explicit 401/403 rejection). A shared store deletes only
+        while it still holds ``if_token``, so one machine never deletes another's newer token."""
 
 
 class BrowserStateStore(abc.ABC):
@@ -157,12 +166,14 @@ class LockHandle:
     caller never inspects the handle, so the shape is adapter-private.
     """
 
-    __slots__ = ("name", "path", "fd")
+    __slots__ = ("name", "path", "fd", "owner")
 
-    def __init__(self, name: str, path: Optional[str] = None, fd: Optional[int] = None):
+    def __init__(self, name: str, path: Optional[str] = None, fd: Optional[int] = None,
+                 owner: Optional[str] = None):
         self.name = name
         self.path = path
         self.fd = fd
+        self.owner = owner   # DB row-lease adapter: the lease owner it must match on release
 
 
 class LockProvider(abc.ABC):
@@ -300,7 +311,7 @@ class FileTokenStore(TokenStore):
         except Exception as exc:
             p._log.debug("etrade: clear_reauth_alert best-effort failed: %s", exc)
 
-    def delete(self) -> None:
+    def delete(self, env: Optional[str] = None, if_token: Optional[str] = None) -> None:
         p = _pkg()
         if p.os.path.exists(p._TOKEN_PATH):
             p.os.remove(p._TOKEN_PATH)
@@ -428,6 +439,122 @@ def _file_store() -> EtradeStore:
     )
 
 
+# ===========================================================================
+# Shared store with a file fallback (AETHER_ETRADE_STORE=db)
+# ===========================================================================
+
+_WARNED: set = set()   # one fallback warning per operation per process
+
+# After a StoreUnavailable this process uses its files directly for SHARED_RETRY_S, then tries the
+# database again. Without it, every call during a NAS / Tailscale outage first waited the ~5 s connect
+# timeout (#268 review: three get_tokens() calls took 5.1 s, 5.0 s, 5.0 s).
+SHARED_RETRY_S = 300
+_shared_down_until = 0.0   # time.monotonic() until which the shared store is skipped
+
+
+def _fallback_warning(what: str, err: Exception) -> None:
+    if what in _WARNED:
+        return
+    _WARNED.add(what)
+    _pkg()._log.warning(f"E*TRADE shared store unavailable ({what}: {err}); using this machine's files"
+                        f" (the database is tried again in {SHARED_RETRY_S // 60} min).")
+
+
+def _try_shared(what: str, fn):
+    """``(True, fn())`` from the shared store, or ``(False, None)`` when it is down or inside the outage window."""
+    global _shared_down_until
+    if time.monotonic() < _shared_down_until:
+        return False, None
+    try:
+        return True, fn()
+    except StoreUnavailable as e:
+        _shared_down_until = time.monotonic() + SHARED_RETRY_S
+        _fallback_warning(what, e)
+        return False, None
+
+
+class _FallbackTokenStore(TokenStore):
+    """Shared token first; this machine's file when the database can't be reached. Every save also
+    goes to the file, so a fallback starts from the latest token this machine saw."""
+
+    def __init__(self, shared: TokenStore, local: TokenStore):
+        self._shared, self._local = shared, local
+
+    def load(self, env: str) -> Optional[dict]:
+        ok, tokens = _try_shared("token load", lambda: self._shared.load(env))
+        if ok and tokens:
+            return tokens
+        local = self._local.load(env)
+        if ok and local:
+            # Nothing shared today: this machine may hold one minted while the database was down.
+            _try_shared("token save", lambda: self._shared.save(dict(local), env))
+        return local
+
+    def load_any_date(self, env: str) -> Optional[dict]:
+        ok, tokens = _try_shared("token load", lambda: self._shared.load_any_date(env))
+        return tokens if ok and tokens else self._local.load_any_date(env)
+
+    def save(self, tokens: dict, env: str) -> None:
+        self._local.save(tokens, env)
+        _try_shared("token save", lambda: self._shared.save(dict(tokens), env))
+
+    def delete(self, env: Optional[str] = None, if_token: Optional[str] = None) -> None:
+        _try_shared("token delete", lambda: self._shared.delete(env=env, if_token=if_token))
+
+
+class _FallbackReauthStateStore(ReauthStateStore):
+    def __init__(self, shared: ReauthStateStore, local: ReauthStateStore):
+        self._shared, self._local = shared, local
+
+    def load(self, env: str = "production") -> dict:
+        ok, state = _try_shared("re-auth state load", lambda: self._shared.load(env))
+        return state if ok else self._local.load(env)
+
+    def save(self, state: dict, env: str = "production") -> None:
+        self._local.save(state, env)
+        _try_shared("re-auth state save", lambda: self._shared.save(state, env))
+
+    def reset(self, env: str = "production") -> None:
+        self.save({"consecutive_failures": 0, "last_attempt": 0.0, "cooldown_until": 0.0}, env)
+
+
+class _FallbackLockProvider(LockProvider):
+    """The shared row lease; this machine's file lock when the database can't be reached."""
+
+    def __init__(self, shared: LockProvider, local: LockProvider):
+        self._shared, self._local = shared, local
+
+    def acquire(self, name: str, ttl: int = _DEFAULT_LOCK_TTL) -> Optional[LockHandle]:
+        ok, handle = _try_shared("lock", lambda: self._shared.acquire(name, ttl))
+        return handle if ok else self._local.acquire(name, ttl)
+
+    def release(self, handle: Optional[LockHandle]) -> None:
+        if handle is None:
+            return
+        if handle.path:                       # a file lock (taken during a fallback)
+            self._local.release(handle)
+            return
+        # If the database is down now, the lease expires on its own after its ttl.
+        _try_shared("lock release", lambda: self._shared.release(handle))
+
+    def is_held(self, name: str) -> bool:
+        ok, held = _try_shared("lock", lambda: self._shared.is_held(name))
+        return held if ok else os.path.exists(self._local._resolve(name))
+
+
+def _with_file_fallback(shared: EtradeStore) -> EtradeStore:
+    p = _pkg()
+    local = _file_store()
+    local.lock = FileLockProvider(lock_dir=p._DATA_DIR)
+    return EtradeStore(
+        tokens=_FallbackTokenStore(shared.tokens, local.tokens),
+        browser_state=shared.browser_state,
+        reauth=_FallbackReauthStateStore(shared.reauth, local.reauth),
+        lock=_FallbackLockProvider(shared.lock, local.lock),
+        backend="db",
+    )
+
+
 def make_etrade_store(config=None) -> EtradeStore:
     """Select the persistence backend.
 
@@ -445,18 +572,18 @@ def make_etrade_store(config=None) -> EtradeStore:
     backend = (os.environ.get("AETHER_ETRADE_STORE") or "file").strip().lower()
     if backend != "db":
         return _file_store()
-    db_url = os.environ.get("DATABASE_URL")
-    if not db_url:
-        if config is None:
-            try:
-                from aether.config import CFG
-                config = CFG
-            except Exception:
-                config = None
-        db_url = getattr(config, "database_url", None) if config is not None else None
+    if config is None:
+        try:
+            from aether.config import CFG
+            config = CFG
+        except Exception:
+            config = None
+    db_url = os.environ.get("DATABASE_URL") or (getattr(config, "database_url", None) if config is not None else None)
     if not db_url:
         raise ValueError("AETHER_ETRADE_STORE=db but no DATABASE_URL / database.url is configured.")
+    # The token blob is encrypted with a key derived from the production consumer secret.
+    key_secret = (getattr(config, "etrade_production_secret", "") or "") if config is not None else ""
     # DB backend requested — kept isolated so importing it (and SQLAlchemy) is
     # only paid for when actually selected.
     from aether.etrade.store_db import make_db_store
-    return make_db_store(db_url)
+    return _with_file_fallback(make_db_store(db_url, key_secret))
