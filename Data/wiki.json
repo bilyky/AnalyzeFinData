@@ -268,7 +268,7 @@
   },
   "digit_sum_numerology": {
     "title": "Digit-Sum Numerology Factor",
-    "summary": "Backtested across 522 symbols \u00d7 9+ years. Tests whether the digit-sum of a stock's open/close price predicts same-day or next-day direction. Two variants (integer and full-cents) cover 228 unique symbols with 95%+ confidence signals. Of 473 raw signals, <b>224 pass the full 4-layer quality validator</b> and are active in scoring. Symbol page shows a Stability column: <b class=\"text-green-400\">stable</b> / <b class=\"text-amber-400\">mixed</b> / <b class=\"text-orange-400\">sparse</b> / <b class=\"text-red-400\">flip</b>.",
+    "summary": "<b class=\"text-amber-400\">Status (2026-11-12, R&amp;D #72): failed its out-of-sample test. Rebuilt from pre-2023 data, it didn't improve candidate ranking (IC -0.0008, t -0.61) or the portfolio (t 1.42; 40% of robustness draws). Still in the live scores until its removal PR lands.</b> Backtested across 522 symbols \u00d7 9+ years. Tests whether the digit-sum of a stock's open/close price predicts same-day or next-day direction. Two variants (integer and full-cents) cover 228 unique symbols with 95%+ confidence signals. Of 473 raw signals, <b>224 pass the full 4-layer quality validator</b> and are active in scoring. Symbol page shows a Stability column: <b class=\"text-green-400\">stable</b> / <b class=\"text-amber-400\">mixed</b> / <b class=\"text-orange-400\">sparse</b> / <b class=\"text-red-400\">flip</b>.",
     "origin": "Inspired by W.D. Gann's numerology research (1878\u20131955). Empirically backtested by AETHER across 522 symbols \u00d7 9+ years of daily OHLCV data (2014\u20132026).",
     "body": "<p>Tests whether the <b>digit-sum of a stock's price</b> predicts short-term direction. Digit-sum collapses any price to a single digit: <code>$247.35 \u2192 2+4+7+3+5=21 \u2192 3</code>.</p>\n<p class=\"mt-2\">AETHER runs <b>two variants</b> simultaneously:</p>\n<ul class=\"list-disc pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>Integer digit-sum</b> \u2014 whole-dollar only ($247 \u2192 4). 162/522 symbols with 95%+ signals.</li>\n  <li><b>Full-cents digit-sum</b> \u2014 includes cents ($247.35 \u2192 3). Adds 106 unique symbols not captured by integer-only.</li>\n</ul>\n<p class=\"mt-2\"><b>Two timing modes:</b></p>\n<ul class=\"list-disc pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>Prior-close \u2192 next-day</b>: standing factor in S10/L60, computed nightly from OHLCV cache.</li>\n  <li><b>Today's open \u2192 same-day</b>: real-time tiebreaker in <code>_execute_buys()</code> using live open price. Logged as <code>\ud83d\udd22 [Digit-Sum]</code>.</li>\n</ul>\n<p class=\"mt-2\">Of 473 signals at 95%+ confidence, <b>only 224 pass all four quality gates</b> and are used in scoring. See the Signal Quality Validator wiki entry for the full filter pipeline.</p>\n<p class=\"mt-2\">The Symbol detail modal shows a digit table with a <b>Stability</b> column: <span class=\"text-green-400\">stable</span> / <span class=\"text-amber-400\">mixed</span> / <span class=\"text-orange-400\">sparse</span> / <span class=\"text-red-400\">flip</span> / <span class=\"text-slate-500\">stale</span>.</p>",
     "config": [
@@ -404,6 +404,73 @@
       "Expiry and settlement: the call expires on the last NYSE session on or before Friday (Thursday when Friday is a holiday) and settles on the first run after that session, at its close from Symbol_full; with no cached close it waits."
     ],
     "origin": "Project AETHER R&D #26 (Option Trading & Volatility Patterns). Base weekly writer plus two backtest-gated refinements (per-symbol ATR-implied vol; high-conviction flower exclusion) shipped September 2026 on the covered-call follow-up (PR #60)."
+  },
+  "position_watch": {
+    "title": "Position Watch (concentrated holding)",
+    "summary": "A daily, recommend-only check of one concentrated holding (default INTC): <b>TRIM</b> a small tranche, <b>HOLD</b> or <b>WAIT</b>, with reasons, tax lots and a RETRO of the last call. Never places an order, never sells below the floor.",
+    "origin": "Built for OceanView (R&D #79): bring a concentrated position down slowly and on evidence. Rules are heuristics, reviewed against the RETRO hit rate.",
+    "body": "<p>Each run measures the symbol (SMA 20/50/200, drawdown from the 52-week high, 1/5/20/60-day returns), separates <b>the sector's move from the symbol's own</b> (beta to an equal-weight peer basket and the residual return with a z-score), checks each replacement's entry timing (stretch vs its 50-day average, RSI-14), and computes concentration against the total, including stock-plan shares and outside assets.</p><p class=\"mt-2\">A <b>TRIM</b> needs all of: below the 50-day average, weak on its own (20-day residual z &lt; -1), no recovery pattern forming, not a crash day, and a replacement with an OK entry. Any doubt in the inputs (stale bars, a missing peer, a failed account snapshot or live quote) turns a TRIM into <b>WAIT</b>; so does the day after a big drop. Suggested lots: losses first (outside the &plusmn;30-day vest/ESPP wash windows), then long-term lots with the smallest gain, short-term last.</p><p class=\"mt-2\">Every call goes to a journal; the next run scores it (RETRO) and a one-line lesson can be attached.</p>",
+    "config": [
+      "scripts/monitoring/position_watch.py --symbol INTC [--live] (one read-only E*TRADE quote with --live)",
+      "Floor: floor_pct (default 30% of the total); tranche: tranche_pct (default 5% of the position)",
+      "Private inputs in Data/position_watch/: config (peers, replacements, vest/ESPP dates), lots, journal",
+      "Rules version v2; skill: .claude/commands/position-watch.md"
+    ]
+  },
+  "oceanview": {
+    "title": "OceanView Tab & Context Pack",
+    "summary": "The dashboard's <b>OceanView</b> tab shows a concentrated holding in one place: today's position-watch call, the RETRO, lots with tax, the vest/ESPP wash-sale calendar, the dated plan and the relevant study results. Agents start from the same facts through the OceanView context pack.",
+    "origin": "OceanView programme (R&D #79): a recommend-only adviser for concentration, tax and margin.",
+    "body": "<p>The tab (login required) reads <code>oceanview_api.summary()</code>: position-watch's report (without writing its journal), the journal and RETRO, each lot's gain at today's price with long/short-term status and the lots a TRIM would sell, vest/ESPP dates with their &plusmn;30-day wash windows, the latest study results and the dated plan's check. Lots' account names are never returned.</p><p class=\"mt-2\">The <b>context pack</b> (<code>aether/oceanview_context.py</code>) gives any agent one manifest: account state, the paper-game summary, study gates, data health and guardrails, with a health verdict (<b>ok</b>, <b>degraded</b> from a recent cache, <b>failed</b>). Its broker read only renews a same-day token over HTTP and never opens a browser; on a failed verdict no account numbers may be quoted.</p>",
+    "config": [
+      "Tab: /api/oceanview/summary (admin login required); data: oceanview_api.py",
+      "Context pack: build_oceanview_context(live=False) reads offline; the evening pipeline rebuilds it",
+      "Skill: .claude/commands/oceanview-adviser.md (recommend-only)"
+    ]
+  },
+  "invest_plan": {
+    "title": "Dated Investment Plan Check",
+    "summary": "A daily check of a short, dated buy plan: which step is due, <b>wait a day</b> after a market drop, each holding against its stop, and the days left to the sell window. Recommend-only.",
+    "origin": "OceanView (R&D #79): a short plan with dated steps, stops and a sell window, checked every day instead of from memory.",
+    "body": "<p>The plan is a private JSON file (steps with dates and amounts, rules, fills). Each day <code>invest_plan.py</code> says from the cached daily bars which step is due or overdue (a step counts as covered only by fills dated on or after it, within $1 or 1%), whether to <b>wait a day</b> because SPY fell by the plan's threshold on the last session, whether the index fund to buy is stretched, how each holding stands against its stop, and the days to the sell window.</p>",
+    "config": [
+      "scripts/monitoring/invest_plan.py (reads Data/position_watch/invest_plan.json)",
+      "Fills are recorded in the plan's fills list (date, symbol, shares, price, optional stop)",
+      "Shown on the OceanView tab when the plan file exists"
+    ]
+  },
+  "margin_watch": {
+    "title": "Oracle Margin Watch",
+    "summary": "The Oracle's daily email adds a <b>Margin watch</b> for every real account with a margin loan: debt, equity, the maintenance requirement, how far holdings can fall before a call, any open call as the broker states it, and the sales that free the most requirement first.",
+    "origin": "R&D #39 Phase 1 (PR #256): the Oracle audited one account, so a margined account it doesn't trade could reach a call unseen.",
+    "body": "<p>From the broker's live figures only (no live data, no section): debt and margin equity from E*TRADE's balance data, open house/Fed/minimum-equity/cash calls as stated, and the requirement from each holding's maintenance rate (a private file copied from the broker's margin page; a missing symbol is assumed at 30% and the email says how much is assumed).</p><p class=\"mt-2\"><b>Pay down first</b> lists the five sales that free the most requirement per dollar (100% names first), losses before gains; a loss on a symbol bought in the last 30 days is marked as a wash-sale window and listed last. Holdings without prices are shown as <b>unpriced</b> rather than guessed. Recommend-only.</p>",
+    "config": [
+      "aether/margin_watch.py; private Data/margin_requirements.json ({last4: {SYMBOL: rate}})",
+      "Optional oracle.margin_rate_pct for the interest line",
+      "One broker read per Oracle run, shared with its audit"
+    ]
+  },
+  "options_adviser": {
+    "title": "Options & Tax Adviser",
+    "summary": "Builds a menu of protection and income strategies for a stock position (collar, protective put, covered call, cash-secured put, bull-put and bear-call spreads), each with its economics and U.S. tax considerations. Recommend-only.",
+    "origin": "The INTC collar / CPA adviser, generalised to any holding (default symbol INTC).",
+    "body": "<p>For each strategy: net cost or credit, maximum loss and gain, protection floor, upside cap and breakevens, plus tax flags (long/short-term holding period, IRC &sect;1259 constructive sale, &sect;1092 qualified covered call, &sect;1091 wash sale). The engine is pure and unit-tested; the option chain comes from a saved sample by default or one read-only E*TRADE fetch with <code>--live</code>.</p><p class=\"mt-2\">The OceanView adviser skill doesn't build this menu for employer stock under a hedging ban (the user's INTC) and uses position-watch instead; the tool itself doesn't enforce that. Tax notes are considerations, not advice.</p>",
+    "config": [
+      "python options_adviser.py --symbol SYM --print --no-email (offline sample chain)",
+      "--live: one ban-safe options_chain fetch, no browser; --dte / --expiry pick the expiry",
+      "Engine: aether/options_adviser.py; skill: .claude/commands/oceanview-adviser.md"
+    ]
+  },
+  "etrade_session_safety": {
+    "title": "E*TRADE Session & TLS Safety",
+    "summary": "Every E*TRADE, Chaikin and EDGAR call <b>verifies TLS certificates</b> (against the Windows trust store when <code>truststore</code> is installed). A certificate failure or a token file copied from another machine never triggers an automated login.",
+    "origin": "PRs #253, #257 and #270 (2026-11): token and session calls had run with certificate checks off, and a backup copy of PROD's data brought PROD's token onto dev.",
+    "body": "<p><b>Certificates:</b> no call turns verification off (a test scans the code for any bypass). With the optional <code>truststore</code> package, certificates are checked against the operating system's store, which includes a corporate or antivirus root; without it, against certifi. <code>scripts/diagnostics/tls_precheck.py</code> checks all three hosts before a deploy.</p><p class=\"mt-2\"><b>No login on the wrong problem:</b> a certificate error in the token check or the renew is not a dead token, so the automated login is skipped (recorded per thread, so overlapping dashboard calls can't clear each other's note). A token file saved on another machine is ignored and doesn't trigger an automated login here; a person can still log in.</p>",
+    "config": [
+      "AETHER_TLS_TRUSTSTORE=0 falls back to certifi (verification stays on)",
+      "REQUESTS_CA_BUNDLE is honoured by every call, including Chaikin's direct session",
+      "Token files record the host that saved them; another host's file is skipped"
+    ]
   },
   "etrade_shared_login": {
     "title": "Shared E*TRADE Login (opt-in)",
