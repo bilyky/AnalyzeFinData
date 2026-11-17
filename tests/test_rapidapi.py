@@ -350,8 +350,9 @@ class TestRunSymbols(unittest.TestCase):
         self.assertEqual(syms, ["AAPL", "SPY", "SEDG", "QQQ"])
 
     def test_the_default_run_includes_every_reference_etf(self):
-        syms = rapidapi.run_symbols([], set(), sheet=lambda: ["AAPL"])
-        self.assertTrue({"QQQ", "SMH", "SOXX", "XLK", "SPY", "RSP", "GDX", "VXX", "UVXY"} <= set(syms))
+        with mock.patch.object(rapidapi.CFG, "reference_symbols", ("QQQ", "VXX")):
+            syms = rapidapi.run_symbols([], set(), sheet=lambda: ["AAPL"])
+        self.assertEqual(syms, ["AAPL", "QQQ", "VXX"])                         # the configured list
 
 
 class TestReferenceEtfsStayCurrent(unittest.TestCase):
@@ -388,7 +389,7 @@ class TestReferenceEtfsStayCurrent(unittest.TestCase):
              mock.patch.object(rapidapi._log, "console"):
             rapidapi.main([])
         syms, kw = rep.call_args.args[0], rep.call_args.kwargs
-        ref = set(rapidapi.REFERENCE_SYMBOLS)
+        ref = set(rapidapi.reference_symbols())
         self.assertTrue(ref <= set(syms))
         self.assertEqual(kw["daily"], ref)
         self.assertEqual(kw["priority"], ref | {"SEDG"})

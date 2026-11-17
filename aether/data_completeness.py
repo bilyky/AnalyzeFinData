@@ -11,7 +11,7 @@ Also checked:
   - the number of snapshots vs the usual count;
   - values: the 12-char signal string is 0/1 only, the PGR rating is 1-5;
   - each stock's OHLCV (Data/Symbol_full) has a bar for the session;
-  - each reference ETF (REFERENCE_SYMBOLS) has a bar for the session before it;
+  - each reference ETF (reference_symbols()) has a bar for the session before it;
   - each snapshot has its raw copy (Data/Symbol_raw), once that folder exists;
   - screen symbols (``expected``, the Research sheet) that were there in 8 of the last 10
     sessions and are missing today are named;
@@ -36,6 +36,7 @@ import statistics
 import sys
 
 from aether import market_calendar, paths
+from aether.config import CFG
 
 BASELINE_DAYS = 10          # prior sessions the fill rates are compared with
 USUAL_FILL = 0.5            # a field filled for at least half the stocks counts as "usual"
@@ -44,12 +45,12 @@ COUNT_DROP = 0.9            # alarm when there are under 90% of the usual number
 BAR_MISS = 0.1              # alarm when more than 10% of stocks have no OHLCV bar for the session
 KEEPS_UP = 0.8              # a screen symbol present in 80% of the prior sessions is expected today
 SIGNALS_RE = re.compile(r"^[01]{12}$")
-# Reference ETFs whose OHLCV bars are kept current whether or not they are on the Research
-# sheet: the rapidapi.py repair pass always fetches them, and check() alarms when one is behind.
-# VXX/UVXY stand in for the VIX index, which Alpha Vantage's daily endpoint rejects
-# ("Invalid API call", checked 2026-11-17). Both reverse-split often: split_adjust_ohlcv
-# can mistake a real volatility spike with a gap open (close >= 1.8x) for a split.
-REFERENCE_SYMBOLS = ("QQQ", "SMH", "SOXX", "XLK", "SPY", "RSP", "GDX", "VXX", "UVXY")
+
+
+def reference_symbols() -> tuple:
+    """Reference ETFs kept current off the Research sheet: CFG.reference_symbols (config
+    rapidapi.reference_symbols or AETHER_REFERENCE_SYMBOLS, else config.DEFAULT_REFERENCE_SYMBOLS)."""
+    return tuple(CFG.reference_symbols)
 
 
 def _filled(v) -> bool:
@@ -184,7 +185,7 @@ def check(day: str | None = None, base: str | None = None, expected: list | None
     # Off-sheet reference ETFs get bars only from the recovery pass, which runs after the
     # evening email, so the email can expect the previous session's bar, not today's.
     prev = _sessions_before(d, 1)[0] if session else None
-    stale_ref = [s for s in REFERENCE_SYMBOLS if not _has_bar(s, prev)] if prev else []
+    stale_ref = [s for s in reference_symbols() if not _has_bar(s, prev)] if prev else []
     if stale_ref:
         alarms.append(f"{len(stale_ref)} reference ETFs have no OHLCV bar for {prev}: {', '.join(stale_ref)}")
     raw_dir = os.path.join(paths.cache_dir(), "Symbol_raw")

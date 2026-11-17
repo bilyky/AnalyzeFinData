@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 import daily_task
+from aether import config as aether_config
 from aether import data_completeness as dc
 
 # Mon 2026-08-24 .. Fri 2026-08-28, Mon 2026-08-31, Tue 2026-09-01 (all sessions).
@@ -30,11 +31,12 @@ class Base(unittest.TestCase):
         self.ohlcv = os.path.join(self._tmp.name, "Symbol_full")
         os.makedirs(self.ohlcv)
         self._p = [mock.patch.object(dc.paths, "ohlcv_dir", return_value=self.ohlcv),
-                   mock.patch.object(dc.paths, "cache_dir", return_value=self._tmp.name)]
+                   mock.patch.object(dc.paths, "cache_dir", return_value=self._tmp.name),
+                   mock.patch.object(dc.CFG, "reference_symbols", aether_config.DEFAULT_REFERENCE_SYMBOLS)]
         for p in self._p:
             p.start()
         dc._bars_cache.clear()
-        for s in dc.REFERENCE_SYMBOLS:                               # current reference ETFs: no alarm
+        for s in dc.reference_symbols():                             # current reference ETFs: no alarm
             self.bars(s, DAYS + REF_EXTRA)
 
     def tearDown(self):
@@ -217,7 +219,15 @@ class TestReferenceBars(Base):
     them, so the check wants the bar of the session before the checked day."""
 
     def test_reference_list(self):
-        self.assertEqual(set(dc.REFERENCE_SYMBOLS), {"QQQ", "SMH", "SOXX", "XLK", "SPY", "RSP", "GDX", "VXX", "UVXY"})
+        self.assertEqual(set(aether_config.DEFAULT_REFERENCE_SYMBOLS),
+                         {"QQQ", "SMH", "SOXX", "XLK", "SPY", "RSP", "GDX", "VXX", "UVXY"})
+        self.assertEqual(dc.reference_symbols(), aether_config.DEFAULT_REFERENCE_SYMBOLS)
+
+    def test_the_configured_list_is_the_one_checked(self):
+        self.history(upto=7)
+        with mock.patch.object(dc.CFG, "reference_symbols", ("QQQ", "ZZZ")):   # set in config.json
+            self.assertEqual(dc.check("2026-09-01", self.base)["alarms"],
+                             ["1 reference ETFs have no OHLCV bar for 2026-08-31: ZZZ"])
 
     def test_missing_file_or_stale_bar_is_named(self):
         self.history(upto=7)
@@ -235,7 +245,7 @@ class TestReferenceBars(Base):
         self.history(upto=7)
         for s in ("AAA", "BBB", "CCC", "DDD"):
             self.write(s, "2026-09-05", _snap())                     # a Saturday
-        for s in dc.REFERENCE_SYMBOLS:
+        for s in dc.reference_symbols():
             os.remove(os.path.join(self.ohlcv, f"{s}_daily.json"))
         self.assertEqual(dc.check("2026-09-05", self.base)["alarms"], [])
 

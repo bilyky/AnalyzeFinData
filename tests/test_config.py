@@ -246,5 +246,29 @@ class TestConfigRequire(unittest.TestCase):
             self.assertIn("chaikin_password", str(e))
 
 
+
+class TestReferenceSymbols(unittest.TestCase):
+    """rapidapi.reference_symbols: the ETFs kept current off the Research sheet."""
+
+    def test_default(self):
+        self.assertEqual(_make_cfg({}).reference_symbols, config_module.DEFAULT_REFERENCE_SYMBOLS)
+
+    def test_list_from_file(self):
+        cfg = _make_cfg({"rapidapi": {"reference_symbols": ["spy", " qqq ", "SPY"]}})
+        self.assertEqual(cfg.reference_symbols, ("SPY", "QQQ"))          # upper-cased, trimmed, once
+
+    def test_comma_string_and_env_override(self):
+        self.assertEqual(_make_cfg({"rapidapi": {"reference_symbols": "SPY,VXX"}}).reference_symbols,
+                         ("SPY", "VXX"))
+        cfg = _make_cfg({"rapidapi": {"reference_symbols": ["SPY"]}}, env={"AETHER_REFERENCE_SYMBOLS": "GDX, UVXY"})
+        self.assertEqual(cfg.reference_symbols, ("GDX", "UVXY"))
+
+    def test_bad_or_empty_value_keeps_the_default(self):
+        for bad in (None, 5, [], "", " , ", [1, 2], {"a": 1}):
+            with self.subTest(bad=bad):
+                cfg = _make_cfg({"rapidapi": {"reference_symbols": bad}})
+                self.assertEqual(cfg.reference_symbols, config_module.DEFAULT_REFERENCE_SYMBOLS)
+
+
 if __name__ == "__main__":
     unittest.main()
