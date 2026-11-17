@@ -6,9 +6,12 @@ Snapshot: logs up to 2026-11-17 07:15 PT, state files copied 08:50.
 PROD pulled at 2026-11-16 19:44:53 (dashboard "Pulling latest code"). That pull brought main up to #268
 (merged 19:41:42). #268 is live: from 21:01:24 the log says "E*TRADE production token saved to the shared store".
 
-Merged since that pull: **#264** (reversal-filter study; scripts and docs only, no live change).
-Open and meant for this pull: **#274** (scheduled jobs without the Gemini CLI), **#277** (data-completeness CLI
-checks the screen list), and this PR.
+Merged since that pull:
+- **#274** (scheduled jobs without the Gemini CLI; the weekly run only proposes failure-DNA rules): the live
+  change in this pull, with steps 3 and 7 below.
+- #264, #265, #266 (studies), #272, #273, #279 (docs, and wiki/About-tab text): no live change.
+
+Open and meant for this pull: **#277** (data-completeness CLI checks the screen list) and this PR.
 
 ## What this PR fixes
 1. **Stop-monitor alert emails every other run.** One symbol is on the Short_Long sheet twice, with two
@@ -22,7 +25,7 @@ checks the screen list), and this PR.
 
 ## Steps
 1. **Before the pull:** no job running (lock files, `tasklist` for python). Back up `Data\` as usual.
-2. **Pull** main, after #274, #277 and this PR are merged. The dashboard restarts itself when it pulls.
+2. **Pull** main, after #277 and this PR are merged (#274 is already on main). The dashboard restarts itself when it pulls.
 3. **Re-register the tasks** (needed for #274, and finishes #259's retirements):
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\utils\register_agent_tasks.ps1 -DryRun
