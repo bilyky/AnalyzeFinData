@@ -9,8 +9,8 @@ example is an anecdote; this measures the setup across history.
 
 Swings: confirmed zigzag turns on split-adjusted closes (position_watch.bars_from_series,
 placeholders dropped). A swing high is confirmed when the close falls PCT below the running high; a
-swing low when the close rises PCT above the running low. The zigzag is copied from
-gann_time_cycle_study.zigzag_turns (PR #265, not on main) and also returns the confirmation index.
+swing low when the close rises PCT above the running low. The zigzag is
+gann_time_cycle_study.zigzag_indices (shared; it also returns the confirmation index).
 
 Event, at the confirmation of a swing low L0 (its zigzag reversal day k, never the low's own day):
     L0 > L1            the higher low
@@ -56,6 +56,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "monitoring"))
 
+import gann_time_cycle_study as gs  # noqa: E402
 import position_watch as pw  # noqa: E402
 import setup_s10_gate_study as sg  # noqa: E402
 from aether import instruments, paths  # noqa: E402
@@ -73,38 +74,9 @@ MIN_EVENTS = 100
 OPTION_NEED = 0.117
 
 
-def zigzag(closes: list, pct: float) -> list:
-    """[(extreme_index, "high"|"low", confirm_index)] for confirmed turns on `closes`."""
-    turns, direction, hi, lo, ext = [], 0, 0, 0, 0   # direction: +1 tracking a high, -1 a low
-    for k in range(1, len(closes)):
-        c = closes[k]
-        if direction == 0:
-            hi = k if c > closes[hi] else hi
-            lo = k if c < closes[lo] else lo
-            if c <= closes[hi] * (1 - pct):
-                turns.append((hi, "high", k))
-                direction, ext = -1, k
-            elif c >= closes[lo] * (1 + pct):
-                turns.append((lo, "low", k))
-                direction, ext = 1, k
-        elif direction == 1:
-            if c > closes[ext]:
-                ext = k
-            elif c <= closes[ext] * (1 - pct):
-                turns.append((ext, "high", k))
-                direction, ext = -1, k
-        else:
-            if c < closes[ext]:
-                ext = k
-            elif c >= closes[ext] * (1 + pct):
-                turns.append((ext, "low", k))
-                direction, ext = 1, k
-    return turns
-
-
 def find_events(closes: list, pct: float = PCT) -> list:
     """Confirmation indices k of the pattern (see the docstring). Uses only turns confirmed by k."""
-    turns = zigzag(closes, pct)
+    turns = gs.zigzag_indices(closes, pct)
     out = []
     for n, (i0, kind, k) in enumerate(turns):
         if kind != "low":

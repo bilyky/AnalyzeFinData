@@ -32,7 +32,7 @@ def bars(closes, opens=None, start=datetime.date(2024, 1, 1)):
 class TestZigzag(unittest.TestCase):
     def test_turns_carry_their_confirmation(self):
         c = [100, 109, 120, 105, 95, 100, 110]
-        z = tb.zigzag(c, 0.10)
+        z = tb.gs.zigzag_indices(c, 0.10)
         self.assertEqual(z[0], (0, "low", 2))                  # 109 is +9%: the low is confirmed at bar 2 (120)
         self.assertEqual(z[1], (2, "high", 3))                 # 120 -> 105 (-12.5%) confirms the high at bar 3
         self.assertTrue(all(k > i for i, _t, k in z))           # confirmation always after the extreme
