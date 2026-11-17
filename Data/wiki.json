@@ -259,8 +259,8 @@
     "origin": "Project AETHER Core Team (R&D Sprints, August 2026). Single-source-of-truth comparison engine.",
     "body": "One pure, deterministic engine (<code>aether/stock_compare.py</code>) selects the requested symbols straight from the already-computed Research rows &mdash; no recompute, no extra workbook reads &mdash; and ranks them by combined score, breaking ties by a confirmed setup, then reward:risk, then symbol, for fully stable ordering. Each row carries a <code>stale</code> flag when its stop or target fell back to a fixed % off price because the OHLCV cache was old, and a comparison-wide warning fires if any symbol is stale, so levels are never presented as exact when they are only approximate. An optional AI &lsquo;WHY&rsquo; narrative (the shared <code>prompts/compare_stocks.md</code> rubric) is layered on demand; it synthesizes on the quantitative factors only (no web access) and, when a provider is unavailable, degrades to a plain-language reason rather than a bare error. The same engine powers the Research-page selection panel, the web chat &lsquo;compare&rsquo; intent, the console script, and the <code>/compare-stocks</code> agent skill &mdash; the agent surface adds live news/events search on top.",
     "config": [
-      "Engine: aether/stock_compare.compare_data() &mdash; pure, no LLM, no network; the single source of truth for facts + ranking.",
-      "Ranking: combined score (desc), then confirmed setup, then reward:risk, then alphabetical &mdash; fully deterministic.",
+      "Engine: aether/stock_compare.compare_data(): pure, no LLM, no network; the single source of truth for facts + ranking.",
+      "Ranking: combined score (desc), then confirmed setup, then reward:risk, then alphabetical; fully deterministic.",
       "Surfaces: Research-page row selection + inline panel, web chat 'compare/vs' intent, console script, /compare-stocks agent skill.",
       "Freshness: per-symbol stale flag plus a comparison-wide warning whenever a stop/target is a % fallback.",
       "AI WHY (optional): prompts/compare_stocks.md rubric, quantitative factors only; on-demand, and states why if a provider is unavailable."
@@ -487,7 +487,7 @@
   "dev_project_model": {
     "title": "Development Tab: Project Model",
     "summary": "A dashboard tab that shows the AETHER services redesign (R&amp;D #78): each step, fix and service with its status and PR, plus code metrics measured live from the source tree.",
-    "origin": "PR #242 (2026-11-06), step S0b of R&amp;D #78.",
+    "origin": "PR #242 (2026-11-06), step S0b of R&D #78.",
     "body": "<p>The progress comes from <code>plans/aether-services-progress.json</code>, which each R&amp;D #78 PR updates. The metrics are measured on every load, so they show the code as it is: lines in <code>ai_portfolio_game.py</code>, <code>aether/scenario</code> and <code>aether/services</code>, <code>game.X</code> calls and <code>_pkg()</code> shims in the new packages, and magic <code>row[N]</code> indexes. Read-only; no login needed.</p>",
     "config": [
       "Endpoint: GET /api/dev/project-model",
@@ -527,7 +527,7 @@
     ]
   },
   "system_watchdog": {
-    "title": "System Watchdog &amp; Alerts",
+    "title": "System Watchdog & Alerts",
     "summary": "An hourly health check: it emails on data loss, a stale backup, a missing scheduled trade run or a failing OceanView pack, reports missing scheduled tasks, and hands a pipeline crash to an AI agent for diagnosis.",
     "origin": "Core infrastructure; the missed-run alert and retired tasks came in PR #259 (2026-11-13).",
     "body": "<p><b>Alerts</b> (each at most once a day): a symbol cache that loses more than 20% of its entries between runs; no successful backup for 3 days; no scheduled trade run by 07:30 PT on an NYSE session day; an OceanView context pack that failed or is more than 30 hours old. The stop monitor separately emails once a day when it has no prices for half or more of the positions it watches.</p><p class=\"mt-2\"><b>Tasks:</b> the watchdog checks the tasks listed in <code>scripts/utils/scheduled_tasks.json</code> and reports missing ones, but never creates them (re-register with <code>register_agent_tasks.ps1</code>); tasks marked retired are left alone. <b>Crashes:</b> a pipeline traceback goes to an AI agent CLI, by default the Claude CLI with read-only tools, so it diagnoses rather than edits; a lock file stops repeat triggers until someone reviews it.</p>",
