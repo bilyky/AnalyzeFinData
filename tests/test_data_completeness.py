@@ -11,6 +11,7 @@ from aether import data_completeness as dc
 
 # Mon 2026-08-24 .. Fri 2026-08-28, Mon 2026-08-31, Tue 2026-09-01 (all sessions).
 DAYS = ["2026-08-24", "2026-08-25", "2026-08-26", "2026-08-27", "2026-08-28", "2026-08-31", "2026-09-01"]
+REF_EXTRA = ["2026-09-02", "2026-09-03", "2026-09-04", "2026-09-08"]   # later sessions some tests check
 
 
 def _snap(factors=True, signals="000000001000", pgr=4, strength=2):
@@ -33,6 +34,8 @@ class Base(unittest.TestCase):
         for p in self._p:
             p.start()
         dc._bars_cache.clear()
+        for s in dc.REFERENCE_SYMBOLS:                               # current reference ETFs: no alarm
+            self.bars(s, DAYS + REF_EXTRA)
 
     def tearDown(self):
         for p in self._p:
@@ -206,6 +209,35 @@ class TestCheck(Base):
         with mock.patch.object(dc, "check", return_value={"day": "d", "alarms": [], "notes": []}), \
                 mock.patch.object(dc.sys.stdout, "write"):
             self.assertEqual(dc.main([]), 0)
+
+
+class TestReferenceBars(Base):
+    """2026-11-17: SMH and SOXX bars stopped at 2026-11-02 and QQQ had no file, because only
+    screened symbols get bars. The evening email runs before the recovery pass that fetches
+    them, so the check wants the bar of the session before the checked day."""
+
+    def test_reference_list(self):
+        self.assertEqual(set(dc.REFERENCE_SYMBOLS), {"QQQ", "SMH", "SOXX", "XLK", "SPY", "RSP", "GDX"})
+
+    def test_missing_file_or_stale_bar_is_named(self):
+        self.history(upto=7)
+        os.remove(os.path.join(self.ohlcv, "QQQ_daily.json"))
+        self.bars("SMH", DAYS[:5])                                   # last bar 08-28, 08-31 missing
+        self.assertEqual(dc.check("2026-09-01", self.base)["alarms"],
+                         ["2 reference ETFs have no OHLCV bar for 2026-08-31: QQQ, SMH"])
+
+    def test_bar_of_the_previous_session_is_enough(self):
+        self.history(upto=7)
+        self.bars("SMH", DAYS[:6])                                   # 08-31 yes, 09-01 not yet fetched
+        self.assertEqual(dc.check("2026-09-01", self.base)["alarms"], [])
+
+    def test_no_check_on_a_non_trading_day(self):
+        self.history(upto=7)
+        for s in ("AAA", "BBB", "CCC", "DDD"):
+            self.write(s, "2026-09-05", _snap())                     # a Saturday
+        for s in dc.REFERENCE_SYMBOLS:
+            os.remove(os.path.join(self.ohlcv, f"{s}_daily.json"))
+        self.assertEqual(dc.check("2026-09-05", self.base)["alarms"], [])
 
 
 class TestDailyTaskBanner(unittest.TestCase):
