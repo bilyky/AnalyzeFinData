@@ -9,5 +9,6 @@ _DATA = Path(__file__).resolve().parent.parent / "Data"
 
 TRADE_DNA_FILE = _DATA / "trade_history_dna.json"        # closed trades + circuit-breaker triggers
 FAILURE_RULES_FILE = _DATA / "failure_dna_rules.json"    # retrospective_analyzer -> buy-time veto
+FAILURE_RULES_PROPOSED_FILE = _DATA / "failure_dna_rules_proposed.json"  # a --report-only run: not read by the game
 RETRO_REPORT_FILE = _DATA / "retrospective_report.txt"   # retrospective_analyzer human report
 PICK_LOG_FILE = _DATA / "pick_lists_log.jsonl"          # daily email pick lists -> aether/pick_eval scorecard
