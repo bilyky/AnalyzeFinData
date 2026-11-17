@@ -39,6 +39,32 @@ class ExtractTest(unittest.TestCase):
         text = "## A\n```bash\npython autonomous_pipeline.py\n```\n## B\n```bash\npython -c \"print(1)\"\n```\n"
         self.assertEqual([c.code for c in sr.extract_checks(text)], ["print(1)"])
 
+    def test_the_status_checks_only_read(self):
+        """They run unattended at 14:00 on PROD. A new block that writes or calls out is refused at
+        run time; this pins today's blocks so such a change shows up here first."""
+        checks = sr.extract_checks((_REPO / ".claude" / "commands" / "status.md").read_text(encoding="utf-8"))
+        self.assertEqual({c.label: sr.not_read_only(c.code) for c in checks}, {c.label: "" for c in checks})
+
+    def test_a_check_that_is_more_than_a_read_is_named(self):
+        for code, hit in [("from aether import etrade; etrade.get_quotes(['X'])", "etrade"),
+                          ("from ai_portfolio_game import get_live_prices", "get_live_prices"),
+                          ("import notify; notify.send_email('s', 'b')", "notify"),
+                          ("from aether.notify import x; x.send_email('s')", "notify"),
+                          ("send_email('s', 'b')", "send_email"),
+                          ("import subprocess; subprocess.run(['x'])", "subprocess"),
+                          ("import requests; requests.get('http://x')", "requests"),
+                          ("open('Data/x.json', 'w').write('{}')", "open('Data/x.json', 'w'"),
+                          ("open(p, mode='a+')", "open(p, mode='a+'"),
+                          ("import json; json.dump({}, f)", "json.dump("),
+                          ("import os; os.remove('x')", "os.remove"),
+                          ("wb.save('x.xlsx')", ".save(")]:
+            with self.subTest(code=code):
+                self.assertEqual(sr.not_read_only(code), hit)
+        for code in ("print(open('x.json').read())", "open('wax.json', 'r', encoding='utf-8')", "open(p, 'rb')",
+                     "import data_api"):
+            with self.subTest(code=code):
+                self.assertEqual(sr.not_read_only(code), "")
+
     def test_the_report_section_is_the_ai_instruction(self):
         self.assertIn("Flag any stale data", sr.report_instructions(
             (_REPO / ".claude" / "commands" / "status.md").read_text(encoding="utf-8")))
@@ -82,6 +108,15 @@ class RunnerTest(unittest.TestCase):
         _, _, step, _ = self._main(["--skill", "status", "--title", "t"], ok, rc=1)
         self.assertIn("FAILED (exit 1)", step.call_args.args[2])
         self.assertIn("err!", step.call_args.args[2])
+
+    def test_a_writing_check_is_refused_and_not_run(self):
+        skill = "# s\n## Safe\n```bash\npython -c \"print(1)\"\n```\n## Writes\n```bash\npython -c \"open('x','w')\"\n```\n"
+        ok = lambda name, system, user, **k: ai_step.StepResult("r", "groq", None)
+        with mock.patch.object(Path, "read_text", return_value=skill):
+            _, sp, step, _ = self._main(["--skill", "status", "--title", "t"], ok)
+        self.assertEqual(sp.call_count, 1)                     # only the safe block ran
+        self.assertEqual(sp.call_args.args[0][2], "print(1)")
+        self.assertIn("REFUSED, not run", step.call_args.args[2])
 
     def test_sessions_only_skips_weekends(self):
         code, sp, step, send = self._main(["--skill", "status", "--title", "t", "--sessions-only"], None,

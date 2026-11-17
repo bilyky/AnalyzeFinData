@@ -3,6 +3,10 @@
 Comprehensive overview of the system's operational and financial health.
 Run all checks below and report findings.
 
+**Scheduled:** AETHER_StatusReport runs this skill's `python -c` blocks unattended at 14:00 on PROD
+(`scripts/utils/skill_report.py`). Each block must only read: no broker calls, email, subprocesses,
+network calls or file writes. A block that mentions one is refused and reported, not run.
+
 ## Step 1 — Data freshness
 
 ```bash
