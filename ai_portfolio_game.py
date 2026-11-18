@@ -1464,21 +1464,6 @@ def run_daily_ai_management(force=False, manual_profile=None):
     """
     return runners.run_daily_management(force=force, manual_profile=manual_profile)
 
-def deduct_operational_costs(amount):
-    if amount <= 0: return
-    state = load_game()
-    state["balance"] -= amount
-    state["total_ops_cost"] = round(state.get("total_ops_cost", 0) + amount, 4)
-    state["history"].append({
-        "date": str(datetime.date.today()),
-        "type": "COST_DEDUCTION",
-        "symbol": "OPS",
-        "price": amount,
-        "details": "Token & API fees"
-    })
-    save_game(state)
-    _log.info(f"💸 AI Account debited ${round(amount, 4)} for operational costs.")
-
 def show_report():
     state = load_game()
     
@@ -1556,5 +1541,5 @@ if __name__ == "__main__":
                       "it today, or the state is busy (single-executor guard).")
     elif args.summary:
         send_daily_summary()
-    else:
+    else:  # --report, or no flag (watchdog.py runs `--report`)
         show_report()
