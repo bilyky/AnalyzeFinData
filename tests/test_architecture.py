@@ -3,10 +3,12 @@
 Static checks over the import statements of every module under aether/ (AST, nothing is
 imported or run):
 
-1. **No aether module imports a root application script** (ai_portfolio_game, data_api,
-   server, ...). Dependencies point from the scripts into the package, never back. Three
-   modules break this today; they are listed in ``KNOWN_ROOT_IMPORTS`` and must shrink:
-   the test fails both on a new violation and on a listed one that has been fixed.
+1. **No aether module imports root code**: any ``*.py`` at the repo root that is not a
+   ``sys.modules`` shim for an aether module (ai_portfolio_game, data_api, bar_provenance,
+   ...). The set is derived from the tree, so a new root script is covered automatically.
+   Dependencies point from the root into the package, never back. The imports that break
+   this today are listed in ``KNOWN_ROOT_IMPORTS`` and must shrink: the test fails both on
+   a new violation and on a listed one that has been fixed.
 2. **aether/core imports only the standard library and aether.core** (the kernel depends
    on nothing).
 3. **A service imports another service only through its ``api``**
@@ -14,7 +16,9 @@ imported or run):
 4. **A service's domain does no I/O**: it imports no adapter, no other aether I/O module
    and no I/O library.
 
-Each rule is also run on a small synthetic tree, so a broken checker cannot pass silently.
+Relative imports (``from ..x import y``) are resolved against the file's package and
+checked like absolute ones. Each rule is also run on a small synthetic tree, so a broken
+checker cannot pass silently.
 """
 import ast
 import sys
@@ -24,18 +28,18 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
 
-# Root application scripts: entry points and orchestrators that aether/ must never import.
-ROOT_APP_SCRIPTS = frozenset({
-    "ai_portfolio_game", "aether_oracle", "autonomous_pipeline", "daily_task", "data_api", "main",
-    "oceanview_api", "powergauge", "real_copilot", "run_history", "server", "watchdog", "workbook_read",
-})
-
-# Debt to pay down (each entry: module path, imported root script). Remove an entry when
+# Debt to pay down (each entry: module path, imported root module). Remove an entry when
 # its import is gone; the test fails if a listed import no longer exists.
 KNOWN_ROOT_IMPORTS = frozenset({
     ("aether/scenario/steps.py", "ai_portfolio_game"),   # _pkg(); goes with the scenario package (S9)
     ("aether/stock_compare.py", "data_api"),
     ("aether/workbook_write.py", "data_api"),
+    # bar_provenance and performance_tracker: small root libraries that belong under aether/.
+    ("aether/oceanview_context.py", "bar_provenance"),
+    ("aether/patterns.py", "bar_provenance"),
+    ("aether/pick_eval.py", "bar_provenance"),
+    ("aether/pick_eval.py", "performance_tracker"),
+    ("aether/risk_utils.py", "bar_provenance"),
 })
 
 # I/O that a service domain must not import (third-party, stdlib and aether I/O modules).
@@ -46,17 +50,29 @@ DOMAIN_FORBIDDEN = frozenset({
 })
 
 
-def _imports(path: Path):
-    """(lineno, absolute module name) for every import in the file, including nested ones."""
+def _imports(path: Path, rel: str):
+    """(lineno, absolute module name) for every import in the file, including nested ones.
+
+    ``rel`` is the file's repo-relative path; relative imports are resolved against it.
+    """
+    package = rel[:-3].split("/")[:-1]  # the module's package (for __init__.py: the package itself)
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield node.lineno, alias.name
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            yield node.lineno, node.module
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                base = package[:len(package) - (node.level - 1)] if node.level - 1 <= len(package) else []
+                module = ".".join(base + ([node.module] if node.module else []))
+            else:
+                module = node.module
+            if not module:
+                continue
+            if node.module:
+                yield node.lineno, module
             for alias in node.names:  # `from aether.services.x import api` imports aether.services.x.api
-                yield node.lineno, f"{node.module}.{alias.name}"
+                yield node.lineno, f"{module}.{alias.name}"
 
 
 def _modules(root: Path):
@@ -65,12 +81,23 @@ def _modules(root: Path):
             yield path.relative_to(root).as_posix(), path
 
 
+def root_modules(root: Path):
+    """Root-level modules aether/ must not import: every root *.py that isn't a shim.
+
+    A shim (``sys.modules[__name__] = aether.x``) only re-points an old name at an aether
+    module, so importing it is importing aether code.
+    """
+    return {p.stem for p in root.glob("*.py")
+            if "sys.modules[__name__]" not in p.read_text(encoding="utf-8", errors="replace")}
+
+
 def root_script_imports(root: Path):
+    roots = root_modules(root)
     found = set()
     for rel, path in _modules(root):
-        for _, mod in _imports(path):
+        for _, mod in _imports(path, rel):
             top = mod.split(".")[0]
-            if top in ROOT_APP_SCRIPTS:
+            if top in roots:
                 found.add((rel, top))
     return found
 
@@ -81,7 +108,7 @@ def core_violations(root: Path):
     for rel, path in _modules(root):
         if not rel.startswith("aether/core/"):
             continue
-        for line, mod in _imports(path):
+        for line, mod in _imports(path, rel):
             top = mod.split(".")[0]
             if mod == "aether.core" or mod.startswith("aether.core.") or top in stdlib or top == "__future__":
                 continue
@@ -101,7 +128,7 @@ def service_boundary_violations(root: Path):
         own = _service_of(rel)
         if own is None:
             continue
-        for line, mod in _imports(path):
+        for line, mod in _imports(path, rel):
             parts = mod.split(".")
             if parts[:2] != ["aether", "services"] or len(parts) < 3 or parts[2] == own:
                 continue
@@ -118,7 +145,7 @@ def domain_io_violations(root: Path):
         own = _service_of(rel)
         if own is None or "/domain/" not in rel:
             continue
-        for line, mod in _imports(path):
+        for line, mod in _imports(path, rel):
             hit = next((f for f in DOMAIN_FORBIDDEN if mod == f or mod.startswith(f + ".")), None)
             adapter = mod.startswith(f"aether.services.{own}.adapters")
             if (hit or adapter) and not any(b.startswith(f"{rel}:{line} ") for b in bad):  # one per line
@@ -156,11 +183,30 @@ def _tree(files):
 
 
 class TestCheckersCatchViolations(unittest.TestCase):
-    def test_root_script_import_is_found_even_inside_a_function(self):
-        d, root = _tree({"aether/x.py": "def f():\n    import ai_portfolio_game as g\n",
-                         "aether/y.py": "import data_api.sub\n", "aether/ok.py": "import json\n"})
+    def test_root_import_is_found_even_inside_a_function(self):
+        d, root = _tree({"ai_portfolio_game.py": "x = 1\n", "data_api.py": "x = 1\n", "new_tool.py": "x = 1\n",
+                         "risk_utils.py": "import sys\nimport aether.risk_utils as m\nsys.modules[__name__] = m\n",
+                         "aether/x.py": "def f():\n    import ai_portfolio_game as g\n",
+                         "aether/y.py": "import data_api.sub\nimport risk_utils\n",
+                         "aether/z.py": "from new_tool import thing\n", "aether/ok.py": "import json\n"})
         with d:
-            self.assertEqual(root_script_imports(root), {("aether/x.py", "ai_portfolio_game"), ("aether/y.py", "data_api")})
+            found = root_script_imports(root)
+        # A shim (risk_utils) is not root code; a brand-new root script (new_tool) is.
+        self.assertEqual(found, {("aether/x.py", "ai_portfolio_game"), ("aether/y.py", "data_api"),
+                                 ("aether/z.py", "new_tool")})
+
+    def test_relative_imports_are_checked_like_absolute_ones(self):
+        d, root = _tree({
+            "aether/core/x.py": "from .. import paths\n",
+            "aether/services/a/app.py": "from ..b.domain import model\n",
+            "aether/services/a/domain/m.py": "from ....notify import send\n",  # aether.notify
+            "aether/services/a/domain/ok.py": "from . import other\nfrom .other import y\n",
+        })
+        with d:
+            core, boundary, domain = core_violations(root), service_boundary_violations(root), domain_io_violations(root)
+        self.assertEqual(core, ["aether/core/x.py:1 imports aether.paths"])
+        self.assertEqual(boundary, ["aether/services/a/app.py:1 imports aether.services.b.domain (use aether.services.b.api)"])
+        self.assertEqual(domain, ["aether/services/a/domain/m.py:1 imports aether.notify (domain code does no I/O)"])
 
     def test_core_may_not_import_aether_or_third_party(self):
         d, root = _tree({"aether/core/a.py": "import datetime\nfrom aether.core.ids import PortfolioId\n",
