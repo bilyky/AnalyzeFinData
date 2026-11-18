@@ -205,6 +205,10 @@ import aether.oceanview_context as _oceanview_context
 (_lock_tmp / "oceanview").mkdir(exist_ok=True)
 _oceanview_context._default_data_dir = lambda: str(_lock_tmp / "oceanview")
 _run_guard._DATA_DIR = _lock_tmp
+# The data-health buy-freeze memory (Data/data_gate_memory.json) -> temp: the gate step writes it
+# on every trade run. Tests that need their own file pass a path.
+import aether.data_completeness as _data_completeness
+_data_completeness.gate_memory_file = lambda: str(_lock_tmp / _data_completeness.GATE_MEMORY_NAME)
 for _mod_name, _attrs in (("watchdog", ("WATCHDOG_LOCK_FILE", "SELF_HEAL_LOCK", "SELF_HEAL_PROMPT_FILE",
                                        "DATA_SENTINEL_FILE", "BACKUP_STATUS_FILE", "DATA_ALERT_MARKER",
                                        "PACK_STATUS_FILE", "SCHEDULER_AUDIT_STATE",

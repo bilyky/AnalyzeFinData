@@ -62,7 +62,10 @@ def screen_symbols(path: str | None = None) -> list:
         wb.close()
 
 
-DATA_GATE_KEY = "_data_gate_fields"   # game state: game-input fields that went empty (buy freeze memory)
+# Buy-freeze memory: the game-input fields that went empty and have not filled again. It lives in
+# this module's own file (gate_memory_file()), never in the portfolio state, which only the game writes.
+GATE_MEMORY_NAME = "data_gate_memory.json"
+LEGACY_STATE_KEY = "_data_gate_fields"   # where #288 first kept it, inside the game state; moved out on the next run
 # Snapshot fields the game's buy decisions read (field paths as built by fields()). Readers:
 # powergauge.PowerGauge (PGR Value / Corrected PGR Value, the four factor groups that give money
 # flow, OB/OS, LT trend and industry strength, metaInfo Last / signals / industry_name) and the
@@ -261,14 +264,29 @@ def html_banner(report: dict) -> str:
             f'<i>Check with: python -m aether.data_completeness --date {report.get("day")}</i></div>')
 
 
-def game_file() -> str:
-    return os.path.join(paths.data_dir(), "ai_portfolio_game.json")
+def gate_memory_file() -> str:
+    return os.path.join(paths.data_dir(), GATE_MEMORY_NAME)
 
 
 def remembered_fields(path: str | None = None) -> list:
     """The game-input fields the buy freeze still remembers as empty ([] when none or unreadable)."""
-    state = _read(path or game_file())
-    return list(state.get(DATA_GATE_KEY) or []) if isinstance(state, dict) else []
+    m = _read(path or gate_memory_file())
+    return [str(f) for f in (m.get("fields") or [])] if isinstance(m, dict) else []
+
+
+def save_remembered_fields(fields: list, path: str | None = None, now: datetime.datetime | None = None) -> None:
+    """Replace the remembered fields (atomic write). No file is written when nothing is remembered
+    and there is no file yet."""
+    path = path or gate_memory_file()
+    fields = sorted(set(fields))
+    if not fields and not os.path.exists(path):
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"fields": fields, "updated": (now or datetime.datetime.now()).isoformat(timespec="seconds")},
+                  f, indent=1)
+    os.replace(tmp, path)
 
 
 def frozen_alarm(path: str | None = None) -> str | None:
@@ -283,13 +301,11 @@ def frozen_alarm(path: str | None = None) -> str | None:
 
 
 def accept_fields(names: list, path: str | None = None, now: datetime.datetime | None = None) -> dict:
-    """Drop fields from the buy-freeze memory (the owner accepts they stay empty). Backs up the game
-    file to Data/Backup/<time>_pre_accept_fields first and replaces it atomically."""
-    path = path or game_file()
-    state = _read(path)
-    if not isinstance(state, dict):
-        return {"status": "error", "reason": f"cannot read {path}"}
-    before = list(state.get(DATA_GATE_KEY) or [])
+    """Drop fields from the buy-freeze memory (the owner accepts they stay empty). Edits only this
+    module's memory file, after copying it to Data/Backup/<time>_pre_accept_fields; the game file
+    is never touched."""
+    path = path or gate_memory_file()
+    before = remembered_fields(path)
     unknown = [n for n in names if n not in before]
     after = [f for f in before if f not in names]
     if after == before:
@@ -298,14 +314,7 @@ def accept_fields(names: list, path: str | None = None, now: datetime.datetime |
     bdir = os.path.join(os.path.dirname(path), "Backup", f"{stamp}_pre_accept_fields")
     os.makedirs(bdir, exist_ok=True)
     shutil.copy2(path, os.path.join(bdir, os.path.basename(path)))
-    if after:
-        state[DATA_GATE_KEY] = after
-    else:
-        state.pop(DATA_GATE_KEY, None)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
-    os.replace(tmp, path)
+    save_remembered_fields(after, path, now)
     return {"status": "updated", "remembered": after, "unknown": unknown, "backup": bdir}
 
 
@@ -313,7 +322,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--date", help="session to check (default: the latest with snapshots)")
     ap.add_argument("--accept-fields", help="comma-separated fields to drop from the buy-freeze memory "
-                    "(backs up the game file first)")
+                    "(edits only Data/data_gate_memory.json, after a backup)")
     a = ap.parse_args(argv)
     if a.accept_fields:
         r = accept_fields([x.strip() for x in a.accept_fields.split(",") if x.strip()])

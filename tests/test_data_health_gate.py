@@ -86,26 +86,56 @@ def report(gate=(), dropped=(), rates=None):
 
 
 class TestRemembered(unittest.TestCase):
+    """data_health_reasons is pure: memory in, (reasons, memory) out."""
+
     def test_outage_is_remembered_until_the_field_fills_again(self):
-        state = {}
-        first = steps.data_health_reasons(state, report(["44 fields went empty"], [FIELD], {FIELD: 0.0}))
-        self.assertEqual(first, ["44 fields went empty"])
-        self.assertEqual(state[dc.DATA_GATE_KEY], [FIELD])
+        first, mem = steps.data_health_reasons(report(["44 fields went empty"], [FIELD], {FIELD: 0.0}), [])
+        self.assertEqual((first, mem), (["44 fields went empty"], [FIELD]))
         # a week later the check's own baseline has adapted: no alarm, but the field is still empty
-        later = steps.data_health_reasons(state, report(rates={FIELD: 0.0}))
+        later, mem = steps.data_health_reasons(report(rates={FIELD: 0.0}), mem)
         self.assertEqual(len(later), 1)
         self.assertIn("still empty since their outage", later[0])
-        # filled again: freeze lifts and the memory is cleared
-        self.assertEqual(steps.data_health_reasons(state, report(rates={FIELD: dc.USUAL_FILL})), [])
-        self.assertNotIn(dc.DATA_GATE_KEY, state)
+        self.assertEqual(mem, [FIELD])
+        # filled again: freeze lifts and the memory is empty
+        self.assertEqual(steps.data_health_reasons(report(rates={FIELD: dc.USUAL_FILL}), mem), ([], []))
 
     def test_a_clean_day_without_memory_is_fine(self):
-        state = {}
-        self.assertEqual(steps.data_health_reasons(state, report(rates={FIELD: 1.0})), [])
-        self.assertEqual(state, {})
+        self.assertEqual(steps.data_health_reasons(report(rates={FIELD: 1.0}), []), ([], []))
 
 
 class TestGateStep(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.mem = os.path.join(self._tmp.name, dc.GATE_MEMORY_NAME)
+        p = mock.patch.object(dc, "gate_memory_file", return_value=self.mem)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_the_memory_goes_to_its_own_file_not_the_state(self):
+        state, _ = self.run_gate(report(["44 fields went empty"], [FIELD]))
+        self.assertEqual(dc.remembered_fields(), [FIELD])
+        self.assertNotIn(dc.LEGACY_STATE_KEY, state)
+        self.run_gate(report(rates={FIELD: 1.0}))                    # filled again: file emptied
+        self.assertEqual(dc.remembered_fields(), [])
+
+    def test_a_clean_run_writes_no_file(self):
+        self.run_gate(report(rates={FIELD: 1.0}))
+        self.assertFalse(os.path.exists(self.mem))
+
+    def test_a_legacy_state_key_moves_to_the_file(self):
+        state, out = self.run_gate(report(rates={FIELD: 0.0}), state={dc.LEGACY_STATE_KEY: [FIELD]})
+        self.assertEqual(dc.remembered_fields(), [FIELD])
+        self.assertNotIn(dc.LEGACY_STATE_KEY, state)
+        self.assertIn("still empty since their outage", state[circuit_breaker.FREEZE_KEY])
+        self.assertEqual([q["type"] for q in out], ["SELL"])
+
+    def test_a_failed_save_keeps_the_legacy_key(self):
+        with mock.patch.object(dc, "save_remembered_fields", side_effect=OSError("disk")):
+            state, _ = self.run_gate(report(rates={FIELD: 0.0}), state={dc.LEGACY_STATE_KEY: [FIELD]})
+        self.assertEqual(state[dc.LEGACY_STATE_KEY], [FIELD])
+        self.assertIn("check failed", state[circuit_breaker.FREEZE_KEY])
+
     def run_gate(self, rep=None, force=False, state=None, exc=None):
         state = state if state is not None else {}
         kw = {"side_effect": exc} if exc else {"return_value": rep}
@@ -142,55 +172,61 @@ class TestGateStep(unittest.TestCase):
 
 
 class TestReleaseAndNotice(unittest.TestCase):
-    """The memory must never hold buys silently or forever (PR #288 review)."""
+    """The memory must never hold buys silently or forever (PR #288 review). It lives in its own
+    file: releasing a field never touches the game file (one writer for the portfolio state)."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
-        self.path = os.path.join(self._tmp.name, "ai_portfolio_game.json")
-        with open(self.path, "w", encoding="utf-8") as f:
-            json.dump({"balance": 1.0, dc.DATA_GATE_KEY: [FIELD, "pgr.Earnings"]}, f)
+        self.path = os.path.join(self._tmp.name, dc.GATE_MEMORY_NAME)
+        self.game = os.path.join(self._tmp.name, "ai_portfolio_game.json")
+        with open(self.game, "w", encoding="utf-8") as f:
+            json.dump({"balance": 1.0}, f, indent=4)
+        dc.save_remembered_fields([FIELD, "pgr.Earnings"], self.path)
 
     def tearDown(self):
         self._tmp.cleanup()
-
-    def _state(self):
-        with open(self.path, encoding="utf-8") as f:
-            return json.load(f)
 
     def test_frozen_alarm_names_the_fields_and_the_release_command(self):
         a = dc.frozen_alarm(self.path)
         self.assertIn("New buys frozen: 2 game-input fields", a)
         self.assertIn("--accept-fields", a)
         os.remove(self.path)
-        self.assertIsNone(dc.frozen_alarm(self.path))                # unreadable: no line, no crash
+        self.assertIsNone(dc.frozen_alarm(self.path))                # no file: no line, no crash
 
     def test_accept_fields_backs_up_then_releases(self):
+        with open(self.game, "rb") as f:
+            game_before = f.read()
         r = dc.accept_fields([FIELD, "pgr.nope"], self.path, now=datetime.datetime(2026, 11, 18, 7, 0, 0))
         self.assertEqual((r["status"], r["remembered"], r["unknown"]), ("updated", ["pgr.Earnings"], ["pgr.nope"]))
-        backup = os.path.join(self._tmp.name, "Backup", "20261118_070000_pre_accept_fields", "ai_portfolio_game.json")
-        with open(backup, encoding="utf-8") as f:
-            self.assertEqual(json.load(f)[dc.DATA_GATE_KEY], [FIELD, "pgr.Earnings"])   # the old file, intact
-        self.assertEqual(self._state()[dc.DATA_GATE_KEY], ["pgr.Earnings"])
+        backup = os.path.join(self._tmp.name, "Backup", "20261118_070000_pre_accept_fields", dc.GATE_MEMORY_NAME)
+        self.assertEqual(dc.remembered_fields(backup), sorted([FIELD, "pgr.Earnings"]))   # the old file, intact
+        self.assertEqual(dc.remembered_fields(self.path), ["pgr.Earnings"])
         dc.accept_fields(["pgr.Earnings"], self.path)
-        self.assertNotIn(dc.DATA_GATE_KEY, self._state())
-        self.assertEqual(self._state()["balance"], 1.0)
+        self.assertEqual(dc.remembered_fields(self.path), [])
         self.assertEqual(dc.accept_fields(["x"], self.path)["status"], "unchanged")
+        with open(self.game, "rb") as f:
+            self.assertEqual(f.read(), game_before)                  # the game file is never touched
 
     def test_accepting_the_second_field_keeps_the_first(self):
-        r = dc.accept_fields(["pgr.Earnings"], self.path)                 # the second of two
-        self.assertEqual(r["remembered"], [FIELD])
-        self.assertEqual(self._state()[dc.DATA_GATE_KEY], [FIELD])
+        first, second = dc.remembered_fields(self.path)
+        r = dc.accept_fields([second], self.path)
+        self.assertEqual(r["remembered"], [first])
+        self.assertEqual(dc.remembered_fields(self.path), [first])
 
     def test_cli_accept_fields(self):
-        with mock.patch.object(dc, "game_file", return_value=self.path), mock.patch.object(dc.sys, "stdout"):
+        with mock.patch.object(dc, "gate_memory_file", return_value=self.path), mock.patch.object(dc.sys, "stdout"):
             self.assertEqual(dc.main(["--accept-fields", FIELD]), 0)
-        self.assertEqual(self._state()[dc.DATA_GATE_KEY], ["pgr.Earnings"])
+        self.assertEqual(dc.remembered_fields(self.path), ["pgr.Earnings"])
+
+    def test_the_suite_never_uses_the_real_memory_file(self):
+        real = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Data")
+        self.assertFalse(os.path.abspath(dc.gate_memory_file()).startswith(os.path.abspath(real)))
 
     def test_evening_banner_shows_the_freeze(self):
         clean = {"day": "2026-11-16", "alarms": [], "notes": []}
         with mock.patch.object(daily_task.data_completeness, "check", return_value=clean), \
                 mock.patch.object(daily_task, "get_symbols_from_xls", return_value=[]), \
-                mock.patch.object(daily_task.data_completeness, "game_file", return_value=self.path):
+                mock.patch.object(daily_task.data_completeness, "gate_memory_file", return_value=self.path):
             html = daily_task._data_completeness_banner("2026-11-16")
         self.assertIn("New buys frozen", html)
 
@@ -211,14 +247,14 @@ class TestOutageReplay(Base):
             self.bars(s, DAYS + ["2026-09-02", "2026-09-03"])
         for d in DAYS[:6]:
             self._day(d, True, True)
-        state = {}
         self._day("2026-09-01", False, False)                  # outage: factors and power_bar empty
-        self.assertTrue(steps.data_health_reasons(state, dc.check("2026-09-01", self.base)))
+        reasons, mem = steps.data_health_reasons(dc.check("2026-09-01", self.base), [])
+        self.assertTrue(reasons)
         self._day("2026-09-02", False, False)
-        self.assertTrue(steps.data_health_reasons(state, dc.check("2026-09-02", self.base)))
+        reasons, mem = steps.data_health_reasons(dc.check("2026-09-02", self.base), mem)
+        self.assertTrue(reasons)
         self._day("2026-09-03", True, False)                   # factors back, power_bar gone for good
-        self.assertEqual(steps.data_health_reasons(state, dc.check("2026-09-03", self.base)), [])
-        self.assertNotIn(dc.DATA_GATE_KEY, state)
+        self.assertEqual(steps.data_health_reasons(dc.check("2026-09-03", self.base), mem), ([], []))
 
 
 if __name__ == "__main__":

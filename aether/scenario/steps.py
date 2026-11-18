@@ -272,29 +272,28 @@ def apply_preflight_gate(state, queued, today, force):
     return [q for q in queued if q.get("type") != "BUY"]
 
 
-def data_health_reasons(state, report) -> list:
-    """Why today's inputs are not fit to buy on (empty list = fine). Updates the remembered fields.
+def data_health_reasons(report, remembered) -> tuple:
+    """Why today's inputs are not fit to buy on, and the fields to remember. Pure: returns
+    ``(reasons, fields)``; an empty ``reasons`` means fine.
 
-    ``report`` is :func:`aether.data_completeness.check` for the latest snapshot day. A field that
-    went empty (only fields the game reads, ``data_completeness.GAME_INPUT_FIELDS``) is remembered in
-    ``state[data_completeness.DATA_GATE_KEY]`` and keeps the freeze on until its fill rate is back to
-    ``data_completeness.USUAL_FILL`` or the owner releases it (``--accept-fields``): the check itself compares with the last 10 sessions,
-    so after about a week an outage becomes the new normal and its alarm stops (2026-09-01..09-09
-    alarmed, 09-10 onward silent while the fields stayed empty until 11-05).
+    ``report`` is :func:`aether.data_completeness.check` for the latest snapshot day; ``remembered`` is
+    the memory so far (``data_completeness.remembered_fields()``). A field that went empty (only fields
+    the game reads, ``data_completeness.GAME_INPUT_FIELDS``) stays in the memory and keeps the freeze on
+    until its fill rate is back to ``data_completeness.USUAL_FILL`` or the owner releases it
+    (``--accept-fields``): the check itself compares with the last 10 sessions, so after about a week an
+    outage becomes the new normal and its alarm stops (2026-09-01..09-09 alarmed, 09-10 onward silent
+    while the fields stayed empty until 11-05).
     """
     rates = report.get("fill_rates") or {}
-    remembered = [f for f in state.get(data_completeness.DATA_GATE_KEY, []) if rates.get(f, 0.0) < data_completeness.USUAL_FILL]
-    fields = sorted(set(remembered) | set(report.get("dropped_fields") or []))
-    if fields:
-        state[data_completeness.DATA_GATE_KEY] = fields
-    else:
-        state.pop(data_completeness.DATA_GATE_KEY, None)
+    dropped = report.get("dropped_fields") or []
+    kept = [f for f in remembered if rates.get(f, 0.0) < data_completeness.USUAL_FILL]
+    fields = sorted(set(kept) | set(dropped))
     reasons = list(report.get("gate") or [])
-    still = [f for f in remembered if f not in (report.get("dropped_fields") or [])]
+    still = [f for f in kept if f not in dropped]
     if still:
         reasons.append(f"{len(still)} game-input fields still empty since their outage: {', '.join(still[:6])}"
                        + (" ..." if len(still) > 6 else ""))
-    return reasons
+    return reasons, fields
 
 
 def apply_data_health_gate(state, queued, force):
@@ -309,7 +308,14 @@ def apply_data_health_gate(state, queued, force):
     """
     game = _pkg()
     try:
-        reasons = data_health_reasons(state, data_completeness.check())
+        # The memory is data_completeness's file, not the portfolio state. A state saved by the first
+        # #288 build may still carry it: move it over once (save_game then drops the key).
+        legacy = state.get(data_completeness.LEGACY_STATE_KEY) or []
+        stored = data_completeness.remembered_fields()
+        reasons, fields = data_health_reasons(data_completeness.check(), sorted(set(stored) | set(legacy)))
+        if fields != stored:
+            data_completeness.save_remembered_fields(fields)
+        state.pop(data_completeness.LEGACY_STATE_KEY, None)   # only once the file holds it
     except Exception as e:                      # the check could not run: we do not know the data is sound
         reasons = [f"data-completeness check failed: {type(e).__name__}: {e}"]
     if not reasons:
