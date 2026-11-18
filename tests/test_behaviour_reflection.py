@@ -15,6 +15,7 @@ import datetime
 import json
 import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -194,14 +195,12 @@ class RetrospectiveFixesTest(unittest.TestCase):
 
     def test_a_failing_reflection_is_one_line_not_a_lost_report(self):
         """PR #289 review: an exception in reflect() must not stop the weekly report."""
-        path = os.path.join(os.environ["TEMP"] if "TEMP" in os.environ else ".", "_beh_ledger_test.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({"history": [{"date": "2026-10-01", "type": "SELL", "symbol": "X", "price": 1.0}]}, f)
-        try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ai_portfolio_game.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"history": [{"date": "2026-10-01", "type": "SELL", "symbol": "X", "price": 1.0}]}, f)
             with mock.patch.object(ra.behaviour_reflection, "reflect", side_effect=ValueError("bad qty")):
                 out = ra.behaviour_section(game_file=path)
-        finally:
-            os.remove(path)
         self.assertEqual(out, ["BEHAVIOUR REFLECTION: failed (ValueError: bad qty)."])
 
 
