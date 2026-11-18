@@ -149,7 +149,11 @@ def check_failure_rules(symbol, pgr, score, z_score, industry, s10=0.0) -> tuple
                 return True, reason
 
             # 3. Z-Score Match
-            if field == "z_score" and condition == "greater_than_2.5" and z_score > 2.5:
+            # retrospective_analyzer writes "greater_equal_2.5" (it counts z >= 2.5); older rule
+            # files said "greater_than_2.5". Before this, the analyzer's rule never matched.
+            if field == "z_score" and (
+                    (condition == "greater_equal_2.5" and z_score >= 2.5)
+                    or (condition == "greater_than_2.5" and z_score > 2.5)):
                 return True, reason
     except Exception as e:
         _log.warning(f"Failed to evaluate failure rules: {e}")
