@@ -21,9 +21,14 @@ dict); the study captures that dict and scores it once per variant with scoring.
 Digit-sum stays off (compute_br's study default: its index is in-sample).
 
 Picks. For each day, candidates = rows with setup_ok True (the game only buys active-setup rows) and
-that variant's short score >= 2.0 (AGGRESSIVE min_score_threshold). Picks = the top 6 by short score,
+that variant's short score (S10) >= 2.0. Picks = the top 6 by short score,
 ties broken by symbol (ascending). Picks are chosen before outcomes are looked at; a pick with no
 outcome (missing forward bars) is dropped from the means and counted.
+Correction after the run (2026-11-18, review of PR #291; wording only, no code change): the 2.0 cut
+here is on S10 alone. The live game gates on S10+L60 >= min_score_threshold (steps.py total_score)
+with its own adaptive S10 floor, so this replay asks "does the waiver change make an S10-ranked top 6
+worse?", which is close to but not the live selector. A live-like selector would be a new,
+separately pre-registered study.
 
 Outcome (lesson #85: never feature and outcome from the same price). From split-adjusted, real
 (non-placeholder) bars via position_watch.bars_from_series: t+1 = the first bar after the snapshot
