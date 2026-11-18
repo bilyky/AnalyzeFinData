@@ -96,8 +96,9 @@ adapters. An **architecture test** (an import-linter-style AST check) fails the 
 
 ### Composition root
 `aether/bootstrap.py` builds the adapters from config (JSON or DB, real or fake) and wires them
-into each service's `app`. The CLI and `server.py` call `bootstrap` once. Tests call
-`bootstrap(test=True)` with fakes. This replaces the `_pkg()` call-time lookups.
+into each service's `app`. The CLI and `server.py` call `bootstrap()` once. Tests pass their fakes in,
+for example `bootstrap(clock=FixedClock(...))`; each service adds its own keyword (a repository, a price
+feed, ...) as it lands. This replaces the `_pkg()` call-time lookups.
 
 ## Domain model (well-known patterns, with the reason for each)
 
@@ -243,7 +244,7 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
 ## Testing and engineering practices
 - **Test pyramid:**
   - pure domain unit tests on real numbers (no mocks);
-  - application tests with in-memory fakes from `bootstrap(test=True)`;
+  - application tests with in-memory fakes passed to `bootstrap(...)`;
   - adapter tests (JSON in a temp dir; SQL via SQLAlchemy on SQLite in-memory, plus PostgreSQL
     behind `AETHER_LIVE_TESTS`);
   - **repository contract tests** run against every adapter;

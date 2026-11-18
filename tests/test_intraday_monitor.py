@@ -174,6 +174,33 @@ class TestBreachIsEmailedOnce(unittest.TestCase):
         ai.assert_called_once_with("TT", 90.0, 100.0)
         self.assertNotIn("out of date", send.call_args.args[1])
 
+    def test_a_symbol_listed_twice_is_emailed_once(self):
+        """PROD 11-14..16: one name on two rows, the price between the two stops. Old code: breach by
+        the higher-stop row, 'recovered' by the lower-stop row, so an email every other run."""
+        rows = [{"symbol": "XX", "stop": 7}, {"symbol": "AA", "stop": 10}, {"symbol": "XX", "stop": 5.21}]
+        saved, sends = {"last_breached": {}}, []
+        for _ in range(4):
+            out = {}
+            with mock.patch.object(monitor, "load_state", return_value=saved), \
+                    mock.patch.object(monitor, "save_state", side_effect=out.update), \
+                    mock.patch.object(monitor, "get_monitored_positions", return_value=rows), \
+                    mock.patch.object(monitor, "get_live_prices", return_value={"XX": 5.755, "AA": 11}), \
+                    mock.patch.object(monitor, "generate_ai_analysis", return_value="AI"), \
+                    mock.patch("notify.send_email") as send:
+                monitor.monitor()
+            sends.append(send.call_count)
+            saved = out
+        self.assertEqual(sends, [1, 0, 0, 0])
+        self.assertEqual(saved["alerted"], {"XX": {"stop": 7, "price": 5.755}})
+
+    def test_one_stop_per_symbol_keeps_the_highest_and_says_so(self):
+        rows = [{"symbol": "XX", "stop": 5.21}, {"symbol": "AA", "stop": 10}, {"symbol": "XX", "stop": 7}]
+        with self.assertLogs("aether.monitor", level="WARNING") as logs:
+            self.assertEqual(monitor.one_stop_per_symbol(rows), [{"symbol": "XX", "stop": 7}, {"symbol": "AA", "stop": 10}])
+        self.assertIn("XX 7", logs.output[0])
+        with self.assertNoLogs("aether.monitor", level="WARNING"):
+            self.assertEqual(monitor.one_stop_per_symbol(rows[1:2]), rows[1:2])
+
     def test_a_sold_name_is_forgotten(self):
         # GONE is no longer in the workbook (sold): it leaves the alerted memory even though no
         # quote says it recovered, so a later re-buy that breaches alerts again.
