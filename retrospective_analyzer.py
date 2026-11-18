@@ -15,11 +15,50 @@ rules. The live rules change which buys the game rejects, so only a run by hand 
 import argparse
 import json
 import datetime
+from pathlib import Path
+
 import circuit_breaker
-from aether import ledgers
+from aether import behaviour_reflection, decision_eval, ledgers
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("retrospective")
+
+# The paper game's ledger (read only). The test harness points GAME_FILE at a temp file.
+GAME_FILE = Path(__file__).resolve().parent / "Data" / "ai_portfolio_game.json"
+
+
+def win_loss_split(trades: list) -> tuple:
+    """(winners, flat, losers) by pnl_pct: > 0, == 0, < 0. A flat trade is not a win."""
+    winners = [t for t in trades if t.get("pnl_pct", 0.0) > 0.0]
+    flat = [t for t in trades if t.get("pnl_pct", 0.0) == 0.0]
+    losers = [t for t in trades if t.get("pnl_pct", 0.0) < 0.0]
+    return winners, flat, losers
+
+
+def breaker_lines(triggers: list, shown: int = 5) -> list:
+    """The circuit-breaker trigger lines: the last ``shown`` of N, labelled as such."""
+    out = [f"  - Total Systemic Crash Circuit Breaker Triggers: {len(triggers)}"]
+    if triggers:
+        if len(triggers) > shown:
+            out.append(f"    Last {shown} of {len(triggers)}:")
+        for i, trig in enumerate(triggers[-shown:], 1):
+            out.append(f"    {i}. {trig.get('date')} {trig.get('time')} -> Reason: {trig.get('reason')} "
+                       f"(SPY: {trig.get('spy_return_pct'):+.2f}%, VXX: {trig.get('vxx_return_pct'):+.1f}%)")
+    return out
+
+
+def behaviour_section(game_file=None, decision_log=None) -> list:
+    """The Behaviour reflection lines from the game ledger, the decision log and the OHLCV cache."""
+    try:
+        with open(game_file or GAME_FILE, "r", encoding="utf-8") as f:
+            history = json.load(f).get("history", [])
+    except (OSError, ValueError, AttributeError) as e:
+        return ["BEHAVIOUR REFLECTION: the game ledger could not be read (" + type(e).__name__ + ")."]
+    cache = {}
+    result = behaviour_reflection.reflect(
+        history, lambda sym: behaviour_reflection.load_closes(sym, cache),
+        behaviour_reflection.load_closes("SPY", cache), decision_eval.read_log(decision_log))
+    return behaviour_reflection.render(result)
 
 def _read_rules(path) -> list:
     try:
@@ -67,19 +106,22 @@ def analyze(report_only: bool = False):
     if total_completed == 0:
         _log.warning("Empty completed trade list. Moving directly to Circuit Breaker audit.")
         winners = []
+        flat = []
         losers = []
         win_count = 0
         loss_count = 0
         win_rate = 0.0
     else:
-        winners = [t for t in completed_trades if t.get("pnl_pct", 0.0) >= 0.0]
-        losers = [t for t in completed_trades if t.get("pnl_pct", 0.0) < 0.0]
+        winners, flat, losers = win_loss_split(completed_trades)
 
         win_count = len(winners)
         loss_count = len(losers)
         win_rate = round((win_count / total_completed) * 100, 2)
 
-    _log.info(f"Winners: {win_count} | Losers: {loss_count} | Win Rate: {win_rate}%")
+    _log.info(f"Winners: {win_count} | Flat: {len(flat)} | Losers: {loss_count} | Win Rate: {win_rate}%")
+    # The toxic-pattern rates below have always counted flat trades with the winners (the
+    # old >= 0 split). Keep that so the proposed rules do not change with the count fix.
+    non_losers = winners + flat
 
     # --- 🔬 Statistical Toxic Pattern Clustering ---
     toxic_rules = []
@@ -88,7 +130,7 @@ def analyze(report_only: bool = False):
     if total_completed > 0:
         # 1. Bearish PGR Rating Check
         bearish_losses = [t for t in losers if str(t.get("buy_dna", {}).get("pgr", "")).startswith("Be")]
-        bearish_winners = [t for t in winners if str(t.get("buy_dna", {}).get("pgr", "")).startswith("Be")]
+        bearish_winners = [t for t in non_losers if str(t.get("buy_dna", {}).get("pgr", "")).startswith("Be")]
         total_bearish = len(bearish_losses) + len(bearish_winners)
         if total_bearish >= 3:
             bearish_loss_rate = round((len(bearish_losses) / total_bearish) * 100, 2)
@@ -103,7 +145,7 @@ def analyze(report_only: bool = False):
 
         # 2. Low Combined Score Check
         low_score_losses = [t for t in losers if float(t.get("buy_dna", {}).get("score", 0.0)) < 5.0]
-        low_score_winners = [t for t in winners if float(t.get("buy_dna", {}).get("score", 0.0)) < 5.0]
+        low_score_winners = [t for t in non_losers if float(t.get("buy_dna", {}).get("score", 0.0)) < 5.0]
         total_low_score = len(low_score_losses) + len(low_score_winners)
         if total_low_score >= 3:
             low_score_loss_rate = round((len(low_score_losses) / total_low_score) * 100, 2)
@@ -118,7 +160,7 @@ def analyze(report_only: bool = False):
 
         # 3. High Bubble Z-Score Check
         high_z_losses = [t for t in losers if float(t.get("buy_dna", {}).get("z_score") or 0.0) >= 2.5]
-        high_z_winners = [t for t in winners if float(t.get("buy_dna", {}).get("z_score") or 0.0) >= 2.5]
+        high_z_winners = [t for t in non_losers if float(t.get("buy_dna", {}).get("z_score") or 0.0) >= 2.5]
         total_high_z = len(high_z_losses) + len(high_z_winners)
         if total_high_z >= 3:
             high_z_loss_rate = round((len(high_z_losses) / total_high_z) * 100, 2)
@@ -150,11 +192,7 @@ def analyze(report_only: bool = False):
     breaker_audit.append("======================================================================")
     breaker_audit.append("🛡️ CIRCUIT BREAKER SYSTEMIC GAP AUDIT (Design-Vulnerability Audit):")
     
-    total_triggers = len(breaker_triggers)
-    breaker_audit.append(f"  - Total Systemic Crash Circuit Breaker Triggers: {total_triggers}")
-    if total_triggers > 0:
-        for i, trig in enumerate(breaker_triggers[-5:], 1):
-            breaker_audit.append(f"    {i}. {trig.get('date')} {trig.get('time')} -> Reason: {trig.get('reason')} (SPY: {trig.get('spy_return_pct'):+.2f}%, VXX: {trig.get('vxx_return_pct'):+.1f}%)")
+    breaker_audit.extend(breaker_lines(breaker_triggers))
             
     near_misses = []
     spy_series = circuit_breaker.load_spy_history()
@@ -196,6 +234,7 @@ def analyze(report_only: bool = False):
     report.append(f"  - Total Paired Completed Trades: {total_completed}")
     report.append(f"  - Winning Trades: {win_count}")
     report.append(f"  - Losing Trades:  {loss_count}")
+    report.append(f"  - Flat Trades (0.00%, not counted as wins): {len(flat)}")
     report.append(f"  - Realised Win-Rate:   {win_rate}%")
     report.append("")
     
@@ -231,6 +270,9 @@ def analyze(report_only: bool = False):
             high_score_win_rate = round((len(high_score_wins) / total_high_score) * 100, 2)
             report.append(f"  🟢 Buying Strong Combined Score (>= 9.5): {len(high_score_wins)} wins, {len(high_score_losses)} losses ({high_score_win_rate}% win rate)")
 
+    report.append("")
+    report.append("======================================================================")
+    report.extend(behaviour_section())
     report.append("")
     report.append("======================================================================")
     report.append("📋 HISTORICAL COMPLETED TRADE LOG (Chronological):")

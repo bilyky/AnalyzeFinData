@@ -623,7 +623,8 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                     "l60": buy.get("l60", 0.0),
                     "score": buy.get("total", 0.0),
                     "z_score": z_score,
-                    "industry": buy.get("industry", "Unknown")
+                    "industry": buy.get("industry", "Unknown"),
+                    "setup": buy.get("setup"),     # Setup flag at entry (retrospective DNA)
                 }
             }
             tx = {"date": today, "time": now_time, "type": "BUY", "symbol": buy["sym"], "price": buy["price"], "qty": qty}
