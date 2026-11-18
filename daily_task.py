@@ -8,8 +8,6 @@ import sys
 import traceback
 from pathlib import Path
 
-import openpyxl
-
 import notify
 from aether import data_completeness, oceanview_context, paths, pick_eval, pick_lists
 import powergauge
@@ -158,27 +156,13 @@ def _add_data_banner(html: str, subject: str, today) -> tuple[str, str]:
 
 
 def get_symbols_from_xls():
-    wb = None
+    """The Research-sheet symbols of the root workbook (one reader, shared with the
+    data_completeness CLI so it checks the same screen as the evening email)."""
     try:
-        # We read from the ROOT folder file
-        src_path = BASE_DIR / "state_of_the_day.xlsx"
-        wb = openpyxl.load_workbook(src_path, data_only=True, read_only=True)
-        ws = wb['Research']
-        symbols = []
-        for row in ws.iter_rows(min_row=2):
-            val = row[3].value
-            if val:
-                symbols.append(str(val))
-        return symbols
+        return data_completeness.screen_symbols(str(BASE_DIR / "state_of_the_day.xlsx"))
     except Exception as e:
         _log.error(f"Error reading symbols from XLS: {e}")
         return []
-    finally:
-        if wb:
-            try:
-                wb.close()
-            except Exception:
-                pass
 
 def get_all_data(date):
     # Dynamic import to use existing logic
