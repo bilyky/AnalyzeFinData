@@ -23,6 +23,16 @@ only one step was tracked; another fell in the seam between two R&D items, owned
 reference was one-way. Fix in the same PR: extend an existing item to own the orphan and add links both
 ways.
 
+**Correct and green, but against the target architecture — PR #288 (missed, then caught).** The
+data-health freeze stored its memory (`_data_gate_fields`) as a key inside the game state, and its
+`--accept-fields` command opened `Data/ai_portfolio_game.json` itself, wrote it with its own backup
+folder and its own JSON indent, and found it through its own path helper. Up to then `save_game` was
+the only writer of that file, and the plan puts every write behind `PortfolioRepository` +
+`UnitOfWork`. The first reviews checked behaviour, tests and risk only and filed the path and indent
+as FYIs, so the PR merged with a second writer of portfolio state. Rule since then (skill §3, target
+architecture): a second writer of state, or one module's data inside another's state, is a 🟠 and
+blocks the merge.
+
 **Copy drift in a strangler-fig stage — PRs #136 / #138.** #138 added `decide_exits` as a verbatim copy
 of the root SELL loop. #136 then changed the root loop to return `{symbol: reason}`; the copy kept
 returning a list and its isolated tests stayed green. A normalized line diff of stage vs root (strip
@@ -163,6 +173,16 @@ Docs drift between PRs even when each review was careful. After a batch lands:
 5. Land the fixes as one docs PR from a fresh branch off latest `main`.
 
 ## H. This repo's architecture seams (for the skill's "Architecture fit")
+
+**Target (R&D #78, approved 2026-11-05):** modular services (`market_data`, `research`,
+`portfolio`, `trading`, `reporting`, `ledger`), each with `api` / `app` / `domain` / `ports` /
+`adapters`; a shared kernel in `aether/core`; a composition root in `aether/bootstrap.py`; portfolio
+state behind `PortfolioRepository` + `UnitOfWork` (JSON today, SQL later, one contract test suite);
+side effects as domain events with one writer each. Source: `plans/aether-services.md`; step status:
+`plans/aether-services-progress.json`; enforced in part by `tests/test_architecture.py`. Review new
+code against this target, and against the seams below that exist today.
+
+**Today:**
 
 AETHER is a modular monolith. Its seams: ports & adapters around external dependencies (the E\*TRADE
 `store` and `make_etrade_store()`); a strangler-fig extraction `ai_portfolio_game.py →
