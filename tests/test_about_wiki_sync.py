@@ -57,6 +57,20 @@ class AboutWikiSyncTest(unittest.TestCase):
         orphans = sorted(wiki - cards)
         self.assertEqual(orphans, [], f"wiki entries with no About card: {orphans}")
 
+    def test_text_fields_have_no_html(self):
+        # app.js shows title, origin and config as plain text (esc / textContent), so an entity or
+        # a tag there is printed literally (e.g. "&amp;"). summary and body are HTML and may use them.
+        html = re.compile(r"&[a-z]+;|&#\d+;|<[a-z/][^>]*>", re.I)
+        bad = []
+        for key, e in _wiki().items():
+            for field in ("title", "origin"):
+                if html.search(str(e.get(field, ""))):
+                    bad.append(f"{key}.{field}")
+            for i, line in enumerate(e.get("config") or []):
+                if html.search(str(line)):
+                    bad.append(f"{key}.config[{i}]")
+        self.assertEqual(bad, [], "HTML in a plain-text wiki field (shown literally): " + ", ".join(bad))
+
     def test_every_entry_has_summary_and_title(self):
         wiki = _wiki()
         no_summary = sorted(k for k, v in wiki.items() if not str(v.get("summary", "")).strip())
