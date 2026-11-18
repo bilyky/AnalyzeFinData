@@ -658,12 +658,15 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str,
 
 
 # The authorize URL carries the consumer key and the request token (and a page error can quote it).
-_AUTH_SECRET_QS = _re.compile(r"((?:key|token|oauth_[a-z_]+|verifier|password|pwd)=)[^&\s'\"]+", _re.I)
+# Values after "=" or ":", bare or quoted: query strings, OAuth headers (oauth_token="..."), dict reprs.
+_AUTH_SECRET_QS = _re.compile(
+    r"((?:key|token|oauth_[a-z_]+|verifier|password|pwd)['\"]?\s*[=:]\s*['\"]?)[^&\s'\",}]+", _re.I)
 
 
 def _redact_auth_text(text) -> str:
-    """An exception text safe to log: auth query values masked, cut to 300 characters."""
-    return _AUTH_SECRET_QS.sub(r"\1<redacted>", str(text))[:300]
+    """An exception text safe to log: on one line (a Playwright error spans several), auth values
+    masked, cut to 300 characters."""
+    return _AUTH_SECRET_QS.sub(r"\1<redacted>", " ".join(str(text).split()))[:300]
 
 
 def _get_verifier_via_totp(auth_url, username, password, totp_secret, headless=True):
@@ -1445,7 +1448,7 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
                 if tokens and tokens.get("issued_date_et") == _et_today():
                     _log.info("E*TRADE: automatic re-authentication succeeded.")
                     return tokens
-                _log.warning("E*TRADE: automatic re-authentication failed (browser state may be stale).")
+                _log.warning("E*TRADE: automatic re-authentication failed (the reason is logged above).")
             except SmsRequired:
                 # Trust lapsed mid-renewal; don't swallow it as a generic error — let the
                 # dedicated door (scheduled_reauth) latch sms_required and alert a human.
