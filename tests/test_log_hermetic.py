@@ -11,12 +11,17 @@ import. And an unmocked watchdog.run_watchdog() ran the live process supervisor
 (taskkill of duplicate server.py / "orphaned" consoles) plus a real
 `ai_portfolio_game.py --report` child.
 """
+import datetime
 import logging
 import os
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+import pytz
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game
@@ -212,13 +217,26 @@ class TestProcessSideEffectsBlocked(unittest.TestCase):
                 harness._guard_proc(argv)  # raises RuntimeError if refused
 
 
-if __name__ == "__main__":
-    unittest.main()
+class _At0945ET(datetime.datetime):
+    """A clock frozen at 09:45 ET on a weekday: inside the 9:30-10:00 opening window."""
+
+    @classmethod
+    def now(cls, tz=None):
+        moment = pytz.timezone("America/New_York").localize(datetime.datetime(2026, 11, 18, 9, 45))
+        return moment.astimezone(tz) if tz else moment.replace(tzinfo=None)
 
 
 class TestWallClockPinned(unittest.TestCase):
-    """The suite must not depend on whether it runs inside 9:30-10:00 ET (2026-11-18 CI failure)."""
+    """The suite must not depend on whether it runs inside 9:30-10:00 ET (2026-11-18 CI failure).
+    Checked against a clock frozen inside the window, so it fails at any time of day if the pin
+    in tests/__init__.py is removed (PR #292 review)."""
 
-    def test_opening_window_is_pinned_closed(self):
-        self.assertFalse(circuit_breaker.is_market_opening_window())
-        self.assertFalse(root_cb.is_market_opening_window())
+    def test_opening_window_is_pinned_closed_even_inside_the_window(self):
+        with mock.patch.object(circuit_breaker, "datetime", SimpleNamespace(datetime=_At0945ET)):
+            self.assertTrue(harness.REAL_IS_MARKET_OPENING_WINDOW())     # the clock really is inside
+            self.assertFalse(circuit_breaker.is_market_opening_window())
+            self.assertFalse(root_cb.is_market_opening_window())
+
+
+if __name__ == "__main__":
+    unittest.main()

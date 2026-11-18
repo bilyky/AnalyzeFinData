@@ -355,4 +355,5 @@ if not _os.getenv("AETHER_LIVE_TESTS"):
 # Guarded by tests/test_log_hermetic.py::TestWallClockPinned.
 import aether.circuit_breaker as _cb  # noqa: E402
 
+REAL_IS_MARKET_OPENING_WINDOW = _cb.is_market_opening_window  # kept for the guard test
 _cb.is_market_opening_window = lambda: False
