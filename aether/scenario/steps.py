@@ -43,7 +43,9 @@ function, and avoids a top-level import cycle once the root becomes a facade.
 """
 from __future__ import annotations
 
-from aether import preflight_status
+from aether import data_completeness, preflight_status
+
+DATA_GATE_KEY = "_data_gate_fields"   # fields that went empty; the freeze holds until they fill again
 
 
 def _pkg():
@@ -269,6 +271,58 @@ def apply_preflight_gate(state, queued, today, force):
     state.setdefault(game.circuit_breaker.FREEZE_KEY, reason)
     dropped = [q["symbol"] for q in queued if q.get("type") == "BUY"]
     game._log.warning(f"🛑 [Pre-flight Gate] [SKIPPED] new buys and scale-ins this run: {reason}."
+                      + (f" Dropped queued BUYs: {', '.join(dropped)}." if dropped else ""))
+    return [q for q in queued if q.get("type") != "BUY"]
+
+
+def data_health_reasons(state, report) -> list:
+    """Why today's inputs are not fit to buy on (empty list = fine). Updates the remembered fields.
+
+    ``report`` is :func:`aether.data_completeness.check` for the latest snapshot day. A field that
+    went empty is remembered in ``state[DATA_GATE_KEY]`` and keeps the freeze on until its fill rate
+    is back to ``data_completeness.USUAL_FILL``: the check itself compares with the last 10 sessions,
+    so after about a week an outage becomes the new normal and its alarm stops (2026-09-01..09-09
+    alarmed, 09-10 onward silent while the fields stayed empty until 11-05).
+    """
+    rates = report.get("fill_rates") or {}
+    remembered = [f for f in state.get(DATA_GATE_KEY, []) if rates.get(f, 0.0) < data_completeness.USUAL_FILL]
+    fields = sorted(set(remembered) | set(report.get("dropped_fields") or []))
+    if fields:
+        state[DATA_GATE_KEY] = fields
+    else:
+        state.pop(DATA_GATE_KEY, None)
+    reasons = list(report.get("gate") or [])
+    still = [f for f in remembered if f not in (report.get("dropped_fields") or [])]
+    if still:
+        reasons.append(f"{len(still)} fields still empty since their outage: {', '.join(still[:6])}"
+                       + (" ..." if len(still) > 6 else ""))
+    return reasons
+
+
+def apply_data_health_gate(state, queued, force):
+    """No buys on broken inputs: freeze new buys and scale-ins when the data-completeness check of the
+    latest snapshot day fails (fields gone empty, snapshot count drop, bad values, missing price
+    bars), until the inputs recover. Exits, stops and queued SELLs still run. --force bypasses with a
+    warning, like the pre-flight gate.
+
+    PROD 2026-08-31..09-15: the Chaikin API switch left 44 fields empty and the game kept buying; the
+    11 buys of that window trailed SPY by 4.75 pp on average over the next 10 sessions (1 of 11 beat it).
+    A failure of the check itself also freezes buys (doubt in the data means wait).
+    """
+    game = _pkg()
+    try:
+        reasons = data_health_reasons(state, data_completeness.check())
+    except Exception as e:                      # the check could not run: we do not know the data is sound
+        reasons = [f"data-completeness check failed: {type(e).__name__}: {e}"]
+    if not reasons:
+        return queued
+    if force:
+        game._log.warning("⚠️ [Data-Health Gate] bypassed by --force: " + "; ".join(reasons))
+        return queued
+    reason = "Data-health freeze: " + "; ".join(reasons)
+    state.setdefault(game.circuit_breaker.FREEZE_KEY, reason)
+    dropped = [q["symbol"] for q in queued if q.get("type") == "BUY"]
+    game._log.warning(f"🛑 [Data-Health Gate] [SKIPPED] new buys and scale-ins this run: {reason}."
                       + (f" Dropped queued BUYs: {', '.join(dropped)}." if dropped else ""))
     return [q for q in queued if q.get("type") != "BUY"]
 

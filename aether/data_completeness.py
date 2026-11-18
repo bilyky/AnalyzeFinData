@@ -130,11 +130,13 @@ def check(day: str | None = None, base: str | None = None, expected: list | None
     symbols = sorted(x for x in os.listdir(base) if os.path.isdir(os.path.join(base, x)))
     day = day or _latest_day(base, symbols)
     if day is None:
-        return {"day": None, "alarms": ["no Chaikin snapshots in the last 10 days"], "notes": []}
+        msg = "no Chaikin snapshots in the last 10 days"
+        return {"day": None, "alarms": [msg], "notes": [], "gate": [msg], "dropped_fields": [], "fill_rates": {}}
     today = day_stats(base, symbols, day)
     prior = [st for st in (day_stats(base, symbols, d) for d in _sessions_before(datetime.date.fromisoformat(day),
                                                                                 BASELINE_DAYS)) if st["n"]]
     alarms, notes = [], []
+    gate, dropped_fields = [], []       # alarms that mean the inputs are broken (the buy freeze reads these)
     d = datetime.date.fromisoformat(day)
     session = market_calendar.is_session(d)
     if today["n"] and not session:
@@ -144,20 +146,24 @@ def check(day: str | None = None, base: str | None = None, expected: list | None
         usual_n = statistics.median(st["n"] for st in prior)
         if session and today["n"] < COUNT_DROP * usual_n:
             alarms.append(f"{today['n']} snapshots, usually {usual_n:.0f}")
+            gate.append(alarms[-1])
         dropped = []
         for f in sorted({f for st in prior for f in st["rate"]}) if today["n"] else []:
             usual = statistics.median(st["rate"].get(f, 0.0) for st in prior)
             now = today["rate"].get(f, 0.0)
             if usual >= USUAL_FILL and now < DROP * usual:
                 dropped.append(f"{f} {now:.0%} (usually {usual:.0%})")
+                dropped_fields.append(f)
         if dropped:
             alarms.append(f"{len(dropped)} fields went empty: " + "; ".join(dropped[:12])
                           + (" ..." if len(dropped) > 12 else ""))
+            gate.append(alarms[-1])
     else:
         notes.append("no earlier sessions to compare with")
     if today["bad_values"]:
         sample = "; ".join(f"{s}: {', '.join(p)}" for s, p in list(today["bad_values"].items())[:5])
         alarms.append(f"{len(today['bad_values'])} snapshots with bad values ({sample})")
+        gate.append(alarms[-1])
     if expected and prior:
         seen = {}
         for st in prior:
@@ -172,6 +178,7 @@ def check(day: str | None = None, base: str | None = None, expected: list | None
     no_bar = [s for s in today["symbols"] if not _has_bar(s, day)] if session else []
     if today["n"] and len(no_bar) > BAR_MISS * today["n"]:
         alarms.append(f"{len(no_bar)} of {today['n']} stocks have no OHLCV bar for {day}")
+        gate.append(alarms[-1])
     elif no_bar:
         notes.append(f"{len(no_bar)} stocks without an OHLCV bar for {day}: {', '.join(no_bar[:10])}")
     raw_dir = os.path.join(paths.cache_dir(), "Symbol_raw")
@@ -180,8 +187,11 @@ def check(day: str | None = None, base: str | None = None, expected: list | None
                   if not os.path.exists(os.path.join(raw_dir, s, f"{s}_{day}.json.gz"))]
         if no_raw:
             alarms.append(f"{len(no_raw)} snapshots without a raw copy (Data/Symbol_raw)")
+    # "gate": the alarms that mean today's inputs are broken (the game's data-health buy freeze);
+    # the raw-copy and missing-screen-symbol alarms are left out on purpose. "fill_rates" lets the
+    # freeze tell when fields that went empty are filled again.
     return {"day": day, "snapshots": today["n"], "baseline_sessions": len(prior), "alarms": alarms,
-            "notes": notes}
+            "notes": notes, "gate": gate, "dropped_fields": dropped_fields, "fill_rates": today["rate"]}
 
 
 _bars_cache: dict = {}

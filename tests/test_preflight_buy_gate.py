@@ -118,7 +118,8 @@ class RunnerWiringTest(unittest.TestCase):
              mock.patch.object(steps, "assemble_symbol_universe", return_value={"all_syms": [], "symbols_to_check": []}), \
              mock.patch.object(steps, "price_and_settle", side_effect=lambda *a, **k: order.append("price") or {}), \
              mock.patch.object(steps, "apply_preflight_gate",
-                               side_effect=lambda s, q, t, force: order.append(("gate", force)) or q), \
+                               side_effect=lambda s, q, t, force: order.append(("gate", force)) or q),              mock.patch.object(steps, "apply_data_health_gate",
+                               side_effect=lambda s, q, force: order.append(("data", force)) or q), \
              mock.patch.object(steps, "execute_queued_orders", side_effect=lambda *a, **k: order.append("queued")), \
              mock.patch.object(steps, "decide_exits", return_value={}), \
              mock.patch.object(steps, "execute_exits"), \
@@ -129,7 +130,7 @@ class RunnerWiringTest(unittest.TestCase):
              mock.patch.object(steps, "deploy_capital"), \
              mock.patch.object(steps, "finalize_run"):
             runners.run_daily_management(force=True)
-        self.assertEqual(order, ["price", ("gate", True), "queued"])
+        self.assertEqual(order, ["price", ("gate", True), ("data", True), "queued"])
 
 
 class PipelineRecordsVerdictTest(unittest.TestCase):
