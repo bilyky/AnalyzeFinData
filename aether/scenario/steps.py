@@ -955,6 +955,59 @@ def rotate_positions(state, prices, profile, available_slots, max_positions, top
     return available_slots
 
 
+# Pyramiding adds only to a position trading within 2% of its peak close since entry.
+PYRAMID_PEAK_TOLERANCE = 0.98
+# No scale-in while the symbol had a SELL (scale-out or exit) within this many NYSE sessions,
+# today included as session 0. PROD NEM banked 3 sh on 2026-11-09, scaled in 6 sh the next
+# session 4% lower and was stopped out 11-12 (-$56.88).
+NO_SCALE_IN_AFTER_SELL_SESSIONS = 5
+
+
+def _near_peak(current_px, peak_close):
+    """True when ``current_px`` is at or above ``PYRAMID_PEAK_TOLERANCE`` of ``peak_close``.
+
+    No recorded peak (0 or missing) is never near a peak."""
+    return bool(peak_close) and current_px >= peak_close * PYRAMID_PEAK_TOLERANCE
+
+
+def _sessions_since(day, today):
+    """NYSE sessions after ``day`` up to and including ``today`` (0 when ``day`` is today)."""
+    game = _pkg()
+    count = 0
+    d = day + game.datetime.timedelta(days=1)
+    while d <= today:
+        if game.is_session(d):
+            count += 1
+        d += game.datetime.timedelta(days=1)
+    return count
+
+
+def _recent_sell(history, sym, today):
+    """``(date, sessions_ago)`` of the latest SELL of ``sym`` within
+    ``NO_SCALE_IN_AFTER_SELL_SESSIONS`` sessions of ``today``, else ``None``.
+
+    ``today`` and the ledger dates are ISO ``YYYY-MM-DD`` strings; a malformed date is ignored."""
+    game = _pkg()
+    try:
+        today_d = game.datetime.date.fromisoformat(str(today))
+    except ValueError:
+        return None
+    latest = None
+    for t in history:
+        if t.get("symbol") != sym or t.get("type") != "SELL":
+            continue
+        try:
+            d = game.datetime.date.fromisoformat(str(t.get("date")))
+        except ValueError:
+            continue
+        if latest is None or d > latest:
+            latest = d
+    if latest is None:
+        return None
+    ago = _sessions_since(latest, today_d)
+    return (latest, ago) if ago <= NO_SCALE_IN_AFTER_SELL_SESSIONS else None
+
+
 def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash_required,
                    today, now_time, new_transactions):
     """Buy the ranked candidates, scale into winners and write covered calls (B6).
@@ -974,10 +1027,11 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
     * **Market hours** — ``_execute_buys`` buys them, then:
 
       * **Pyramiding** (R&D #31) — only when cash is above
-        ``CFG.system_pyramiding_cash_ratio`` of equity. A symbol with a SELL
-        dated today in ``state["history"]`` is skipped (no buying back what was
-        just sold, #181). Otherwise a held position in profit and within 2% of
-        its peak close, passing
+        ``CFG.system_pyramiding_cash_ratio`` of equity. A symbol with a SELL in
+        ``state["history"]`` today or within ``NO_SCALE_IN_AFTER_SELL_SESSIONS``
+        NYSE sessions is skipped (no buying back what was just sold, #181).
+        Otherwise a held position in profit and trading at or above
+        ``PYRAMID_PEAK_TOLERANCE`` (98%) of its peak close, passing
         ``should_pyramid_into_winner`` on its Research-sheet s10/l60, gets more
         shares if it has more than $500 of room under
         ``rules["max_allocation_pct"]`` of equity. The cost comes out of cash, the
@@ -1023,9 +1077,16 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
                     # Never buy back what this run (or an earlier run today) just sold, e.g.
                     # a Bank-As-You-Go scale-out: that books profit and restores the
                     # exposure at the same price (PROD GNE 2026-10-02).
-                    if any(t.get("symbol") == sym and t.get("type") == "SELL" and t.get("date") == today
-                           for t in state["history"]):
-                        game._log.info(f"🛡️ [Pyramiding Pass] {sym}: sold earlier today; no scale-in.")
+                    # Also not within NO_SCALE_IN_AFTER_SELL_SESSIONS of a sale: PROD NEM
+                    # banked 11-09 and bought back the next session 4% lower.
+                    recent_sell = _recent_sell(state["history"], sym, today)
+                    if recent_sell is not None:
+                        sold_on, ago = recent_sell
+                        if ago == 0:
+                            game._log.info(f"🛡️ [Pyramiding Pass] {sym}: sold earlier today; no scale-in.")
+                        else:
+                            game._log.info(f"🛡️ [Pyramiding Pass] {sym}: sold on {sold_on} ({ago} session(s) ago, "
+                                           f"within {NO_SCALE_IN_AFTER_SELL_SESSIONS}); no scale-in.")
                         continue
                     # R&D #31 adds only to protected positions: the stop is at or above cost.
                     stop_loss = pos.get("stop_loss") or 0.0
@@ -1035,7 +1096,7 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
                     current_px = prices.get(sym, pos["cost"])
                     # A winner is in profit and trading at or near its peak close
                     is_winner = (current_px > pos["cost"])
-                    has_peak = (pos.get("highest_close_since_acq", 0.0) >= current_px * 0.98) # within 2% of peak close
+                    has_peak = _near_peak(current_px, pos.get("highest_close_since_acq", 0.0))
 
                     # Retrieve its Short10 and Long60 momentum scores from row
                     s10 = 0.0
