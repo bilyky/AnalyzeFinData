@@ -176,6 +176,11 @@ class TestReleaseAndNotice(unittest.TestCase):
         self.assertEqual(self._state()["balance"], 1.0)
         self.assertEqual(dc.accept_fields(["x"], self.path)["status"], "unchanged")
 
+    def test_accepting_the_second_field_keeps_the_first(self):
+        r = dc.accept_fields(["pgr.Earnings"], self.path)                 # the second of two
+        self.assertEqual(r["remembered"], [FIELD])
+        self.assertEqual(self._state()[dc.DATA_GATE_KEY], [FIELD])
+
     def test_cli_accept_fields(self):
         with mock.patch.object(dc, "game_file", return_value=self.path), mock.patch.object(dc.sys, "stdout"):
             self.assertEqual(dc.main(["--accept-fields", FIELD]), 0)
@@ -183,7 +188,9 @@ class TestReleaseAndNotice(unittest.TestCase):
 
     def test_evening_banner_shows_the_freeze(self):
         clean = {"day": "2026-11-16", "alarms": [], "notes": []}
-        with mock.patch.object(daily_task.data_completeness, "check", return_value=clean),                 mock.patch.object(daily_task, "get_symbols_from_xls", return_value=[]),                 mock.patch.object(daily_task.data_completeness, "game_file", return_value=self.path):
+        with mock.patch.object(daily_task.data_completeness, "check", return_value=clean), \
+                mock.patch.object(daily_task, "get_symbols_from_xls", return_value=[]), \
+                mock.patch.object(daily_task.data_completeness, "game_file", return_value=self.path):
             html = daily_task._data_completeness_banner("2026-11-16")
         self.assertIn("New buys frozen", html)
 

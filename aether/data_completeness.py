@@ -261,7 +261,8 @@ def frozen_alarm(path: str | None = None) -> str | None:
     if not f:
         return None
     return (f"New buys frozen: {len(f)} game-input fields still empty since their outage ({', '.join(f[:6])}"
-            + (" ..." if len(f) > 6 else "") + "). Release by hand only if the field is no longer used: "
+            + (" ..." if len(f) > 6 else "") + "). Release by hand only if the field is no longer used and has been empty for a week or more "
+            "(sooner, the day-over-day alarm puts it back): "
             "python -m aether.data_completeness --accept-fields <field,...>")
 
 
