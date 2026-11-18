@@ -7,6 +7,8 @@ deleted in R&D #78 step S2; the plan (plans/aether-services.md) replaces this pa
 the services under aether/services/.
 """
 from aether.scenario.steps import (
+    apply_data_health_gate,
+    data_health_reasons,
     apply_preflight_gate,
     assemble_symbol_universe,
     decide_exits,
@@ -27,6 +29,8 @@ __all__ = [
     "determine_profile",
     "assemble_symbol_universe",
     "price_and_settle",
+    "apply_data_health_gate",
+    "data_health_reasons",
     "apply_preflight_gate",
     "execute_queued_orders",
     "decide_exits",
