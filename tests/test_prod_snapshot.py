@@ -175,6 +175,15 @@ class TestCli(_Tmp):
         self.assertTrue(lines[0].startswith("levels since 2026-11-05 07:00:"))
         self.assertEqual(len(lines), 3)
 
+    def test_an_emoji_on_a_cp1252_console_does_not_crash(self):
+        raw = io.BytesIO()
+        con = io.TextIOWrapper(raw, encoding="cp1252")
+        with redirect_stdout(con):
+            ps._out("WARN aether.ai_game | \U0001f6d1 AI BUY REJECTED")
+            ps._out("next")
+        con.flush()
+        self.assertEqual(raw.getvalue().decode("cp1252").splitlines(), ["WARN aether.ai_game | ? AI BUY REJECTED", "next"])
+
 
 if __name__ == "__main__":
     unittest.main()
