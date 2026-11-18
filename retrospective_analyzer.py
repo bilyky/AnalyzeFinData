@@ -55,10 +55,13 @@ def behaviour_section(game_file=None, decision_log=None) -> list:
     except (OSError, ValueError, AttributeError) as e:
         return ["BEHAVIOUR REFLECTION: the game ledger could not be read (" + type(e).__name__ + ")."]
     cache = {}
-    result = behaviour_reflection.reflect(
-        history, lambda sym: behaviour_reflection.load_closes(sym, cache),
-        behaviour_reflection.load_closes("SPY", cache), decision_eval.read_log(decision_log))
-    return behaviour_reflection.render(result)
+    try:   # one bad ledger row must not lose the whole weekly report (PR #289 review)
+        result = behaviour_reflection.reflect(
+            history, lambda sym: behaviour_reflection.load_closes(sym, cache),
+            behaviour_reflection.load_closes("SPY", cache), decision_eval.read_log(decision_log))
+        return behaviour_reflection.render(result)
+    except Exception as e:
+        return ["BEHAVIOUR REFLECTION: failed (" + type(e).__name__ + ": " + str(e)[:120] + ")."]
 
 def _read_rules(path) -> list:
     try:

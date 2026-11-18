@@ -192,6 +192,26 @@ class RetrospectiveFixesTest(unittest.TestCase):
     def test_missing_game_ledger_is_one_line(self):
         self.assertEqual(len(ra.behaviour_section()), 1)
 
+    def test_a_failing_reflection_is_one_line_not_a_lost_report(self):
+        """PR #289 review: an exception in reflect() must not stop the weekly report."""
+        path = os.path.join(os.environ["TEMP"] if "TEMP" in os.environ else ".", "_beh_ledger_test.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"history": [{"date": "2026-10-01", "type": "SELL", "symbol": "X", "price": 1.0}]}, f)
+        try:
+            with mock.patch.object(ra.behaviour_reflection, "reflect", side_effect=ValueError("bad qty")):
+                out = ra.behaviour_section(game_file=path)
+        finally:
+            os.remove(path)
+        self.assertEqual(out, ["BEHAVIOUR REFLECTION: failed (ValueError: bad qty)."])
+
+
+class ForwardReturnEdgeTest(unittest.TestCase):
+    def test_exactly_horizon_bars_from_the_end_is_none_not_an_error(self):
+        days = [f"2026-01-{i + 1:02d}" for i in range(20)]
+        series = (days, [100.0 + i for i in range(20)])
+        self.assertIsNone(br.forward_return(series, days[10], horizon=10))      # 10 + 10 == len
+        self.assertAlmostEqual(br.forward_return(series, days[9], horizon=10), (119.0 / 109.0 - 1) * 100)
+
 
 class ValidationRowTest(unittest.TestCase):
     def test_combo_pattern_name_and_average(self):
