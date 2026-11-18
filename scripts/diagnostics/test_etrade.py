@@ -11,6 +11,10 @@ sys.stdout.write("=== E*TRADE OAuth test ===\n")
 # Default to production if specified, else sandbox
 env = "production" if len(sys.argv) > 1 and sys.argv[1] == "production" else "sandbox"
 sys.stdout.write(f"Target Environment: {env}\n")
+sys.stdout.write(f"Token store: {etrade.make_etrade_store().backend}\n")
+_note = etrade.manual_login_store_note(env)
+if _note:
+    sys.stdout.write(f"\n{_note}\n\n")
 
 # Explicitly pass allow_browser=True to authorize browser re-authentication
 tokens = etrade.get_tokens(env=env, allow_browser=True)

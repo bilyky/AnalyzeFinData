@@ -194,6 +194,21 @@ def _proxies():
     return {"http": p, "https": p} if p else {}
 
 
+def manual_login_store_note(env: str = "production") -> str:
+    """A warning for a person about to log in by hand, or "" when there is nothing to say.
+
+    PROD 2026-11-17: a manual login ran in a window without AETHER_ETRADE_STORE=db (opened before
+    it was set), so the token and the breaker reset went to this machine's files only; the shared
+    failure count stayed at 3 and still blocked the 21:00 automated login."""
+    backend = make_etrade_store().backend
+    if env != "production" or backend == "db" or not CFG.database_url:
+        return ""
+    return ("WARNING: this window uses the '" + backend + "' token store, not the shared one. The new "
+            "token and the breaker reset go to this machine's files only. If this machine uses the "
+            "shared store, open a NEW PowerShell window (AETHER_ETRADE_STORE is set for the user) or "
+            "run $env:AETHER_ETRADE_STORE='db' first, then run this again.")
+
+
 def _save_tokens(tokens, env):
     """Shim → ``make_etrade_store().tokens.save``: the file adapter by default; with
     ``AETHER_ETRADE_STORE=db`` the shared store plus this machine's file (PROD review 11-13)."""
