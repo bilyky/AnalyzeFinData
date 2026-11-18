@@ -98,6 +98,20 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
     **copy-not-move** stages. A "verbatim extraction" claim is checkable: normalize (strip
     comments/indent/module prefix) and diff the body against the live source block by script; a copy
     that must track a live source needs a **parity test**. Recommend the seam the project already uses.
+  - **Check every PR against the architecture plan, small ones too** (`plans/aether-services.md`,
+    `docs/adr/`; the checklist is in `ship-pr.md` §1, "Fit the architecture plan"). A breach is a
+    **🟠 design finding, not an FYI**, even when the code works:
+    - a second writer of a store another module owns (above all the portfolio state: only
+      `save_game`, later P2's repository, writes it). Signs: its own backup folder, a different
+      indent or key order, a different path helper for the same file;
+    - a module's own data parked inside another store (its memory in the portfolio state);
+    - a new rule that changes the state dict where it could return a value, or new logic added
+      through `_pkg()` that is not small and pure;
+    - an import that grows `KNOWN_ROOT_IMPORTS`, a service reached past its `api`, I/O in a domain;
+    - another module's file name, format or backup policy copied instead of called.
+    Name the plan section it breaks and the shape that fits (the module's own file, a pure function
+    plus a caller that does the I/O, the owner's API). #288 was approved with the second writer
+    reported as two FYIs (path, indent); #297 had to undo it after merge.
   - **Reuse before new:** match new functionality against the feature list (`Data/wiki.json`,
     `AETHER_REFERENCE.md`) and the code. A second implementation of something that exists (another
     broker read, score, gate, backup, report section or scheduler for the same job) is a finding:
@@ -262,5 +276,6 @@ Goal and definition first (§0) · all three comment surfaces (§1) · suite run
 inferred (§3) · red-green or mutation, with a negative control for probes (§3–§4) · docs grepped for
 the old behavior (§3) · every consumer of a changed output traced (§3) · prod-readiness on both gates
 (§3) · feature docs in this PR, or "No feature-doc change" with a reason that holds (§3) · new
-functionality matched to existing features, no parallel copy (§3) · every factual sentence re-checked
+functionality matched to existing features, no parallel copy (§3) · the change checked against
+the architecture plan, a breach reported as 🟠 not FYI (§3) · every factual sentence re-checked
 now (§5) · PII masked (§6).

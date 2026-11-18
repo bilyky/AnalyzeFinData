@@ -172,6 +172,13 @@ golden snapshot of the daily run (`tests/test_scenario_runner.py`); path helpers
 per rule (R&D items in `plans/roadmap.md`, their code anchors in
 `pre_commit_validator.FEATURE_CHECKS`).
 
+The target shape and the order of the moves are in `plans/aether-services.md` (services with
+`api`/`domain`/`ports`/`app`/`adapters`, P1-P9, migration S1..S14); the dependency rules it names
+are enforced by `tests/test_architecture.py`, the kernel is `aether/core`, the composition root
+`aether/bootstrap.py`. One writer per store: the portfolio state belongs to
+`ai_portfolio_game.save_game` (later P2's `JsonPortfolioRepository`); every other module keeps
+its own data in its own file under `paths.data_dir()` (#288 → #297).
+
 ## I. Retargeting a stacked PR after its parent was squash-merged
 
 Every line both PRs touched conflicts, because the merge base predates the squash. First prove `main`'s
