@@ -41,6 +41,8 @@ import decision_eval
 import instruments
 from aether import options
 from aether.scenario import runners
+from aether.bootstrap import PortfolioFile, bootstrap
+from aether.core import DEFAULT_PORTFOLIO
 from aether.services.portfolio import api as portfolio_api
 from aether.market_calendar import NYSE_HOLIDAYS, is_session, last_session_on_or_before
 from aether_logger import get_logger as _get_logger
@@ -878,17 +880,20 @@ def should_pyramid_into_winner(is_winner: bool, has_peak: bool, s10: float, l60:
         and (s10 >= CFG.system_pyramiding_s10_floor or l60 >= CFG.system_pyramiding_l60_floor)
     )
 
-def _state_file():
-    """The state store for AI_GAME_FILE, built per call so a redirected path (tests) applies."""
-    return portfolio_api.open_state_file(AI_GAME_FILE, GAME_BACKUP_DIR, initial_balance=INITIAL_BALANCE, log=_log)
+def _portfolio_state():
+    """The game's state, through the portfolio service (R&D #78). Built per call with the
+    game's own paths, so a redirected AI_GAME_FILE / GAME_BACKUP_DIR (tests) applies."""
+    app = bootstrap(portfolio_files={DEFAULT_PORTFOLIO: PortfolioFile(AI_GAME_FILE, GAME_BACKUP_DIR)},
+                    starting_capital=INITIAL_BALANCE, log=_log)
+    return portfolio_api.LegacyStateGateway(app.portfolio)
 
 
 def load_game():
-    return _state_file().load()
+    return _portfolio_state().load_state(DEFAULT_PORTFOLIO)
 
 
 def save_game(state):
-    _state_file().save(state)
+    _portfolio_state().save_state(state, DEFAULT_PORTFOLIO)
 
 def backtrack_verify(symbol):
     """Verify the consistency of a price trend over the last 3 trading days using local daily history."""

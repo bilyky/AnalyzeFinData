@@ -1,17 +1,17 @@
 """Public interface of the portfolio service: the only module other code may import.
 
-API_VERSION follows semver; a breaking change bumps the major version (ADR 0004).
+Callers name a portfolio by ``PortfolioId`` and never see how it is stored; the store is
+chosen in ``aether.bootstrap`` (JSON by default). API_VERSION follows semver (ADR 0004).
 """
-from pathlib import Path
-
-from aether.services.portfolio.adapters.json_file import JsonStateFile
-from aether.services.portfolio.ports import StateStore
+from aether.services.portfolio.app import PortfolioService, UnitOfWork
+from aether.services.portfolio.domain.model import (ABSENT, BuyDNA, Portfolio, Position, QueuedOrder,
+                                                   StopChanged, Transaction)
+from aether.services.portfolio.errors import UnknownPortfolio
+from aether.services.portfolio.legacy_state import LegacyStateGateway
+from aether.services.portfolio.ports import PortfolioRepository
 
 API_VERSION = "0.1.0"
 
-__all__ = ["API_VERSION", "StateStore", "open_state_file"]
-
-
-def open_state_file(path: Path, backup_dir: Path, *, initial_balance: float, log=None) -> StateStore:
-    """The JSON state store for one portfolio file and its backup folder."""
-    return JsonStateFile(path, backup_dir, initial_balance=initial_balance, log=log)
+__all__ = ["ABSENT", "API_VERSION", "BuyDNA", "LegacyStateGateway", "Portfolio", "PortfolioRepository",
+           "PortfolioService", "Position", "QueuedOrder", "StopChanged", "Transaction", "UnitOfWork",
+           "UnknownPortfolio"]

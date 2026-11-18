@@ -1,14 +1,20 @@
 """Ports the portfolio service depends on (ADR 0002: ``typing.Protocol``, no inheritance)."""
 from typing import Protocol
 
+from aether.core import PortfolioId
+from aether.services.portfolio.domain.model import Portfolio
 
-class StateStore(Protocol):
-    """Raw portfolio state, read and written as one JSON-shaped dict.
 
-    The lowest storage layer: it owns the file (or table), backups and recovery. The domain
-    mapper and ``PortfolioRepository`` (S4b) sit on top of it.
+class PortfolioRepository(Protocol):
+    """Loads and saves whole ``Portfolio`` aggregates (ADR 0003).
+
+    Adapters: ``JsonPortfolioRepository`` (the default); ``SqlPortfolioRepository`` in S14.
+    Both must pass the same contract tests (tests/test_portfolio_repository.py).
     """
 
-    def load(self) -> dict: ...
+    def load(self, portfolio_id: PortfolioId) -> Portfolio:
+        """The stored portfolio, or a fresh one on a first run. Unknown id: ``UnknownPortfolio``."""
+        ...
 
-    def save(self, state: dict) -> None: ...
+    def save(self, portfolio: Portfolio) -> None:
+        ...

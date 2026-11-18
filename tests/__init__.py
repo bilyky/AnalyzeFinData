@@ -98,6 +98,12 @@ _seed_wb.save(_test_xlsx_path)
 _test_game_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
 _test_game_file = Path(_test_game_dir.name) / "ai_portfolio_game.json"
 
+# The portfolio service's default store (aether.bootstrap) -> the same temp dir, and its
+# store switch is never inherited from the developer's environment (R&D #78 S4).
+import aether.bootstrap as _bootstrap
+_bootstrap.DEFAULT_DATA_DIR = Path(_test_game_dir.name)
+_os.environ.pop("AETHER_PORTFOLIO_STORE", None)
+
 for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomous_pipeline", "bootstrap_dna"):
     try:
         _mod = _importlib.import_module(_mod_name)
