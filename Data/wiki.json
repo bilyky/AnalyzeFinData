@@ -529,6 +529,16 @@
       "System page: --check, and --cdp --force"
     ]
   },
+  "data_completeness": {
+    "title": "Data Completeness Check & Reference ETFs",
+    "summary": "Each evening the Chaikin download is compared with the sessions before it: fields that went empty, fewer snapshots, bad values, missing price bars and screen symbols that disappeared put a <b>[DATA]</b> banner on top of the evening email. A short list of reference ETFs is kept current every night even when they are off the screen.",
+    "origin": "Built after the 2026-09-01 Chaikin API switch emptied 44 snapshot fields for two months unnoticed (PR #235). Reference ETFs added 2026-11-17 (PR #281) after SMH and SOXX bars stopped on 11-02 with no alarm.",
+    "body": "<p><code>aether/data_completeness.py</code> counts how often every snapshot field is filled and compares it with the median of the last 10 sessions; a usually-filled field that empties is an alarm, without anyone listing which fields matter. It also checks the snapshot count, value ranges (the 12-char signal string, the PGR rating) and that each stock has an OHLCV bar for the session.</p><p class=\"mt-2\"><b>Reference ETFs</b> (default QQQ, SMH, SOXX, XLK, SPY, RSP, GDX, VXX, UVXY; VXX/UVXY stand in for the VIX index, which the data API does not serve) are fetched by the nightly repair pass as soon as they miss the latest session's bar, and the check alarms when one has no bar for the session before the checked day.</p>",
+    "config": [
+      "Run by hand: python -m aether.data_completeness [--date YYYY-MM-DD]",
+      "Reference list: rapidapi.reference_symbols in config.json (a list or \"A,B\") or AETHER_REFERENCE_SYMBOLS; default in aether/config.py DEFAULT_REFERENCE_SYMBOLS"
+    ]
+  },
   "preflight_buy_gate": {
     "title": "Pre-Flight Buy Gate",
     "summary": "After a failed morning pre-flight, the scheduled trade run makes no new buys, scale-ins or queued buys. Stops, exits and queued sells still run.",
