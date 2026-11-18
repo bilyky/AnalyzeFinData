@@ -315,6 +315,11 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
    - `PortfolioQueries`; the ~10 direct readers move to them.
 
    Then **F1 + F2**.
+
+   **Order of the S4 PRs** (state-file safety first, as agreed): (1) move `load_game` /
+   `save_game` as they are into a `StateStore` port and its JSON adapter; (2) F1; (3) F2;
+   (4) the domain model and mapper on top of `StateStore`, with the repository and unit of work;
+   (5) `PortfolioQueries` and the direct readers.
 6. **S5 `market_data`:** clock/session (computed once per run), `OhlcvStore` (freshness and heal,
    per-run caches), `ChainedPriceFeed`. The game's functions delegate, so external importers keep
    working. (F3 already landed early, as step 1c.)

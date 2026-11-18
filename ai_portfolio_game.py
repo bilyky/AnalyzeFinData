@@ -41,6 +41,7 @@ import decision_eval
 import instruments
 from aether import options
 from aether.scenario import runners
+from aether.services.portfolio import api as portfolio_api
 from aether.market_calendar import NYSE_HOLIDAYS, is_session, last_session_on_or_before
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
@@ -877,82 +878,17 @@ def should_pyramid_into_winner(is_winner: bool, has_peak: bool, s10: float, l60:
         and (s10 >= CFG.system_pyramiding_s10_floor or l60 >= CFG.system_pyramiding_l60_floor)
     )
 
-def load_game():
-    if not AI_GAME_FILE.exists() or AI_GAME_FILE.stat().st_size == 0:
-        # Try to find a backup to restore from
-        backup_dir = GAME_BACKUP_DIR
-        if backup_dir.exists():
-            backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
-            for b in backups:
-                try:
-                    with open(b, "r", encoding="utf-8") as bf:
-                        state = json.load(bf)
-                        # Succeeded! Copy it back to repair AI_GAME_FILE
-                        shutil.copy2(b, AI_GAME_FILE)
-                        _log.warning(f"  [⚠️ AETHER SELF-HEALER] AI game file was missing or empty. Successfully restored from backup: {b.name}")
-                        return state
-                except Exception:
-                    continue
-        return {
-            "balance": INITIAL_BALANCE,
-            "equity": INITIAL_BALANCE,
-            "positions": {},
-            "history": [],
-            "start_date": str(datetime.date.today()),
-            "profile": "BALANCED"
-        }
-    with open(AI_GAME_FILE, "r", encoding="utf-8") as f:
-        try:
-            return json.load(f)
-        except Exception as e:
-            # Corruption detected! Try to restore from backup
-            _log.warning(f"  [⚠️ AETHER SELF-HEALER] Error loading {AI_GAME_FILE.name}: {e}. Attempting automated recovery from backup...")
-            backup_dir = GAME_BACKUP_DIR
-            if backup_dir.exists():
-                backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
-                for b in backups:
-                    try:
-                        with open(b, "r", encoding="utf-8") as bf:
-                            state = json.load(bf)
-                            shutil.copy2(b, AI_GAME_FILE)
-                            _log.warning(f"  [⚠️ AETHER SELF-HEALER] Successfully restored corrupted file from backup: {b.name}")
-                            return state
-                    except Exception:
-                        continue
-            # Fallback to default state if all else fails
-            return {
-                "balance": INITIAL_BALANCE,
-                "equity": INITIAL_BALANCE,
-                "positions": {},
-                "history": [],
-                "start_date": str(datetime.date.today()),
-                "profile": "BALANCED"
-            }
+def _state_file():
+    """The state store for AI_GAME_FILE, built per call so a redirected path (tests) applies."""
+    return portfolio_api.open_state_file(AI_GAME_FILE, GAME_BACKUP_DIR, initial_balance=INITIAL_BALANCE, log=_log)
 
-import shutil
+
+def load_game():
+    return _state_file().load()
+
 
 def save_game(state):
-    # --- Mandatory Backup before Write ---
-    if AI_GAME_FILE.exists():
-        try:
-            backup_dir = GAME_BACKUP_DIR
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = backup_dir / f"ai_portfolio_game_{ts}.json"
-            
-            shutil.copy2(AI_GAME_FILE, backup_path)
-            
-            # Clean up old backups (Keep last 15)
-            backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime)
-            if len(backups) > 15:
-                for old_b in backups[:-15]:
-                    trash.soft_delete(old_b, reason="game-backup-prune", force=True)
-        except Exception as e:
-            _log.warning(f"  [Warning] Game backup failed: {e}")
-
-    with open(AI_GAME_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=4)
+    _state_file().save(state)
 
 def backtrack_verify(symbol):
     """Verify the consistency of a price trend over the last 3 trading days using local daily history."""
