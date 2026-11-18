@@ -45,8 +45,6 @@ from __future__ import annotations
 
 from aether import data_completeness, preflight_status
 
-DATA_GATE_KEY = "_data_gate_fields"   # fields that went empty; the freeze holds until they fill again
-
 
 def _pkg():
     """Return the ``ai_portfolio_game`` module, resolved lazily at call time.
@@ -279,22 +277,23 @@ def data_health_reasons(state, report) -> list:
     """Why today's inputs are not fit to buy on (empty list = fine). Updates the remembered fields.
 
     ``report`` is :func:`aether.data_completeness.check` for the latest snapshot day. A field that
-    went empty is remembered in ``state[DATA_GATE_KEY]`` and keeps the freeze on until its fill rate
-    is back to ``data_completeness.USUAL_FILL``: the check itself compares with the last 10 sessions,
+    went empty (only fields the game reads, ``data_completeness.GAME_INPUT_FIELDS``) is remembered in
+    ``state[data_completeness.DATA_GATE_KEY]`` and keeps the freeze on until its fill rate is back to
+    ``data_completeness.USUAL_FILL`` or the owner releases it (``--accept-fields``): the check itself compares with the last 10 sessions,
     so after about a week an outage becomes the new normal and its alarm stops (2026-09-01..09-09
     alarmed, 09-10 onward silent while the fields stayed empty until 11-05).
     """
     rates = report.get("fill_rates") or {}
-    remembered = [f for f in state.get(DATA_GATE_KEY, []) if rates.get(f, 0.0) < data_completeness.USUAL_FILL]
+    remembered = [f for f in state.get(data_completeness.DATA_GATE_KEY, []) if rates.get(f, 0.0) < data_completeness.USUAL_FILL]
     fields = sorted(set(remembered) | set(report.get("dropped_fields") or []))
     if fields:
-        state[DATA_GATE_KEY] = fields
+        state[data_completeness.DATA_GATE_KEY] = fields
     else:
-        state.pop(DATA_GATE_KEY, None)
+        state.pop(data_completeness.DATA_GATE_KEY, None)
     reasons = list(report.get("gate") or [])
     still = [f for f in remembered if f not in (report.get("dropped_fields") or [])]
     if still:
-        reasons.append(f"{len(still)} fields still empty since their outage: {', '.join(still[:6])}"
+        reasons.append(f"{len(still)} game-input fields still empty since their outage: {', '.join(still[:6])}"
                        + (" ..." if len(still) > 6 else ""))
     return reasons
 

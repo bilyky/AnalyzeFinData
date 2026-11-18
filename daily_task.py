@@ -143,7 +143,11 @@ def _data_completeness_banner(today) -> str:
     """The day-over-day completeness check of the Chaikin download, as an email banner ("" when
     clean). Never raises: a broken check must not stop the evening report."""
     try:
-        return data_completeness.html_banner(data_completeness.check(str(today), expected=get_symbols_from_xls()))
+        report = data_completeness.check(str(today), expected=get_symbols_from_xls())
+        frozen = data_completeness.frozen_alarm()      # the trade run's buy freeze, while it holds
+        if frozen:
+            report["alarms"] = [*report.get("alarms", []), frozen]
+        return data_completeness.html_banner(report)
     except Exception as e:
         _log.warning(f"Data completeness check failed: {e}")
         return ""

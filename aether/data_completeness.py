@@ -31,6 +31,7 @@ import html
 import json
 import os
 import re
+import shutil
 import statistics
 import sys
 
@@ -43,6 +44,22 @@ COUNT_DROP = 0.9            # alarm when there are under 90% of the usual number
 BAR_MISS = 0.1              # alarm when more than 10% of stocks have no OHLCV bar for the session
 KEEPS_UP = 0.8              # a screen symbol present in 80% of the prior sessions is expected today
 SIGNALS_RE = re.compile(r"^[01]{12}$")
+
+
+DATA_GATE_KEY = "_data_gate_fields"   # game state: game-input fields that went empty (buy freeze memory)
+# Snapshot fields the game's buy decisions read (field paths as built by fields()). Readers:
+# powergauge.PowerGauge (PGR Value / Corrected PGR Value, the four factor groups that give money
+# flow, OB/OS, LT trend and industry strength, metaInfo Last / signals / industry_name) and the
+# R&D #32 guard (checklist strengthCount / timingCount). Only these can hold the buy freeze: on
+# 2026-09-01 nine other fields (pgr.power_bar, pgr.beta, ...) went empty for good, and nothing
+# reads them (PR #288 review).
+GAME_INPUT_FIELDS = ("pgr.PGR Value", "pgr.Corrected PGR Value", "pgr.Financials", "pgr.Earnings",
+                     "pgr.Technicals", "pgr.Experts", "meta.Last", "meta.signals", "meta.industry_name",
+                     "checklist.strengthCount", "checklist.timingCount")
+
+
+def is_game_input(field: str) -> bool:
+    return any(field == p or field.startswith(p + ".") for p in GAME_INPUT_FIELDS)
 
 
 def _filled(v) -> bool:
@@ -116,8 +133,8 @@ def _sessions_before(day: datetime.date, k: int) -> list:
     return out
 
 
-def _latest_day(base: str, symbols: list) -> str | None:
-    d = datetime.date.today()
+def _latest_day(base: str, symbols: list, today: datetime.date | None = None) -> str | None:
+    d = today or datetime.date.today()
     for _ in range(10):
         if any(os.path.exists(os.path.join(base, s, f"{s}_{d.isoformat()}.json")) for s in symbols[:50]):
             return d.isoformat()
@@ -125,10 +142,13 @@ def _latest_day(base: str, symbols: list) -> str | None:
     return None
 
 
-def check(day: str | None = None, base: str | None = None, expected: list | None = None) -> dict:
+def check(day: str | None = None, base: str | None = None, expected: list | None = None,
+          as_of: datetime.date | None = None) -> dict:
+    """as_of: the calendar date the check runs on (default: today), for the last-session rule."""
     base = base or paths.symbol_dir()
     symbols = sorted(x for x in os.listdir(base) if os.path.isdir(os.path.join(base, x)))
-    day = day or _latest_day(base, symbols)
+    auto = day is None
+    day = day or _latest_day(base, symbols, as_of)
     if day is None:
         msg = "no Chaikin snapshots in the last 10 days"
         return {"day": None, "alarms": [msg], "notes": [], "gate": [msg], "dropped_fields": [], "fill_rates": {}}
@@ -138,6 +158,13 @@ def check(day: str | None = None, base: str | None = None, expected: list | None
     alarms, notes = [], []
     gate, dropped_fields = [], []       # alarms that mean the inputs are broken (the buy freeze reads these)
     d = datetime.date.fromisoformat(day)
+    if auto:
+        # The newest day with snapshots must be the last finished session: if the evening run
+        # wrote nothing, a morning check would otherwise judge an older, healthy day (#288 review).
+        last_session = _sessions_before(as_of or datetime.date.today(), 1)[0]
+        if day < last_session:
+            alarms.append(f"no snapshots for the last session {last_session} (newest: {day})")
+            gate.append(alarms[-1])
     session = market_calendar.is_session(d)
     if today["n"] and not session:
         kind = "a weekend day" if d.weekday() >= 5 else "a weekday market holiday"
@@ -153,11 +180,14 @@ def check(day: str | None = None, base: str | None = None, expected: list | None
             now = today["rate"].get(f, 0.0)
             if usual >= USUAL_FILL and now < DROP * usual:
                 dropped.append(f"{f} {now:.0%} (usually {usual:.0%})")
-                dropped_fields.append(f)
+                if is_game_input(f):
+                    dropped_fields.append(f)
         if dropped:
             alarms.append(f"{len(dropped)} fields went empty: " + "; ".join(dropped[:12])
                           + (" ..." if len(dropped) > 12 else ""))
-            gate.append(alarms[-1])
+        if dropped_fields:                      # only fields the game reads hold back buys
+            gate.append(f"{len(dropped_fields)} game-input fields went empty: " + ", ".join(dropped_fields[:8])
+                        + (" ..." if len(dropped_fields) > 8 else ""))
     else:
         notes.append("no earlier sessions to compare with")
     if today["bad_values"]:
@@ -215,10 +245,63 @@ def html_banner(report: dict) -> str:
             f'<i>Check with: python -m aether.data_completeness --date {report.get("day")}</i></div>')
 
 
+def game_file() -> str:
+    return os.path.join(paths.data_dir(), "ai_portfolio_game.json")
+
+
+def remembered_fields(path: str | None = None) -> list:
+    """The game-input fields the buy freeze still remembers as empty ([] when none or unreadable)."""
+    state = _read(path or game_file())
+    return list(state.get(DATA_GATE_KEY) or []) if isinstance(state, dict) else []
+
+
+def frozen_alarm(path: str | None = None) -> str | None:
+    """A line for the evening email while the remembered fields keep new buys frozen."""
+    f = remembered_fields(path)
+    if not f:
+        return None
+    return (f"New buys frozen: {len(f)} game-input fields still empty since their outage ({', '.join(f[:6])}"
+            + (" ..." if len(f) > 6 else "") + "). Release by hand only if the field is no longer used: "
+            "python -m aether.data_completeness --accept-fields <field,...>")
+
+
+def accept_fields(names: list, path: str | None = None, now: datetime.datetime | None = None) -> dict:
+    """Drop fields from the buy-freeze memory (the owner accepts they stay empty). Backs up the game
+    file to Data/Backup/<time>_pre_accept_fields first and replaces it atomically."""
+    path = path or game_file()
+    state = _read(path)
+    if not isinstance(state, dict):
+        return {"status": "error", "reason": f"cannot read {path}"}
+    before = list(state.get(DATA_GATE_KEY) or [])
+    unknown = [n for n in names if n not in before]
+    after = [f for f in before if f not in names]
+    if after == before:
+        return {"status": "unchanged", "remembered": before, "unknown": unknown}
+    stamp = (now or datetime.datetime.now()).strftime("%Y%m%d_%H%M%S")
+    bdir = os.path.join(os.path.dirname(path), "Backup", f"{stamp}_pre_accept_fields")
+    os.makedirs(bdir, exist_ok=True)
+    shutil.copy2(path, os.path.join(bdir, os.path.basename(path)))
+    if after:
+        state[DATA_GATE_KEY] = after
+    else:
+        state.pop(DATA_GATE_KEY, None)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+    os.replace(tmp, path)
+    return {"status": "updated", "remembered": after, "unknown": unknown, "backup": bdir}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--date", help="session to check (default: the latest with snapshots)")
+    ap.add_argument("--accept-fields", help="comma-separated fields to drop from the buy-freeze memory "
+                    "(backs up the game file first)")
     a = ap.parse_args(argv)
+    if a.accept_fields:
+        r = accept_fields([x.strip() for x in a.accept_fields.split(",") if x.strip()])
+        sys.stdout.write(json.dumps(r, indent=1) + "\n")
+        return 0 if r["status"] in ("updated", "unchanged") else 1
     r = check(a.date)
     sys.stdout.write(f"Data completeness for {r['day']}: {r.get('snapshots', 0)} snapshots, "
                      f"compared with {r.get('baseline_sessions', 0)} earlier sessions\n")
