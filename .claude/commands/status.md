@@ -3,6 +3,10 @@
 Comprehensive overview of the system's operational and financial health.
 Run all checks below and report findings.
 
+**Scheduled:** AETHER_StatusReport runs this skill's `python -c` blocks unattended at 14:00 on PROD
+(`scripts/utils/skill_report.py`). Each block must only read: no broker calls, email, subprocesses,
+network calls or file writes. A block that mentions one is refused and reported, not run.
+
 ## Step 1 — Data freshness
 
 ```bash
@@ -32,7 +36,7 @@ print(f'Positions: {len(pf[\"positions\"])}')
 ## Step 3 — Scheduled task health
 
 ```bash
-python -c "import data_api; [print(f'{t[\"name\"]}: {t[\"status\"]} (last: {t[\"last_run\"]})') for t in data_api.read_scheduled_tasks()]"
+python -c "import data_api; [print(f'{t[\"name\"]}: {t[\"status\"]} (last: {t[\"last_run\"]})') for t in data_api.read_scheduled_tasks() if not t.get(\"retired\")]"
 ```
 
 ## Step 4 — Recent errors
