@@ -84,7 +84,7 @@ class ManualLoginStoreNoteTest(unittest.TestCase):
 
     def test_the_script_prints_it_before_logging_in(self):
         src = (_REPO / "scripts" / "diagnostics" / "test_etrade.py").read_text(encoding="utf-8")
-        self.assertLess(src.index("manual_login_store_note(env)"), src.index("etrade.get_tokens(env=env, allow_browser=True)"))
+        self.assertLess(src.index("manual_login_store_note(env"), src.index("etrade.get_tokens(env=env, allow_browser=True)"))
 
 
 class HarnessIgnoresTheMachineStoreTest(unittest.TestCase):
@@ -97,6 +97,16 @@ class HarnessIgnoresTheMachineStoreTest(unittest.TestCase):
             env={**os.environ, "AETHER_ETRADE_STORE": "db", "DATABASE_URL": "postgresql://u:p@127.0.0.1:1/x"})
         self.assertEqual(r.returncode, 0, r.stderr[-800:])
         self.assertEqual(r.stdout.strip().splitlines()[-1], "None file")
+
+    def test_a_live_run_keeps_them(self):
+        """AETHER_LIVE_TESTS=1 is the explicit live mode; a live DB test must still see DATABASE_URL."""
+        r = __import__("subprocess").run(
+            [sys.executable, "-c", "import tests, os; print(os.environ.get('AETHER_ETRADE_STORE'), bool(os.environ.get('DATABASE_URL')))"],
+            cwd=str(_REPO), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+            env={**os.environ, "AETHER_LIVE_TESTS": "1", "AETHER_ETRADE_STORE": "db",
+                 "DATABASE_URL": "postgresql://u:p@127.0.0.1:1/x"})
+        self.assertEqual(r.returncode, 0, r.stderr[-800:])
+        self.assertEqual(r.stdout.strip().splitlines()[-1], "db True")
 
 
 if __name__ == "__main__":

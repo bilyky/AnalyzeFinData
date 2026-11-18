@@ -12,8 +12,10 @@ _os_early.environ["AETHER_CACHE_DIR"] = _test_cache_dir.name
 # The machine's shared-store opt-in must not reach the suite: with AETHER_ETRADE_STORE=db set for
 # the user (dev and PROD, PR #268), 79 E*TRADE tests failed or errored on a clean tree (11-18).
 # Tests that need the DB backend set these themselves (tests/test_etrade_client_store.py).
-for _k in ("AETHER_ETRADE_STORE", "DATABASE_URL"):
-    _os_early.environ.pop(_k, None)
+# A live run (AETHER_LIVE_TESTS=1) keeps them, like the other live-gated guards below.
+if not _os_early.environ.get("AETHER_LIVE_TESTS"):
+    for _k in ("AETHER_ETRADE_STORE", "DATABASE_URL"):
+        _os_early.environ.pop(_k, None)
 
 # Globally mock notify.send_email during all unit test executions
 # to completely prevent test email spam and keep production code clean.

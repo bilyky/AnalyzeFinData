@@ -35,10 +35,20 @@ on Sat 11-21 at 10:00.
    isn't verified; the provider chain still falls back as before.
 3. **`test_etrade.py` prints the token store** it uses, and warns when it isn't the shared one while a
    `database.url` is set.
+4. **Test isolation:** the suite ignores the machine's `AETHER_ETRADE_STORE` / `DATABASE_URL` (set for the user by
+   #268's note), except in a live run (`AETHER_LIVE_TESTS=1`). Before this, a shell that inherited `=db` failed 79
+   E*TRADE tests on dev; on PROD, where `database.url` is real, those tests could have reached the shared store.
 
 ## Next pull: steps
-1. Merge **#277**, **#278**, **#287** and this PR, in that order.
-2. Pull when no job is running. These are all code-only changes: no config, and no re-register beyond #274's.
+1. **What the pull brings** (PROD's last pull was `main` at `4d70925`, #274, on 11-17):
+   - live fixes: **#277** (data-completeness CLI), **#278** (stop monitor, one stop per symbol), **#287** (the
+     reason of a failed automated E*TRADE login, masked), and this PR;
+   - refactors that say "no behaviour change": #276 (deletes dead scenario code; golden tests and 159/159 stage
+     mutants unchanged) and #294 (new `aether/core` modules nothing calls yet);
+   - tests only: #292; studies and docs: #280, #282, #283, #284, #286.
+   Still open, so not in this pull unless merged first: #288 and #290 (both change how the game buys: a data-health
+   freeze, and the pyramid peak check), #289 (weekly retrospective report), #291 (study).
+2. Pull when no job is running. All of these are code-only changes: no config, and no re-register beyond #274's.
 3. #278's note (`2026-11-17-prod-review.md`) lists the owner steps: the Short_Long duplicate row, the stale
    hand-set stops, and the Chaikin renewal by **Sat 11-21 08:57 PT**.
 4. If the task re-register for #274 wasn't run, run it now (dry run first), as in `2026-11-16-prod-no-gemini-cli.md`.
