@@ -15,16 +15,14 @@ rules. The live rules change which buys the game rejects, so only a run by hand 
 import argparse
 import json
 import datetime
-from pathlib import Path
 
+import ai_portfolio_game
 import circuit_breaker
 from aether import behaviour_reflection, decision_eval, ledgers
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("retrospective")
 
-# The paper game's ledger (read only). The test harness points GAME_FILE at a temp file.
-GAME_FILE = Path(__file__).resolve().parent / "Data" / "ai_portfolio_game.json"
 
 
 def win_loss_split(trades: list) -> tuple:
@@ -50,7 +48,7 @@ def breaker_lines(triggers: list, shown: int = 5) -> list:
 def behaviour_section(game_file=None, decision_log=None) -> list:
     """The Behaviour reflection lines from the game ledger, the decision log and the OHLCV cache."""
     try:
-        with open(game_file or GAME_FILE, "r", encoding="utf-8") as f:
+        with open(game_file or ai_portfolio_game.AI_GAME_FILE, "r", encoding="utf-8") as f:   # the owner's path, read only
             history = json.load(f).get("history", [])
     except (OSError, ValueError, AttributeError) as e:
         return ["BEHAVIOUR REFLECTION: the game ledger could not be read (" + type(e).__name__ + ")."]

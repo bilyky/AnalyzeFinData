@@ -155,14 +155,14 @@ class ReflectTest(unittest.TestCase):
 class RetrospectiveFixesTest(unittest.TestCase):
     def setUp(self):
         self.assertNotEqual(ledgers.TRADE_DNA_FILE.parent.name, "Data")        # the harness temp folder
-        self.assertNotEqual(ra.GAME_FILE.parent.name, "Data")
-        for f in (ledgers.TRADE_DNA_FILE, ledgers.RETRO_REPORT_FILE, ra.GAME_FILE):
+        self.assertNotEqual(game.AI_GAME_FILE.parent.name, "Data")
+        for f in (ledgers.TRADE_DNA_FILE, ledgers.RETRO_REPORT_FILE, game.AI_GAME_FILE):
             if f.exists():
                 f.unlink()
 
     def tearDown(self):
-        if ra.GAME_FILE.exists():
-            ra.GAME_FILE.unlink()
+        if game.AI_GAME_FILE.exists():
+            game.AI_GAME_FILE.unlink()
 
     def test_flat_trade_is_not_a_win(self):
         w, f, lo = ra.win_loss_split([{"pnl_pct": 1.0}, {"pnl_pct": 0.0}, {"pnl_pct": -1.0}])
@@ -181,7 +181,7 @@ class RetrospectiveFixesTest(unittest.TestCase):
                    "sell_price": 10, "pnl_pct": p, "holding_days": 4, "buy_dna": {"pgr": "Bu", "score": 8.0}}
                   for s, p in (("W", 2.0), ("F", 0.0), ("L", -1.0))]
         ledgers.TRADE_DNA_FILE.write_text(json.dumps(trades), encoding="utf-8")
-        ra.GAME_FILE.write_text(json.dumps({"history": [_tx(0, "BUY", "ZZNOBARS")]}), encoding="utf-8")
+        game.AI_GAME_FILE.write_text(json.dumps({"history": [_tx(0, "BUY", "ZZNOBARS")]}), encoding="utf-8")
         ra.analyze(report_only=True)
         report = ledgers.RETRO_REPORT_FILE.read_text(encoding="utf-8")
         self.assertIn("  - Winning Trades: 1", report)

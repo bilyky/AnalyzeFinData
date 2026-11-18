@@ -98,8 +98,7 @@ _seed_wb.save(_test_xlsx_path)
 _test_game_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
 _test_game_file = Path(_test_game_dir.name) / "ai_portfolio_game.json"
 
-for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomous_pipeline", "bootstrap_dna",
-                  "retrospective_analyzer"):
+for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomous_pipeline", "bootstrap_dna"):
     try:
         _mod = _importlib.import_module(_mod_name)
     except Exception:
@@ -111,7 +110,7 @@ for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomou
     # Game state: ai_portfolio_game is the only writer (save_game, load_game's backup
     # restore). Its backups MUST move with it — save_game prunes GAME_BACKUP_DIR to the
     # last 15, so redirecting the file alone would delete real backups. Readers
-    # (workbook_read / bootstrap_dna / retrospective_analyzer GAME_FILE) point at the same temp file.
+    # (workbook_read / bootstrap_dna GAME_FILE) point at the same temp file.
     if hasattr(_mod, "AI_GAME_FILE"):
         _mod.AI_GAME_FILE = _test_game_file
         _mod.GAME_BACKUP_DIR = Path(_test_game_dir.name) / "Backup" / "Game"
