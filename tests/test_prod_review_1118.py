@@ -87,5 +87,17 @@ class ManualLoginStoreNoteTest(unittest.TestCase):
         self.assertLess(src.index("manual_login_store_note(env)"), src.index("etrade.get_tokens(env=env, allow_browser=True)"))
 
 
+class HarnessIgnoresTheMachineStoreTest(unittest.TestCase):
+    def test_the_suite_uses_the_file_store_whatever_the_machine_sets(self):
+        """A run in a shell that inherited AETHER_ETRADE_STORE=db (set for the user by #268's note)."""
+        r = __import__("subprocess").run(
+            [sys.executable, "-c", "import tests, os; from aether import etrade; "
+             "print(os.environ.get('AETHER_ETRADE_STORE'), etrade.make_etrade_store().backend)"],
+            cwd=str(_REPO), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+            env={**os.environ, "AETHER_ETRADE_STORE": "db", "DATABASE_URL": "postgresql://u:p@127.0.0.1:1/x"})
+        self.assertEqual(r.returncode, 0, r.stderr[-800:])
+        self.assertEqual(r.stdout.strip().splitlines()[-1], "None file")
+
+
 if __name__ == "__main__":
     unittest.main()
