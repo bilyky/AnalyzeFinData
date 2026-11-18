@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game
 import autonomous_pipeline
+import circuit_breaker as root_cb
 import bootstrap_dna
 import daily_task
 import data_api
@@ -213,3 +214,11 @@ class TestProcessSideEffectsBlocked(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWallClockPinned(unittest.TestCase):
+    """The suite must not depend on whether it runs inside 9:30-10:00 ET (2026-11-18 CI failure)."""
+
+    def test_opening_window_is_pinned_closed(self):
+        self.assertFalse(circuit_breaker.is_market_opening_window())
+        self.assertFalse(root_cb.is_market_opening_window())

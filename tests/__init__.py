@@ -345,3 +345,14 @@ if not _os.getenv("AETHER_LIVE_TESTS"):
 
     _subprocess.run = _guarded_run
     _subprocess.Popen = _GuardedPopen
+
+# ---------------------------------------------------------------------------
+# Wall-clock independence: aether.circuit_breaker.is_market_opening_window() reads the real
+# New York clock (9:30-10:00 ET on weekdays). A suite run inside that window took a different
+# path (the opening gap guard) and test_exit_reason_logging failed on main on 2026-11-18 at
+# 09:43 ET in CI. Pin it to "not the opening window" for every test; tests that need the window
+# open still patch it explicitly (tests/test_custom_sprints.py), which overrides this.
+# Guarded by tests/test_log_hermetic.py::TestWallClockPinned.
+import aether.circuit_breaker as _cb  # noqa: E402
+
+_cb.is_market_opening_window = lambda: False
