@@ -161,6 +161,63 @@ class TestLoginHeadlessHonorsBreaker(_StateFileMixin, unittest.TestCase):
         self.assertEqual(etrade._load_reauth_state()["consecutive_failures"], 1)  # arm stands after
         self.assertGreater(etrade._reauth_cooldown_remaining(), 0)                # will not hammer
 
+    def test_a_failed_attempt_says_why_at_warning(self):
+        """PROD 2026-11-17: three automated failures hard-blocked the login, and the reason was
+        logged only at DEBUG (PROD logs at INFO), so the log never said why."""
+        with (
+            mock.patch.object(etrade, "_get_tokens_via_playwright", return_value=None),
+            mock.patch.object(etrade, "pyetrade") as pye,
+            self.assertLogs("aether.etrade", level="WARNING") as logs,
+        ):
+            pye.ETradeOAuth.return_value.get_request_token.return_value = "http://auth"
+            self.assertIsNone(etrade._login_headless("ck", "cs", "u", "pw", "production"))
+        self.assertTrue(any("no verifier captured" in m for m in logs.output))
+
+        etrade.reset_reauth_circuit_breaker("production")   # the 1st failure armed a 15-min cooldown
+        url = "https://us.etrade.com/e/t/etws/authorize?key=CK123SECRET&token=RT456SECRET"
+        boom = RuntimeError(f"Page.goto: net::ERR_CONNECTION_TIMED_OUT at {url}")
+        with (
+            mock.patch.object(etrade, "_get_tokens_via_playwright", side_effect=boom),
+            mock.patch.object(etrade, "pyetrade") as pye,
+            self.assertLogs("aether.etrade", level="WARNING") as logs,
+        ):
+            pye.ETradeOAuth.return_value.get_request_token.return_value = url
+            self.assertIsNone(etrade._login_headless("ck", "cs", "u", "pw", "production"))
+        line = next(m for m in logs.output if "re-auth attempt failed" in m)
+        self.assertIn("RuntimeError: Page.goto: net::ERR_CONNECTION_TIMED_OUT", line)
+        self.assertIn("key=<redacted>&token=<redacted>", line)
+        self.assertNotIn("CK123SECRET", line)
+        self.assertNotIn("RT456SECRET", line)
+
+    def test_the_11_17_sequence_logs_the_click_timeout_on_one_line(self):
+        """PROD 11-17 08:45/09:15/09:45: TOTP path, no security-code field, then the submit click
+        timed out (8 s); main logged nothing about it. The reason is one WARNING line now."""
+        err = TimeoutError("Page.click: Timeout 8000ms exceeded.\nCall log:\n"
+                           "  - waiting for locator(\"#mfaLogonButton, button:has-text('Log on')\")")
+        with (
+            mock.patch.object(etrade, "_get_verifier_via_totp", side_effect=err) as totp,
+            mock.patch.object(etrade, "pyetrade") as pye,
+            self.assertLogs("aether.etrade", level="WARNING") as logs,
+        ):
+            pye.ETradeOAuth.return_value.get_request_token.return_value = "http://auth"
+            self.assertIsNone(etrade._login_headless("ck", "cs", "u", "pw", "production", totp_secret="SEED"))
+        totp.assert_called_once()                       # the TOTP path ran, as on PROD
+        line = next(m for m in logs.output if "re-auth attempt failed" in m)
+        self.assertIn("TimeoutError: Page.click: Timeout 8000ms exceeded. Call log: - waiting for locator", line)
+        self.assertNotIn("\n", line)
+
+    def test_redact_auth_text(self):
+        self.assertEqual(etrade._redact_auth_text("x?oauth_verifier=ABC&oauth_token=D1 y"),
+                         "x?oauth_verifier=<redacted>&oauth_token=<redacted> y")
+        self.assertEqual(len(etrade._redact_auth_text("e" * 1000)), 300)
+        # Quoted OAuth-header and dict-style values (review of #287).
+        self.assertEqual(etrade._redact_auth_text('OAuth oauth_consumer_key="CK123", oauth_token="RT456"'),
+                         'OAuth oauth_consumer_key="<redacted>", oauth_token="<redacted>"')
+        self.assertEqual(etrade._redact_auth_text("{'oauth_token': 'RT456', 'oauth_verifier': 'V789'}"),
+                         "{'oauth_token': '<redacted>', 'oauth_verifier': '<redacted>'}")
+        self.assertEqual(etrade._redact_auth_text("Timeout 8000ms exceeded.\n  - waiting for locator"),
+                         "Timeout 8000ms exceeded. - waiting for locator")
+
     def test_open_gate_success_returns_and_resets(self):
         # Pre-load a failure to prove a SUCCESS clears it.
         with mock.patch.object(etrade.time, "time", return_value=1000.0):
