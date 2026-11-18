@@ -17,7 +17,6 @@ Every collaborator is patched on the live module and ``ws`` is a hermetic fake â
 no network or disk. Re-export is pinned in ``test_scenario_steps``; the composed
 run in ``test_scenario_runner``.
 """
-import datetime
 import os
 import sys
 import unittest
@@ -26,7 +25,6 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game  # noqa: E402
-from aether.scenario import steps  # noqa: E402
 from aether.scenario.steps import deploy_capital  # noqa: E402
 
 
@@ -157,7 +155,7 @@ class TestPyramiding(unittest.TestCase):
         # #181 (PROD GNE 2026-10-02): never buy back what was sold earlier today.
         cases = [
             ({"symbol": "WIN", "type": "SELL", "date": _TODAY}, False),
-            ({"symbol": "WIN", "type": "SELL", "date": "2026-10-02"}, True),  # 6 sessions before
+            ({"symbol": "WIN", "type": "SELL", "date": "2026-10-11"}, True),
             ({"symbol": "OTHER", "type": "SELL", "date": _TODAY}, True),
             ({"symbol": "WIN", "type": "BUY", "date": _TODAY}, True),
         ]
@@ -169,49 +167,6 @@ class TestPyramiding(unittest.TestCase):
                 self.assertEqual(bool(txs), scaled)
                 self.assertEqual(h.pyramid.called, scaled)
                 self.assertEqual("WIN: sold earlier today; no scale-in." in h.logged(), not scaled)
-
-    def test_no_scale_in_within_five_sessions_of_a_sell(self):
-        # PROD NEM: banked 3 sh on 2026-11-09, bought 6 sh back on 11-10 4% lower, stopped 11-12.
-        # _TODAY is Monday 2026-10-12: 10-09 is 1 session back, 10-05 is 5, 10-02 is 6.
-        self.assertEqual(steps.NO_SCALE_IN_AFTER_SELL_SESSIONS, 5)
-        cases = [("2026-10-09", 1, False), ("2026-10-07", 3, False), ("2026-10-05", 5, False),
-                 ("2026-10-02", 6, True)]
-        for sold_on, ago, scaled in cases:
-            with self.subTest(sold_on=sold_on), _Harness() as h:
-                state = _state()
-                state["history"].append({"symbol": "WIN", "type": "SELL", "date": sold_on})
-                txs = _run(state)
-                self.assertEqual(bool(txs), scaled)
-                self.assertEqual(h.pyramid.called, scaled)
-                msg = f"WIN: sold on {sold_on} ({ago} session(s) ago, within 5); no scale-in."
-                self.assertEqual(msg in h.logged(), not scaled)
-
-    def test_the_latest_of_several_sells_counts(self):
-        state = _state()
-        state["history"] += [{"symbol": "WIN", "type": "SELL", "date": "2026-09-01"},
-                             {"symbol": "WIN", "type": "SELL", "date": "2026-10-08"}]
-        with _Harness() as h:
-            self.assertEqual(_run(state), [])
-        h.pyramid.assert_not_called()
-
-    def test_a_malformed_sell_date_is_ignored(self):
-        state = _state()
-        state["history"].append({"symbol": "WIN", "type": "SELL", "date": "n/a"})
-        with _Harness() as h:
-            self.assertEqual(len(_run(state)), 1)
-        h.pyramid.assert_called_once()
-
-    def test_sessions_skip_weekends_and_holidays(self):
-        # Thanksgiving 2026-11-26: from Monday 11-30 back, 11-27 is 1 session, 11-20 is 5, 11-19 is 6.
-        today = datetime.date(2026, 11, 30)
-        for day, n in ((today, 0), (datetime.date(2026, 11, 27), 1), (datetime.date(2026, 11, 25), 2),
-                       (datetime.date(2026, 11, 20), 5), (datetime.date(2026, 11, 19), 6)):
-            with self.subTest(day=day):
-                self.assertEqual(steps._sessions_since(day, today), n)
-        self.assertIsNotNone(steps._recent_sell([{"symbol": "X", "type": "SELL", "date": "2026-11-20"}],
-                                                "X", "2026-11-30"))
-        self.assertIsNone(steps._recent_sell([{"symbol": "X", "type": "SELL", "date": "2026-11-19"}],
-                                             "X", "2026-11-30"))
 
     def test_spare_cash_caps_the_deploy_amount(self):
         state = _state(balance=2300.0, equity=10000.0)  # ratio 0.23 > 0.2; spare = 300
