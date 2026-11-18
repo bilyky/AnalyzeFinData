@@ -20,7 +20,7 @@ Also checked:
     check (2026-05-25, Memorial Day: 56 snapshots with "-1-1-..." signals).
 
 Read-only. ``check(day)`` returns a report; daily_task puts ``alarms`` at the top of the
-evening email. CLI:
+evening email. The CLI runs the same check as the email, screen list included (``screen_symbols``):
 
     python -m aether.data_completeness                 # latest session with snapshots
     python -m aether.data_completeness --date 2026-09-01
@@ -35,6 +35,8 @@ import shutil
 import statistics
 import sys
 
+import openpyxl
+
 from aether import market_calendar, paths
 
 BASELINE_DAYS = 10          # prior sessions the fill rates are compared with
@@ -44,6 +46,20 @@ COUNT_DROP = 0.9            # alarm when there are under 90% of the usual number
 BAR_MISS = 0.1              # alarm when more than 10% of stocks have no OHLCV bar for the session
 KEEPS_UP = 0.8              # a screen symbol present in 80% of the prior sessions is expected today
 SIGNALS_RE = re.compile(r"^[01]{12}$")
+# The screen: column D of the Research sheet of the source workbook in the checkout root (the
+# file the evening daily_task reads; Data/state_of_the_day.xlsx is the pipeline's copy of it).
+SCREEN_XLSX = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state_of_the_day.xlsx")
+
+
+def screen_symbols(path: str | None = None) -> list:
+    """The screen symbols ``check(expected=...)`` looks for, in sheet order. Raises when the
+    workbook can't be read; callers decide what a missing screen means."""
+    wb = openpyxl.load_workbook(path or SCREEN_XLSX, data_only=True, read_only=True)
+    try:
+        return [str(row[3].value) for row in wb["Research"].iter_rows(min_row=2)
+                if len(row) > 3 and row[3].value]
+    finally:
+        wb.close()
 
 
 DATA_GATE_KEY = "_data_gate_fields"   # game state: game-input fields that went empty (buy freeze memory)
@@ -303,7 +319,12 @@ def main(argv=None) -> int:
         r = accept_fields([x.strip() for x in a.accept_fields.split(",") if x.strip()])
         sys.stdout.write(json.dumps(r, indent=1) + "\n")
         return 0 if r["status"] in ("updated", "unchanged") else 1
-    r = check(a.date)
+    try:
+        expected = screen_symbols()
+    except Exception as e:   # the check still runs; it just can't name missing screen symbols
+        expected = None
+        sys.stdout.write(f"  (screen list not read, missing screen symbols not checked: {e})\n")
+    r = check(a.date, expected=expected)
     sys.stdout.write(f"Data completeness for {r['day']}: {r.get('snapshots', 0)} snapshots, "
                      f"compared with {r.get('baseline_sessions', 0)} earlier sessions\n")
     for x in r["alarms"]:

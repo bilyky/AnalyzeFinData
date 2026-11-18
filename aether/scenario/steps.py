@@ -2,11 +2,10 @@
 
 WHAT THIS IS
 ------------
-The fifth seam of the ``ai_portfolio_game`` -> ``aether/scenario`` refactor
-(design doc ``plans/scenario-refactor.md``, R&D #44). B1 gave the *action* ports
-(``prices.py``); B2 the *entity* views (``schema.py``); B3 the stateless helper
-surface (``helpers.py``); B4 the ``ResearchRow`` lens (``schema.py``). This module
-begins lifting the god-function's *stateful stages* out of
+The stateful seam of the ``ai_portfolio_game`` -> ``aether/scenario`` refactor
+(design doc ``plans/scenario-refactor.md``, R&D #44, now superseded by R&D #78). The
+earlier price-port, entity-view and helper modules were never used and were deleted
+in R&D #78 step S2. This module began lifting the god-function's *stateful stages* out of
 ``run_daily_ai_management`` as plain functions that take the raw ``state`` dict,
 mutate it in place, and return their result — the shape a ``RunContext`` step will
 compose in B7.
@@ -53,7 +52,7 @@ def _pkg():
     looked up on the live module object each call — a ``mock.patch.object(game,
     ...)`` then keeps intercepting after callers move into this package, and there
     is no circular-import hazard with the root script. Mirrors
-    ``aether/scenario/helpers.py::_pkg()`` and ``aether/etrade/store.py::_pkg()``.
+    ``aether/etrade/store.py::_pkg()``.
     """
     import ai_portfolio_game as _p
     return _p
