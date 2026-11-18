@@ -71,6 +71,22 @@ def _send(subject: str, body: str) -> bool:
         return False
 
 
+def ai_payload(report: dict) -> str:
+    """The report as compact JSON for the AI step. An analysis's ``winners`` list is dropped when
+    every winner is already in ``missed`` or ``bought`` (each winner is one or the other unless it
+    was not in the universe), so the same rows aren't sent twice. PROD 11-17: Groq refused the
+    full prompt (413 Payload Too Large)."""
+    out = dict(report)
+    for key in ("s10_analysis", "l60_analysis"):
+        a = out.get(key)
+        if not isinstance(a, dict) or not a.get("winners"):
+            continue
+        seen = {json.dumps(r, sort_keys=True, default=str) for r in (a.get("missed") or []) + (a.get("bought") or [])}
+        if all(json.dumps(r, sort_keys=True, default=str) in seen for r in a["winners"]):
+            out[key] = {k: v for k, v in a.items() if k != "winners"}
+    return json.dumps(out, default=str, separators=(",", ":"))[:MAX_REPORT_CHARS]
+
+
 def rules_summary(since: float = 0.0) -> str:
     """The failure-DNA "proposed vs live" lines from the report the analyzer just wrote (pattern
     discovery runs it report-only in Phase 7), or "" when the report has none or was written
@@ -113,7 +129,7 @@ def main() -> int:
     report = json.loads(report_path.read_text(encoding="utf-8"))
     rules = rules_summary(started)
     rules = f"\n\nFailure-DNA {rules}" if rules else ""
-    payload = json.dumps(report, default=str)[:MAX_REPORT_CHARS]
+    payload = ai_payload(report)
     result = ai_step.run(f"pattern discovery {day}", analysis_instructions(),
                          f"DATE = {day}\nReport JSON (Data/{report_path.name}):\n{payload}",
                          tier="strong", max_tokens=3000, notify_on_skip=False)

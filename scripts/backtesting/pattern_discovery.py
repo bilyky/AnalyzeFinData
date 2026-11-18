@@ -144,8 +144,10 @@ def reconstruct_scores(replay_date: str, symbols: list[str] | None = None) -> li
         if (replay_dt - use_dt).days > 7:
             return None
         try:
+            # check_schema=False: these are old snapshots, checked when they were fetched. A replay
+            # inside the 09-01..10-30 factor gap logged ~1,000 SCHEMA WARNING lines (PROD 11-17).
             pg = powergauge.get_symbol_data(sym, date.fromisoformat(use_date),
-                                             prefer_cache=True, session_id={})
+                                             prefer_cache=True, session_id={}, check_schema=False)
             if not pg or pg.price <= 0:
                 return None
             ts, _ = _load_ohlcv(sym)

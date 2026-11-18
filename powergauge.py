@@ -1189,7 +1189,8 @@ def load_raw(symbol: str, cache_date):
         return json.load(f)
 
 
-def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _allow_reauth: bool = True) -> PowerGauge:
+def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _allow_reauth: bool = True,
+                    check_schema: bool = True) -> PowerGauge:
     if not _SYMBOL_RE.match(symbol):
         raise ValueError(f"Invalid symbol format: {symbol!r}")
 
@@ -1285,7 +1286,7 @@ def get_symbol_data(symbol: str, date, prefer_cache: bool, session_id=None, _all
             _pg_log.warning(f"Warning: API error for {symbol} (HTTP {response.status_code}) — row will be skipped")
             pg.price = -1
     if data_jsn:
-        pg.init_from_json(data_jsn)
+        pg.init_from_json(data_jsn, check_schema=check_schema)
         pg.find_prev_pf()
     return pg
 
