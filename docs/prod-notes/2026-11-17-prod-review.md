@@ -13,6 +13,11 @@ Merged since that pull:
 
 Open and meant for this pull: **#277** (data-completeness CLI checks the screen list) and this PR.
 
+**Update 11-18:** PROD pulled #274 on 11-17 (dashboard restart 18:41) and ran the catch-up (step 7) at 18:45. #277 is
+merged. The runbook for the next pull (#278, #287, #293) is
+[2026-11-18-prod-review.md](2026-11-18-prod-review.md), which lands with #293; the owner steps below (3 if not done, 4, 5, 6)
+still apply.
+
 ## What this PR fixes
 1. **Stop-monitor alert emails every other run.** One symbol is on the Short_Long sheet twice, with two
    different stops, and its price sits between them. The breach check used the higher stop (breach) and the
