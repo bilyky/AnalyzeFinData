@@ -215,7 +215,7 @@
     "body": "Employs zero-trust risk safety principles. Operates a closed-loop retrospective feedback analyzer that dynamically clusters true losses (bad habits) into active rejections to immunize the portfolio against repeating errors.",
     "config": [
       "DNA Capture: Freezes PGR, scores, and Z-scores on purchase, logging completed trades to Data/trade_history_dna.json.",
-      "Retrospective Loop: retrospective_analyzer.py runs every Saturday, automatically filtering out market-panic days and statistically clustering failures into failure_dna_rules.json.",
+      "Retrospective Loop: retrospective_analyzer.py filters out market-panic days and statistically clusters failures into failure_dna_rules.json when run by hand. The Saturday AETHER_PatternDiscovery run calls it with --report-only: it proposes rules in failure_dna_rules_proposed.json and leaves the live rules alone.",
       "Action: Dynamic buy-rejection guard (check_failure_rules) blocks any new buy candidate matching our toxic clusters on autopilot."
     ]
   },
@@ -259,8 +259,8 @@
     "origin": "Project AETHER Core Team (R&D Sprints, August 2026). Single-source-of-truth comparison engine.",
     "body": "One pure, deterministic engine (<code>aether/stock_compare.py</code>) selects the requested symbols straight from the already-computed Research rows &mdash; no recompute, no extra workbook reads &mdash; and ranks them by combined score, breaking ties by a confirmed setup, then reward:risk, then symbol, for fully stable ordering. Each row carries a <code>stale</code> flag when its stop or target fell back to a fixed % off price because the OHLCV cache was old, and a comparison-wide warning fires if any symbol is stale, so levels are never presented as exact when they are only approximate. An optional AI &lsquo;WHY&rsquo; narrative (the shared <code>prompts/compare_stocks.md</code> rubric) is layered on demand; it synthesizes on the quantitative factors only (no web access) and, when a provider is unavailable, degrades to a plain-language reason rather than a bare error. The same engine powers the Research-page selection panel, the web chat &lsquo;compare&rsquo; intent, the console script, and the <code>/compare-stocks</code> agent skill &mdash; the agent surface adds live news/events search on top.",
     "config": [
-      "Engine: aether/stock_compare.compare_data() &mdash; pure, no LLM, no network; the single source of truth for facts + ranking.",
-      "Ranking: combined score (desc), then confirmed setup, then reward:risk, then alphabetical &mdash; fully deterministic.",
+      "Engine: aether/stock_compare.compare_data(): pure, no LLM, no network; the single source of truth for facts + ranking.",
+      "Ranking: combined score (desc), then confirmed setup, then reward:risk, then alphabetical; fully deterministic.",
       "Surfaces: Research-page row selection + inline panel, web chat 'compare/vs' intent, console script, /compare-stocks agent skill.",
       "Freshness: per-symbol stale flag plus a comparison-wide warning whenever a stop/target is a % fallback.",
       "AI WHY (optional): prompts/compare_stocks.md rubric, quantitative factors only; on-demand, and states why if a provider is unavailable."
@@ -283,17 +283,30 @@
   },
   "pattern_discovery": {
     "title": "Pattern Discovery Agent \u2014 Missed Winners Retrospective",
-    "summary": "Weekly self-improvement loop: replay a past date, find the top 10 actual winners, diagnose why each was missed, and extract candidate new scoring factors. Two-layer design \u2014 a Python computation engine reconstructs 475 symbol scores from the Chaikin cache in ~14s (parallelized), followed by an LLM agent that reasons about <em>why</em> patterns exist and names them. <b>First finding (Jul 2026):</b> <code>lt_trend=Strong</code> penalized -3.0 in L60 appeared in 95% of missed 60-day winners across 3 dates \u2014 weight corrected to 0. Run from the System page or via <code>/pattern-discover</code>.",
+    "summary": "Weekly self-improvement loop: replay a past date, find the top 10 actual winners, diagnose why each was missed, and extract candidate new scoring factors. Two-layer design \u2014 a Python computation engine reconstructs 475 symbol scores from the Chaikin cache in ~14s (parallelized), followed by an LLM agent that reasons about <em>why</em> patterns exist and names them. <b>First finding (Jul 2026):</b> <code>lt_trend=Strong</code> penalized -3.0 in L60 appeared in 95% of missed 60-day winners across 3 dates \u2014 weight corrected to 0. Runs every Saturday at 10:00 as the AETHER_PatternDiscovery task (replay date: today \u2212 25 days); the analysis is written by AETHER's own AI layer (config <code>ai</code>) and emailed, or skipped and reported when no provider answers. Also run from the System page or via <code>/pattern-discover</code>.",
     "origin": "AETHER Internal R&D (July 2026). Inspired by W.D. Gann's retrospective analysis approach and Amy Edmondson's Right Kind of Wrong \u2014 learning from intelligent failures.",
-    "body": "<p>A self-improving learning loop that finds stocks the system missed, diagnoses <em>why</em> it missed them, and extracts candidate new scoring factors.</p>\n<p class=\"mt-2\"><b>How it works (run weekly on Saturdays):</b></p>\n<ol class=\"list-decimal pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>Historical replay</b> \u2014 reconstructs every symbol's AETHER scores as they were on a past date (reads from the Chaikin per-symbol cache, no live API needed).</li>\n  <li><b>Forward returns</b> \u2014 computes actual 10-day (S10) and 60-day (L60) returns from OHLCV for all symbols.</li>\n  <li><b>Classify winners</b> \u2014 ranks actual winners; marks each as <em>bought</em> (system selected it), <em>missed</em> (system rejected it despite being in universe), or <em>not in universe</em>.</li>\n  <li><b>Diagnose misses</b> \u2014 for each missed winner records the exact filter that rejected it (score &lt; threshold, wrong PGR, setup=False) and which factor was most anomalous vs the universe.</li>\n  <li><b>Extract patterns</b> \u2014 two types: (a) <em>missed-winner patterns</em>: factor combos present in missed winners but penalized in the model; (b) <em>false-positive guards</em>: signals common in stocks the system bought that then lost.</li>\n  <li><b>Validate</b> \u2014 rolls candidate patterns across 16 historical dates. Only patterns with |z|\u22652.0 and N\u226530 are promoted to the scoring backlog.</li>\n</ol>\n<p class=\"mt-2\"><b>First finding (Jul 2026):</b> <code>lt_trend=Strong</code> appeared in 95% of L60 missed winners across 3 dates. The -3.0 contrarian penalty was excluding exactly the stocks that performed best over 60 days. <b>Weight updated: Strong \u2192 0 (was -3.0) in L60.</b></p>\n<p class=\"mt-2\">Run from the System page, or invoke the <code>/pattern-discover</code> skill for full LLM reasoning over the results.</p>",
+    "body": "<p>A self-improving learning loop that finds stocks the system missed, diagnoses <em>why</em> it missed them, and extracts candidate new scoring factors.</p>\n<p class=\"mt-2\"><b>How it works (run weekly on Saturdays):</b></p>\n<ol class=\"list-decimal pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>Historical replay</b> \u2014 reconstructs every symbol's AETHER scores as they were on a past date (reads from the Chaikin per-symbol cache, no live API needed).</li>\n  <li><b>Forward returns</b> \u2014 computes actual 10-day (S10) and 60-day (L60) returns from OHLCV for all symbols.</li>\n  <li><b>Classify winners</b> \u2014 ranks actual winners; marks each as <em>bought</em> (system selected it), <em>missed</em> (system rejected it despite being in universe), or <em>not in universe</em>.</li>\n  <li><b>Diagnose misses</b> \u2014 for each missed winner records the exact filter that rejected it (score &lt; threshold, wrong PGR, setup=False) and which factor was most anomalous vs the universe.</li>\n  <li><b>Extract patterns</b> \u2014 two types: (a) <em>missed-winner patterns</em>: factor combos present in missed winners but penalized in the model; (b) <em>false-positive guards</em>: signals common in stocks the system bought that then lost.</li>\n  <li><b>Validate</b> \u2014 rolls candidate patterns across 16 historical dates. Only patterns with |z|\u22652.0 and N\u226530 are promoted to the scoring backlog.</li>\n</ol>\n<p class=\"mt-2\"><b>First finding (Jul 2026):</b> <code>lt_trend=Strong</code> appeared in 95% of L60 missed winners across 3 dates. The -3.0 contrarian penalty was excluding exactly the stocks that performed best over 60 days. <b>Weight updated: Strong \u2192 0 (was -3.0) in L60.</b></p>\n<p class=\"mt-2\"><b>Scheduled:</b> the AETHER_PatternDiscovery task (Sat 10:00) replays today \u2212 25 days, sends the report and the skill's analysis steps to AETHER's AI layer, saves the answer as <code>Data/pattern_discovery_{DATE}_ai.md</code> and emails it. If no AI provider answers, the email says why and carries the computed counts; the report stays on disk. It replaced the Gemini CLI agent task, which failed with HTTP 403 on PROD every Saturday from at least 2026-09-19. Run from the System page, or invoke the <code>/pattern-discover</code> skill by hand.</p>",
     "config": [
       "Replay date: target ~3-4 weeks back so both 10d and 60d windows have settled OHLCV data",
-      "Constraint: replay date \u2264 2026-04-04 for 10d window, \u2264 2026-02-24 for 60d window",
+      "Schedule: AETHER_PatternDiscovery, Sat 10:00, scripts/backtesting/rd_pattern_discovery.py (replay date today \u2212 25 days; --date to pick one)",
       "Reconstruction: reads Data/Symbol/{sym}/{sym}_{date}.json Chaikin cache (no live session needed)",
       "Thresholds: score \u2265 9.5 AND pgr \u2208 {Bu, Bu+} AND setup=True to qualify as 'bought'",
       "Validation: 16 sampled dates across 9-month range, |z|\u22652.0 + N\u226530 for promotion",
       "Output: Data/pattern_discovery_{DATE}.json \u2014 machine-readable for the /pattern-discover skill",
       "Weekly cadence: run same date each week; pattern recurring in 3+ weeks = strong validation signal"
+    ]
+  },
+  "status_report": {
+    "title": "Daily Status Report \u2014 Health Check by Email",
+    "summary": "Every NYSE session at 14:00 the AETHER_StatusReport task runs the <code>status</code> skill's read-only checks (data freshness, portfolio, scheduled tasks, recent errors, market regime) in Python and emails a short report written by AETHER's AI layer (config <code>ai</code>, tier <code>cheap</code>). If no AI provider answers, the email carries the raw check outputs and the reason.",
+    "origin": "AETHER Internal (November 2026). Replaced the AETHER_PostMarketReporter Gemini CLI task, which failed with HTTP 403 on PROD.",
+    "body": "<p>A daily health check that needs no agent CLI.</p>\n<ol class=\"list-decimal pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>Checks</b> \u2014 <code>scripts/utils/skill_report.py</code> runs each <code>python -c</code> block of <code>.claude/commands/status.md</code>, under its step heading. Only those blocks run, and a block that mentions a broker call, email, a subprocess, a network call or a file write is refused and reported instead of run.</li>\n  <li><b>Report</b> \u2014 the outputs and the skill's report format go to the AI layer, told to use only the given outputs and to say plainly when a check failed.</li>\n  <li><b>Email</b> \u2014 the report, or the raw outputs and the reason when the AI step is skipped.</li>\n</ol>\n<p class=\"mt-2\">Weekends and market holidays are skipped (<code>--sessions-only</code>). The refusal is a text check: it can't see what a called function does inside, so a test pins the status skill's current blocks as read-only.</p>",
+    "config": [
+      "Task: AETHER_StatusReport, daily 14:00, NYSE sessions only (scripts/utils/scheduled_tasks.json)",
+      "Command: scripts/utils/skill_report.py --skill status --title \"Portfolio status\" --sessions-only",
+      "AI: config ai, tier cheap (--tier to change); skipped and reported when no provider answers",
+      "Checks: 180 s timeout each; a failed check is reported as FAILED with its exit code",
+      "Log: Data/logs/agent_runs/status_report_task.log"
     ]
   },
   "signal_quality_validator": {
@@ -482,6 +495,59 @@
       "database.url / DATABASE_URL: the shared Postgres (reached over Tailscale from dev)",
       "SHARED_RETRY_S = 300: after a database failure, skip it for 5 minutes",
       "Needs the cryptography package (requirements.txt)"
+    ]
+  },
+  "dev_project_model": {
+    "title": "Development Tab: Project Model",
+    "summary": "A dashboard tab that shows the AETHER services redesign (R&amp;D #78): each step, fix and service with its status and PR, plus code metrics measured live from the source tree.",
+    "origin": "PR #242 (2026-11-06), step S0b of R&D #78.",
+    "body": "<p>The progress comes from <code>plans/aether-services-progress.json</code>, which each R&amp;D #78 PR updates. The metrics are measured on every load, so they show the code as it is: lines in <code>ai_portfolio_game.py</code>, <code>aether/scenario</code> and <code>aether/services</code>, <code>game.X</code> calls and <code>_pkg()</code> shims in the new packages, and magic <code>row[N]</code> indexes. Read-only; no login needed.</p>",
+    "config": [
+      "Endpoint: GET /api/dev/project-model",
+      "Source: plans/aether-services-progress.json"
+    ]
+  },
+  "dashboard_login": {
+    "title": "Dashboard Login for Private Data",
+    "summary": "Pages and actions that show real accounts, logs or private plans, or that spend AI quota or touch E*TRADE, need the admin login. Market data and the paper game stay open.",
+    "origin": "PR #243 (2026-11-10); PR #252 added it to admin-only task output. The dashboard listens on the network.",
+    "body": "<p>Log in at the top right with an account from <code>web.admins</code>; a session lasts 12 hours. The login is required for real accounts, the private plan page, the OceanView tab, logs, chat, live requalify, an AI summary on Compare, running or healing tasks, E*TRADE status and re-auth, and the output of an admin-only task. Without <code>web.secret</code> in the config, sessions end when the server restarts.</p>",
+    "config": [
+      "web.admins: who can log in",
+      "web.secret: signing key (set it so sessions survive a restart)",
+      "Session length: 12 hours"
+    ]
+  },
+  "chaikin_session": {
+    "title": "Chaikin Session Renewal",
+    "summary": "The Chaikin login token lasts about 7 days. A daily task renews it on a weekday before it runs out, and a morning check emails a reminder when fewer than 2.5 days are left.",
+    "origin": "PR #251 (2026-11-10): the token kept expiring on Sunday evening, and the weekly Sunday renewal had nobody to fix a failure.",
+    "body": "<p><b>AETHER_Chaikin_Reauth</b> (daily 08:00; needs a logged-on desktop because it opens Chrome) renews on a weekday when the token wouldn't outlive the next weekday run plus a day, so a Friday renews a token that would die over the weekend. At the weekend it renews only if the token dies before Monday 08:00. <b>AETHER_Chaikin_Runway_Watch</b> (daily 07:00) never opens a browser: it emails a reminder, at most once a day, naming the expiry time. On the System page, <i>Check Token Runway</i> and <i>Login &amp; Refresh Token</i> run the same script (admin only).</p>",
+    "config": [
+      "Task: scripts/monitoring/chaikin_reauth.py --weekday-aware",
+      "Reminder: --notify-days 2.5",
+      "System page: --check, and --cdp --force"
+    ]
+  },
+  "preflight_buy_gate": {
+    "title": "Pre-Flight Buy Gate",
+    "summary": "After a failed morning pre-flight, the scheduled trade run makes no new buys, scale-ins or queued buys. Stops, exits and queued sells still run.",
+    "origin": "PR #251 (2026-11-10): on 2026-11-09 the pre-flight failed on an expired Chaikin session, yet the 07:00 run bought on stale data. PR #259 added the log lines.",
+    "body": "<p>The morning pipeline records its verdict in <code>Data/preflight_status.json</code>. A FAIL for today, or a record that can't be read, sets the same buy freeze the circuit breaker uses and drops queued BUY orders. A run started by hand with <code>--run --force</code> may still buy, and logs that it bypassed the gate. Each pre-flight logs one <i>Pre-flight summary</i> line naming any failed check.</p>",
+    "config": [
+      "Data/preflight_status.json (written by autonomous_pipeline.py)",
+      "Manual override: ai_portfolio_game.py --run --force"
+    ]
+  },
+  "system_watchdog": {
+    "title": "System Watchdog & Alerts",
+    "summary": "An hourly health check: it emails on data loss, a stale backup, a missing scheduled trade run or a failing OceanView pack, reports missing scheduled tasks, and hands a pipeline crash to an AI agent for diagnosis.",
+    "origin": "Core infrastructure; the missed-run alert and retired tasks came in PR #259 (2026-11-13).",
+    "body": "<p><b>Alerts</b> (each at most once a day): a symbol cache that loses more than 20% of its entries between runs; no successful backup for 3 days; no scheduled trade run by 07:30 PT on an NYSE session day; an OceanView context pack that failed or is more than 30 hours old. The stop monitor separately emails once a day when it has no prices for half or more of the positions it watches.</p><p class=\"mt-2\"><b>Tasks:</b> the watchdog checks the tasks listed in <code>scripts/utils/scheduled_tasks.json</code> and reports missing ones, but never creates them (re-register with <code>register_agent_tasks.ps1</code>); tasks marked retired are left alone. <b>Crashes:</b> a pipeline traceback goes to an AI agent CLI, by default the Claude CLI with read-only tools, so it diagnoses rather than edits; a lock file stops repeat triggers until someone reviews it.</p>",
+    "config": [
+      "Schedule: AETHER_Watchdog, hourly",
+      "AETHER_HEALER_CMD overrides the healer command",
+      "Thresholds: cache drop 20%, backup 3 days, trade run due 07:30 PT, pack 30 h"
     ]
   }
 }
