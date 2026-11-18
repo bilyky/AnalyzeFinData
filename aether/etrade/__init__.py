@@ -637,6 +637,8 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str,
             reset_reauth_circuit_breaker(env)   # success retracts the pre-armed failure
             _set_profile_trust(env, "trusted")  # a clean mint through the profile proves trust
             return tokens
+        _log.warning("E*TRADE automated re-auth attempt failed: no verifier captured "
+                     "(the login page did not complete).")
     except SmsRequired:
         # OTP wall in a headless run: the browser and login WORKED — trust merely lapsed. That
         # is not a ban-risk failure, so retract the pre-armed breaker (don't let it escalate)
@@ -644,12 +646,24 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str,
         reset_reauth_circuit_breaker(env)
         raise SmsRequired(env)
     except Exception as e:
-        _log.debug(f"_login_headless: {e}")
+        # WARNING, not DEBUG: since the breaker (08-18) and the 3-strike block (#113) a failure
+        # counts, and PROD logs at INFO. On 2026-11-17 three failures blocked the automated
+        # login with no reason in the log.
+        _log.warning(f"E*TRADE automated re-auth attempt failed: {type(e).__name__}: {_redact_auth_text(e)}")
     # This attempt failed (no verifier, or an exception that isn't SmsRequired). The breaker was
     # already bumped up-front; if that pushed the streak to the hard-block threshold, alert now so
     # even an end-of-day 3rd failure reports without waiting for a 4th (blocked) attempt.
     _maybe_alert_reauth_blocked(env)
     return None
+
+
+# The authorize URL carries the consumer key and the request token (and a page error can quote it).
+_AUTH_SECRET_QS = _re.compile(r"((?:key|token|oauth_[a-z_]+|verifier|password|pwd)=)[^&\s'\"]+", _re.I)
+
+
+def _redact_auth_text(text) -> str:
+    """An exception text safe to log: auth query values masked, cut to 300 characters."""
+    return _AUTH_SECRET_QS.sub(r"\1<redacted>", str(text))[:300]
 
 
 def _get_verifier_via_totp(auth_url, username, password, totp_secret, headless=True):

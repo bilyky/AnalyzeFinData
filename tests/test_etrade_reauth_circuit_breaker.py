@@ -161,6 +161,31 @@ class TestLoginHeadlessHonorsBreaker(_StateFileMixin, unittest.TestCase):
         self.assertEqual(etrade._load_reauth_state()["consecutive_failures"], 1)  # arm stands after
         self.assertGreater(etrade._reauth_cooldown_remaining(), 0)                # will not hammer
 
+    def test_a_failed_attempt_says_why_at_warning(self):
+        """PROD 2026-11-17: three automated failures hard-blocked the login, and the reason was
+        logged only at DEBUG (PROD logs at INFO), so the log never said why."""
+        with mock.patch.object(etrade, "_get_tokens_via_playwright", return_value=None),              mock.patch.object(etrade, "pyetrade") as pye,              self.assertLogs("aether.etrade", level="WARNING") as logs:
+            pye.ETradeOAuth.return_value.get_request_token.return_value = "http://auth"
+            self.assertIsNone(etrade._login_headless("ck", "cs", "u", "pw", "production"))
+        self.assertTrue(any("no verifier captured" in m for m in logs.output))
+
+        etrade.reset_reauth_circuit_breaker("production")   # the 1st failure armed a 15-min cooldown
+        url = "https://us.etrade.com/e/t/etws/authorize?key=CK123SECRET&token=RT456SECRET"
+        boom = RuntimeError(f"Page.goto: net::ERR_CONNECTION_TIMED_OUT at {url}")
+        with mock.patch.object(etrade, "_get_tokens_via_playwright", side_effect=boom),              mock.patch.object(etrade, "pyetrade") as pye,              self.assertLogs("aether.etrade", level="WARNING") as logs:
+            pye.ETradeOAuth.return_value.get_request_token.return_value = url
+            self.assertIsNone(etrade._login_headless("ck", "cs", "u", "pw", "production"))
+        line = next(m for m in logs.output if "re-auth attempt failed" in m)
+        self.assertIn("RuntimeError: Page.goto: net::ERR_CONNECTION_TIMED_OUT", line)
+        self.assertIn("key=<redacted>&token=<redacted>", line)
+        self.assertNotIn("CK123SECRET", line)
+        self.assertNotIn("RT456SECRET", line)
+
+    def test_redact_auth_text(self):
+        self.assertEqual(etrade._redact_auth_text("x?oauth_verifier=ABC&oauth_token=D1 y"),
+                         "x?oauth_verifier=<redacted>&oauth_token=<redacted> y")
+        self.assertEqual(len(etrade._redact_auth_text("e" * 1000)), 300)
+
     def test_open_gate_success_returns_and_resets(self):
         # Pre-load a failure to prove a SUCCESS clears it.
         with mock.patch.object(etrade.time, "time", return_value=1000.0):
