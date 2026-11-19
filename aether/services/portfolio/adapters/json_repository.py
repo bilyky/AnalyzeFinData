@@ -10,7 +10,11 @@ restoring from a backup. The file code came as-is from ``ai_portfolio_game.load_
   (for example the dashboard reading it), so the swap is retried for a few seconds. If any
   step fails, the file keeps its last good content, the state goes to
   ``<file>.unsaved-<time>``, an ERROR is logged and ``StorageError`` is raised.
-- **F2 (open):** a corrupt file with no readable backup quietly becomes a fresh portfolio.
+- **F2 (fixed):** a fresh portfolio only on a true first run: no file **and** no backup. A
+  missing, empty or corrupt file is restored from the newest readable backup. If none can be
+  read, the load stops: an ERROR is logged and ``StorageError`` is raised, and nothing is
+  written. Before F2 the game silently started again with $10k cash. A corrupt file is kept as
+  ``<file>.corrupt-<time>`` before a backup is copied over it.
 
 Which file belongs to which portfolio is configuration, passed in by the composition root
 (``aether.bootstrap``); callers of the service never see a path.
@@ -35,6 +39,7 @@ KEEP_BACKUPS = 15
 REPLACE_TRIES = 10       # os.replace attempts while a reader holds the file open
 REPLACE_WAIT_S = 0.5     # pause between attempts (about 5 s in all)
 RUNBOOK = "aether/services/portfolio/README.md (When a run logs NOT saved)"
+LOAD_RUNBOOK = "aether/services/portfolio/README.md (When the state cannot be loaded)"
 
 
 @dataclass(frozen=True)
@@ -67,7 +72,7 @@ class JsonPortfolioRepository:
 
     # -- PortfolioRepository ---------------------------------------------------------------
     def load(self, portfolio_id: PortfolioId) -> Portfolio:
-        """The stored portfolio; a fresh one on a first run (and, until F2, on an unreadable file)."""
+        """The stored portfolio; a fresh one only on a true first run (no file, no backup)."""
         state = self._read(portfolio_id)
         if state is None:
             return Portfolio.new(portfolio_id, self.starting_capital, str(datetime.date.today()))
@@ -85,42 +90,68 @@ class JsonPortfolioRepository:
             json.dump(state, fh, indent=4, default=repr)
         return str(target)
 
-    # -- the file (today's load_game / save_game, moved as-is) -----------------------------
+    # -- the file (today's load_game / save_game, then F1 and F2) -------------------------
+    def _backups(self, f: PortfolioFile) -> list:
+        backup_dir = Path(f.backup_dir)
+        if not backup_dir.exists():
+            return []
+        return sorted(backup_dir.glob(f.backup_glob), key=lambda x: x.stat().st_mtime, reverse=True)
+
     def _restore_from_backup(self, f: PortfolioFile, success_message: str):
         """Newest readable backup, copied back over the file; None if there is none."""
-        backup_dir = Path(f.backup_dir)
-        if backup_dir.exists():
-            backups = sorted(list(backup_dir.glob(f.backup_glob)), key=lambda x: x.stat().st_mtime, reverse=True)
-            for b in backups:
-                try:
-                    with open(b, "r", encoding="utf-8") as bf:
-                        state = json.load(bf)
-                        shutil.copy2(b, f.path)
-                        self._log.warning(success_message.format(name=b.name))
-                        return state
-                except Exception:
-                    continue
+        for b in self._backups(f):
+            try:
+                with open(b, "r", encoding="utf-8") as bf:
+                    state = json.load(bf)
+                    shutil.copy2(b, f.path)
+                    self._log.warning(success_message.format(name=b.name))
+                    return state
+            except Exception:
+                continue
         return None
 
+    def _keep_corrupt_copy(self, path: Path) -> None:
+        """Keep the unreadable file as evidence before a backup is copied over it."""
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        try:
+            shutil.copy2(path, path.with_name(f"{path.name}.corrupt-{ts}"))
+        except Exception as e:
+            self._log.warning(f"  [PORTFOLIO] Could not keep a copy of the unreadable {path.name}: {e}")
+
+    def _refuse_load(self, portfolio_id: PortfolioId, f: PortfolioFile, why: str, cause=None):
+        n = len(self._backups(f))
+        msg = (f"state for {portfolio_id} cannot be loaded: {why}, and none of the {n} backups in "
+               f"{f.backup_dir} can be read. Nothing was written. To recover, see {LOAD_RUNBOOK}")
+        self._log.error(f"  [PORTFOLIO] {msg}.")
+        raise StorageError(msg) from cause
+
     def _read(self, portfolio_id: PortfolioId):
-        """The stored dict, or None when a fresh portfolio is due."""
+        """The stored dict, or None on a true first run (no file and no backup)."""
         f = self._file(portfolio_id)
         path = Path(f.path)
         if not path.exists() or path.stat().st_size == 0:
+            missing = not path.exists()
+            if missing and not self._backups(f):
+                return None  # a true first run: never saved, nothing to restore
             state = self._restore_from_backup(
                 f, "  [⚠️ AETHER SELF-HEALER] AI game file was missing or empty. "
                    "Successfully restored from backup: {name}")
+            if state is None:
+                self._refuse_load(portfolio_id, f, f"{path.name} is {'missing' if missing else 'empty'}")
             return state
         with open(path, "r", encoding="utf-8") as fh:
             try:
                 return json.load(fh)
             except Exception as e:
-                self._log.warning(f"  [⚠️ AETHER SELF-HEALER] Error loading {path.name}: {e}. "
-                                  "Attempting automated recovery from backup...")
-                state = self._restore_from_backup(
-                    f, "  [⚠️ AETHER SELF-HEALER] Successfully restored corrupted file from backup: {name}")
-                # Fallback to default state if all else fails (F2 changes this)
-                return state
+                error = e
+        self._log.warning(f"  [⚠️ AETHER SELF-HEALER] Error loading {path.name}: {error}. "
+                          "Attempting automated recovery from backup...")
+        self._keep_corrupt_copy(path)
+        state = self._restore_from_backup(
+            f, "  [⚠️ AETHER SELF-HEALER] Successfully restored corrupted file from backup: {name}")
+        if state is None:
+            self._refuse_load(portfolio_id, f, f"{path.name} is not valid JSON ({error})", error)
+        return state
 
     def _write(self, portfolio_id: PortfolioId, state: dict) -> None:
         f = self._file(portfolio_id)
