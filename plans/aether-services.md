@@ -172,6 +172,16 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
 - They compose into named spec sets, and the service writes each `🛑 AI BUY REJECTED` line
   with its values.
 - **Migration:** today's live and queued spec sets are reproduced exactly. Unifying them is F7.
+- **One buy-idea spec set for every recommender (F11, owner 2026-11-19).** Today five places build
+  their own buy filter around the shared elite check, with different thresholds: the Oracle
+  (`aether_oracle.get_oracle_buy_candidates`: S10 ≥ 2.5, R/R ≥ 1.5 or elite), the Autopilot setups
+  (`workbook_write`), the pick lists (`aether/pick_lists.py`), the game (`ai_portfolio_game`,
+  `aether/scenario/steps.py`: R/R ≥ 2 and a 5% target gain, or elite). On 2026-11-18 SA came
+  through four of them at once, and a new guard (R&D #113) had no single place to go. Target: each
+  recommender calls a **named spec set** in `trading` (e.g. `real_money_ideas`, `game_entries`,
+  `report_setups`), built from shared specs; where sets differ (real money stricter than the paper
+  game), the difference is written in the set, on purpose. First pieces: `aether/buy_specs.py`
+  (pure checks from R&D #113; the Oracle uses them, the others move over with S8).
 
 **P7. Domain events + Observer + Outbox**
 - `Portfolio` records `PositionOpened`, `PositionClosed`, `ScaledOut`, `ScaledIn`,
@@ -275,12 +285,14 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
 | F2 | Fresh $10k only on a true first run; corrupt state with no restorable backup → raise | no | unit tests | with F1 |
 | F3 | The run gate uses holiday-aware calendar/session | holidays | red test 2026-11-26 | early, before 2026-11-26 (step 1c) |
 | F4 | Remove the 4 doubled log lines | no | audit test | after the golden split |
-| F5 | The dashboard regime equals the traded regime (one function) | display | unit test | after `trading` strategy |
+| F5 | The dashboard regime equals the traded regime (one function) | display | unit test | done early (2026-11-19): `aether/regime.py`, reports show `ai_portfolio_game.get_market_regime_label()` |
 | F6 | Column 23 ≠ ATR (`options.py:292`) | header-missing case | red test | with the `research` column map |
 | F7 | Queued BUY uses the live spec set | **yes** | replay past queued buys: rejects and P&L | end |
 | F8 | Circuit-breaker restore lowers stops: **study** max(original, ratchet) vs never-restore | **yes** | backtest on trigger dates | end |
 | F9 | The 7 raw OHLCV readers move to split-adjusted bars, one at a time | **yes** | backtest each | end |
 | F10 | Unify the SELL keys and the open-position shape | data shape | reviewed golden update | end |
+| F11 | Every recommender (Oracle, Autopilot setups, pick lists, game) calls a named buy spec set; shared specs in one place | **yes** | per set: a replay of past ideas, rejects and P&L | with S8; first specs in `aether/buy_specs.py` |
+| F12 | Oracle: the elite waiver only within 10% of the 52-week high (hold-back); below a falling 200-day flagged | **yes** (advice) | R&D #113 study + ATR-matched check | done in the F11-seed PR |
 | B9 | Game state follows `$AETHER_DATA_DIR`? It also moves the E*TRADE token | ops | check the PROD task's environment | user decision |
 
 ## Migration (strangler, small PRs; S = structural, golden (a) identical)

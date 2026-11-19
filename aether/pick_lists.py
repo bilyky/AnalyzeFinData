@@ -116,7 +116,8 @@ RAW_L60 = PickList(
 ORACLE_BUYS = PickList(
     "oracle_buys", "Oracle: Top High-Conviction Breakout Setups (real account)",
     "Setup OK; Short10 ≥ {oracle_s10}; bubble z-score below {oracle_bubble}; reward/risk ≥ {oracle_rr} "
-    "or an elite breakout ({elite}); not already held in the real account; ranked by S10+L60; top 3 shown.",
+    "or an elite breakout ({elite}) within 10% of its 52-week high (R&D #113); not already held in the "
+    "real account; ranked by S10+L60; top 3 shown; ideas below a falling 200-day are flagged.",
     lambda r: True, total, "prior_close")
 
 ALL = (MORNING_TOP5, MORNING_RESERVES, EVENING_COMBINED, EVENING_S10, EVENING_L60, RAW_S10, RAW_L60,

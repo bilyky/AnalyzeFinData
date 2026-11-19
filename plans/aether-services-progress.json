@@ -2,7 +2,7 @@
   "project": "AETHER Services (R&D #78)",
   "plan": "plans/aether-services.md",
   "adr": "docs/adr/README.md",
-  "updated": "2026-11-18",
+  "updated": "2026-11-19",
   "statuses": ["todo", "in_progress", "in_review", "done", "blocked", "decision"],
   "services": [
     {"id": "market_data", "title": "Market data", "owns": "prices (E*TRADE, Google, OHLCV cache), OHLCV bars, freshness and heal, calendar and session", "status": "todo", "step": "S5"},
@@ -36,12 +36,14 @@
     {"id": "F2", "title": "No silent fresh $10k state on a corrupt file", "trading": false, "evidence": "unit tests", "status": "todo", "pr": null},
     {"id": "F3", "title": "Run gate respects market holidays (early, before 2026-11-26)", "trading": true, "evidence": "red test on a holiday", "status": "done", "pr": 250},
     {"id": "F4", "title": "Remove the 4 doubled log lines", "trading": false, "evidence": "audit log test", "status": "todo", "pr": null},
-    {"id": "F5", "title": "Dashboard regime equals the traded regime", "trading": false, "evidence": "unit test", "status": "todo", "pr": null},
+    {"id": "F5", "title": "Dashboard regime equals the traded regime", "trading": false, "evidence": "unit test", "status": "in_review", "pr": 303},
     {"id": "F6", "title": "Research column 23 is not ATR (options fallback)", "trading": true, "evidence": "red test", "status": "todo", "pr": null},
     {"id": "F7", "title": "Queued buys get the live buy checks", "trading": true, "evidence": "replay of past queued buys", "status": "todo", "pr": null},
     {"id": "F8", "title": "Circuit breaker lowers stops when it clears (study first)", "trading": true, "evidence": "backtest on trigger dates", "status": "todo", "pr": null},
     {"id": "F9", "title": "OHLCV readers split-adjusted, one at a time", "trading": true, "evidence": "backtest each", "status": "todo", "pr": null},
     {"id": "F10", "title": "One SELL transaction and position shape", "trading": false, "evidence": "reviewed golden update", "status": "todo", "pr": null},
+    {"id": "F11", "title": "One buy-idea spec set for every recommender (Oracle, Autopilot, pick lists, game)", "trading": true, "evidence": "replay of past ideas per set", "status": "in_progress", "pr": 303},
+    {"id": "F12", "title": "Oracle: elite waiver only near the 52-week high; falling 200-day flagged (R&D #113)", "trading": true, "evidence": "R&D #113 study + ATR-matched check", "status": "in_review", "pr": 303},
     {"id": "B9", "title": "Game state follows AETHER_DATA_DIR?", "trading": false, "evidence": "check the PROD task environment", "status": "decision", "pr": null}
   ]
 }

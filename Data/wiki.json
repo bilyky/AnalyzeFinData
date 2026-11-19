@@ -400,7 +400,7 @@
       "Execution: Runs daily at 7:00 AM PST immediately following ai_portfolio_game.py.",
       "Auditing: Flags CRITICAL BREACHES when current price <= technical stop loss.",
       "Override: Seamlessly integrates the AI Second-Opinion Exit Override Gate, auditing shadow verdicts to downgrade a momentum collapse to HOLD or WATCH (sell_rules.ai_exit_override), only for a holding more than 1 ATR in profit. A stop-loss breach or a losing position is never downgraded.",
-      "Rotations: Chooses the single highest-scoring, non-overlapping bullish setup (s10 >= 2.5).",
+      "Rotations: Chooses the single highest-scoring, non-overlapping bullish setup (s10 >= 2.5).", "Loss filters (R&D #113, aether/buy_specs.py): an idea that gets in only through the elite-breakout waiver must be within 10% of its 52-week high, or it is held back and listed as such; an idea below a falling 200-day average is flagged. Each idea shows what was checked (Setup, scores, reward/risk) and that news, earnings and legal events were not.",
       "Zero-Risk: Operational read-only advisory (no automated orders are placed on your brokerage)."
     ]
   },
