@@ -187,9 +187,12 @@ class TestPyramiding(unittest.TestCase):
     def test_winner_and_peak_inputs(self):
         cases = [
             # (price, peak, row s10/l60, expected call)
-            (100.0, 110.0, (4.0, 5.0), (False, True, 4.0, 5.0)),   # not above cost
-            (110.0, 107.8, (4.0, 5.0), (True, True, 4.0, 5.0)),    # exactly 98% of price
-            (110.0, 107.0, (4.0, 5.0), (True, False, 4.0, 5.0)),   # below 98%
+            (100.0, 101.0, (4.0, 5.0), (False, True, 4.0, 5.0)),   # not above cost
+            (110.0, 112.0, (4.0, 5.0), (True, True, 4.0, 5.0)),    # 1.8% under the peak
+            (110.4, 115.0, (4.0, 5.0), (True, False, 4.0, 5.0)),   # 4% under the peak (PROD NEM)
+            (110.0, 120.0, (4.0, 5.0), (True, False, 4.0, 5.0)),   # 8% under the peak
+            (110.0, 105.0, (4.0, 5.0), (True, True, 4.0, 5.0)),    # above the last peak close
+            (110.0, 0.0, (4.0, 5.0), (True, False, 4.0, 5.0)),     # no peak recorded
             (110.0, 110.0, (None, None), (True, True, 0.0, 0.0)),  # empty score cells
         ]
         for px, peak, (s10, l60), expected in cases:

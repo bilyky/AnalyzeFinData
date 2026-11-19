@@ -272,29 +272,28 @@ def apply_preflight_gate(state, queued, today, force):
     return [q for q in queued if q.get("type") != "BUY"]
 
 
-def data_health_reasons(state, report) -> list:
-    """Why today's inputs are not fit to buy on (empty list = fine). Updates the remembered fields.
+def data_health_reasons(report, remembered) -> tuple:
+    """Why today's inputs are not fit to buy on, and the fields to remember. Pure: returns
+    ``(reasons, fields)``; an empty ``reasons`` means fine.
 
-    ``report`` is :func:`aether.data_completeness.check` for the latest snapshot day. A field that
-    went empty (only fields the game reads, ``data_completeness.GAME_INPUT_FIELDS``) is remembered in
-    ``state[data_completeness.DATA_GATE_KEY]`` and keeps the freeze on until its fill rate is back to
-    ``data_completeness.USUAL_FILL`` or the owner releases it (``--accept-fields``): the check itself compares with the last 10 sessions,
-    so after about a week an outage becomes the new normal and its alarm stops (2026-09-01..09-09
-    alarmed, 09-10 onward silent while the fields stayed empty until 11-05).
+    ``report`` is :func:`aether.data_completeness.check` for the latest snapshot day; ``remembered`` is
+    the memory so far (``data_completeness.remembered_fields()``). A field that went empty (only fields
+    the game reads, ``data_completeness.GAME_INPUT_FIELDS``) stays in the memory and keeps the freeze on
+    until its fill rate is back to ``data_completeness.USUAL_FILL`` or the owner releases it
+    (``--accept-fields``): the check itself compares with the last 10 sessions, so after about a week an
+    outage becomes the new normal and its alarm stops (2026-09-01..09-09 alarmed, 09-10 onward silent
+    while the fields stayed empty until 11-05).
     """
     rates = report.get("fill_rates") or {}
-    remembered = [f for f in state.get(data_completeness.DATA_GATE_KEY, []) if rates.get(f, 0.0) < data_completeness.USUAL_FILL]
-    fields = sorted(set(remembered) | set(report.get("dropped_fields") or []))
-    if fields:
-        state[data_completeness.DATA_GATE_KEY] = fields
-    else:
-        state.pop(data_completeness.DATA_GATE_KEY, None)
+    dropped = report.get("dropped_fields") or []
+    kept = [f for f in remembered if rates.get(f, 0.0) < data_completeness.USUAL_FILL]
+    fields = sorted(set(kept) | set(dropped))
     reasons = list(report.get("gate") or [])
-    still = [f for f in remembered if f not in (report.get("dropped_fields") or [])]
+    still = [f for f in kept if f not in dropped]
     if still:
         reasons.append(f"{len(still)} game-input fields still empty since their outage: {', '.join(still[:6])}"
                        + (" ..." if len(still) > 6 else ""))
-    return reasons
+    return reasons, fields
 
 
 def apply_data_health_gate(state, queued, force):
@@ -309,7 +308,14 @@ def apply_data_health_gate(state, queued, force):
     """
     game = _pkg()
     try:
-        reasons = data_health_reasons(state, data_completeness.check())
+        # The memory is data_completeness's file, not the portfolio state. A state saved by the first
+        # #288 build may still carry it: move it over once (save_game then drops the key).
+        legacy = state.get(data_completeness.LEGACY_STATE_KEY) or []
+        stored = data_completeness.remembered_fields()
+        reasons, fields = data_health_reasons(data_completeness.check(), sorted(set(stored) | set(legacy)))
+        if fields != stored:
+            data_completeness.save_remembered_fields(fields)
+        state.pop(data_completeness.LEGACY_STATE_KEY, None)   # only once the file holds it
     except Exception as e:                      # the check could not run: we do not know the data is sound
         reasons = [f"data-completeness check failed: {type(e).__name__}: {e}"]
     if not reasons:
@@ -1011,6 +1017,17 @@ def rotate_positions(state, prices, profile, available_slots, max_positions, top
     return available_slots
 
 
+# Pyramiding adds only to a position trading within 2% of its peak close since entry.
+PYRAMID_PEAK_TOLERANCE = 0.98
+
+
+def _near_peak(current_px, peak_close):
+    """True when ``current_px`` is at or above ``PYRAMID_PEAK_TOLERANCE`` of ``peak_close``.
+
+    No recorded peak (0 or missing) is never near a peak."""
+    return bool(peak_close) and current_px >= peak_close * PYRAMID_PEAK_TOLERANCE
+
+
 def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash_required,
                    today, now_time, new_transactions):
     """Buy the ranked candidates, scale into winners and write covered calls (B6).
@@ -1032,8 +1049,9 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
       * **Pyramiding** (R&D #31) — only when cash is above
         ``CFG.system_pyramiding_cash_ratio`` of equity. A symbol with a SELL
         dated today in ``state["history"]`` is skipped (no buying back what was
-        just sold, #181). Otherwise a held position in profit and within 2% of
-        its peak close, passing
+        just sold, #181).
+        Otherwise a held position in profit and trading at or above
+        ``PYRAMID_PEAK_TOLERANCE`` (98%) of its peak close, passing
         ``should_pyramid_into_winner`` on its Research-sheet s10/l60, gets more
         shares if it has more than $500 of room under
         ``rules["max_allocation_pct"]`` of equity. The cost comes out of cash, the
@@ -1091,7 +1109,7 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
                     current_px = prices.get(sym, pos["cost"])
                     # A winner is in profit and trading at or near its peak close
                     is_winner = (current_px > pos["cost"])
-                    has_peak = (pos.get("highest_close_since_acq", 0.0) >= current_px * 0.98) # within 2% of peak close
+                    has_peak = _near_peak(current_px, pos.get("highest_close_since_acq", 0.0))
 
                     # Retrieve its Short10 and Long60 momentum scores from row
                     s10 = 0.0
