@@ -597,6 +597,22 @@ def validate_patterns(candidates: list[dict], date_range: tuple[str, str],
 medians_global: dict = {}
 
 
+def validation_row(v: dict) -> dict:
+    """One row of the email's Statistical Validation table.
+
+    The name falls back like validate_patterns does (name, then factor): combo patterns
+    (StrongMF+PositiveChart, HighBR_LowScore, ...) have a name and no factor, so the table
+    printed them as None. The average is ``validation["avg_return"]``; the table read a key
+    that is never written (``avg_fwd``), so every row showed +0.00%.
+    """
+    val = v.get("validation", {}) or {}
+    name = v.get("name") or v.get("factor") or "unknown"
+    if v.get("value") is not None and not v.get("name"):
+        name = f"{name}={v['value']}"
+    return {"name": name, "n": val.get("n", 0), "avg_return": val.get("avg_return", 0.0),
+            "lift": val.get("lift", 0.0), "z": val.get("z", 0.0), "confident": bool(val.get("confident"))}
+
+
 # ── Phase 6: report ───────────────────────────────────────────────────────────
 
 def generate_report(replay_date: str, s10_result: dict, l60_result: dict,
@@ -773,15 +789,15 @@ def generate_report(replay_date: str, s10_result: dict, l60_result: dict,
                         </tr>
                 """
                 for v in validated:
-                    val_info = v.get("validation", {})
-                    status = "<span style='color:green; font-weight:bold;'>VALIDATED</span>" if val_info.get("confident") else "<span style='color:#7f8c8d;'>Pending</span>"
+                    row = validation_row(v)
+                    status = "<span style='color:green; font-weight:bold;'>VALIDATED</span>" if row["confident"] else "<span style='color:#7f8c8d;'>Pending</span>"
                     html += f"""
                         <tr>
-                            <td style="padding:8px; border:1px solid #ddd;"><b>{v.get('factor')}</b></td>
-                            <td style="padding:8px; border:1px solid #ddd;">{val_info.get('n', 0)}</td>
-                            <td style="padding:8px; border:1px solid #ddd;">{val_info.get('avg_fwd', 0.0):+.2f}%</td>
-                            <td style="padding:8px; border:1px solid #ddd;">{val_info.get('lift', 0.0):+.2f}%</td>
-                            <td style="padding:8px; border:1px solid #ddd;">{val_info.get('z', 0.0):+.2f}</td>
+                            <td style="padding:8px; border:1px solid #ddd;"><b>{row['name']}</b></td>
+                            <td style="padding:8px; border:1px solid #ddd;">{row['n']}</td>
+                            <td style="padding:8px; border:1px solid #ddd;">{row['avg_return']:+.2f}%</td>
+                            <td style="padding:8px; border:1px solid #ddd;">{row['lift']:+.2f}%</td>
+                            <td style="padding:8px; border:1px solid #ddd;">{row['z']:+.2f}</td>
                             <td style="padding:8px; border:1px solid #ddd;">{status}</td>
                         </tr>
                     """

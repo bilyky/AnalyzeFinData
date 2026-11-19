@@ -288,7 +288,7 @@ class TestProfileThreshold(unittest.TestCase):
             out = _run([_row(pgr=None, industry="Energy")])
         self.assertEqual(out["top_buys"], [{
             "sym": "AAA", "price": 100.0, "total": 7.0, "pgr": "Neutral", "s10": 3.0,
-            "l60": 4.0, "bottom_desc": "", "industry": "Energy"}])
+            "l60": 4.0, "bottom_desc": "", "industry": "Energy", "setup": True}])
 
 
 class TestOverboughtGuardAndSort(unittest.TestCase):

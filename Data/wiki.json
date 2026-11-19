@@ -214,9 +214,10 @@
     "origin": "Nassim Nicholas Taleb - Author of 'Fooled by Randomness', 'The Black Swan', 'Antifragile'.",
     "body": "Employs zero-trust risk safety principles. Operates a closed-loop retrospective feedback analyzer that dynamically clusters true losses (bad habits) into active rejections to immunize the portfolio against repeating errors.",
     "config": [
-      "DNA Capture: Freezes PGR, scores, and Z-scores on purchase, logging completed trades to Data/trade_history_dna.json.",
+      "DNA Capture: Freezes PGR, scores, Z-score and the Setup flag on purchase, logging completed trades to Data/trade_history_dna.json. Live buys did not record Setup until 2026-11, so DNA rows bought from late July show Setup=None.",
       "Retrospective Loop: retrospective_analyzer.py filters out market-panic days and statistically clusters failures into failure_dna_rules.json when run by hand. The Saturday AETHER_PatternDiscovery run calls it with --report-only: it proposes rules in failure_dna_rules_proposed.json and leaves the live rules alone.",
-      "Action: Dynamic buy-rejection guard (check_failure_rules) blocks any new buy candidate matching our toxic clusters on autopilot."
+      "Action: Dynamic buy-rejection guard (check_failure_rules) blocks any new buy candidate matching our toxic clusters on autopilot.",
+      "Behaviour reflection (read-only, aether/behaviour_reflection.py): the weekly report also shows the game's own actions from the ledger: sells by exit type per month and what the stock did 10 sessions after the sale vs SPY, each new buy's 10-session result vs SPY, buys whose S10+L60 fell below 0 within 3 logged days, buys/sells per month and median days held, and Rule B scale-outs followed by a scale-in within 5 sessions. Trades with under 10 sessions of bars are skipped and counted. A flat trade (0.00%) is no longer counted as a win."
     ]
   },
   "decision_eval": {
@@ -386,6 +387,7 @@
     "config": [
       "Slot Expansion: (cash ratio - profile cash buffer) > 15% AND all slots full -> max_positions += 1",
       "Dynamic Pyramiding: add idle cash to existing green winners near peak closes; only when the stop is at or above cost, and the added shares may lose at most max_trade_risk_pct (default 1%) of equity at the stop",
+      "Pyramiding guards: price must be at or above 98% of the peak close since entry (PYRAMID_PEAK_TOLERANCE, aether/scenario/steps.py); no scale-in on a symbol sold earlier the same day",
       "Bounded: still clamped by the per-position ceiling and the Scarcity-core cap",
       "Source: ai_portfolio_game.py slot-expansion + pyramiding blocks"
     ]
