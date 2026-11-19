@@ -49,10 +49,10 @@ python -c "import watchdog; errors = watchdog.check_logs(); [print(e) for e in e
 
 ```bash
 python -c "
-import data_api
-h = data_api.get_system_health()
-print(f'Regime: {h.get(\"market_regime\", \"Unknown\")}')
-print(f'Data fresh: {h.get(\"data_fresh\", False)}')
+import data_api, workbook_read
+label, _ = workbook_read.get_market_regime()   # the regime the emails use (SPY Long60)
+print(f'Regime: {label}')
+print(f'Data fresh: {data_api.get_system_health().get(\"data_fresh\", False)}')
 "
 ```
 
@@ -64,8 +64,8 @@ Summarise findings as:
 |---|---|
 | Workbook freshness | FRESH / STALE (timestamp) |
 | Equity / Return | $X,XXX / +X.X% |
-| Scheduled tasks | N active / N missed |
+| Scheduled tasks | N active / N missed / N never run yet |
 | Recent errors | None / list issues |
 | Market regime | Bull / Neutral / Bear |
 
-Flag any stale data, missed tasks, or errors prominently.
+Flag any stale data, missed tasks, or errors prominently. A task whose last run reads `never run` has not run yet (Task Scheduler shows 11/30/1999 for that): it is not missed.
