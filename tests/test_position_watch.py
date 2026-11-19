@@ -128,6 +128,15 @@ class TestDecide(unittest.TestCase):
         d = pw.decide(_metrics(ret_1=-0.08), _resid(-2.0), [], _repl(), self.conc, CFG)
         self.assertEqual(d["action"], "WAIT")
 
+    def test_an_old_bar_is_not_todays_crash_day(self):
+        # 2026-11-19: bars ended 11-16 (-7%), INTC was +2.4% live; the report said "crash day"
+        d = pw.decide(_metrics(ret_1=-0.08), _resid(-2.0), [], _repl(), self.conc, CFG, bar_is_current=False)
+        self.assertFalse(any(r.startswith("crash day") for r in d["reasons"]))
+        self.assertTrue(any("crash-day check skipped" in r for r in d["reasons"]))
+        # the stale bar is a data doubt in run(), which holds the TRIM back
+        held = pw.apply_doubts(d, ["price history ends 2026-11-16, the last session was 2026-11-18"])
+        self.assertNotEqual(held["action"], "TRIM")
+
     def test_wait_when_replacement_stretched(self):
         d = pw.decide(_metrics(), _resid(-2.0), [], _repl(ok=False, stretch=0.08), self.conc, CFG)
         self.assertEqual(d["action"], "WAIT")
@@ -341,7 +350,7 @@ class TestRun(unittest.TestCase):
         self._tmp.cleanup()
 
     def _run(self, pack=(10, 500.0, {"health": "ok"}), live_px=None, live=False, call=None):
-        with mock.patch.object(pw, "_pack_holdings", return_value=pack),                 mock.patch.object(pw, "_live_price", return_value=live_px),                 mock.patch.object(pw, "decide", side_effect=(lambda *a: dict(call)) if call else pw.decide):
+        with mock.patch.object(pw, "_pack_holdings", return_value=pack),                 mock.patch.object(pw, "_live_price", return_value=live_px),                 mock.patch.object(pw, "decide", side_effect=(lambda *a, **k: dict(call)) if call else pw.decide):
             return pw.run("INTC", live=live, journal=False, config_path=self.cfg)
 
     def test_no_account_snapshot_gives_hold_not_a_crash(self):
