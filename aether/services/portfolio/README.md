@@ -65,6 +65,9 @@ and nothing is written. Before F2 the game silently started again with $10k cash
    `ai_portfolio_game_*.json` files in `Data/Backup/Game/` out of `Data/`. Only then is it a
    true first run.
 
+Only a *missing* file is a first run. An empty file (for example a placeholder made when setting
+up a new machine) is treated as broken and stops the load. Delete it to start fresh.
+
 **Data owned:** `Data/ai_portfolio_game.json` (portfolio `ai_game`) and its backups in
 `Data/Backup/Game/` (the newest 15 are kept).
 
