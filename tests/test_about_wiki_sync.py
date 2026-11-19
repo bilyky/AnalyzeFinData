@@ -39,6 +39,12 @@ def _wiki():
         return json.load(fh)
 
 
+# An HTML entity or a real tag in a plain-text field. A placeholder such as "<last 4>" is text
+# (app.js escapes it) and must not match.
+_HTML_IN_TEXT = re.compile(r"&[a-z]+;|&#\d+;|</?(?:a|b|i|u|p|br|hr|em|strong|code|pre|span|div|ul|ol|li|sup|sub|small|table|tr|td|th)\b[^>]*>",
+                           re.I)
+
+
 class AboutWikiSyncTest(unittest.TestCase):
     def test_no_duplicate_card_keys(self):
         keys = _card_keys()
@@ -60,7 +66,7 @@ class AboutWikiSyncTest(unittest.TestCase):
     def test_text_fields_have_no_html(self):
         # app.js shows title, origin and config as plain text (esc / textContent), so an entity or
         # a tag there is printed literally (e.g. "&amp;"). summary and body are HTML and may use them.
-        html = re.compile(r"&[a-z]+;|&#\d+;|<[a-z/][^>]*>", re.I)
+        html = _HTML_IN_TEXT
         bad = []
         for key, e in _wiki().items():
             for field in ("title", "origin"):
@@ -70,6 +76,14 @@ class AboutWikiSyncTest(unittest.TestCase):
                 if html.search(str(line)):
                     bad.append(f"{key}.config[{i}]")
         self.assertEqual(bad, [], "HTML in a plain-text wiki field (shown literally): " + ", ".join(bad))
+
+    def test_text_guard_flags_html_not_placeholders(self):
+        for bad in ("A &amp; B", "x &#8212; y", "<b>bold</b>", "use <code>x</code>", "line<br>"):
+            with self.subTest(bad=bad):
+                self.assertTrue(_HTML_IN_TEXT.search(bad))
+        for ok in ('"lot_sources": {"<lots label>": "<last 4>"}', "R&D #78", "S&P 500", "a < b > c"):
+            with self.subTest(ok=ok):
+                self.assertIsNone(_HTML_IN_TEXT.search(ok))
 
     def test_every_entry_has_summary_and_title(self):
         wiki = _wiki()
