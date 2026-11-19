@@ -150,8 +150,10 @@ def p_two_sided(t):
     return math.erfc(abs(t) / math.sqrt(2)) if t is not None else None
 
 
-def zigzag_turns(days: list, closes: list, pct: float = ZIGZAG) -> list:
-    """[(day, 'high'|'low')] confirmed turns: an extreme followed by a move of `pct` against it."""
+def zigzag_indices(closes: list, pct: float = ZIGZAG) -> list:
+    """[(extreme_index, 'high'|'low', confirm_index)] confirmed turns: an extreme followed by a move
+    of `pct` against it, confirmed on bar confirm_index (the first bar that knows it). The one zigzag
+    for the studies (trend_break_study imports it)."""
     turns, direction, hi, lo, ext = [], 0, 0, 0, 0   # direction: +1 tracking a high, -1 a low, 0 not yet
     for k in range(1, len(closes)):
         c = closes[k]
@@ -159,24 +161,29 @@ def zigzag_turns(days: list, closes: list, pct: float = ZIGZAG) -> list:
             hi = k if c > closes[hi] else hi
             lo = k if c < closes[lo] else lo
             if c <= closes[hi] * (1 - pct):
-                turns.append((days[hi], "high"))
+                turns.append((hi, "high", k))
                 direction, ext = -1, k
             elif c >= closes[lo] * (1 + pct):
-                turns.append((days[lo], "low"))
+                turns.append((lo, "low", k))
                 direction, ext = 1, k
         elif direction == 1:
             if c > closes[ext]:
                 ext = k
             elif c <= closes[ext] * (1 - pct):
-                turns.append((days[ext], "high"))
+                turns.append((ext, "high", k))
                 direction, ext = -1, k
         else:
             if c < closes[ext]:
                 ext = k
             elif c >= closes[ext] * (1 + pct):
-                turns.append((days[ext], "low"))
+                turns.append((ext, "low", k))
                 direction, ext = 1, k
     return turns
+
+
+def zigzag_turns(days: list, closes: list, pct: float = ZIGZAG) -> list:
+    """[(day, 'high'|'low')] confirmed turns: an extreme followed by a move of `pct` against it."""
+    return [(days[i], kind) for i, kind, _k in zigzag_indices(closes, pct)]
 
 
 def _doy(day: str) -> int:
