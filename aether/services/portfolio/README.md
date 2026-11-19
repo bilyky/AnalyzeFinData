@@ -51,6 +51,23 @@ Transaction_Log rows are written only after a good save. Before the next schedul
 If the line says `nowhere (the quarantine write failed …)`, there is no unsaved copy. The run's
 changes are then only in the log text, and the next run starts from the last good state.
 
+**When the state cannot be loaded (F2 runbook).** A fresh $10k portfolio starts only on a true
+first run: no state file and no backup. If the file is missing, empty or not valid JSON and
+none of the backups can be read, the load stops with `StorageError` and an ERROR line
+(`[PORTFOLIO] state for ai_game cannot be loaded: …`). The run ends before it trades or saves,
+and nothing is written. Before F2 the game silently started again with $10k cash.
+1. Keep the evidence: the unreadable file stays where it is, and a copy is kept as
+   `Data/ai_portfolio_game.json.corrupt-<time>`.
+2. Find a good copy: `Data/Backup/` (the `*_pre_*` folders), `Data/.trash/`, or a PROD copy.
+   Check it opens as JSON and holds the positions you expect.
+3. Copy it to `Data/ai_portfolio_game.json`, then rerun.
+4. To start the game again from $10k on purpose, move both the state file and the
+   `ai_portfolio_game_*.json` files in `Data/Backup/Game/` out of `Data/`. Only then is it a
+   true first run.
+
+Only a *missing* file is a first run. An empty file (for example a placeholder made when setting
+up a new machine) is treated as broken and stops the load. Delete it to start fresh.
+
 **Data owned:** `Data/ai_portfolio_game.json` (portfolio `ai_game`) and its backups in
 `Data/Backup/Game/` (the newest 15 are kept).
 
