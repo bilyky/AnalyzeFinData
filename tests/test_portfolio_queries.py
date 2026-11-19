@@ -81,6 +81,16 @@ class TestViews(unittest.TestCase):
         with self.assertRaises(TypeError):
             self.view.positions[0].extra["price"] = 1
 
+    def test_an_empty_or_falsy_written_call_is_no_call(self):
+        # #308 review: the old read_written_calls skipped a falsy call; the view keeps that.
+        repo = InMemoryPortfolioRepository([_P])
+        repo.save(json_mapper.from_dict(_P, {"positions": {
+            "A": {"qty": 1, "written_call": {}}, "B": {"qty": 1, "written_call": None},
+            "C": {"qty": 1, "written_call": {"strike": 5.0}}}}))
+        v = InMemoryPortfolioQueries(repo).view(_P)
+        self.assertEqual([p.written_call is None for p in v.positions], [True, True, False])
+        self.assertEqual(v.written_call_symbols(), ["C"])
+
     def test_empty_and_missing_parts(self):
         repo = InMemoryPortfolioRepository([_P])
         repo.save(json_mapper.from_dict(_P, {"profile": "BALANCED"}))  # no cash, positions or history stored
@@ -193,8 +203,23 @@ STATE_FILE_ALLOWED = {
 }
 
 
+def _docstrings(tree) -> set:
+    nodes = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    return {id(n.body[0].value) for n in ast.walk(tree)
+            if isinstance(n, nodes) and n.body and isinstance(n.body[0], ast.Expr)
+            and isinstance(n.body[0].value, ast.Constant)}
+
+
+def names_state_file(value) -> bool:
+    """A string that names the game's state file: it contains the name and ends in .json.
+
+    Catches "ai_portfolio_game.json", "Data/ai_portfolio_game.json" and f-string parts such as
+    f"{d}/ai_portfolio_game.json". Not caught: a name split across a concatenation."""
+    return isinstance(value, str) and "ai_portfolio_game" in value and value.strip().endswith(".json")
+
+
 def state_file_constants(root: Path):
-    """(path, line) of every "ai_portfolio_game.json" string constant outside tests."""
+    """(path, line) of every string outside tests that names the state file (docstrings skipped)."""
     found = []
     for p in sorted(root.rglob("*.py")):
         rel = p.relative_to(root).as_posix()
@@ -204,9 +229,10 @@ def state_file_constants(root: Path):
             tree = ast.parse(p.read_text(encoding="utf-8"))
         except (SyntaxError, UnicodeDecodeError):
             continue
+        docs = _docstrings(tree)
         found += [(rel, n.lineno) for n in ast.walk(tree)
-                  if isinstance(n, ast.Constant) and n.value == "ai_portfolio_game.json"]
-    return found
+                  if isinstance(n, ast.Constant) and id(n) not in docs and names_state_file(n.value)]
+    return sorted(set(found))
 
 
 class TestNoDirectReaders(unittest.TestCase):
@@ -217,9 +243,13 @@ class TestNoDirectReaders(unittest.TestCase):
 
     def test_the_guard_finds_a_new_reader(self):
         with tempfile.TemporaryDirectory() as d:
-            Path(d, "tool.py").write_text('open(os.path.join(d, "ai_portfolio_game.json"))\n', encoding="utf-8")
-            Path(d, "ok.py").write_text('"""Reads ai_portfolio_game.json via the service."""\n', encoding="utf-8")
-            self.assertEqual(state_file_constants(Path(d)), [("tool.py", 1)])
+            Path(d, "a.py").write_text('open(os.path.join(d, "ai_portfolio_game.json"))\n', encoding="utf-8")
+            Path(d, "b.py").write_text('P = "Data/ai_portfolio_game.json"\n', encoding="utf-8")  # #308 review
+            Path(d, "c.py").write_text('p = f"{root}/ai_portfolio_game.json"\n', encoding="utf-8")
+            Path(d, "ok.py").write_text('"""Reads Data/ai_portfolio_game.json via the service."""\n'
+                                        'KEY = "ai_portfolio_game"\n'
+                                        'MSG = "ai_portfolio_game.json not found"\n', encoding="utf-8")
+            self.assertEqual(state_file_constants(Path(d)), [("a.py", 1), ("b.py", 1), ("c.py", 1)])
 
 
 if __name__ == "__main__":

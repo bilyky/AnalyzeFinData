@@ -300,7 +300,8 @@ def _game_view():
     """The paper game's read view (portfolio service, R&D #78); None if never saved or unreadable."""
     try:
         return _bootstrap().portfolio_queries.view(_GAME_PORTFOLIO)
-    except _StorageError:
+    except _StorageError as e:  # shown as "no portfolio", so say why (#308 review)
+        _log.warning(f"[PORTFOLIO] Game state unreadable; the dashboard shows it as empty: {e}")
         return None
 
 
