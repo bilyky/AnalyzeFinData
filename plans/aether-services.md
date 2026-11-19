@@ -182,6 +182,11 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
   `report_setups`), built from shared specs; where sets differ (real money stricter than the paper
   game), the difference is written in the set, on purpose. First pieces: `aether/buy_specs.py`
   (pure checks from R&D #113; the Oracle uses them, the others move over with S8).
+  Also to fold in as specs, not separate modules: `aether/drop_risk.py` (PR #299: sudden-drop
+  count and worst-1% day, advisory on Oracle cards) and the weekly pattern discovery's own gate
+  copy (PR #305 `pattern_discovery._gate_failures`, which re-implements the entry gates from
+  `rule_walkforward.CURRENT`). A volatility/tail spec waits for R&D #114, which compares the
+  drop count (#115, PR #304), #113's ATR-matched result and a plain ATR cap.
 
 **P7. Domain events + Observer + Outbox**
 - `Portfolio` records `PositionOpened`, `PositionClosed`, `ScaledOut`, `ScaledIn`,
@@ -291,7 +296,7 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
 | F8 | Circuit-breaker restore lowers stops: **study** max(original, ratchet) vs never-restore | **yes** | backtest on trigger dates | end |
 | F9 | The 7 raw OHLCV readers move to split-adjusted bars, one at a time | **yes** | backtest each | end |
 | F10 | Unify the SELL keys and the open-position shape | data shape | reviewed golden update | end |
-| F11 | Every recommender (Oracle, Autopilot setups, pick lists, game) calls a named buy spec set; shared specs in one place | **yes** | per set: a replay of past ideas, rejects and P&L | with S8; first specs in `aether/buy_specs.py` |
+| F11 | Every recommender (Oracle, Autopilot setups, pick lists, game, pattern discovery) calls a named buy spec set; shared specs in one place (incl. `drop_risk`, PR #299) | **yes** | per set: a replay of past ideas, rejects and P&L | with S8; first specs in `aether/buy_specs.py` |
 | F12 | Oracle: the elite waiver only within 10% of the 52-week high (hold-back); below a falling 200-day flagged | **yes** (advice) | R&D #113 study + ATR-matched check | done in the F11-seed PR |
 | B9 | Game state follows `$AETHER_DATA_DIR`? It also moves the E*TRADE token | ops | check the PROD task's environment | user decision |
 

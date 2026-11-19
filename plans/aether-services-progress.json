@@ -42,7 +42,7 @@
     {"id": "F8", "title": "Circuit breaker lowers stops when it clears (study first)", "trading": true, "evidence": "backtest on trigger dates", "status": "todo", "pr": null},
     {"id": "F9", "title": "OHLCV readers split-adjusted, one at a time", "trading": true, "evidence": "backtest each", "status": "todo", "pr": null},
     {"id": "F10", "title": "One SELL transaction and position shape", "trading": false, "evidence": "reviewed golden update", "status": "todo", "pr": null},
-    {"id": "F11", "title": "One buy-idea spec set for every recommender (Oracle, Autopilot, pick lists, game)", "trading": true, "evidence": "replay of past ideas per set", "status": "in_progress", "pr": 303},
+    {"id": "F11", "title": "One buy-idea spec set for every recommender (Oracle, Autopilot, pick lists, game, pattern discovery; fold in drop_risk #299, #305 gate copy)", "trading": true, "evidence": "replay of past ideas per set", "status": "in_progress", "pr": 303},
     {"id": "F12", "title": "Oracle: elite waiver only near the 52-week high; falling 200-day flagged (R&D #113)", "trading": true, "evidence": "R&D #113 study + ATR-matched check", "status": "in_review", "pr": 303},
     {"id": "B9", "title": "Game state follows AETHER_DATA_DIR?", "trading": false, "evidence": "check the PROD task environment", "status": "decision", "pr": null}
   ]
