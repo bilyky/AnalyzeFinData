@@ -32,6 +32,8 @@ from workbook_read import (
     get_reserves_data as _ap_reserves,
 )
 import powergauge as _pg
+from aether.bootstrap import bootstrap as _bootstrap
+from aether.core import DEFAULT_PORTFOLIO as _GAME_PORTFOLIO, StorageError as _StorageError
 
 _log = logging.getLogger("aether.data_api")
 
@@ -51,7 +53,6 @@ _DATA_DIR = _DIR / "Data"
 _OHLCV_DIR = Path(paths.ohlcv_dir())   # $AETHER_CACHE_DIR-aware (aether.paths)
 _SYMBOL_DIR = Path(paths.symbol_dir())
 _XLSX     = _DATA_DIR / "state_of_the_day.xlsx"
-_GAME     = _DATA_DIR / "ai_portfolio_game.json"
 _LOG      = _DATA_DIR / "autonomous_run.log"
 _PERF     = _DATA_DIR / "performance_log.json"
 
@@ -295,34 +296,44 @@ def _warn_once_per_day(sym: str, msg: str) -> None:
     _log.warning(msg)
 
 
-def read_portfolio() -> dict:
-    """Read ai_portfolio_game.json and compute position-level P&L."""
+def _game_view():
+    """The paper game's read view (portfolio service, R&D #78); None if never saved or unreadable."""
     try:
-        with open(_GAME, encoding="utf-8") as f:
-            state = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+        return _bootstrap().portfolio_queries.view(_GAME_PORTFOLIO)
+    except _StorageError:
+        return None
+
+
+def _or(value, default):
+    return default if value is None else value
+
+
+def read_portfolio() -> dict:
+    """The game portfolio with position-level P&L (from the portfolio service's read view)."""
+    game = _game_view()
+    if game is None:
         return {"balance": 0, "equity": 0, "return_pct": 0, "positions": [],
                 "profile": "UNKNOWN", "open_positions": 0, "max_positions": 5,
                 "start_date": "", "total_return": 0}
 
-    positions = state.get("positions", {})
-    balance   = state.get("balance", 0)
-    history   = state.get("history", [])
+    balance   = _or(game.balance, 0)
+    history   = game.history
 
     # Derive initial balance from history or default
     initial = 10000.0
     pos_list = []
     total_value = balance
-    for sym, pos in positions.items():
-        cost  = pos.get("cost", 0)
-        qty   = pos.get("qty", 0)
-        stop  = pos.get("stop_loss", 0)
+    for pos in game.positions:
+        sym   = pos.symbol
+        cost  = _or(pos.cost, 0)
+        qty   = _or(pos.qty, 0)
+        stop  = _or(pos.stop_loss, 0)
         # Compute days held from history
         days_held = 0
         for tx in reversed(history):
-            if tx.get("symbol") == sym and tx.get("type") == "BUY":
+            if tx.symbol == sym and tx.type == "BUY":
                 try:
-                    d = datetime.fromisoformat(tx["date"]).date()
+                    d = datetime.fromisoformat(tx.date).date()
                     days_held = (date.today() - d).days
                 except Exception:
                     pass
@@ -357,39 +368,36 @@ def read_portfolio() -> dict:
         "equity":         round(equity, 2),
         "return_pct":     return_pct,
         "total_return":   round(equity - initial, 2),
-        "profile":        state.get("profile", "BALANCED"),
+        "profile":        _or(game.profile, "BALANCED"),
         "positions":      pos_list,
         "open_positions": len(pos_list),
         "max_positions":  5,
-        "start_date":     state.get("start_date", ""),
+        "start_date":     _or(game.start_date, ""),
     }
 
 
 def read_written_calls() -> list[dict]:
     """Active covered calls: game positions carrying a `written_call`.
 
-    Reads the raw game state directly — read_portfolio() returns a flattened
-    display projection (a *list*) that drops the `written_call` field, so the
-    options view must source from the raw positions dict instead."""
-    try:
-        with open(_GAME, encoding="utf-8") as f:
-            state = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    read_portfolio() returns a flattened display projection (a *list*) without the call,
+    so the options view reads each position's ``written_call`` from the read view."""
+    game = _game_view()
+    if game is None:
         return []
 
     active_options = []
-    for symbol, details in state.get("positions", {}).items():
-        written_call = details.get("written_call")
-        if not written_call:
+    for pos in game.positions:
+        call = pos.written_call
+        if call is None:
             continue
         active_options.append({
-            "symbol":           symbol,
-            "qty":              written_call.get("qty"),
-            "strike":           written_call.get("strike"),
-            "premium":          written_call.get("premium"),
-            "expiration_date":  written_call.get("expiration_date"),
-            "sigma":            written_call.get("sigma"),
-            "underlying_price": details.get("price") or details.get("cost"),
+            "symbol":           pos.symbol,
+            "qty":              call.qty,
+            "strike":           call.strike,
+            "premium":          call.premium,
+            "expiration_date":  call.expiration_date,
+            "sigma":            call.sigma,
+            "underlying_price": pos.extra.get("price") or pos.cost,
         })
     return active_options
 
@@ -1067,21 +1075,19 @@ def read_accounts() -> dict:
 # ── Transaction history ───────────────────────────────────────────────────────
 
 def read_history(limit: int = 50, offset: int = 0) -> dict:
-    """Read transaction log from ai_portfolio_game.json history array."""
-    try:
-        with open(_GAME, encoding="utf-8") as f:
-            state = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    """The game's transaction log, newest first (from the portfolio service's read view)."""
+    game = _game_view()
+    if game is None:
         return {"total": 0, "transactions": [], "win_rate": 0, "total_pnl": 0}
 
-    history = list(reversed(state.get("history", [])))  # newest first
+    history = list(reversed(game.history))  # newest first
     total   = len(history)
-    page    = history[offset: offset + limit]
+    page    = [t.record() for t in history[offset: offset + limit]]
 
-    sells   = [t for t in history if t.get("type") == "SELL" and t.get("pnl") is not None]
-    wins    = [t for t in sells if (t.get("pnl") or 0) > 0]
+    sells   = [t for t in history if t.type == "SELL" and t.pnl is not None]
+    wins    = [t for t in sells if (t.pnl or 0) > 0]
     win_rate = round(len(wins) / len(sells) * 100, 1) if sells else 0
-    total_pnl = round(sum(t.get("pnl") or 0 for t in sells), 2)
+    total_pnl = round(sum(t.pnl or 0 for t in sells), 2)
 
     return {
         "total":        total,
@@ -1093,27 +1099,25 @@ def read_history(limit: int = 50, offset: int = 0) -> dict:
 
 def read_equity_curve() -> list[dict]:
     """Reconstruct daily equity snapshots from transaction history."""
-    try:
-        with open(_GAME, encoding="utf-8") as f:
-            state = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    game = _game_view()
+    if game is None:
         return []
 
-    history  = sorted(state.get("history", []), key=lambda t: t.get("date", ""))
+    history  = sorted(game.history, key=lambda t: _or(t.date, ""))
     balance  = 10000.0
     by_date: dict[str, float] = {}
     for tx in history:
-        d = tx.get("date", "")[:10]
+        d = _or(tx.date, "")[:10]
         if not d:
             continue
         # Cash-only curve: BUY spends price*qty, SELL returns price*qty — which
         # already equals buy cost + realized pnl (pnl = (price-cost)*qty), so pnl
         # must NOT be added again or profit double-counts. Mirrors the live game's
         # own `balance += proceeds`; open positions are not marked to market here.
-        if tx.get("type") == "BUY":
-            balance -= (tx.get("price", 0) * tx.get("qty", 0))
-        elif tx.get("type") == "SELL":
-            balance += (tx.get("price", 0) * tx.get("qty", 0))
+        if tx.type == "BUY":
+            balance -= (_or(tx.price, 0) * _or(tx.qty, 0))
+        elif tx.type == "SELL":
+            balance += (_or(tx.price, 0) * _or(tx.qty, 0))
         by_date[d] = round(balance, 2)
 
     return [{"date": d, "balance": v} for d, v in sorted(by_date.items())]
