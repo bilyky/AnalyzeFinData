@@ -99,7 +99,7 @@ SELF_HEAL_PROMPT_FILE = BASE_DIR / "Data" / "self_healing_prompt.txt"
 
 # --- Agnostic AI Self-Healing Tool Configuration ---
 # Supports any AI CLI or custom scripts (Gemini CLI, Claude, local Codex, custom wrappers).
-# Defaults to npx @google/gemini-cli but can be overridden globally via environment variables.
+# Defaults to the Claude CLI (_DEFAULT_HEALER below); override with the AETHER_HEALER_CMD environment variable.
 # Placeholders: {prompt} (inline text) or {prompt_file} (safe text file path, highly recommended for Windows).
 _CLAUDE_EXE = os.path.expandvars(r"%USERPROFILE%\.gnai\claude\claude.exe")
 _DEFAULT_HEALER = (

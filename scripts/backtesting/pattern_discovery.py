@@ -144,8 +144,10 @@ def reconstruct_scores(replay_date: str, symbols: list[str] | None = None) -> li
         if (replay_dt - use_dt).days > 7:
             return None
         try:
+            # check_schema=False: these are old snapshots, checked when they were fetched. A replay
+            # inside the 09-01..10-30 factor gap logged ~1,000 SCHEMA WARNING lines (PROD 11-17).
             pg = powergauge.get_symbol_data(sym, date.fromisoformat(use_date),
-                                             prefer_cache=True, session_id={})
+                                             prefer_cache=True, session_id={}, check_schema=False)
             if not pg or pg.price <= 0:
                 return None
             ts, _ = _load_ohlcv(sym)
@@ -595,6 +597,22 @@ def validate_patterns(candidates: list[dict], date_range: tuple[str, str],
 medians_global: dict = {}
 
 
+def validation_row(v: dict) -> dict:
+    """One row of the email's Statistical Validation table.
+
+    The name falls back like validate_patterns does (name, then factor): combo patterns
+    (StrongMF+PositiveChart, HighBR_LowScore, ...) have a name and no factor, so the table
+    printed them as None. The average is ``validation["avg_return"]``; the table read a key
+    that is never written (``avg_fwd``), so every row showed +0.00%.
+    """
+    val = v.get("validation", {}) or {}
+    name = v.get("name") or v.get("factor") or "unknown"
+    if v.get("value") is not None and not v.get("name"):
+        name = f"{name}={v['value']}"
+    return {"name": name, "n": val.get("n", 0), "avg_return": val.get("avg_return", 0.0),
+            "lift": val.get("lift", 0.0), "z": val.get("z", 0.0), "confident": bool(val.get("confident"))}
+
+
 # ── Phase 6: report ───────────────────────────────────────────────────────────
 
 def generate_report(replay_date: str, s10_result: dict, l60_result: dict,
@@ -703,9 +721,12 @@ def generate_report(replay_date: str, s10_result: dict, l60_result: dict,
     try:
         retro_path = os.path.join(BASE_DIR, "retrospective_analyzer.py")
         if os.path.exists(retro_path):
-            _log.info("\nPhase 7: Running Failure DNA Retrospective Analyzer...")
-            subprocess.run([sys.executable, retro_path], check=True, capture_output=True, encoding="utf-8", errors="replace")
-            _log.info("Failure DNA integration completed successfully -> Data/failure_dna_rules.json updated.")
+            _log.info("\nPhase 7: Running Failure DNA Retrospective Analyzer (report only)...")
+            # Report only: the live rules change which buys the game rejects, so a scheduled run
+            # proposes them (Data/failure_dna_rules_proposed.json) and a person sets them.
+            subprocess.run([sys.executable, retro_path, "--report-only"], check=True, capture_output=True,
+                           encoding="utf-8", errors="replace")
+            _log.info("Failure DNA rules proposed -> Data/failure_dna_rules_proposed.json (live rules unchanged).")
             
             # Read the newly generated report
             report_path = ledgers.RETRO_REPORT_FILE
@@ -768,15 +789,15 @@ def generate_report(replay_date: str, s10_result: dict, l60_result: dict,
                         </tr>
                 """
                 for v in validated:
-                    val_info = v.get("validation", {})
-                    status = "<span style='color:green; font-weight:bold;'>VALIDATED</span>" if val_info.get("confident") else "<span style='color:#7f8c8d;'>Pending</span>"
+                    row = validation_row(v)
+                    status = "<span style='color:green; font-weight:bold;'>VALIDATED</span>" if row["confident"] else "<span style='color:#7f8c8d;'>Pending</span>"
                     html += f"""
                         <tr>
-                            <td style="padding:8px; border:1px solid #ddd;"><b>{v.get('factor')}</b></td>
-                            <td style="padding:8px; border:1px solid #ddd;">{val_info.get('n', 0)}</td>
-                            <td style="padding:8px; border:1px solid #ddd;">{val_info.get('avg_fwd', 0.0):+.2f}%</td>
-                            <td style="padding:8px; border:1px solid #ddd;">{val_info.get('lift', 0.0):+.2f}%</td>
-                            <td style="padding:8px; border:1px solid #ddd;">{val_info.get('z', 0.0):+.2f}</td>
+                            <td style="padding:8px; border:1px solid #ddd;"><b>{row['name']}</b></td>
+                            <td style="padding:8px; border:1px solid #ddd;">{row['n']}</td>
+                            <td style="padding:8px; border:1px solid #ddd;">{row['avg_return']:+.2f}%</td>
+                            <td style="padding:8px; border:1px solid #ddd;">{row['lift']:+.2f}%</td>
+                            <td style="padding:8px; border:1px solid #ddd;">{row['z']:+.2f}</td>
                             <td style="padding:8px; border:1px solid #ddd;">{status}</td>
                         </tr>
                     """
@@ -813,6 +834,7 @@ def main():
     parser = argparse.ArgumentParser(description="AETHER Pattern Discovery — Historical Replay")
     parser.add_argument("--date",       required=True, help="Replay date YYYY-MM-DD")
     parser.add_argument("--top",        type=int, default=10, help="Top-N winners to analyze")
+    parser.add_argument("--no-email",   action="store_true", help="don't send the R&D email (the caller reports)")
     parser.add_argument("--symbols",    help="Comma-separated symbol list (default: all cached)")
     parser.add_argument("--validate",   action="store_true", help="Validate candidates across date range")
     parser.add_argument("--date-range", default="2025-06-01:2026-02-28",

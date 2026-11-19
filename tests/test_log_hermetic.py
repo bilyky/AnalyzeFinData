@@ -11,16 +11,25 @@ import. And an unmocked watchdog.run_watchdog() ran the live process supervisor
 (taskkill of duplicate server.py / "orphaned" consoles) plus a real
 `ai_portfolio_game.py --report` child.
 """
+import datetime
 import logging
 import os
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+import aether.bootstrap as _bootstrap
+from aether.core import DEFAULT_PORTFOLIO
+
+import pytz
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game
 import autonomous_pipeline
+import circuit_breaker as root_cb
 import bootstrap_dna
 import daily_task
 import data_api
@@ -80,15 +89,16 @@ class TestLogPathsRedirected(unittest.TestCase):
 class TestGameStateRedirected(unittest.TestCase):
     """The game state file and its backups never resolve into the repo's Data/.
 
-    save_game() backs the file up into GAME_BACKUP_DIR and then PRUNES that folder to
+    save_game() backs the file up into the backup dir and then PRUNES that folder to
     the last 15 backups, so redirecting the file alone would delete real backups. Each
     behavioural test asserts the redirect first, so a broken harness fails here
     without ever writing a production file.
     """
 
     def _assert_redirected(self):
-        for name, path in [("ai_portfolio_game.AI_GAME_FILE", ai_portfolio_game.AI_GAME_FILE),
-                           ("ai_portfolio_game.GAME_BACKUP_DIR", ai_portfolio_game.GAME_BACKUP_DIR),
+        game = _bootstrap.default_portfolio_files()[DEFAULT_PORTFOLIO]  # the game's store
+        for name, path in [("game state file", game.path),
+                           ("game backup dir", game.backup_dir),
                            ("workbook_read.GAME_FILE", workbook_read.GAME_FILE),
                            ("bootstrap_dna.GAME_FILE", bootstrap_dna.GAME_FILE)]:
             self.assertFalse(_inside_repo_data(path), f"{name} -> {path}")
@@ -102,7 +112,8 @@ class TestGameStateRedirected(unittest.TestCase):
         ai_portfolio_game.save_game(state)
         ai_portfolio_game.save_game(state)  # 2nd save backs up the 1st into GAME_BACKUP_DIR
         self.assertEqual(ai_portfolio_game.load_game()["balance"], 123.0)
-        self.assertTrue(any(ai_portfolio_game.GAME_BACKUP_DIR.glob("ai_portfolio_game_*.json")))
+        game = _bootstrap.default_portfolio_files()[DEFAULT_PORTFOLIO]
+        self.assertTrue(any(game.backup_dir.glob("ai_portfolio_game_*.json")))
 
 
 class TestMarketDataCachesRedirected(unittest.TestCase):
@@ -209,6 +220,27 @@ class TestProcessSideEffectsBlocked(unittest.TestCase):
                      ["powershell", "-Command", "Get-ScheduledTask -TaskName AETHER_probe"]):
             with self.subTest(argv=argv):
                 harness._guard_proc(argv)  # raises RuntimeError if refused
+
+
+class _At0945ET(datetime.datetime):
+    """A clock frozen at 09:45 ET on a weekday: inside the 9:30-10:00 opening window."""
+
+    @classmethod
+    def now(cls, tz=None):
+        moment = pytz.timezone("America/New_York").localize(datetime.datetime(2026, 11, 18, 9, 45))
+        return moment.astimezone(tz) if tz else moment.replace(tzinfo=None)
+
+
+class TestWallClockPinned(unittest.TestCase):
+    """The suite must not depend on whether it runs inside 9:30-10:00 ET (2026-11-18 CI failure).
+    Checked against a clock frozen inside the window, so it fails at any time of day if the pin
+    in tests/__init__.py is removed (PR #292 review)."""
+
+    def test_opening_window_is_pinned_closed_even_inside_the_window(self):
+        with mock.patch.object(circuit_breaker, "datetime", SimpleNamespace(datetime=_At0945ET)):
+            self.assertTrue(harness.REAL_IS_MARKET_OPENING_WINDOW())     # the clock really is inside
+            self.assertFalse(circuit_breaker.is_market_opening_window())
+            self.assertFalse(root_cb.is_market_opening_window())
 
 
 if __name__ == "__main__":

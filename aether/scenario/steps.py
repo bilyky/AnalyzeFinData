@@ -2,11 +2,10 @@
 
 WHAT THIS IS
 ------------
-The fifth seam of the ``ai_portfolio_game`` -> ``aether/scenario`` refactor
-(design doc ``plans/scenario-refactor.md``, R&D #44). B1 gave the *action* ports
-(``prices.py``); B2 the *entity* views (``schema.py``); B3 the stateless helper
-surface (``helpers.py``); B4 the ``ResearchRow`` lens (``schema.py``). This module
-begins lifting the god-function's *stateful stages* out of
+The stateful seam of the ``ai_portfolio_game`` -> ``aether/scenario`` refactor
+(design doc ``plans/scenario-refactor.md``, R&D #44, now superseded by R&D #78). The
+earlier price-port, entity-view and helper modules were never used and were deleted
+in R&D #78 step S2. This module began lifting the god-function's *stateful stages* out of
 ``run_daily_ai_management`` as plain functions that take the raw ``state`` dict,
 mutate it in place, and return their result — the shape a ``RunContext`` step will
 compose in B7.
@@ -43,7 +42,7 @@ function, and avoids a top-level import cycle once the root becomes a facade.
 """
 from __future__ import annotations
 
-from aether import preflight_status
+from aether import data_completeness, preflight_status
 
 
 def _pkg():
@@ -53,7 +52,7 @@ def _pkg():
     looked up on the live module object each call — a ``mock.patch.object(game,
     ...)`` then keeps intercepting after callers move into this package, and there
     is no circular-import hazard with the root script. Mirrors
-    ``aether/scenario/helpers.py::_pkg()`` and ``aether/etrade/store.py::_pkg()``.
+    ``aether/etrade/store.py::_pkg()``.
     """
     import ai_portfolio_game as _p
     return _p
@@ -273,6 +272,59 @@ def apply_preflight_gate(state, queued, today, force):
     return [q for q in queued if q.get("type") != "BUY"]
 
 
+def data_health_reasons(state, report) -> list:
+    """Why today's inputs are not fit to buy on (empty list = fine). Updates the remembered fields.
+
+    ``report`` is :func:`aether.data_completeness.check` for the latest snapshot day. A field that
+    went empty (only fields the game reads, ``data_completeness.GAME_INPUT_FIELDS``) is remembered in
+    ``state[data_completeness.DATA_GATE_KEY]`` and keeps the freeze on until its fill rate is back to
+    ``data_completeness.USUAL_FILL`` or the owner releases it (``--accept-fields``): the check itself compares with the last 10 sessions,
+    so after about a week an outage becomes the new normal and its alarm stops (2026-09-01..09-09
+    alarmed, 09-10 onward silent while the fields stayed empty until 11-05).
+    """
+    rates = report.get("fill_rates") or {}
+    remembered = [f for f in state.get(data_completeness.DATA_GATE_KEY, []) if rates.get(f, 0.0) < data_completeness.USUAL_FILL]
+    fields = sorted(set(remembered) | set(report.get("dropped_fields") or []))
+    if fields:
+        state[data_completeness.DATA_GATE_KEY] = fields
+    else:
+        state.pop(data_completeness.DATA_GATE_KEY, None)
+    reasons = list(report.get("gate") or [])
+    still = [f for f in remembered if f not in (report.get("dropped_fields") or [])]
+    if still:
+        reasons.append(f"{len(still)} game-input fields still empty since their outage: {', '.join(still[:6])}"
+                       + (" ..." if len(still) > 6 else ""))
+    return reasons
+
+
+def apply_data_health_gate(state, queued, force):
+    """No buys on broken inputs: freeze new buys and scale-ins when the data-completeness check of the
+    latest snapshot day fails (fields gone empty, snapshot count drop, bad values, missing price
+    bars), until the inputs recover. Exits, stops and queued SELLs still run. --force bypasses with a
+    warning, like the pre-flight gate.
+
+    PROD 2026-08-31..09-15: the Chaikin API switch left 44 fields empty and the game kept buying; the
+    11 buys of that window trailed SPY by 4.75 pp on average over the next 10 sessions (1 of 11 beat it).
+    A failure of the check itself also freezes buys (doubt in the data means wait).
+    """
+    game = _pkg()
+    try:
+        reasons = data_health_reasons(state, data_completeness.check())
+    except Exception as e:                      # the check could not run: we do not know the data is sound
+        reasons = [f"data-completeness check failed: {type(e).__name__}: {e}"]
+    if not reasons:
+        return queued
+    if force:
+        game._log.warning("⚠️ [Data-Health Gate] bypassed by --force: " + "; ".join(reasons))
+        return queued
+    reason = "Data-health freeze: " + "; ".join(reasons)
+    state.setdefault(game.circuit_breaker.FREEZE_KEY, reason)
+    dropped = [q["symbol"] for q in queued if q.get("type") == "BUY"]
+    game._log.warning(f"🛑 [Data-Health Gate] [SKIPPED] new buys and scale-ins this run: {reason}."
+                      + (f" Dropped queued BUYs: {', '.join(dropped)}." if dropped else ""))
+    return [q for q in queued if q.get("type") != "BUY"]
+
+
 def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new_transactions):
     """Execute queued strategic-override orders, then clear the queue (B6).
 
@@ -384,10 +436,12 @@ def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new
                     q_l60 = 0.0
                     q_score = 0.0
                     q_industry = "Unknown"
+                    q_setup = None
                     for r_row in ws.iter_rows(min_row=2, values_only=True):
                         if r_row[3] == sym:
                             q_pgr = r_row[6] or "Neutral"
                             q_industry = r_row[4] or "Unknown"
+                            q_setup = str(r_row[20] or '') in ('1', 'OK') if len(r_row) > 20 else None
                             try:
                                 q_s10 = float(r_row[24] or 0.0)
                                 q_l60 = float(r_row[25] or 0.0)
@@ -407,7 +461,8 @@ def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new
                             "l60": q_l60,
                             "score": q_score,
                             "z_score": 0.0,
-                            "industry": q_industry
+                            "industry": q_industry,
+                            "setup": q_setup,
                         }
                     }
                     tx = {
@@ -868,7 +923,8 @@ def screen_buys(state, prices, rules, ws, profile, today):
                     "s10": row[24] or 0.0,
                     "l60": row[25] or 0.0,
                     "bottom_desc": bottom_desc,
-                    "industry": row[4]
+                    "industry": row[4],
+                    "setup": True,      # only active-setup rows reach here; the buy DNA records it
                 })
             else:
                 game._log.warning(f"🛑 AI BUY REJECTED (Profile Threshold): {sym} - Combined score {round(total_score, 2)} is below the {profile} minimum of {rules['min_score_threshold']} and no confirmed bottom.")
