@@ -22,10 +22,13 @@ pre-flight (test command, linters, commit conventions) comes from the repo's own
 - **Fit the architecture plan, on every PR, a one-line fix included.** The plan is
   `plans/aether-services.md` (services, layers, P1-P9, the migration steps); the decisions behind it
   are in `docs/adr/`. Before writing code, decide where the change belongs in it, then check:
-  - **One writer per store.** Never open, edit and write back a file another module owns. The
-    portfolio state (`Data/ai_portfolio_game.json`) is written only by `ai_portfolio_game.save_game`
-    today and by P2's `JsonPortfolioRepository` later: its backups (keep 15), format (indent 4) and
-    path (`AI_GAME_FILE`) are the owner's. Need to change it? Go through the owner.
+  - **One writer per store, and no private path to it.** Never open, edit and write back a file
+    another module owns, and don't build your own path to read it. The portfolio state
+    (`Data/ai_portfolio_game.json`) belongs to the portfolio service (`aether/services/portfolio`,
+    since #295): `JsonPortfolioRepository` owns the file, its backups (keep 15) and its format, and
+    `aether/bootstrap.py` is the one place that names the path. The game reads and writes it through
+    `load_game()` / `save_game()` (the service's `LegacyStateGateway`); other code reads it through the
+    service (or `load_game()` until S4's read model, `PortfolioQueries`, exists).
   - **A module's own data lives in its own file**, under `paths.data_dir()`, with its redirect in
     `tests/__init__.py` in the same PR. Never park a module's memory inside another store (the
     portfolio state, the workbook, a shared cache).
@@ -36,13 +39,15 @@ pre-flight (test command, linters, commit conventions) comes from the repo's own
     domain objects).
   - **Dependency rules** (`tests/test_architecture.py`, enforced): nothing under `aether/` imports
     root code (shrink `KNOWN_ROOT_IMPORTS`, never grow it); `aether/core` depends on nothing; a service
-    is used only through its `api`; a domain does no I/O. Shared needs go to `aether/core` or the
-    composition root (`aether/bootstrap.py`), not a new `_pkg()`-style lookup.
+    is used only through its `api`; a domain does no I/O; only `aether/bootstrap.py` and a service's
+    own `adapters/` import its adapters. Shared needs go to `aether/core` or the composition root, not a
+    new `_pkg()`-style lookup.
   - **Use the owner's API, not its constants or paths.** Another module's file name, format or
     backup folder copied into your code is a second home for it.
   - **Say it in the body:** an "Architecture fit" line naming the part of the plan the change
     follows, or the debt it adds and why it can't wait. #288 broke the first two rules (its memory
-    in the game file, a second writer with its own backup and indent); #297 had to undo it.
+    in the game file, a second writer with its own backup and indent); #297 had to undo it. #289's
+    first version added a reader with its own copy of the path; it now reads through `load_game()`.
 
 - **Start from the latest default branch, in its own worktree or branch** — never commit feature work
   to `main`: `git fetch origin && git switch -c feat/<slug> origin/main`. Use a conventional prefix
