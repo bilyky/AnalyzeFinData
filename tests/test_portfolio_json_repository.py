@@ -1,8 +1,9 @@
 """JsonPortfolioRepository: the game's load/save, moved into the portfolio service (R&D #78 S4).
 
 The file behaviour is pinned through ``LegacyStateGateway``, the path the game uses.
-``TestSafeWrite`` is F1 (no backup, no write; atomic write). The test marked F2 pins today's
-gap and is rewritten in that fix PR. Everything runs in a temp dir; nothing touches Data/.
+``TestSafeWrite`` is F1 (no backup, no write; atomic write). ``TestNoSilentFreshState`` is F2
+(a fresh portfolio only on a true first run). Everything runs in a temp dir; nothing touches
+Data/.
 """
 import datetime
 import json
@@ -84,11 +85,6 @@ class TestLoad(_Base):
         messages = [c[0][0] for c in self.log.warning.call_args_list]
         self.assertIn("Error loading ai_portfolio_game.json", messages[0])
         self.assertIn("restored corrupted file from backup: ai_portfolio_game_20261102_090000.json", messages[1])
-
-    def test_F2_corrupt_file_without_a_backup_becomes_a_fresh_state(self):
-        # Today's behaviour, and the F2 bug: real positions are silently replaced by $10k cash.
-        self.file.write_text("{not json", encoding="utf-8")
-        self.assertEqual(self.store.load_state(), self._fresh())
 
     def test_load_returns_a_portfolio_object(self):
         self.file.write_text(json.dumps(_STATE), encoding="utf-8")
@@ -214,6 +210,73 @@ class TestSafeWrite(_Base):
         self.assertEqual(json.loads(backup.read_text(encoding="utf-8")), self.good)
 
 
+class TestNoSilentFreshState(_Base):
+    """F2: a fresh $10k portfolio only on a true first run (no file and no backup)."""
+
+    def _assert_refused(self, ctx, why):
+        self.assertIn(why, str(ctx.exception))
+        self.assertIn("Nothing was written", str(ctx.exception))
+        self.assertIn("README.md (When the state cannot be loaded)", str(ctx.exception))
+        self.assertIn("cannot be loaded", self.log.error.call_args[0][0])
+
+    def test_corrupt_file_without_a_backup_stops_the_load(self):
+        self.file.write_text("{not json", encoding="utf-8")
+        with self.assertRaises(StorageError) as ctx:
+            self.store.load_state()
+        self._assert_refused(ctx, "is not valid JSON")
+        self.assertEqual(self.file.read_text(encoding="utf-8"), "{not json")  # left as it was
+        (kept,) = self.root.glob("ai_portfolio_game.json.corrupt-*")
+        self.assertEqual(kept.read_text(encoding="utf-8"), "{not json")
+
+    def test_corrupt_file_with_only_unreadable_backups_stops_the_load(self):
+        self.file.write_text("{not json", encoding="utf-8")
+        self._backup("20261101_090000", "{also broken", age_s=100)
+        with self.assertRaises(StorageError) as ctx:
+            self.store.load_state()
+        self._assert_refused(ctx, "none of the 1 backups")
+
+    def test_empty_file_without_a_backup_stops_the_load(self):
+        self.file.write_text("", encoding="utf-8")
+        with self.assertRaises(StorageError) as ctx:
+            self.store.load_state()
+        self._assert_refused(ctx, "ai_portfolio_game.json is empty")
+
+    def test_missing_file_with_only_unreadable_backups_stops_the_load(self):
+        self._backup("20261101_090000", "{broken", age_s=100)
+        with self.assertRaises(StorageError) as ctx:
+            self.store.load_state()
+        self._assert_refused(ctx, "ai_portfolio_game.json is missing")
+        self.assertFalse(self.file.exists())
+
+    def test_true_first_run_is_still_fresh(self):
+        for setup in ("no backup folder", "empty backup folder", "only other files in it"):
+            with self.subTest(setup=setup):
+                if setup != "no backup folder":
+                    self.backups.mkdir(parents=True, exist_ok=True)
+                if setup == "only other files in it":
+                    (self.backups / "notes.txt").write_text("x", encoding="utf-8")
+                self.assertEqual(self.store.load_state(), self._fresh())
+
+    def test_a_restored_corrupt_file_is_kept_as_evidence(self):
+        self.file.write_text("{not json", encoding="utf-8")
+        self._backup("20261102_090000", json.dumps(_STATE), age_s=100)
+        self.assertEqual(self.store.load_state(), _STATE)
+        (kept,) = self.root.glob("ai_portfolio_game.json.corrupt-*")
+        self.assertEqual(kept.read_text(encoding="utf-8"), "{not json")
+
+    def test_a_daily_run_on_a_corrupt_file_stops_before_any_save(self):
+        # The runner logs a non-RuntimeError at ERROR and does not re-raise (its pinned contract),
+        # so the run ends there: no trade, no save, no Excel rows, and the file is left as it was.
+        from aether.scenario import runners
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(boot_module, "DEFAULT_DATA_DIR", Path(d)),                 mock.patch.object(ai_portfolio_game, "is_market_open", return_value=(True, "open")),                 mock.patch.object(ai_portfolio_game, "save_game") as save,                 mock.patch.object(ai_portfolio_game, "update_excel_log") as excel,                 mock.patch.object(ai_portfolio_game, "_log") as log:
+            (Path(d) / "ai_portfolio_game.json").write_text("{not json", encoding="utf-8")
+            runners.run_daily_management(force=True)
+            self.assertEqual((Path(d) / "ai_portfolio_game.json").read_text(encoding="utf-8"), "{not json")
+        save.assert_not_called()
+        excel.assert_not_called()
+        self.assertIn("cannot be loaded", log.exception.call_args[0][0])
+
+
 class TestRecoveryRunbook(unittest.TestCase):
     """#300 review: the ERROR line points at a runbook that exists and says what to do."""
 
@@ -221,6 +284,7 @@ class TestRecoveryRunbook(unittest.TestCase):
         readme = (Path(__file__).resolve().parent.parent / "aether" / "services" / "portfolio"
                   / "README.md").read_text(encoding="utf-8")
         self.assertIn("When a run logs `NOT saved`", readme)
+        self.assertIn("When the state cannot be loaded", readme)
         for step in ("Back up the current", ".unsaved-<time>", "Excel log is not rebuilt"):
             self.assertIn(step, readme)
 
