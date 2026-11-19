@@ -52,12 +52,13 @@ class _FakeWS:
         return list(self._rows)
 
 
-def _row(sym, pgr="Bullish", industry="Tech", s10=1.0, l60=2.0):
-    """A Research-sheet row: sym at [3], industry [4], pgr [6], s10 [24], l60 [25]."""
+def _row(sym, pgr="Bullish", industry="Tech", s10=1.0, l60=2.0, setup=None):
+    """A Research-sheet row: sym at [3], industry [4], pgr [6], setup [20], s10 [24], l60 [25]."""
     r = [None] * 26
     r[3] = sym
     r[4] = industry
     r[6] = pgr
+    r[20] = setup
     r[24] = s10
     r[25] = l60
     return tuple(r)
@@ -230,6 +231,7 @@ class TestQueuedBuy(unittest.TestCase):
         self.assertEqual(dna["score"], 7.0)
         self.assertEqual(dna["buy_date"], _TODAY)
         self.assertEqual(dna["z_score"], 0.0)
+        self.assertIs(dna["setup"], False)          # no Setup flag on the row
         self.assertEqual(state["balance"], _BUY_BALANCE - 10 * 20.0)
         self.assertEqual(len(new_tx), 1)
         self.assertEqual(new_tx[0]["type"], "BUY")
@@ -255,6 +257,14 @@ class TestQueuedBuy(unittest.TestCase):
         self.assertEqual(dna["industry"], "Unknown")
         self.assertEqual(dna["s10"], 0.0)
         self.assertEqual(dna["l60"], 0.0)
+        self.assertIsNone(dna["setup"])             # unknown: the symbol is not on the sheet
+
+    def test_queued_buy_dna_records_an_active_setup(self):
+        for flag in ("OK", "1", 1):
+            state = _buy_state()
+            _run(state, [{"symbol": "BBB", "type": "BUY", "reason": "x"}], prices={"BBB": 20.0},
+                 ws=_FakeWS([_row("BBB", setup=flag)]), atr=1.0, qty=1)
+            self.assertIs(state["positions"]["BBB"]["buy_dna"]["setup"], True, flag)
 
     def test_queued_buy_skipped_when_stale_after_heal(self):
         order = {"symbol": "BBB", "type": "BUY", "reason": "x"}
