@@ -390,6 +390,18 @@
       "Source: ai_portfolio_game.py slot-expansion + pyramiding blocks"
     ]
   },
+  "drop_risk": {
+    "title": "Drop-Risk Flag and Size Hint",
+    "summary": "Marks a recommended stock whose own history shows sudden large drops (4+ days of -10% or worse in 3 years, or a worst-1% day of -8% or worse), and gives the Oracle a size hint so that a stop-out or a worst-1% day costs about 1% of the account. Advisory; nothing is blocked.",
+    "origin": "AETHER Internal (November 2026), after SA was recommended on 2026-11-18 and fell ~30% the next day. Its history (5 days of -10%, worst 1% of days -9.7%) set it apart from the median stock (2 days, -6.1%).",
+    "body": "<p>Computed each time a recommendation is shown, from the cached daily bars (<code>risk_utils._load_ohlcv_bars</code>: split-adjusted, placeholder bars out). Bars on days NYSE was closed and short snap-back spikes are dropped first, because some cached series hold junk bars.</p>\n<p class=\"mt-2\">History says how likely a big move is, not when: SA's worst day in the 3 years before 11-19 was -15.7%. The size hint reuses the game's idea of a 1% per-trade risk cap for the real account. A study tests whether the count predicts the next big drop before any rule uses it.</p>",
+    "config": [
+      "Module: aether/drop_risk.py (profile, note, size_hint)",
+      "Window: LOOKBACK = 756 sessions; flag at HIGH_DROPS = 4 or HIGH_P1 = -8%",
+      "Size hint: RISK_PCT = 1% of account equity per stop-out or worst-1% day",
+      "Shown in: the evening email's pick tables and the Oracle's buy cards"
+    ]
+  },
   "earnings_calendar": {
     "title": "Earnings Date Flag",
     "summary": "An advisory flag on recommendations: the evening email marks a pick whose earnings report is due within 7 days, and the Oracle's buy cards show the date, or \"earnings date unknown\" when no source has one. Nothing is blocked.",

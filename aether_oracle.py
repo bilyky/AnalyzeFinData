@@ -12,7 +12,7 @@ import html
 
 import ai_portfolio_game
 import data_api
-from aether import earnings_calendar, margin_watch, pick_eval, pick_lists, sell_rules
+from aether import drop_risk, earnings_calendar, margin_watch, pick_eval, pick_lists, sell_rules
 from aether.config import CFG
 from aether.risk_utils import calculate_atr, is_elite_breakout_candidate
 from aether_logger import get_logger as _get_logger
@@ -300,6 +300,16 @@ def generate_oracle_html(acct, sells, holds, buys):
             due = earnings_calendar.note(b['symbol'], today, earnings, unknown=True)
             due_html = (f'<div style="font-size: 12px; color: #f0883e; margin-top: 4px;">&#9888; {due}</div>'
                         if due else "")
+            # Drop-prone history and a size hint (advisory): the most shares at which a stop-out
+            # or a worst-1% day costs ~1% of the account, like the game's per-trade risk cap.
+            prof = drop_risk.profile(b['symbol'])
+            risk = drop_risk.note(prof)
+            if risk:
+                due_html += f'<div style="font-size: 12px; color: #f85149; margin-top: 4px;">&#9888; {risk}</div>'
+            hint = drop_risk.size_hint(b['price'], b['stop'] or 0.0, current_equity or 0.0, prof)
+            if hint is not None:
+                due_html += (f'<div style="font-size: 12px; color: #8b949e; margin-top: 4px;">Size hint: up to '
+                             f'{hint} shares (a stop-out or a worst-1% day = about 1% of the account)</div>')
             buys_html += f"""
             <div style="background-color: #0f1c13; border: 1px solid #56d364; border-radius: 6px; padding: 12px; margin-bottom: 10px; border-left: 5px solid #56d364;">
                 <div style="font-weight: bold; font-size: 15px; color: #7ee787;">🟢 TRIGGER ACTIVE: {b['symbol']} (Entry Price: ${b['price']:.2f})</div>

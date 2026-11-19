@@ -9,7 +9,7 @@ import traceback
 from pathlib import Path
 
 import notify
-from aether import data_completeness, earnings_calendar, oceanview_context, paths, pick_eval, pick_lists
+from aether import data_completeness, drop_risk, earnings_calendar, oceanview_context, paths, pick_eval, pick_lists
 import powergauge
 import rapidapi
 import watchdog
@@ -397,6 +397,8 @@ def main():
                 score = round(r['s10'] + r['br'], 1)
                 due = earnings_calendar.note(r['symbol'], today, earnings)
                 due_html = f'<br><small style="color:#c0392b;">&#9888; {due}</small>' if due else ""
+                risk = drop_risk.note(drop_risk.profile(r['symbol']))
+                due_html += f'<br><small style="color:#c0392b;">&#9888; {risk}</small>' if risk else ""
                 res += f"""
                     <tr class="{row_class}">
                         <td>{i}</td>
