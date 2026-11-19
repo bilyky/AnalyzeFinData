@@ -15,6 +15,10 @@ imported or run):
    (``aether.services.<other>.api``), never its domain, adapters or app.
 4. **A service's domain does no I/O**: it imports no adapter, no other aether I/O module
    and no I/O library.
+5. **Only the composition root and a service's own adapters import its adapters**
+   (``aether/bootstrap.py`` and ``aether/services/<name>/adapters/``). The domain, the app,
+   the api and every other module depend on ports, never on an adapter (``adapters -> ports
+   <- app``).
 
 Relative imports (``from ..x import y``) are resolved against the file's package and
 checked like absolute ones. Each rule is also run on a small synthetic tree, so a broken
@@ -153,6 +157,20 @@ def domain_io_violations(root: Path):
     return bad
 
 
+def adapter_import_violations(root: Path):
+    bad = []
+    for rel, path in _modules(root):
+        for line, mod in _imports(path, rel):
+            parts = mod.split(".")
+            if parts[:2] != ["aether", "services"] or len(parts) < 4 or parts[3] != "adapters":
+                continue
+            if rel == "aether/bootstrap.py" or rel.startswith(f"aether/services/{parts[2]}/adapters/"):
+                continue
+            if not any(b.startswith(f"{rel}:{line} ") for b in bad):  # one report per import line
+                bad.append(f"{rel}:{line} imports {mod} (only aether/bootstrap.py wires adapters)")
+    return bad
+
+
 class TestRealTree(unittest.TestCase):
     def test_no_new_root_script_imports(self):
         new = root_script_imports(_REPO) - KNOWN_ROOT_IMPORTS
@@ -170,6 +188,9 @@ class TestRealTree(unittest.TestCase):
 
     def test_service_domains_do_no_io(self):
         self.assertEqual(domain_io_violations(_REPO), [])
+
+    def test_only_bootstrap_wires_adapters(self):
+        self.assertEqual(adapter_import_violations(_REPO), [])
 
 
 def _tree(files):
@@ -240,6 +261,22 @@ class TestCheckersCatchViolations(unittest.TestCase):
             bad = domain_io_violations(root)
         self.assertEqual(len(bad), 3, bad)  # openpyxl, aether.notify, the adapters import
         self.assertTrue(all(b.startswith("aether/services/portfolio/domain/bad.py") for b in bad), bad)
+
+    def test_adapters_are_imported_only_by_bootstrap_and_their_own_service(self):
+        d, root = _tree({
+            "aether/bootstrap.py": "from aether.services.portfolio.adapters.json_repository import Repo\n",
+            "aether/services/portfolio/adapters/gateway.py": "from . import json_mapper\n"
+                                                             "from aether.services.portfolio.adapters import memory\n",
+            "aether/services/portfolio/app.py": "from aether.services.portfolio.adapters import json_mapper\n",
+            "aether/services/portfolio/api.py": "from .adapters.memory import Fake\n",
+            "aether/services/trading/adapters/x.py": "import aether.services.portfolio.adapters.memory\n",
+            "aether/server_like.py": "from aether.services.portfolio.adapters import json_repository\n",
+        })
+        with d:
+            bad = adapter_import_violations(root)
+        self.assertEqual(sorted(b.split(":")[0] for b in bad),
+                         ["aether/server_like.py", "aether/services/portfolio/api.py",
+                          "aether/services/portfolio/app.py", "aether/services/trading/adapters/x.py"])
 
 
 if __name__ == "__main__":
