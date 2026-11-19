@@ -1,29 +1,39 @@
 """JsonPortfolioRepository: portfolios stored as JSON files with timestamped backups (ADR 0003).
 
 The default store. It owns each portfolio's file, its backups (the newest 15 are kept) and
-restoring from a backup. The file code is moved as-is from ``ai_portfolio_game.load_game`` /
-``save_game``; the behaviour is unchanged, including two known gaps that the next PRs fix:
+restoring from a backup. The file code came as-is from ``ai_portfolio_game.load_game`` /
+``save_game`` (#295), then:
 
-- **F1:** ``save`` still writes when the backup copy fails, and the write is not atomic.
-- **F2:** a corrupt file with no readable backup quietly becomes a fresh portfolio.
+- **F1 (fixed):** a save backs the file up first and **stops if that backup fails**. The file
+  is then written atomically: to a temp file in the same folder, flushed to disk, and swapped
+  in with ``os.replace``. Windows refuses the swap while another process has the file open
+  (for example the dashboard reading it), so the swap is retried for a few seconds. If any
+  step fails, the file keeps its last good content, the state goes to
+  ``<file>.unsaved-<time>``, an ERROR is logged and ``StorageError`` is raised.
+- **F2 (open):** a corrupt file with no readable backup quietly becomes a fresh portfolio.
 
 Which file belongs to which portfolio is configuration, passed in by the composition root
 (``aether.bootstrap``); callers of the service never see a path.
 """
 import datetime
 import json
+import os
 import shutil
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from aether import trash
-from aether.core import PortfolioId
+from aether.core import PortfolioId, StorageError
 from aether.logger import get_logger
 from aether.services.portfolio.adapters import json_mapper
 from aether.services.portfolio.domain.model import Portfolio
 from aether.services.portfolio.errors import UnknownPortfolio
 
 KEEP_BACKUPS = 15
+REPLACE_TRIES = 10       # os.replace attempts while a reader holds the file open
+REPLACE_WAIT_S = 0.5     # pause between attempts (about 5 s in all)
 
 
 @dataclass(frozen=True)
@@ -114,19 +124,62 @@ class JsonPortfolioRepository:
     def _write(self, portfolio_id: PortfolioId, state: dict) -> None:
         f = self._file(portfolio_id)
         path, backup_dir = Path(f.path), Path(f.backup_dir)
-        # --- Mandatory Backup before Write ---
+        # --- Mandatory Backup before Write (F1: no backup, no write) ---
         if path.exists():
             try:
                 backup_dir.mkdir(parents=True, exist_ok=True)
                 ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 shutil.copy2(path, backup_dir / f.backup_name(ts))
-                # Clean up old backups (keep the last KEEP_BACKUPS)
+            except Exception as e:
+                self._refuse(portfolio_id, state, f"the backup of {path.name} failed ({e})", e)
+            try:
+                # Clean up old backups (keep the last KEEP_BACKUPS); the new backup exists, so a
+                # failed prune does not put the state at risk.
                 backups = sorted(list(backup_dir.glob(f.backup_glob)), key=lambda x: x.stat().st_mtime)
                 if len(backups) > KEEP_BACKUPS:
                     for old_b in backups[:-KEEP_BACKUPS]:
                         trash.soft_delete(old_b, reason="game-backup-prune", force=True)
             except Exception as e:
-                self._log.warning(f"  [Warning] Game backup failed: {e}")  # F1: abort instead
+                self._log.warning(f"  [Warning] Game backup prune failed: {e}")
+        self._atomic_write(portfolio_id, path, state)
 
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(state, fh, indent=4)
+    def _atomic_write(self, portfolio_id: PortfolioId, path: Path, state: dict) -> None:
+        """Write to a temp file in the same folder, then swap it in; the file is never half-written."""
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:  # text mode: the same bytes as before
+                json.dump(state, fh, indent=4)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except Exception as e:
+            _remove_quietly(tmp)
+            self._refuse(portfolio_id, state, f"writing {path.name} failed ({e})", e)
+        for attempt in range(1, REPLACE_TRIES + 1):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError as e:  # Windows: another process has the file open
+                if attempt == REPLACE_TRIES:
+                    _remove_quietly(tmp)
+                    self._refuse(portfolio_id, state, f"{path.name} stayed locked by another process ({e})", e)
+                time.sleep(REPLACE_WAIT_S)
+            except Exception as e:
+                _remove_quietly(tmp)
+                self._refuse(portfolio_id, state, f"replacing {path.name} failed ({e})", e)
+
+    def _refuse(self, portfolio_id: PortfolioId, state, why: str, cause: Exception):
+        """Keep the state in a quarantine file, log an ERROR and raise; the stored file is untouched."""
+        try:
+            where = self.quarantine(portfolio_id, state)
+        except Exception as q:
+            where = f"nowhere (the quarantine write failed: {q})"
+        self._log.error(f"  [PORTFOLIO] State for {portfolio_id} NOT saved: {why}. "
+                        f"The file keeps its last good state. Unsaved state kept in: {where}")
+        raise StorageError(f"state for {portfolio_id} not saved: {why}; unsaved copy: {where}") from cause
+
+
+def _remove_quietly(path) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass

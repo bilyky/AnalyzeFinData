@@ -30,13 +30,18 @@ that names the game's file. Only `bootstrap` and the service's own adapters may 
 `AETHER_PORTFOLIO_STORE=db` asks for the database. Until S14 that fails loudly, and a
 `DATABASE_URL` alone never switches the store.
 
+**Saving is safe (F1):** a save backs the file up first and stops if the backup fails. The
+file is written to a temp file and swapped in, so it is never half-written; the swap is retried
+for about 5 s while another process has the file open (Windows refuses it then). On any
+failure the file keeps its last good state, the state goes to `<file>.unsaved-<time>`, an
+ERROR is logged and `StorageError` is raised.
+
 **Data owned:** `Data/ai_portfolio_game.json` (portfolio `ai_game`) and its backups in
 `Data/Backup/Game/` (the newest 15 are kept).
 
 **Events:** `StopChanged`.
 
 **Next:**
-- F1: stop if the backup fails, and write atomically;
 - F2: start a fresh portfolio only on a true first run;
 - `PortfolioQueries` for the modules that read the file directly today, and the one other
   writer, `aether/data_completeness.accept_fields()` (#288), moved onto the service;

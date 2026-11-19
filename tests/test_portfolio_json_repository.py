@@ -1,13 +1,14 @@
 """JsonPortfolioRepository: the game's load/save, moved into the portfolio service (R&D #78 S4).
 
-The file behaviour is pinned through ``LegacyStateGateway``, the path the game uses. These
-tests pin today's behaviour, gaps included; the two marked F1 and F2 are rewritten in those
-fix PRs. Everything runs in a temp dir; nothing touches Data/.
+The file behaviour is pinned through ``LegacyStateGateway``, the path the game uses.
+``TestSafeWrite`` is F1 (no backup, no write; atomic write). The test marked F2 pins today's
+gap and is rewritten in that fix PR. Everything runs in a temp dir; nothing touches Data/.
 """
 import datetime
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -16,8 +17,7 @@ from unittest import mock
 import ai_portfolio_game
 import aether.bootstrap as boot_module
 from aether.bootstrap import PortfolioFile, bootstrap
-from aether.core import DEFAULT_PORTFOLIO, PortfolioId
-from aether.core import StorageError
+from aether.core import DEFAULT_PORTFOLIO, PortfolioId, StorageError
 from aether.services.portfolio.api import Portfolio, UnknownPortfolio
 
 _STATE = {"balance": 812.5, "equity": 10450.0, "positions": {"AAA": {"qty": 3, "cost": 10.0, "stop_loss": 9.0}},
@@ -132,14 +132,84 @@ class TestSave(_Base):
         self.assertNotIn(old[0], left)  # the two oldest go
         self.assertNotIn(old[1], left)
 
-    def test_F1_a_failed_backup_still_writes(self):
-        # Today's behaviour, and the F1 bug: the state is overwritten with no backup taken.
-        self.file.write_text(json.dumps({"balance": 1.0}), encoding="utf-8")
-        with mock.patch("aether.services.portfolio.adapters.json_repository.shutil.copy2",
-                        side_effect=OSError("disk full")):
+
+
+_REPO = "aether.services.portfolio.adapters.json_repository"
+
+
+class TestSafeWrite(_Base):
+    """F1: a save never overwrites the file without a backup, and never leaves it half-written."""
+
+    def setUp(self):
+        super().setUp()
+        self.good = {"balance": 1.0, "positions": {}}
+        self.file.write_text(json.dumps(self.good), encoding="utf-8")
+
+    def _assert_refused(self, ctx, why):
+        self.assertEqual(json.loads(self.file.read_text(encoding="utf-8")), self.good)  # last good state kept
+        (unsaved,) = self.root.glob("ai_portfolio_game.json.unsaved-*")
+        self.assertEqual(json.loads(unsaved.read_text(encoding="utf-8")), _STATE)  # nothing is lost
+        self.assertIn(why, str(ctx.exception))
+        self.assertIn("NOT saved", self.log.error.call_args[0][0])
+        self.assertEqual(list(self.root.glob("*.tmp")), [])  # no temp file left behind
+
+    def test_a_failed_backup_stops_the_save(self):
+        with mock.patch(f"{_REPO}.shutil.copy2", side_effect=OSError("disk full")):
+            with self.assertRaises(StorageError) as ctx:
+                self.store.save_state(_STATE)
+        self._assert_refused(ctx, "backup of ai_portfolio_game.json failed (disk full)")
+
+    def test_a_failed_backup_folder_stops_the_save(self):
+        with mock.patch(f"{_REPO}.Path.mkdir", side_effect=PermissionError("denied")):
+            with self.assertRaises(StorageError) as ctx:
+                self.store.save_state(_STATE)
+        self._assert_refused(ctx, "denied")
+
+    def test_a_failed_write_leaves_the_file_whole(self):
+        with mock.patch(f"{_REPO}.json.dump", side_effect=OSError("disk full mid-write")):
+            with self.assertRaises(StorageError) as ctx:
+                self.store.save_state(_STATE)
+        self.assertEqual(json.loads(self.file.read_text(encoding="utf-8")), self.good)
+        self.assertIn("disk full mid-write", str(ctx.exception))
+        self.assertEqual(list(self.root.glob("*.tmp")), [])
+
+    def test_a_value_json_cannot_write_leaves_the_file_whole(self):
+        # Before F1 the old open("w") had already truncated the file when json.dump raised.
+        with self.assertRaises(StorageError):
+            self.store.save_state({"balance": 2.0, "when": datetime.date(2026, 11, 19)})
+        self.assertEqual(json.loads(self.file.read_text(encoding="utf-8")), self.good)
+
+    def test_a_reader_holding_the_file_open_only_delays_the_save(self):
+        # Real Windows behaviour: os.replace onto an open file raises PermissionError (WinError 5).
+        reader = open(self.file, "r", encoding="utf-8")
+        threading.Timer(1.0, reader.close).start()
+        try:
+            self.store.save_state(_STATE)
+        finally:
+            reader.close()
+        self.assertEqual(json.loads(self.file.read_text(encoding="utf-8")), _STATE)
+        self.log.error.assert_not_called()
+
+    def test_a_file_that_stays_locked_stops_the_save(self):
+        with mock.patch(f"{_REPO}.os.replace", side_effect=PermissionError("locked")) as rep, \
+                mock.patch(f"{_REPO}.time.sleep") as sleep:
+            with self.assertRaises(StorageError) as ctx:
+                self.store.save_state(_STATE)
+        self.assertEqual(rep.call_count, 10)
+        self.assertEqual(sleep.call_count, 9)
+        self._assert_refused(ctx, "stayed locked")
+
+    def test_a_failed_prune_does_not_stop_the_save(self):
+        with mock.patch(f"{_REPO}.trash.soft_delete", side_effect=OSError("x")), \
+                mock.patch.object(type(self.backups), "glob", side_effect=OSError("listing failed")):
             self.store.save_state(_STATE)
         self.assertEqual(json.loads(self.file.read_text(encoding="utf-8")), _STATE)
-        self.assertIn("Game backup failed: disk full", self.log.warning.call_args[0][0])
+        self.assertIn("prune failed: listing failed", self.log.warning.call_args[0][0])
+
+    def test_the_backup_holds_the_previous_state(self):
+        self.store.save_state(_STATE)
+        (backup,) = self.backups.glob("ai_portfolio_game_*.json")
+        self.assertEqual(json.loads(backup.read_text(encoding="utf-8")), self.good)
 
 
 class TestUnmappableStateIsQuarantined(_Base):
