@@ -71,6 +71,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 import backtest_ratings as br
 import setup_s10_gate_study as sg
 from aether import risk_utils
+from bar_provenance import real_dates
 
 MIN_YEAR = 2023
 WF_START = "2024-01"
@@ -88,6 +89,18 @@ GRID = {"s10_floor": (-2.0, 0.0, 1.0, 2.0, 3.0), "setup": ("full", "sma", "dir",
 CURRENT = (2.0, "full", 2.0, False, False, False)
 FIELDS = ("day", "sym", "s10", "s10w", "l60", "above", "up3", "rr", "gain", "leader",
           "mf_weak", "past60", "f20", "f60", "setup_full")
+# Appended after FIELDS for the tail-risk study (tail_risk_study.py). FIELDS keep their positions
+# and meaning, so a panel cached before these existed still loads (to_arrays then omits them).
+#   pgr       corrected Chaikin PGR (backtest_ratings.extract_pgr_corr), 0 when missing
+#   worst10   worst split-adjusted close of the 10 real sessions after the entry day, % vs the
+#             entry day's adjusted close (NaN when bars are missing or have a session gap)
+#   drops756  sessions with a close-to-close return <= -10% in the 756 real sessions before the
+#             entry day; a drop fully reversed next session (>= +10%) is a bad bar, excluded
+#             (NaN when fewer than 756 sessions precede the entry day)
+EXTRA_FIELDS = ("pgr", "worst10", "drops756")
+TAIL_HORIZON = 10
+HIST_SESSIONS = 756
+DROP_PCT = -10.0
 
 
 # ── Extraction ────────────────────────────────────────────────────────────────
@@ -106,6 +119,52 @@ def _risk(price, idx, dates, ts):
     return (target - price) / (price - stop), (target - price) / price * 100
 
 
+def tail_series(ts) -> dict:
+    """Split-adjusted real-bar closes of one OHLCV series, for tail_fields.
+
+    Placeholder bars are dropped (bar_provenance.real_dates) and closes are back-adjusted with
+    the production splitter (risk_utils.split_adjust_ohlcv). A return across a session gap
+    (risk_utils.session_gaps: a hole in the real bars) is a multi-day move and is set to NaN.
+    A drop day is a return <= DROP_PCT that the next session does not fully reverse (a next
+    return >= -DROP_PCT marks a bad bar). drop_cum[k] = drop days among returns 0..k-1."""
+    dates = real_dates(ts)
+    opens = [float(ts[d].get("1. open", 0) or 0) for d in dates]
+    highs = [float(ts[d].get("2. high", 0) or 0) for d in dates]
+    lows = [float(ts[d].get("3. low", 0) or 0) for d in dates]
+    closes = [float(ts[d].get("4. close", 0) or 0) for d in dates]
+    _, _, adj = risk_utils.split_adjust_ohlcv(opens, highs, lows, closes)
+    adj = np.asarray(adj, dtype=float)
+    gaps = np.asarray(risk_utils.session_gaps(dates) if dates else [], dtype=bool)
+    ret = np.full(len(adj), np.nan)
+    if len(adj) > 1:
+        prev = adj[:-1]
+        ret[1:] = np.where(prev > 0, (adj[1:] / np.where(prev > 0, prev, 1.0) - 1) * 100, np.nan)
+    ret[gaps] = np.nan
+    nxt = np.append(ret[1:], np.nan)
+    drop = (ret <= DROP_PCT) & ~(nxt >= -DROP_PCT)
+    return {"pos": {d: i for i, d in enumerate(dates)}, "adj": adj, "gaps": gaps,
+            "drop_cum": np.concatenate(([0], np.cumsum(drop)))}
+
+
+def tail_fields(day, ser) -> tuple:
+    """(worst10 %, drops756) for an entry on `day`; NaN where the data cannot say.
+
+    drops756 counts drop days among the returns of the HIST_SESSIONS sessions before `day`.
+    The reversal check of the last of them reads `day`'s own return, known at `day`'s close
+    (the entry price), so nothing after the decision is used."""
+    j = ser["pos"].get(day)
+    if j is None:
+        return float("nan"), float("nan")
+    adj = ser["adj"]
+    worst = float("nan")
+    if j + TAIL_HORIZON < len(adj) and adj[j] > 0 and not ser["gaps"][j + 1: j + TAIL_HORIZON + 1].any():
+        worst = float((adj[j + 1: j + TAIL_HORIZON + 1].min() / adj[j] - 1) * 100)
+    drops = float("nan")
+    if j - HIST_SESSIONS >= 1:
+        drops = float(ser["drop_cum"][j] - ser["drop_cum"][j - HIST_SESSIONS])   # returns j-756 .. j-1
+    return worst, drops
+
+
 def _symbol_rows(job):
     sym, sym_dir, ohlcv_dir = job
     ts = sg._load(ohlcv_dir, sym)
@@ -114,6 +173,7 @@ def _symbol_rows(job):
     dates = sorted(ts)
     pos = {d: i for i, d in enumerate(dates)}
     seas = br.precompute_seasonality(ts)
+    tail = tail_series(ts)
     rows, prev = [], None
     for path in sorted(glob.glob(os.path.join(sym_dir, sym, f"{sym}_*.json"))):
         day = Path(path).stem[len(sym) + 1:]
@@ -150,7 +210,8 @@ def _symbol_rows(job):
                      str(cl.get("moneyFlow") or "").strip() == "Weak", (price - c(i - 60)) / c(i - 60) * 100,
                      (c(i + 20) - price) / price * 100,
                      (c(i + 60) - price) / price * 100 if i + 60 < len(dates) else float("nan"),
-                     bool(br.compute_setup_ok(price, i, dates, ts))))
+                     bool(br.compute_setup_ok(price, i, dates, ts)),
+                     br.extract_pgr_corr(data)) + tail_fields(day, tail))
         prev = data
     return rows
 
@@ -176,7 +237,9 @@ def build_panel(data_dir, path, rebuild=False, workers=None):
 # ── Rules ─────────────────────────────────────────────────────────────────────
 
 def to_arrays(rows) -> dict:
-    a = {k: np.array([r[i] for r in rows]) for i, k in enumerate(FIELDS)}
+    """Column arrays by field name; EXTRA_FIELDS only when the rows carry them (newer panels)."""
+    names = FIELDS + EXTRA_FIELDS if rows and len(rows[0]) >= len(FIELDS) + len(EXTRA_FIELDS) else FIELDS
+    a = {k: np.array([r[i] for r in rows]) for i, k in enumerate(names)}
     a["day"] = a["day"].astype(str)
     return a
 
