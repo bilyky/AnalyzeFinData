@@ -24,7 +24,6 @@ _log = _get_logger("workbook_read")
 
 BASE_DIR = Path(__file__).resolve().parent
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
-GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
 ACCOUNT_RISK_USD = 500  # Dollars to lose if a stop is hit (position-sizing basis).
 
 
