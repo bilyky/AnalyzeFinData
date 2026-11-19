@@ -1,92 +1,61 @@
 """How prone a stock is to sudden large drops, from its own daily history: an advisory flag and a
 position-size hint for recommendations. Nothing is blocked.
 
-PROD 2026-11-18/19: SA was recommended on 11-18 and fell ~30% on 11-19. Its history already set it
-apart (3 years to 11-17: 5 days of -10% or worse, universe median 2; worst 1% of days -9.7%, median
--6.1%; annual volatility 58%, median 38%), though its worst day had been -15.7%, so no history said
-*when*. The history says *how likely* a big move is, which is what a position size should respect.
-
-Bars come from ``risk_utils._load_ohlcv_bars``: split-adjusted, placeholder bars excluded; bars on days NYSE
-was closed are dropped. Plateau spikes
-(1-3 bars far from the previous close that then snap back) are bad bars and dropped first:
-some cached series hold them (RS: a 2023-11-23 Thanksgiving bar at 369.1 between ~268 closes).
-Whether a high count predicts the next big drop is being tested separately (the tail-risk study);
-until then this is a warning and a sizing hint only.
+PROD 2026-11-18/19: SA was recommended on 11-18 and fell ~30% on 11-19. R&D #115 (tail-risk study)
+then found that among admitted buys, a stock with 4 or more drop days in the prior 756 sessions hit
+a -15% worst close within 10 sessions 8.9% of the time, vs 1.2% for 0-1 such days (HAC t 8.89).
+The flag shows exactly that count: ``risk_utils.drop_day_flags`` is the one definition (a return
+<= -10% the next session does not fully reverse; returns across session gaps left out), on real,
+split-adjusted bars (``risk_utils._load_ohlcv_bars``). The history says how likely a big move is,
+not when. R&D #117 found that skipping such buys did not help a portfolio; this stays a warning.
 """
 from __future__ import annotations
 
-import datetime
 import math
 
-from aether import market_calendar, risk_utils
+from aether import risk_utils
+from aether.config import CFG
 
-LOOKBACK = 756           # ~3 years of sessions
-DROP = -0.10             # a "sudden drop" day
-SPIKE_PCT = 0.15         # a bar this far from the previous close ...
-BACK_PCT = 0.05          # ... with the price back within this of it 1-3 bars later is a bad bar
-HIGH_DROPS = 4           # this many drop days (or a worst-1% day at/below HIGH_P1) flags the name
-HIGH_P1 = -0.08
-RISK_PCT = 0.01          # size so a stop-out or a worst-1% day costs at most this share of equity
-MIN_SESSIONS = 250
-
-
-def _is_session(day: str) -> bool:
-    try:
-        return market_calendar.is_session(datetime.date.fromisoformat(day))
-    except ValueError:
-        return False
-
-
-def drop_spikes(closes: list) -> list:
-    """Closes without plateau spikes: 1-3 bars more than SPIKE_PCT away from the previous close,
-    after which the price is back within BACK_PCT of it (RS 2023-11-23/24: two bars at 369.1
-    between ~268 closes). A real crash that stays down is kept."""
-    bad = set()
-    for i in range(1, len(closes)):
-        base = closes[i - 1]
-        for k in (1, 2, 3):
-            j = i + k
-            if j < len(closes) and abs(closes[j] / base - 1) < BACK_PCT                     and all(abs(closes[m] / base - 1) > SPIKE_PCT for m in range(i, j)):
-                bad.update(range(i, j))
-                break
-    return [c for i, c in enumerate(closes) if i not in bad]
+LOOKBACK = 756           # sessions before the decision day, as in R&D #115
+HIGH_DROPS = 4           # R&D #115's HIGH group
 
 
 def profile(symbol: str, as_of: str | None = None) -> dict | None:
-    """{"sessions", "drops", "p1", "worst"} over the last LOOKBACK sessions, or None when there is
-    too little history."""
+    """{"sessions", "drops", "p1", "worst"} for the LOOKBACK sessions before the latest bar (the
+    decision day), or None when there are fewer (R&D #115 leaves the count undefined then)."""
     dates, _h, _l, closes = risk_utils._load_ohlcv_bars(symbol, as_of)
-    # Bars on days NYSE was closed are cache junk (RS: closes of 369.29 on 2024-11-28 and 2025-07-04).
-    closes = [c for d, c in zip(dates, closes) if c and c > 0 and _is_session(d)]
-    closes = drop_spikes(closes)[-(LOOKBACK + 1):]
-    r = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
-    if len(r) < MIN_SESSIONS:
+    n = len(closes)
+    if n <= LOOKBACK:
         return None
-    ordered = sorted(r)
-    return {"sessions": len(r), "drops": sum(1 for x in r if x <= DROP),
+    flags = risk_utils.drop_day_flags(dates, closes)
+    window = range(n - 1 - LOOKBACK, n - 1)          # returns i-756 .. i-1 for decision day i = n-1
+    rets = [r for r in risk_utils.daily_returns(dates, closes)[n - 2 - LOOKBACK:n - 2] if r is not None]
+    if not rets:
+        return None
+    ordered = sorted(rets)
+    return {"sessions": LOOKBACK, "drops": sum(1 for i in window if flags[i]),
             "p1": ordered[int(len(ordered) * 0.01)], "worst": ordered[0]}
 
 
 def is_high(p: dict | None) -> bool:
-    return bool(p) and (p["drops"] >= HIGH_DROPS or p["p1"] <= HIGH_P1)
+    return bool(p) and p["drops"] >= HIGH_DROPS
 
 
 def note(p: dict | None) -> str:
     """'high drop risk: 5 days of -10% or worse in 3 years; worst 1% of days -9.7%', or ""."""
     if not is_high(p):
         return ""
-    years = p["sessions"] / 252
-    return (f"high drop risk: {p['drops']} days of -10% or worse in {years:.0f} years; "
+    return (f"high drop risk: {p['drops']} days of -10% or worse in {p['sessions'] / 252:.0f} years; "
             f"worst 1% of days {p['p1'] * 100:+.1f}%")
 
 
 def size_hint(price: float, stop: float, equity: float, p: dict | None) -> int | None:
-    """Most shares such that the larger of a stop-out and a worst-1% day costs RISK_PCT of equity.
-    None when the inputs don't allow a number."""
+    """Most shares such that the larger of a stop-out and a worst-1% day costs the game's per-trade
+    risk cap (``CFG.system_max_trade_risk_pct``) of equity. None when the inputs don't allow a number."""
     if not price or price <= 0 or not equity or equity <= 0:
         return None
     per_share = max(price - stop if stop and 0 < stop < price else 0.0,
                     price * abs(p["p1"]) if p else 0.0)
     if per_share <= 0:
         return None
-    return int(math.floor(RISK_PCT * equity / per_share))
+    return int(math.floor(CFG.system_max_trade_risk_pct * equity / per_share))
