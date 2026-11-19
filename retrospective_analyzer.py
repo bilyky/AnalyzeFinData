@@ -48,10 +48,15 @@ def breaker_lines(triggers: list, shown: int = 5) -> list:
 def behaviour_section(game_file=None, decision_log=None) -> list:
     """The Behaviour reflection lines from the game ledger, the decision log and the OHLCV cache."""
     try:
-        with open(game_file or ai_portfolio_game.AI_GAME_FILE, "r", encoding="utf-8") as f:   # the owner's path, read only
-            history = json.load(f).get("history", [])
-    except (OSError, ValueError, AttributeError) as e:
+        if game_file:   # an explicit file (tests, a copy of PROD's state)
+            with open(game_file, "r", encoding="utf-8") as f:
+                history = json.load(f).get("history", [])
+        else:           # the portfolio service owns the file: read through the game's loader
+            history = ai_portfolio_game.load_game().get("history", [])
+    except Exception as e:
         return ["BEHAVIOUR REFLECTION: the game ledger could not be read (" + type(e).__name__ + ")."]
+    if not history:   # a missing file reads as a new, empty portfolio
+        return ["BEHAVIOUR REFLECTION: no trades in the game ledger."]
     cache = {}
     try:   # one bad ledger row must not lose the whole weekly report (PR #289 review)
         result = behaviour_reflection.reflect(

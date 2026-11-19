@@ -22,6 +22,7 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "backtesting"))
 import ai_portfolio_game as game
+import aether.bootstrap as aether_bootstrap
 import pattern_discovery as pd
 import retrospective_analyzer as ra
 from aether import behaviour_reflection as br, ledgers
@@ -152,17 +153,22 @@ class ReflectTest(unittest.TestCase):
             self.assertIn(part, text)
 
 
+def _game_file():
+    """The portfolio service's default store (the harness points it at a temp folder)."""
+    return aether_bootstrap.DEFAULT_DATA_DIR / "ai_portfolio_game.json"
+
+
 class RetrospectiveFixesTest(unittest.TestCase):
     def setUp(self):
         self.assertNotEqual(ledgers.TRADE_DNA_FILE.parent.name, "Data")        # the harness temp folder
-        self.assertNotEqual(game.AI_GAME_FILE.parent.name, "Data")
-        for f in (ledgers.TRADE_DNA_FILE, ledgers.RETRO_REPORT_FILE, game.AI_GAME_FILE):
+        self.assertNotEqual(_game_file().parent.name, "Data")
+        for f in (ledgers.TRADE_DNA_FILE, ledgers.RETRO_REPORT_FILE, _game_file()):
             if f.exists():
                 f.unlink()
 
     def tearDown(self):
-        if game.AI_GAME_FILE.exists():
-            game.AI_GAME_FILE.unlink()
+        if _game_file().exists():
+            _game_file().unlink()
 
     def test_flat_trade_is_not_a_win(self):
         w, f, lo = ra.win_loss_split([{"pnl_pct": 1.0}, {"pnl_pct": 0.0}, {"pnl_pct": -1.0}])
@@ -181,7 +187,7 @@ class RetrospectiveFixesTest(unittest.TestCase):
                    "sell_price": 10, "pnl_pct": p, "holding_days": 4, "buy_dna": {"pgr": "Bu", "score": 8.0}}
                   for s, p in (("W", 2.0), ("F", 0.0), ("L", -1.0))]
         ledgers.TRADE_DNA_FILE.write_text(json.dumps(trades), encoding="utf-8")
-        game.AI_GAME_FILE.write_text(json.dumps({"history": [_tx(0, "BUY", "ZZNOBARS")]}), encoding="utf-8")
+        _game_file().write_text(json.dumps({"history": [_tx(0, "BUY", "ZZNOBARS")]}), encoding="utf-8")
         ra.analyze(report_only=True)
         report = ledgers.RETRO_REPORT_FILE.read_text(encoding="utf-8")
         self.assertIn("  - Winning Trades: 1", report)
@@ -191,7 +197,15 @@ class RetrospectiveFixesTest(unittest.TestCase):
         self.assertIn("skipped (under 10 sessions of bars): 1", report)
 
     def test_missing_game_ledger_is_one_line(self):
-        self.assertEqual(len(ra.behaviour_section()), 1)
+        self.assertEqual(ra.behaviour_section(), ["BEHAVIOUR REFLECTION: no trades in the game ledger."])
+
+    def test_reads_the_ledger_through_the_portfolio_service(self):
+        _game_file().write_text(json.dumps({"history": [_tx(0, "BUY", "ZZNOBARS")]}), encoding="utf-8")
+        with mock.patch.object(game, "load_game", wraps=game.load_game) as load:
+            lines = ra.behaviour_section()
+        load.assert_called_once_with()
+        self.assertIn("BEHAVIOUR REFLECTION", lines[0])
+        self.assertGreater(len(lines), 1)
 
     def test_a_failing_reflection_is_one_line_not_a_lost_report(self):
         """PR #289 review: an exception in reflect() must not stop the weekly report."""
