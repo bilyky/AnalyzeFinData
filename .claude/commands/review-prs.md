@@ -306,5 +306,7 @@ inferred (§3) · red-green or mutation, with a negative control for probes (§3
 the old behavior (§3) · every consumer of a changed output traced (§3) · prod-readiness on all three gates
 (§3) · feature docs in this PR, or "No feature-doc change" with a reason that holds (§3) · new
 functionality matched to existing features, no parallel copy (§3) · the change checked against
-the architecture plan, a breach reported as 🟠 not FYI (§3) · every factual sentence re-checked
+the architecture plan, a breach reported as 🟠 not FYI (§3) · a PR in a multi-stage project
+updates its item on the Development page (`plans/aether-services-progress.json`: status and `pr`;
+`ship-pr.md` §2) · every factual sentence re-checked
 now (§5) · PII masked (§6).

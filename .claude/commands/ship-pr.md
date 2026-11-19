@@ -106,6 +106,13 @@ git add <paths> && git commit -m "<type>: <summary>" && git push -u origin HEAD
   removes one), update the feature docs in the same PR: `AETHER_REFERENCE.md`, the `Data/wiki.json`
   entry and its About-tab card (`.claude/commands/doc-sentry.md`). Otherwise write **"No feature-doc
   change"** in the body, with the reason (bug fix, study, refactor, tests). Reviewers check the choice.
+- **Multi-stage projects live on the Development page, and every PR updates it** (owner, 2026-11-19).
+  A project with several stages or PRs (the services migration's S-steps and F-fixes, the one
+  buy-idea spec set, a study series that ends in a rule change) gets its items in
+  `plans/aether-services-progress.json`, which the Development page shows. Each PR in it sets its
+  item's `status` (todo → in_progress → in_review → done) and `pr` in the same PR; `tests/test_dev_progress.py`
+  fails on an `in_review` or `done` item without a PR. A new multi-stage effort adds its items
+  before its first PR, not after.
 - **Keep title and body true.** When a later push changes the payload or the conclusion (a study's
   verdict, a scope cut), edit them: `gh pr edit <n> --title … --body-file …`.
 - **Several open PRs at once?** Each merge puts the others behind. Re-merge `main` into each, and when
