@@ -200,7 +200,9 @@ def get_oracle_buy_candidates(acct):
                     "l60": l60,
                     "combined": combined,
                     "pgr": r.get("pgr", "N/A"),
-                    "patterns": r.get("patterns", "")
+                    "patterns": r.get("patterns", ""),
+                    "rr": rr_ratio,
+                    "rr_waived": rr_ratio < min_rr,   # admitted only by the elite-breakout waiver
                 })
                 
         # Sort by combined score descending
@@ -209,6 +211,20 @@ def get_oracle_buy_candidates(acct):
         _oracle_log.warning(f"Oracle failed to query buy candidates: {e}")
         
     return candidates
+
+def _checked_note(b: dict) -> str:
+    """What the Oracle actually checked for a buy idea: no bottom detection, no news. The setup
+    flag, the scores and the reward/risk, and whether the elite-breakout waiver let it in."""
+    parts = ["Setup OK"]
+    if b.get("s10") is not None:
+        parts.append(f"S10 {b['s10']:+.1f}")
+    parts.append(f"S10+L60 {b.get('combined', 0.0):+.1f} (PGR: {b.get('pgr', 'N/A')})")
+    if b.get("rr") is not None:
+        parts.append(f"reward/risk {b['rr']:.2f}"
+                     + (" (under the minimum: admitted only by the elite-breakout waiver)" if b.get("rr_waived") else ""))
+    return (", ".join(parts) + f". Patterns: {b.get('patterns') or 'none'}. "
+            "Not checked: news, earnings, legal or regulatory events.")
+
 
 def _target_date() -> datetime.date | None:
     raw = (CFG.oracle_target_date or "").strip()
@@ -297,7 +313,7 @@ def generate_oracle_html(acct, sells, holds, buys):
             buys_html += f"""
             <div style="background-color: #0f1c13; border: 1px solid #56d364; border-radius: 6px; padding: 12px; margin-bottom: 10px; border-left: 5px solid #56d364;">
                 <div style="font-weight: bold; font-size: 15px; color: #7ee787;">🟢 TRIGGER ACTIVE: {b['symbol']} (Entry Price: ${b['price']:.2f})</div>
-                <div style="font-size: 13px; color: #c9d1d9; margin: 5px 0;"><b>Advisor Note:</b> Confirmed bottom setup, trend-momentum score +{b['combined']:.1f} (PGR: {b['pgr']}). Patterns: {b['patterns'] or 'Breakout'}.</div>
+                <div style="font-size: 13px; color: #c9d1d9; margin: 5px 0;"><b>Checked:</b> {_checked_note(b)}</div>
                 <div style="font-size: 12px; color: #8b949e;">Est. Stop-Loss: ${b['stop'] or 0.0:.2f} | Profit Target: ${b['target'] or 0.0:.2f}</div>
             </div>
             """

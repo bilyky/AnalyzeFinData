@@ -1,7 +1,8 @@
 """
 Project AETHER Intraday Stop-Breach Monitor.
 Performs 30-minute interval audits of held E*TRADE positions against their ATR-based stop-loss levels.
-Includes state-persistence (cures 30-min duplicate email spam) and dynamic, AI-powered qualitative analyses.
+Includes state-persistence (cures 30-min duplicate email spam) and a factual note per breach (the
+delta to the stop; no AI-invented cause, 2026-11-19).
 """
 import sys
 import os
@@ -14,7 +15,6 @@ _BASE_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_BASE_DIR))
 
 import notify
-import ai_client
 from aether_logger import get_logger
 from data_api import _SL  # canonical Short_Long column map (single source of truth)
 from ai_portfolio_game import get_live_prices
@@ -105,24 +105,16 @@ def one_stop_per_symbol(positions: list) -> list:
     return list(best.values())
 
 
-def generate_ai_analysis(sym: str, price: float, stop: float) -> str:
-    """Generate a highly specific, professional quantitative analysis for the stop breach."""
-    if not ai_client.primary():
-        return f"ATR Stop-Loss Floor Breached. Technical momentum is currently negative, representing an immediate capital preservation exit risk."
-        
-    system_prompt = (
-        "You are AETHER, an expert hedge-fund quantitative analyst.\n"
-        "Provide a highly concise, professional 2-sentence analysis and reasoning of why this stock has hit its stop-loss, "
-        "what the primary technical risk factor is, and what action the trader should take immediately. "
-        "Be concise, direct, and authoritative."
-    )
-    user_prompt = f"Asset {sym} has breached its ATR stop-loss floor. Current Price: ${price:.2f} | Stop-Loss level: ${stop:.2f}."
-    try:
-        raw_reply = ai_client.evaluate(system_prompt, user_prompt, max_tokens=150, tier="cheap")
-        return raw_reply.strip()
-    except Exception as e:
-        _log.warning(f"Failed calling AI analyzer for {sym}: {e}")
-        return "ATR Stop-Loss Floor Breached. Technical momentum is currently negative, representing an immediate capital preservation exit risk."
+def breach_note(sym: str, price: float, stop: float) -> str:
+    """The facts of a stop breach, without a cause. An AI used to be asked *why* the stop broke
+    from just the price and the stop; it invented causes and numbers (2026-11-19: "0.31 % below the
+    floor" for a 0.04% breach) and told the owner to "close the position immediately", even on a
+    core index fund of the dated plan. AETHER doesn't know the cause here, so it says so."""
+    pct = (1 - price / stop) * 100 if stop else 0.0
+    return (f"{sym} at ${price:.2f} is {pct:.2f}% below its workbook stop of ${stop:.2f}. "
+            "The cause isn't known to this monitor: check the news and the position's plan "
+            "(a dated-plan index fund has its own stop) before acting. Recommend-only.")
+
 
 def monitor():
     _log.console(f"[{datetime.datetime.now()}] Starting Intraday Stop Monitor...")
@@ -211,7 +203,7 @@ def monitor():
         if cleared_breaches:
             diff_msgs.append(f"🟢 BREACHES CLEARED/EXITED: {', '.join(cleared_breaches)}")
 
-        _log.warning("Stop breach state changed! Dispatching rich, AI-analyzed alert email...")
+        _log.warning("Stop breach state changed! Dispatching the alert email...")
 
         subject = f"AETHER ALERT: Stop Breach Detected ({len(current_breaches)} Position{'s' if len(current_breaches) > 1 else ''})"
 
@@ -241,8 +233,7 @@ def monitor():
                              "below it at the last alert, so the stop may be out of date. Update or remove "
                              "it in the workbook if it no longer applies.")
             else:
-                _log.console(f"Running live AI risk analysis and reasoning for {sym}...")
-                reasoning = generate_ai_analysis(sym, price, stop)
+                reasoning = breach_note(sym, price, stop)
                 if deep:
                     seen = "first seen this run" if sym in new_breaches else "deeper than at the last alert"
                     reasoning = (f"DEEP BREACH, {seen}: the price is {(1 - price / stop) * 100:.0f}% "
@@ -253,7 +244,7 @@ def monitor():
                 f"\n  * Current Price:   ${price:.2f}"
                 f"\n  * Stop-Loss Level: ${stop:.2f}"
                 f"\n  * Technical Delta: {round(((price - stop)/stop)*100, 2):+.2f}%"
-                f"\n  * AI Risk Analysis & Reasoning:"
+                f"\n  * Note:"
                 f"\n    {reasoning}"
                 f"\n\n" + "-" * 80
             )

@@ -1777,11 +1777,23 @@ def _live_task_states(folder: str):
             continue
         states.setdefault(task_name[len(prefix):], {
             "status":      col(parts, "Status"),
-            "last_run":    col(parts, "Last Run Time"),
+            "last_run":    _last_run_text(col(parts, "Last Run Time"), col(parts, "Last Result")),
             "next_run":    col(parts, "Next Run Time"),
             "last_result": col(parts, "Last Result"),
         })
     return states
+
+
+# Task Scheduler's "has not run yet": Last Run Time 11/30/1999 12:00:00 AM with Last Result
+# 267011 (0x41303, SCHED_S_TASK_HAS_NOT_RUN). Reports read it as a run in 1999 and flagged the
+# tasks as missed (2026-11-18 status email: "3 missed").
+_NEVER_RUN_RESULT = "267011"
+
+
+def _last_run_text(last_run: str, last_result: str) -> str:
+    if last_result == _NEVER_RUN_RESULT or last_run.startswith("11/30/1999"):
+        return "never run"
+    return last_run
 
 
 def read_scheduled_tasks() -> list[dict]:

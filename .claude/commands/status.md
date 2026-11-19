@@ -63,8 +63,8 @@ Summarise findings as:
 |---|---|
 | Workbook freshness | FRESH / STALE (timestamp) |
 | Equity / Return | $X,XXX / +X.X% |
-| Scheduled tasks | N active / N missed |
+| Scheduled tasks | N active / N missed / N never run yet |
 | Recent errors | None / list issues |
 | Market regime | Bull / Neutral / Bear |
 
-Flag any stale data, missed tasks, or errors prominently.
+Flag any stale data, missed tasks, or errors prominently. A task whose last run reads `never run` has not run yet (Task Scheduler shows 11/30/1999 for that): it is not missed.
