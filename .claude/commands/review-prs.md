@@ -11,6 +11,13 @@ a step below points you there.
 Input: a PR number or list (e.g. `5`, or `2 3 4 5`), however your agent passes it. None → every open
 PR. A review of a change you authored has little independent value — say so in the write-up.
 
+**Design and maintainability are a gate, as strict as correctness.** The owner has decided on
+modular services with a real domain model and a separate data layer (R&D #78,
+`plans/aether-services.md`). A PR that is correct and green but makes that design harder to reach
+(a second writer of state, one module's data inside another's, a new reach-back into a root script,
+logic that can't move) is not ready to merge. Correctness, tests and risk are not relaxed for this:
+every other step below still applies in full.
+
 ## 0. Understand the GOAL before reading a single line of diff
 
 A review that only checks the code is internally *consistent* will bless code that does the wrong
@@ -98,6 +105,36 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
     **copy-not-move** stages. A "verbatim extraction" claim is checkable: normalize (strip
     comments/indent/module prefix) and diff the body against the live source block by script; a copy
     that must track a live source needs a **parity test**. Recommend the seam the project already uses.
+  - **Target architecture: check every PR against the approved design, small ones too.** Open the
+    plan when you review: `plans/aether-services.md`, its ADRs (`docs/adr/`), progress in
+    `plans/aether-services-progress.json`, rules enforced in part by `tests/test_architecture.py`. The
+    author's checklist is `ship-pr.md` §1, "Fit the architecture plan". A PR that works but moves the
+    code away from the design is a finding even when it is small and green: each one is debt the
+    migration has to undo later. Check, and report what you checked:
+    - **State has one writer, and readers go through it.** The portfolio state belongs to the
+      portfolio service (`aether/services/portfolio`, #295; `aether/bootstrap.py` names the file). A
+      new `open()`/`json.dump`/`os.replace` on a state file from another module, a second backup
+      scheme or file format for it, or a new reader that builds its own path to it is a **🟠**.
+      Signs: its own backup folder, a different indent or key order, a different path helper.
+    - **A module keeps its own data.** One module storing its memory inside another's state (a new
+      key in the game state from a data-quality or report module) is a **🟠**. It gets its own file
+      under `Data/` (or its own table later), with a test redirect.
+    - **Dependencies point the right way.** No new import from `aether/` into a root script, no new
+      `_pkg()` / `game.X` reach-back, no adapter imported outside `bootstrap` and the service's own
+      `adapters/`. Run `tests/test_architecture.py` on the merged tree; a new `KNOWN_ROOT_IMPORTS`
+      entry needs a reason in the PR.
+    - **Domain logic can move.** A new rule is a pure function or a method on its domain object, with
+      its inputs passed in. A rule that reads files, the clock or the network inside the decision, or
+      changes a shared dict deep in a procedural stage where it could return a value, is a 🟡 (🟠 if
+      it also writes state).
+    - **One home per concept.** Prices, positions, stops, regime, config: use the existing service or
+      port (or its planned home), never a new parallel copy, and call the owner instead of copying its
+      file name, format or backup policy.
+    - **Packaging matches the plan.** An S/F step updates the progress file; a structural step keeps
+      the golden byte-identical; a trading change brings its evidence.
+    When a PR has to break one of these for now (a hotfix), the body must say so and name the plan step
+    that removes it; otherwise ask for the change before merge. Name the plan section a finding breaks
+    and the shape that fits. Worked example: reference §A (#288, undone by #297).
   - **Reuse before new:** match new functionality against the feature list (`Data/wiki.json`,
     `AETHER_REFERENCE.md`) and the code. A second implementation of something that exists (another
     broker read, score, gate, backup, report section or scheduler for the same job) is a finding:
@@ -163,9 +200,12 @@ git diff --stat origin/main...<head>     # scope       git show <head>:<path>   
 - **Not findings** (leave out unless they carry a concrete risk): style the linter already enforces,
   subjective naming, refactors unrelated to the PR's goal, handling for errors that can't occur,
   performance off the hot path. If unsure an exclusion applies, report it with lower confidence.
-- **Is it ready for PROD?** — answer explicitly, on two axes:
+- **Is it ready for PROD?** — answer explicitly, on three axes:
   - **Code-quality gate** (objective): suite run green, validator green, no open 🔴, tests real,
     packaging honest.
+  - **Design gate** (objective against the plan): every target-architecture check above passes, or
+    the PR names the plan step that removes the exception. An open architecture 🟠 means **not
+    ready to merge**, whatever the other gates say.
   - **Behavioral/risk gate** (judgment): what does it actually change in production, and is that the
     intended posture? Per the project's Rule of Loss-Minimization, flag anything that increases
     exposure or weakens protection (looser filters, wider stops, more broker logins). Green tests prove
@@ -185,11 +225,14 @@ FYI last.
 
 - **Severity by consequence, not by how often it triggers:** 🔴 data loss, security, wrong trades, or
   the change's main path broken; 🟠 wrong result, crash, hang or leak on a reachable path, however
-  rare; 🟡 works, but could be clearer, safer or simpler.
+  rare, **or a break of the target architecture** (a second writer of state or a private path to
+  it, a module's data stored in another module's state: §3); 🟡 works, but could be clearer, safer
+  or simpler. Never file an architecture break as an FYI: it stays in the code after the merge.
 - **Confidence per finding, rated apart from severity:** high (all context seen) / medium / low, with
   the missing context named when not high. Doubt lowers confidence, never severity. A hunch with no
   code behind it is not a finding.
-- **Verdict rule:** `Request changes` only with a 🔴 or two or more 🟠; otherwise `Comment` or `Approve`.
+- **Verdict rule:** `Request changes` with a 🔴, two or more 🟠, or **any open target-architecture
+  🟠**; otherwise `Comment` or `Approve`.
 
 **Prove findings with a probe.** For a suspected bug, run the real function with only the boundary
 mocked (subprocess, HTTP, clock, email) and quote the output in the finding — a reproduced bug isn't
@@ -260,7 +303,10 @@ leak (`10.0.0.x`, `<user>`, `<account-id>`, local paths) before posting; a posti
 
 Goal and definition first (§0) · all three comment surfaces (§1) · suite run on the merged tree, not
 inferred (§3) · red-green or mutation, with a negative control for probes (§3–§4) · docs grepped for
-the old behavior (§3) · every consumer of a changed output traced (§3) · prod-readiness on both gates
+the old behavior (§3) · every consumer of a changed output traced (§3) · prod-readiness on all three gates
 (§3) · feature docs in this PR, or "No feature-doc change" with a reason that holds (§3) · new
-functionality matched to existing features, no parallel copy (§3) · every factual sentence re-checked
+functionality matched to existing features, no parallel copy (§3) · the change checked against
+the architecture plan, a breach reported as 🟠 not FYI (§3) · a PR in a multi-stage project
+updates its item on the Development page (`plans/aether-services-progress.json`: status and `pr`;
+`ship-pr.md` §2) · every factual sentence re-checked
 now (§5) · PII masked (§6).

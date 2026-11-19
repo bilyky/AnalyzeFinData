@@ -183,9 +183,15 @@ def concentration(symbol_value: float, total: float, floor_pct: float) -> dict:
             "headroom_usd": max(0.0, symbol_value - floor_pct * total) if total else 0.0}
 
 
-def decide(m: dict, rb: dict | None, rbr_tags: list, repl: dict, conc: dict, cfg: dict) -> dict:
+def decide(m: dict, rb: dict | None, rbr_tags: list, repl: dict, conc: dict, cfg: dict,
+           bar_is_current: bool = True) -> dict:
     """Heuristic call (RULES_VERSION). TRIM only when the symbol is weak on its own, above
-    the floor, not on a crash day, and a replacement's entry timing is OK."""
+    the floor, not on a crash day, and a replacement's entry timing is OK.
+
+    ``bar_is_current`` False means the last bar is older than the last session: its 1-day move
+    is an old day's, so the crash-day check is skipped and said so (2026-11-19: bars ended 11-16
+    and the report called 11-16's -7% "today's crash day" while INTC was up 2.4%). The stale
+    bar is already a data doubt, which holds a TRIM back."""
     reasons = []
     floor = cfg["floor_pct"]
     best = min((k for k in repl if repl[k]["entry_ok"]), key=lambda k: repl[k]["stretch_50"], default=None)
@@ -208,7 +214,9 @@ def decide(m: dict, rb: dict | None, rbr_tags: list, repl: dict, conc: dict, cfg
         return {"action": "HOLD", "reasons": reasons or ["no clear signal"], "tranche_usd": 0.0, "replacement": None}
     reasons.append(f"below its 50-day average ({m['vs_sma50']:+.1%}) and weak on its own "
                    f"(20-day residual {rb['resid_20']:+.1%}, z {rb['z_20']:+.2f})")
-    if m["ret_1"] is not None and m["ret_1"] < CRASH_DAY:
+    if not bar_is_current:
+        reasons.append(f"crash-day check skipped: the last bar ({m.get('date', '?')}) is not the last session")
+    elif m["ret_1"] is not None and m["ret_1"] < CRASH_DAY:
         return {"action": "WAIT", "reasons": reasons + [f"crash day ({m['ret_1']:+.1%}): don't sell into it"],
                 "tranche_usd": 0.0, "replacement": None}
     if best is None:
@@ -399,7 +407,8 @@ def run(symbol=None, live=False, journal=True, config_path=None) -> dict:
     doubts = data_doubts(m["date"], {s: p["days"][-1] if p else None for s, p in peer_bars.items()},
                          {s: repl[s]["date"] if s in repl else None for s in cfg["replacements"]},
                          meta.get("health"), live, bool(live_px), today)
-    call = apply_doubts(decide(m, rb, tags, repl, conc, cfg), doubts)
+    last_session = market_calendar.last_session_on_or_before(today - datetime.timedelta(days=1)).isoformat()
+    call = apply_doubts(decide(m, rb, tags, repl, conc, cfg, bar_is_current=m["date"] >= last_session), doubts)
     lots_path = os.path.join(watch_dir(), f"{symbol}_lots.json")
     lots = None
     if call["action"] == "TRIM" and os.path.exists(lots_path):
