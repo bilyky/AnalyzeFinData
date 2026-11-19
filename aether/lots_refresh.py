@@ -17,11 +17,11 @@ import argparse
 import datetime
 import json
 import os
-import shutil
 import sys
 from zoneinfo import ZoneInfo
 
-from aether import etrade, paths
+from aether import position_watch_store as store
+from aether.etrade.client import ETradeClient
 
 ET = ZoneInfo("America/New_York")
 QTY_TOL = 1e-3
@@ -36,35 +36,27 @@ def et_date(ms) -> str | None:
     return datetime.datetime.fromtimestamp(ms / 1000, tz=ET).date().isoformat() if ms > 0 else None
 
 
-def fetch_position_lots(accounts_api, symbol: str, last4s: set, positions: list) -> dict:
+def fetch_position_lots(accounts, symbol: str, last4s: set, positions: list, tokens: dict | None = None) -> dict:
     """{last4: {"position_qty": float, "lots": [{acquired, price, qty}]}} for the mapped accounts that
-    hold `symbol`. accounts_api: a pyetrade ETradeAccounts (aether.etrade.get_accounts).
-    positions: etrade.fetch_positions() rows, the one reader of portfolios (the workbook update has
-    just made them); quantities come from there and only the lots are fetched here."""
-    raw = accounts_api.list_accounts(resp_format="json")          # last 4 digits -> account key
+    hold `symbol`. accounts: the E*TRADE client's read-only accounts feed (``ETradeClient.accounts``:
+    ``account_keys`` and ``position_lots``). positions: etrade.fetch_positions() rows, the one
+    reader of portfolios (the workbook update has just made them); quantities come from there and
+    only the lots are fetched here."""
     out = {}
-    for acct in etrade._walk(raw, "Account"):
-        last4, key = str(acct.get("accountId", ""))[-4:], acct.get("accountIdKey")
-        if last4 not in last4s or not key:
+    for last4, key in accounts.account_keys(tokens).items():
+        if last4 not in last4s:
             continue
         qty = sum(float(p.get("qty") or 0) for p in positions
                   if str(p.get("account_last4")) == last4 and str(p.get("symbol", "")).upper() == symbol)
         lots = []
         if qty > 0:
-            resp = accounts_api.get_portfolio_position_lot(symbol, key, resp_format="json")
-            for lot in etrade._walk(resp, "PositionLot"):
+            for lot in accounts.position_lots(symbol, key, tokens):
                 q = float(lot.get("remainingQty", lot.get("originalQty", 0)) or 0)
                 if q > 0:
                     lots.append({"acquired": et_date(lot.get("acquiredDate")), "price": float(lot.get("price") or 0),
                                  "qty": q})
         out[last4] = {"position_qty": qty, "lots": lots}
     return out
-
-
-def _canon(lots: list) -> list:
-    """Order-free form of a lots list, for the "unchanged" check (qty/price compared as floats)."""
-    return sorted(json.dumps({**x, "qty": float(x.get("qty") or 0), "price": float(x.get("price") or 0)},
-                             sort_keys=True) for x in lots)
 
 
 def merge(existing: list, fresh_by_label: dict) -> list:
@@ -74,34 +66,31 @@ def merge(existing: list, fresh_by_label: dict) -> list:
     return kept + sorted(added, key=lambda x: (x["account"], x["acquired"] or "", x["price"]))
 
 
-def refresh(accounts_api, *, symbol: str | None = None, cfg: dict | None = None, data_dir: str | None = None,
-            now: datetime.datetime | None = None, dry_run: bool = False, positions: list | None = None) -> dict:
+def refresh(accounts, *, tokens: dict | None = None, symbol: str | None = None, cfg: dict | None = None,
+            data_dir: str | None = None, now: datetime.datetime | None = None, dry_run: bool = False,
+            positions: list | None = None) -> dict:
     """Refresh the lots file for the mapped accounts. Returns {"status": ..., ...}; never raises on a
     broker or data problem (the caller is the workbook update, which must not fail on this)."""
-    data_dir = data_dir or paths.data_dir()
-    watch = os.path.join(data_dir, "position_watch")
+    folder = os.path.join(data_dir, store.FOLDER_NAME) if data_dir else store.watch_dir()
     if cfg is None:
         try:
-            with open(os.path.join(watch, "config.json"), encoding="utf-8") as f:
-                cfg = json.load(f)
+            cfg = store.read_config(folder)
         except (OSError, ValueError):
+            cfg = None
+        if not cfg:
             return {"status": "skipped", "reason": "no position-watch config"}
     sources = {str(k): str(v)[-4:] for k, v in (cfg.get("lot_sources") or {}).items()}
     symbol = (symbol or cfg.get("symbol") or "").upper()
     if not sources or not symbol:
         return {"status": "skipped", "reason": "no lot_sources in the config"}
-    path = os.path.join(watch, f"{symbol}_lots.json")
     try:
-        with open(path, encoding="utf-8") as f:
-            existing = json.load(f)
-    except FileNotFoundError:
-        existing = []
+        existing = store.read_lots(symbol, folder) or []
     except (OSError, ValueError) as e:
-        return {"status": "error", "reason": f"can't read {os.path.basename(path)}: {e}"}
+        return {"status": "error", "reason": f"can't read {os.path.basename(store.lots_path(symbol, folder))}: {e}"}
     if positions is None:                      # quantities come only from etrade.fetch_positions()
         return {"status": "error", "reason": "no positions given (pass etrade.fetch_positions() rows)"}
     try:
-        got = fetch_position_lots(accounts_api, symbol, set(sources.values()), positions)
+        got = fetch_position_lots(accounts, symbol, set(sources.values()), positions, tokens)
     except Exception as e:                      # broker read failed: keep the file
         return {"status": "error", "reason": f"broker read failed: {e}"}
     fresh, problems = {}, []
@@ -118,22 +107,13 @@ def refresh(accounts_api, *, symbol: str | None = None, cfg: dict | None = None,
     if problems:
         return {"status": "blocked", "reason": "; ".join(problems)}
     new = merge(existing, fresh)
-    if _canon(new) == _canon(existing):           # same lots in another order: no write, no backup
+    if store.same_lots(new, existing):            # same lots in another order: no write, no backup
         return {"status": "unchanged", "lots": len(new)}
     if dry_run:                                   # first run on a machine: show, don't write
-        before = {x for x in _canon(existing)}
-        after = {x for x in _canon(new)}
+        added, removed = store.lots_diff(existing, new)
         return {"status": "would_update", "lots": len(new), "labels": sorted(fresh),
-                "added": len(after - before), "removed": len(before - after)}
-    stamp = (now or datetime.datetime.now()).strftime("%Y%m%d_%H%M%S")
-    if os.path.exists(path):
-        bdir = os.path.join(data_dir, "Backup", f"{stamp}_pre_lots_refresh")
-        os.makedirs(bdir, exist_ok=True)
-        shutil.copy2(path, os.path.join(bdir, os.path.basename(path)))
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(new, f, indent=1)
-    os.replace(tmp, path)
+                "added": added, "removed": removed}
+    store.write_lots(symbol, new, folder, now)    # backup first, then an atomic replace
     return {"status": "updated", "lots": len(new), "labels": sorted(fresh)}
 
 
@@ -143,12 +123,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Refresh position-watch's lots from E*TRADE (dry run by default)")
     ap.add_argument("--write", action="store_true", help="write the file (after a backup)")
     a = ap.parse_args(argv)
-    tok = etrade._load_tokens("production")
+    client = ETradeClient("production", role="data")      # the read plane: never renews, never logs in
+    tok = client.auth.current_token()
     if not tok:
         sys.stdout.write("No E*TRADE token for today on this machine; nothing done (no login is attempted).\n")
         return 1
-    r = refresh(etrade.get_accounts(tok, "production"), dry_run=not a.write,
-                positions=etrade.fetch_positions(tok, "production"))
+    r = refresh(client.accounts, tokens=tok, dry_run=not a.write, positions=client.accounts.positions(tok))
     sys.stdout.write(json.dumps(r, indent=1) + "\n")
     return 0 if r["status"] in ("updated", "unchanged", "would_update", "skipped") else 1
 

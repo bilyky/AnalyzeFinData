@@ -8,9 +8,12 @@ import tempfile
 import unittest
 from unittest import mock
 
+from aether import etrade as et_pkg
 from aether import lots_refresh as lr
+from aether.etrade.client import ETradeClient
 
 KEY = "key-1"
+TOK = {"oauth_token": "t", "oauth_token_secret": "s"}
 
 
 def accounts_api(lots, qty=None, last4="9999", single=False):
@@ -26,12 +29,20 @@ def accounts_api(lots, qty=None, last4="9999", single=False):
     return api
 
 
+def feed():
+    """The client's read-only accounts feed (the facade lots_refresh reads through)."""
+    return ETradeClient("production", role="data", store=mock.Mock()).accounts
+
+
 def run_refresh(api, **kw):
-    return lr.refresh(api, positions=api.positions, **kw)
+    """refresh() through the real facade, with the fake pyetrade object behind it."""
+    with mock.patch.object(et_pkg, "get_accounts", return_value=api):
+        return lr.refresh(feed(), tokens=TOK, positions=api.positions, **kw)
 
 
 def fetch(api, symbol, last4s):
-    return lr.fetch_position_lots(api, symbol, last4s, api.positions)
+    with mock.patch.object(et_pkg, "get_accounts", return_value=api):
+        return lr.fetch_position_lots(feed(), symbol, last4s, api.positions, TOK)
 
 
 def ms(y, m, d, hour_utc=12):
@@ -141,20 +152,25 @@ class TestRefresh(unittest.TestCase):
         self.assertEqual(self._backups(), [])
 
     def test_cli_without_a_token_does_nothing(self):
-        with mock.patch.object(lr.etrade, "_load_tokens", return_value=None), \
+        cl = mock.Mock()
+        cl.auth.current_token.return_value = None
+        with mock.patch.object(lr, "ETradeClient", return_value=cl) as mk, \
                 mock.patch.object(lr, "refresh") as ref, mock.patch.object(lr.sys, "stdout"):
             self.assertEqual(lr.main([]), 1)
         ref.assert_not_called()
+        self.assertEqual(mk.call_args.kwargs["role"], "data")               # the read plane: no renew, no login
 
     def test_cli_is_a_dry_run_unless_write(self):
-        with mock.patch.object(lr.etrade, "_load_tokens", return_value={"oauth_token": "t"}), \
-                mock.patch.object(lr.etrade, "get_accounts", return_value="API"), \
-                mock.patch.object(lr.etrade, "fetch_positions", return_value=["ROWS"]), \
+        cl = mock.Mock()
+        cl.auth.current_token.return_value = {"oauth_token": "t"}
+        cl.accounts.positions.return_value = ["ROWS"]
+        with mock.patch.object(lr, "ETradeClient", return_value=cl), \
                 mock.patch.object(lr, "refresh", return_value={"status": "would_update"}) as ref, \
                 mock.patch.object(lr.sys, "stdout"):
             lr.main([])
             self.assertTrue(ref.call_args.kwargs["dry_run"])
-            self.assertEqual(ref.call_args.kwargs["positions"], ["ROWS"])   # quantities from fetch_positions
+            self.assertEqual(ref.call_args.kwargs["positions"], ["ROWS"])   # quantities from the facade's positions
+            self.assertIs(ref.call_args.args[0], cl.accounts)               # lots through the facade
             lr.main(["--write"])
             self.assertFalse(ref.call_args.kwargs["dry_run"])
 

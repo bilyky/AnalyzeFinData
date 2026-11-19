@@ -1879,6 +1879,19 @@ def _walk(d, key):
     return []
 
 
+def account_keys(tokens, env="sandbox") -> dict:
+    """{last 4 digits: accountIdKey} for every account the broker lists. Read-only."""
+    raw = get_accounts(tokens, env).list_accounts(resp_format="json")
+    return {str(a.get("accountId", ""))[-4:]: a.get("accountIdKey")
+            for a in _walk(raw, "Account") if a.get("accountIdKey")}
+
+
+def position_lots(tokens, symbol, account_key, env="sandbox") -> list:
+    """The broker's tax lots of ``symbol`` in one account (raw PositionLot dicts). Read-only."""
+    resp = get_accounts(tokens, env).get_portfolio_position_lot(symbol, account_key, resp_format="json")
+    return _walk(resp, "PositionLot")
+
+
 def _last_trade(container, key="All") -> float:
     """lastTrade out of an E*TRADE quote node as a float, 0.0 if missing/blank.
 
