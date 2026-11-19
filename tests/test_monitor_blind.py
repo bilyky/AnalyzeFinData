@@ -23,7 +23,7 @@ def _run(prices, state, today="2026-11-09"):
          mock.patch.object(monitor, "get_monitored_positions",
                            return_value=[{"symbol": s, "stop": v} for s, v in _STOPS.items()]), \
          mock.patch.object(monitor, "get_live_prices", return_value=prices), \
-         mock.patch.object(monitor, "generate_ai_analysis", return_value="AI"), \
+         mock.patch.object(monitor, "breach_note", return_value="AI"), \
          mock.patch.object(monitor, "_today", return_value=today), \
          mock.patch("notify.send_email") as send:
         with mock.patch.object(monitor._log, "warning") as warn:

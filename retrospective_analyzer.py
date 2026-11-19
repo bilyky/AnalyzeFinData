@@ -6,18 +6,89 @@ runs statistical pattern audits to isolate toxic clusters (bad-habit trades),
 writes them to 'Data/failure_dna_rules.json' as actionable rules for the autopilot,
 runs a meta-audit on Circuit Breaker triggers and un-triggered 'near-miss' design gaps,
 and outputs a rich, human-readable 'Data/retrospective_report.txt'.
+
+``--report-only`` (the weekly AETHER_PatternDiscovery run) writes the rules it would set to
+'Data/failure_dna_rules_proposed.json' instead, and the report lists how they differ from the live
+rules. The live rules change which buys the game rejects, so only a run by hand (no flag) sets them.
 """
 
+import argparse
 import json
 import datetime
+
+import ai_portfolio_game
 import circuit_breaker
-from aether import ledgers
+from aether import behaviour_reflection, decision_eval, ledgers
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("retrospective")
 
-def analyze():
-    _log.info("Launching automated Feedback & Pattern Analyzer...")
+
+
+def win_loss_split(trades: list) -> tuple:
+    """(winners, flat, losers) by pnl_pct: > 0, == 0, < 0. A flat trade is not a win."""
+    winners = [t for t in trades if t.get("pnl_pct", 0.0) > 0.0]
+    flat = [t for t in trades if t.get("pnl_pct", 0.0) == 0.0]
+    losers = [t for t in trades if t.get("pnl_pct", 0.0) < 0.0]
+    return winners, flat, losers
+
+
+def breaker_lines(triggers: list, shown: int = 5) -> list:
+    """The circuit-breaker trigger lines: the last ``shown`` of N, labelled as such."""
+    out = [f"  - Total Systemic Crash Circuit Breaker Triggers: {len(triggers)}"]
+    if triggers:
+        if len(triggers) > shown:
+            out.append(f"    Last {shown} of {len(triggers)}:")
+        for i, trig in enumerate(triggers[-shown:], 1):
+            out.append(f"    {i}. {trig.get('date')} {trig.get('time')} -> Reason: {trig.get('reason')} "
+                       f"(SPY: {trig.get('spy_return_pct'):+.2f}%, VXX: {trig.get('vxx_return_pct'):+.1f}%)")
+    return out
+
+
+def behaviour_section(game_file=None, decision_log=None) -> list:
+    """The Behaviour reflection lines from the game ledger, the decision log and the OHLCV cache."""
+    try:
+        if game_file:   # an explicit file (tests, a copy of PROD's state)
+            with open(game_file, "r", encoding="utf-8") as f:
+                history = json.load(f).get("history", [])
+        else:           # the portfolio service owns the file: read through the game's loader
+            history = ai_portfolio_game.load_game().get("history", [])
+    except Exception as e:
+        return ["BEHAVIOUR REFLECTION: the game ledger could not be read (" + type(e).__name__ + ")."]
+    if not history:   # a missing file reads as a new, empty portfolio
+        return ["BEHAVIOUR REFLECTION: no trades in the game ledger."]
+    cache = {}
+    try:   # one bad ledger row must not lose the whole weekly report (PR #289 review)
+        result = behaviour_reflection.reflect(
+            history, lambda sym: behaviour_reflection.load_closes(sym, cache),
+            behaviour_reflection.load_closes("SPY", cache), decision_eval.read_log(decision_log))
+        return behaviour_reflection.render(result)
+    except Exception as e:
+        return ["BEHAVIOUR REFLECTION: failed (" + type(e).__name__ + ": " + str(e)[:120] + ")."]
+
+def _read_rules(path) -> list:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            rules = json.load(f)
+        return rules if isinstance(rules, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def rules_diff(live: list, proposed: list) -> list:
+    """Plain lines saying how the proposed rules differ from the live ones (by rule id)."""
+    lv = {r.get("id"): r for r in live if isinstance(r, dict)}
+    pv = {r.get("id"): r for r in proposed if isinstance(r, dict)}
+    out = [f"  + would add {i}: {pv[i].get('field')} {pv[i].get('condition')}" for i in sorted(set(pv) - set(lv))]
+    out += [f"  - would remove {i}: {lv[i].get('field')} {lv[i].get('condition')}" for i in sorted(set(lv) - set(pv))]
+    out += [f"  ~ would change {i}: {lv[i].get('condition')} -> {pv[i].get('condition')}"
+            for i in sorted(set(lv) & set(pv)) if lv[i].get("condition") != pv[i].get("condition")]
+    return out or ["  = the proposed rules match the live rules"]
+
+
+def analyze(report_only: bool = False):
+    _log.info("Launching automated Feedback & Pattern Analyzer..." + (" (report only)" if report_only else ""))
+    rules_note = []
 
     dna_file = ledgers.TRADE_DNA_FILE
     if not dna_file.exists() or dna_file.stat().st_size == 0:
@@ -41,19 +112,22 @@ def analyze():
     if total_completed == 0:
         _log.warning("Empty completed trade list. Moving directly to Circuit Breaker audit.")
         winners = []
+        flat = []
         losers = []
         win_count = 0
         loss_count = 0
         win_rate = 0.0
     else:
-        winners = [t for t in completed_trades if t.get("pnl_pct", 0.0) >= 0.0]
-        losers = [t for t in completed_trades if t.get("pnl_pct", 0.0) < 0.0]
+        winners, flat, losers = win_loss_split(completed_trades)
 
         win_count = len(winners)
         loss_count = len(losers)
         win_rate = round((win_count / total_completed) * 100, 2)
 
-    _log.info(f"Winners: {win_count} | Losers: {loss_count} | Win Rate: {win_rate}%")
+    _log.info(f"Winners: {win_count} | Flat: {len(flat)} | Losers: {loss_count} | Win Rate: {win_rate}%")
+    # The toxic-pattern rates below have always counted flat trades with the winners (the
+    # old >= 0 split). Keep that so the proposed rules do not change with the count fix.
+    non_losers = winners + flat
 
     # --- 🔬 Statistical Toxic Pattern Clustering ---
     toxic_rules = []
@@ -62,7 +136,7 @@ def analyze():
     if total_completed > 0:
         # 1. Bearish PGR Rating Check
         bearish_losses = [t for t in losers if str(t.get("buy_dna", {}).get("pgr", "")).startswith("Be")]
-        bearish_winners = [t for t in winners if str(t.get("buy_dna", {}).get("pgr", "")).startswith("Be")]
+        bearish_winners = [t for t in non_losers if str(t.get("buy_dna", {}).get("pgr", "")).startswith("Be")]
         total_bearish = len(bearish_losses) + len(bearish_winners)
         if total_bearish >= 3:
             bearish_loss_rate = round((len(bearish_losses) / total_bearish) * 100, 2)
@@ -77,7 +151,7 @@ def analyze():
 
         # 2. Low Combined Score Check
         low_score_losses = [t for t in losers if float(t.get("buy_dna", {}).get("score", 0.0)) < 5.0]
-        low_score_winners = [t for t in winners if float(t.get("buy_dna", {}).get("score", 0.0)) < 5.0]
+        low_score_winners = [t for t in non_losers if float(t.get("buy_dna", {}).get("score", 0.0)) < 5.0]
         total_low_score = len(low_score_losses) + len(low_score_winners)
         if total_low_score >= 3:
             low_score_loss_rate = round((len(low_score_losses) / total_low_score) * 100, 2)
@@ -92,7 +166,7 @@ def analyze():
 
         # 3. High Bubble Z-Score Check
         high_z_losses = [t for t in losers if float(t.get("buy_dna", {}).get("z_score") or 0.0) >= 2.5]
-        high_z_winners = [t for t in winners if float(t.get("buy_dna", {}).get("z_score") or 0.0) >= 2.5]
+        high_z_winners = [t for t in non_losers if float(t.get("buy_dna", {}).get("z_score") or 0.0) >= 2.5]
         total_high_z = len(high_z_losses) + len(high_z_winners)
         if total_high_z >= 3:
             high_z_loss_rate = round((len(high_z_losses) / total_high_z) * 100, 2)
@@ -105,12 +179,18 @@ def analyze():
                 })
                 toxic_patterns_found.append(f"🔴 Buying Overextended Bubble Assets (Z-Score >= 2.5): {len(high_z_losses)} losses, {len(high_z_winners)} wins ({high_z_loss_rate}% loss rate)")
 
+        target = ledgers.FAILURE_RULES_PROPOSED_FILE if report_only else ledgers.FAILURE_RULES_FILE
+        live_before = _read_rules(ledgers.FAILURE_RULES_FILE)
         try:
-            with open(ledgers.FAILURE_RULES_FILE, "w", encoding="utf-8") as f:
+            with open(target, "w", encoding="utf-8") as f:
                 json.dump(toxic_rules, f, indent=4)
-            _log.info(f"Dynamically generated {len(toxic_rules)} toxic trade rules and wrote to rules file: {ledgers.FAILURE_RULES_FILE}")
+            _log.info(f"Dynamically generated {len(toxic_rules)} toxic trade rules and wrote to rules file: {target}")
         except Exception as e:
             _log.error(f"Failed to save dynamic rules file: {e}")
+        rules_note = ([f"REPORT ONLY: the live rules ({ledgers.FAILURE_RULES_FILE.name}) were not changed. "
+                       f"Proposed rules: {target.name}. Set them with: python retrospective_analyzer.py"]
+                      if report_only else [f"The live rules were set ({ledgers.FAILURE_RULES_FILE.name})."])
+        rules_note += rules_diff(live_before, toxic_rules)
 
     # Scan losers for sell dates where SPY was in the -1.2% to -2.0% "near-miss" band
     # (just below the -2.0% breaker threshold) to surface threshold calibration opportunities.
@@ -118,11 +198,7 @@ def analyze():
     breaker_audit.append("======================================================================")
     breaker_audit.append("🛡️ CIRCUIT BREAKER SYSTEMIC GAP AUDIT (Design-Vulnerability Audit):")
     
-    total_triggers = len(breaker_triggers)
-    breaker_audit.append(f"  - Total Systemic Crash Circuit Breaker Triggers: {total_triggers}")
-    if total_triggers > 0:
-        for i, trig in enumerate(breaker_triggers[-5:], 1):
-            breaker_audit.append(f"    {i}. {trig.get('date')} {trig.get('time')} -> Reason: {trig.get('reason')} (SPY: {trig.get('spy_return_pct'):+.2f}%, VXX: {trig.get('vxx_return_pct'):+.1f}%)")
+    breaker_audit.extend(breaker_lines(breaker_triggers))
             
     near_misses = []
     spy_series = circuit_breaker.load_spy_history()
@@ -164,6 +240,7 @@ def analyze():
     report.append(f"  - Total Paired Completed Trades: {total_completed}")
     report.append(f"  - Winning Trades: {win_count}")
     report.append(f"  - Losing Trades:  {loss_count}")
+    report.append(f"  - Flat Trades (0.00%, not counted as wins): {len(flat)}")
     report.append(f"  - Realised Win-Rate:   {win_rate}%")
     report.append("")
     
@@ -177,6 +254,10 @@ def analyze():
     else:
         report.append("  ✅ Excellent! No statistically recurring toxic patterns detected so far.")
     report.append("")
+    if rules_note:
+        report.append("RULES (proposed vs live):")
+        report.extend(rules_note)
+        report.append("")
     report.append("======================================================================")
     report.append("🌟 WINNING HABITS AUDIT (Primal Successes):")
 
@@ -197,6 +278,9 @@ def analyze():
 
     report.append("")
     report.append("======================================================================")
+    report.extend(behaviour_section())
+    report.append("")
+    report.append("======================================================================")
     report.append("📋 HISTORICAL COMPLETED TRADE LOG (Chronological):")
     for i, t in enumerate(reversed(completed_trades), 1):
         report.append(f"  {i}. {t['symbol']}: Bought {t['buy_date']} @ ${t['buy_price']} | Sold {t['sell_date']} @ ${t['sell_price']} | PnL: {t['pnl_pct']:+.2f}% ({t['holding_days']}d held)")
@@ -212,4 +296,7 @@ def analyze():
         _log.error(f"Failed to generate Retrospective Report: {e}")
 
 if __name__ == "__main__":
-    analyze()
+    _ap = argparse.ArgumentParser(description="Failure-DNA retrospective: toxic patterns and the buy-time veto rules")
+    _ap.add_argument("--report-only", action="store_true",
+                     help="write the proposed rules to Data/failure_dna_rules_proposed.json, not the live rules")
+    analyze(report_only=_ap.parse_args().report_only)

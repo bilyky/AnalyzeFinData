@@ -35,7 +35,11 @@ _TS_LINE = re.compile(r"^\[?(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})")
 
 
 def _out(line=""):
-    sys.stdout.write(f"{line}\n")
+    """Write one line; a character the console can't show becomes '?'. PROD log messages carry
+    emoji, and a Windows console is cp1252 (``python -I`` ignores PYTHONUTF8), so the
+    11-17 review crashed half-way through ``errors`` on a 🛑."""
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    sys.stdout.write(f"{line}\n".encode(enc, "replace").decode(enc))
 
 
 def extract(zip_path, dest):

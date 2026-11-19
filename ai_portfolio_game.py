@@ -10,13 +10,14 @@ import rapidapi
 import sys
 import console_safe
 import circuit_breaker
-from aether import ledgers, trash
+from aether import ledgers, regime, trash
 import aether.notify as notify
 import argparse
 from pathlib import Path
 import aether_oracle
 from aether.utils import _to_float
 from aether.config import CFG
+from aether.bootstrap import STARTING_CAPITAL, bootstrap
 from aether.run_guard import DailyRunGuard, RunSkipped
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
@@ -26,13 +27,11 @@ console_safe.install()
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
-AI_GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
-GAME_BACKUP_DIR = BASE_DIR / "Data" / "Backup" / "Game"   # timestamped save_game backups (keeps last 15)
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 
 AI_PERF_XLSX = BASE_DIR / "Data" / "ai_portfolio_performance.xlsx"
 SYMBOL_FULL_DIR = Path(paths.ohlcv_dir())   # OHLCV cache — one source of truth ($AETHER_CACHE_DIR-aware)
-INITIAL_BALANCE = 10000.0
+INITIAL_BALANCE = STARTING_CAPITAL  # one home: aether.bootstrap
 
 # Import risk utils safely
 import risk_utils
@@ -41,6 +40,7 @@ import decision_eval
 import instruments
 from aether import options
 from aether.scenario import runners
+from aether.core import DEFAULT_PORTFOLIO
 from aether.market_calendar import NYSE_HOLIDAYS, is_session, last_session_on_or_before
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
@@ -149,7 +149,11 @@ def check_failure_rules(symbol, pgr, score, z_score, industry, s10=0.0) -> tuple
                 return True, reason
 
             # 3. Z-Score Match
-            if field == "z_score" and condition == "greater_than_2.5" and z_score > 2.5:
+            # retrospective_analyzer writes "greater_equal_2.5" (it counts z >= 2.5); older rule
+            # files said "greater_than_2.5". Before this, the analyzer's rule never matched.
+            if field == "z_score" and (
+                    (condition == "greater_equal_2.5" and z_score >= 2.5)
+                    or (condition == "greater_than_2.5" and z_score > 2.5)):
                 return True, reason
     except Exception as e:
         _log.warning(f"Failed to evaluate failure rules: {e}")
@@ -619,7 +623,8 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
                     "l60": buy.get("l60", 0.0),
                     "score": buy.get("total", 0.0),
                     "z_score": z_score,
-                    "industry": buy.get("industry", "Unknown")
+                    "industry": buy.get("industry", "Unknown"),
+                    "setup": buy.get("setup"),     # Setup flag at entry (retrospective DNA)
                 }
             }
             tx = {"date": today, "time": now_time, "type": "BUY", "symbol": buy["sym"], "price": buy["price"], "qty": qty}
@@ -733,13 +738,7 @@ def get_market_regime():
         ws = wb["Research"]
         for row in ws.iter_rows(min_row=2, values_only=True):
             if row[3] == "SPY":
-                l60 = row[25] or 0
-                if l60 > 2:
-                    base_profile = "AGGRESSIVE" # Strong bull market
-                elif l60 < -2:
-                    base_profile = "DEFENSIVE" # Bear market
-                else:
-                    base_profile = "BALANCED" # Consolidation
+                base_profile = regime.base_profile(row[25])   # SPY Long60 (aether/regime.py)
                 break
     except Exception as e:
         _log.warning(f"Error loading SPY regime: {e}")
@@ -772,6 +771,12 @@ def get_market_regime():
 
     return base_profile
 
+def get_market_regime_label():
+    """(text, colour) of the profile the game trades on (breadth step included): the one regime
+    every report should show (Development page F5)."""
+    return regime.label(get_market_regime())
+
+
 def get_strategy_rules(profile):
     """Define risk and size rules based on the chosen strategy profile."""
     # Profile options: BALANCED, AGGRESSIVE, DEFENSIVE
@@ -779,8 +784,8 @@ def get_strategy_rules(profile):
     # get_market_regime() labels a strong bull market "AGGRESSIVE" (SPY L60 > 2),
     # so that is the bull signal — deploy fully (zero cash buffer) when it fires,
     # regardless of which profile is active (Zero-Cash-Drag Autopilot).
-    regime = get_market_regime()
-    is_bullish = (regime == "AGGRESSIVE")
+    profile_now = get_market_regime()
+    is_bullish = (profile_now == "AGGRESSIVE")
 
     if profile == "AGGRESSIVE":
         return {
@@ -873,82 +878,18 @@ def should_pyramid_into_winner(is_winner: bool, has_peak: bool, s10: float, l60:
         and (s10 >= CFG.system_pyramiding_s10_floor or l60 >= CFG.system_pyramiding_l60_floor)
     )
 
-def load_game():
-    if not AI_GAME_FILE.exists() or AI_GAME_FILE.stat().st_size == 0:
-        # Try to find a backup to restore from
-        backup_dir = GAME_BACKUP_DIR
-        if backup_dir.exists():
-            backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
-            for b in backups:
-                try:
-                    with open(b, "r", encoding="utf-8") as bf:
-                        state = json.load(bf)
-                        # Succeeded! Copy it back to repair AI_GAME_FILE
-                        shutil.copy2(b, AI_GAME_FILE)
-                        _log.warning(f"  [⚠️ AETHER SELF-HEALER] AI game file was missing or empty. Successfully restored from backup: {b.name}")
-                        return state
-                except Exception:
-                    continue
-        return {
-            "balance": INITIAL_BALANCE,
-            "equity": INITIAL_BALANCE,
-            "positions": {},
-            "history": [],
-            "start_date": str(datetime.date.today()),
-            "profile": "BALANCED"
-        }
-    with open(AI_GAME_FILE, "r", encoding="utf-8") as f:
-        try:
-            return json.load(f)
-        except Exception as e:
-            # Corruption detected! Try to restore from backup
-            _log.warning(f"  [⚠️ AETHER SELF-HEALER] Error loading {AI_GAME_FILE.name}: {e}. Attempting automated recovery from backup...")
-            backup_dir = GAME_BACKUP_DIR
-            if backup_dir.exists():
-                backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
-                for b in backups:
-                    try:
-                        with open(b, "r", encoding="utf-8") as bf:
-                            state = json.load(bf)
-                            shutil.copy2(b, AI_GAME_FILE)
-                            _log.warning(f"  [⚠️ AETHER SELF-HEALER] Successfully restored corrupted file from backup: {b.name}")
-                            return state
-                    except Exception:
-                        continue
-            # Fallback to default state if all else fails
-            return {
-                "balance": INITIAL_BALANCE,
-                "equity": INITIAL_BALANCE,
-                "positions": {},
-                "history": [],
-                "start_date": str(datetime.date.today()),
-                "profile": "BALANCED"
-            }
+def _portfolio_state():
+    """The game's state, through the portfolio service (R&D #78). Built per call, so the
+    store follows bootstrap's current configuration (the test harness redirects it)."""
+    return bootstrap(log=_log).portfolio_state
 
-import shutil
+
+def load_game():
+    return _portfolio_state().load_state(DEFAULT_PORTFOLIO)
+
 
 def save_game(state):
-    # --- Mandatory Backup before Write ---
-    if AI_GAME_FILE.exists():
-        try:
-            backup_dir = GAME_BACKUP_DIR
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = backup_dir / f"ai_portfolio_game_{ts}.json"
-            
-            shutil.copy2(AI_GAME_FILE, backup_path)
-            
-            # Clean up old backups (Keep last 15)
-            backups = sorted(list(backup_dir.glob("ai_portfolio_game_*.json")), key=lambda x: x.stat().st_mtime)
-            if len(backups) > 15:
-                for old_b in backups[:-15]:
-                    trash.soft_delete(old_b, reason="game-backup-prune", force=True)
-        except Exception as e:
-            _log.warning(f"  [Warning] Game backup failed: {e}")
-
-    with open(AI_GAME_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=4)
+    _portfolio_state().save_state(state, DEFAULT_PORTFOLIO)
 
 def backtrack_verify(symbol):
     """Verify the consistency of a price trend over the last 3 trading days using local daily history."""
@@ -1459,21 +1400,6 @@ def run_daily_ai_management(force=False, manual_profile=None):
     """
     return runners.run_daily_management(force=force, manual_profile=manual_profile)
 
-def deduct_operational_costs(amount):
-    if amount <= 0: return
-    state = load_game()
-    state["balance"] -= amount
-    state["total_ops_cost"] = round(state.get("total_ops_cost", 0) + amount, 4)
-    state["history"].append({
-        "date": str(datetime.date.today()),
-        "type": "COST_DEDUCTION",
-        "symbol": "OPS",
-        "price": amount,
-        "details": "Token & API fees"
-    })
-    save_game(state)
-    _log.info(f"💸 AI Account debited ${round(amount, 4)} for operational costs.")
-
 def show_report():
     state = load_game()
     
@@ -1551,5 +1477,5 @@ if __name__ == "__main__":
                       "it today, or the state is busy (single-executor guard).")
     elif args.summary:
         send_daily_summary()
-    else:
+    else:  # --report, or no flag (watchdog.py runs `--report`)
         show_report()

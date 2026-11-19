@@ -45,7 +45,7 @@
     },
     {
       "name": "AETHER_DailyDriver",
-      "retired": "Retired 2026-11-12 (disabling was first recommended 2026-11-02): the Gemini CLI gets HTTP 403 (organization policy) on PROD; the data refresh is AETHER_AftermarketReport. See docs/prod-notes/2026-11-02-prod-review-actions.md section 2.",
+      "retired": "Retired 2026-11-12 (disabling first recommended 2026-11-02): the Gemini CLI gets HTTP 403 (organization policy) on PROD. No replacement needed: its daily-run skill only runs autonomous_pipeline.py, which AETHER_Morning already runs at 05:30, and the watchdog checks the logs hourly.",
       "schedule": {"type": "daily", "at": "07:05"},
       "prompt": "Execute the automated skill defined in .claude/commands/daily-run.md",
       "time_limit_min": 15,
@@ -55,7 +55,7 @@
     },
     {
       "name": "AETHER_PostMarketSync",
-      "retired": "Retired 2026-11-12 (disabling was first recommended 2026-11-02): the Gemini CLI gets HTTP 403 (organization policy) on PROD; the data refresh is AETHER_AftermarketReport. See docs/prod-notes/2026-11-02-prod-review-actions.md section 2.",
+      "retired": "Retired 2026-11-12 (disabling first recommended 2026-11-02): the Gemini CLI gets HTTP 403 (organization policy) on PROD, and its skill file .claude/commands/post-market-sync.md does not exist, so there is nothing to port.",
       "schedule": {"type": "daily", "at": "13:30"},
       "prompt": "Execute the automated skill defined in .claude/commands/post-market-sync.md",
       "time_limit_min": 15,
@@ -65,7 +65,7 @@
     },
     {
       "name": "AETHER_PostMarketReporter",
-      "retired": "Retired 2026-11-12 (disabling was first recommended 2026-11-02): the Gemini CLI gets HTTP 403 (organization policy) on PROD; the data refresh is AETHER_AftermarketReport. See docs/prod-notes/2026-11-02-prod-review-actions.md section 2.",
+      "retired": "Retired 2026-11-12 (disabling first recommended 2026-11-02): the Gemini CLI gets HTTP 403 (organization policy) on PROD. Replaced by AETHER_StatusReport (Python checks + our AI layer).",
       "schedule": {"type": "daily", "at": "14:00"},
       "prompt": "Execute the automated skill defined in .claude/commands/status.md",
       "time_limit_min": 15,
@@ -115,7 +115,7 @@
     },
     {
       "name": "AETHER_RD_Scientist",
-      "retired": "Retired 2026-11-12: the Gemini CLI gets HTTP 403 (organization policy) on PROD (11-07 run); the 2026-11-04 PROD note listed it with the other Gemini tasks. Run its skills by hand.",
+      "retired": "Retired 2026-11-12: the Gemini CLI gets HTTP 403 (organization policy) on PROD (every Saturday from at least 09-19). Pattern discovery is replaced by AETHER_PatternDiscovery; the failure-DNA half has no skill file (.claude/commands/failure-dna.md does not exist).",
       "schedule": {"type": "weekly", "at": "10:00", "day": "Saturday"},
       "prompt": "Execute the automated R&D skills defined in .claude/commands/pattern-discover.md and .claude/commands/failure-dna.md",
       "time_limit_min": 15,
@@ -123,6 +123,25 @@
       "summary": "AI agent: weekly R&D loop.",
       "description": "Runs the pattern-discover and failure-DNA skills through the CLI agent: missed-winner retro and failure-pattern rules.",
       "manual_run": "pattern_discovery"
+    },
+    {
+      "name": "AETHER_PatternDiscovery",
+      "schedule": {"type": "weekly", "at": "10:00", "day": "Saturday"},
+      "script": "scripts/backtesting/rd_pattern_discovery.py", "args": "",
+      "time_limit_min": 20,
+      "log": "pattern_discovery_task.log",
+      "summary": "Weekly missed-winner replay; AI analysis via config ai.",
+      "description": "Replays today minus 25 days with scripts/backtesting/pattern_discovery.py (writes Data/pattern_discovery_<date>.json), then runs the pattern-discover skill's analysis through aether.ai_step (config 'ai', tier strong) and emails the findings. When the AI step can't run, the email says why and carries the computed counts. Replaces AETHER_RD_Scientist (Gemini CLI, HTTP 403).",
+      "manual_run": "pattern_discovery"
+    },
+    {
+      "name": "AETHER_StatusReport",
+      "schedule": {"type": "daily", "at": "14:00"},
+      "script": "scripts/utils/skill_report.py", "args": "--skill status --title \"Portfolio status\" --sessions-only",
+      "time_limit_min": 15,
+      "log": "status_report_task.log",
+      "summary": "Post-market status report (status skill) on NYSE sessions.",
+      "description": "Runs the status skill's read-only python -c checks (data freshness, portfolio, task health, recent errors, regime), then writes the report through aether.ai_step (config 'ai', tier cheap) and emails it. When the AI step can't run, it emails the raw outputs and the reason. Replaces AETHER_PostMarketReporter (Gemini CLI, HTTP 403)."
     },
     {
       "name": "AETHER_Chaikin_Reauth",

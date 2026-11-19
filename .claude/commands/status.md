@@ -3,6 +3,10 @@
 Comprehensive overview of the system's operational and financial health.
 Run all checks below and report findings.
 
+**Scheduled:** AETHER_StatusReport runs this skill's `python -c` blocks unattended at 14:00 on PROD
+(`scripts/utils/skill_report.py`). Each block must only read: no broker calls, email, subprocesses,
+network calls or file writes. A block that mentions one is refused and reported, not run.
+
 ## Step 1 — Data freshness
 
 ```bash
@@ -32,7 +36,7 @@ print(f'Positions: {len(pf[\"positions\"])}')
 ## Step 3 — Scheduled task health
 
 ```bash
-python -c "import data_api; [print(f'{t[\"name\"]}: {t[\"status\"]} (last: {t[\"last_run\"]})') for t in data_api.read_scheduled_tasks()]"
+python -c "import data_api; [print(f'{t[\"name\"]}: {t[\"status\"]} (last: {t[\"last_run\"]})') for t in data_api.read_scheduled_tasks() if not t.get(\"retired\")]"
 ```
 
 ## Step 4 — Recent errors
@@ -45,10 +49,9 @@ python -c "import watchdog; errors = watchdog.check_logs(); [print(e) for e in e
 
 ```bash
 python -c "
-import data_api
-h = data_api.get_system_health()
-print(f'Regime: {h.get(\"market_regime\", \"Unknown\")}')
-print(f'Data fresh: {h.get(\"data_fresh\", False)}')
+import ai_portfolio_game, data_api
+print(f'Regime: {ai_portfolio_game.get_market_regime_label()[0]}')   # the regime the game trades on
+print(f'Data fresh: {data_api.get_system_health().get(\"data_fresh\", False)}')
 "
 ```
 
@@ -60,8 +63,8 @@ Summarise findings as:
 |---|---|
 | Workbook freshness | FRESH / STALE (timestamp) |
 | Equity / Return | $X,XXX / +X.X% |
-| Scheduled tasks | N active / N missed |
+| Scheduled tasks | N active / N missed / N never run yet |
 | Recent errors | None / list issues |
 | Market regime | Bull / Neutral / Bear |
 
-Flag any stale data, missed tasks, or errors prominently.
+Flag any stale data, missed tasks, or errors prominently. A task whose last run reads `never run` has not run yet (Task Scheduler shows 11/30/1999 for that): it is not missed.
