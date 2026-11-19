@@ -28,7 +28,6 @@ from aether import etrade, paths
 from aether import scheduled_tasks as _scheduled_tasks
 from workbook_read import (
     get_top_5_picks as _ap_picks,
-    get_market_regime as _ap_regime,
     get_replacement_pairs as _ap_replacements,
     get_reserves_data as _ap_reserves,
 )
@@ -402,7 +401,7 @@ def read_picks() -> dict:
     def _load():
         try:
             picks = _ap_picks()
-            regime, color = _ap_regime()
+            regime, color = ai_portfolio_game.get_market_regime_label()   # the traded regime (F5)
             return {"market_regime": regime, "regime_color": color, "picks": picks}
         except Exception as e:
             return {"market_regime": "Unknown", "regime_color": "#7f8c8d",
@@ -580,7 +579,7 @@ def read_research() -> dict:
             _log.warning(f"TARGET MISS: {target_misses}/{len(rows)} symbols have fresh "
                          f"data but no overhead resistance — target used an ATR/8% projection.")
         try:
-            regime, color = _ap_regime()
+            regime, color = ai_portfolio_game.get_market_regime_label()   # the traded regime (F5)
             summary["market_regime"], summary["regime_color"] = regime, color
         except Exception:
             summary["market_regime"], summary["regime_color"] = "Unknown", "#7f8c8d"
@@ -1703,8 +1702,7 @@ def requalify_symbol(symbol: str, cost: float | None = None) -> dict:
 
     # ── 4. Market regime ─────────────────────────────────────────────────────
     try:
-        health = get_system_health()
-        result["regime"] = health.get("market_regime", "Unknown")
+        result["regime"] = ai_portfolio_game.get_market_regime_label()[0]   # the traded regime (F5)
     except Exception:
         result["regime"] = "Unknown"
 

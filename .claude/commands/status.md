@@ -49,10 +49,9 @@ python -c "import watchdog; errors = watchdog.check_logs(); [print(e) for e in e
 
 ```bash
 python -c "
-import data_api
-h = data_api.get_system_health()
-print(f'Regime: {h.get(\"market_regime\", \"Unknown\")}')
-print(f'Data fresh: {h.get(\"data_fresh\", False)}')
+import ai_portfolio_game, data_api
+print(f'Regime: {ai_portfolio_game.get_market_regime_label()[0]}')   # the regime the game trades on
+print(f'Data fresh: {data_api.get_system_health().get(\"data_fresh\", False)}')
 "
 ```
 

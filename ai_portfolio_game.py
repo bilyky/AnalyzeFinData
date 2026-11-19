@@ -10,7 +10,7 @@ import rapidapi
 import sys
 import console_safe
 import circuit_breaker
-from aether import ledgers, trash
+from aether import ledgers, regime, trash
 import aether.notify as notify
 import argparse
 from pathlib import Path
@@ -737,13 +737,7 @@ def get_market_regime():
         ws = wb["Research"]
         for row in ws.iter_rows(min_row=2, values_only=True):
             if row[3] == "SPY":
-                l60 = row[25] or 0
-                if l60 > 2:
-                    base_profile = "AGGRESSIVE" # Strong bull market
-                elif l60 < -2:
-                    base_profile = "DEFENSIVE" # Bear market
-                else:
-                    base_profile = "BALANCED" # Consolidation
+                base_profile = regime.base_profile(row[25])   # SPY Long60 (aether/regime.py)
                 break
     except Exception as e:
         _log.warning(f"Error loading SPY regime: {e}")
@@ -776,6 +770,12 @@ def get_market_regime():
 
     return base_profile
 
+def get_market_regime_label():
+    """(text, colour) of the profile the game trades on (breadth step included): the one regime
+    every report should show (Development page F5)."""
+    return regime.label(get_market_regime())
+
+
 def get_strategy_rules(profile):
     """Define risk and size rules based on the chosen strategy profile."""
     # Profile options: BALANCED, AGGRESSIVE, DEFENSIVE
@@ -783,8 +783,8 @@ def get_strategy_rules(profile):
     # get_market_regime() labels a strong bull market "AGGRESSIVE" (SPY L60 > 2),
     # so that is the bull signal — deploy fully (zero cash buffer) when it fires,
     # regardless of which profile is active (Zero-Cash-Drag Autopilot).
-    regime = get_market_regime()
-    is_bullish = (regime == "AGGRESSIVE")
+    profile_now = get_market_regime()
+    is_bullish = (profile_now == "AGGRESSIVE")
 
     if profile == "AGGRESSIVE":
         return {
