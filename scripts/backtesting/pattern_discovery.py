@@ -63,6 +63,9 @@ PGR_REQUIRED        = {4, 5}  # Bu / Bu+  (pgr_corrected_value)
 # unless an elite breakout (R&D #32), and the live TOXIC_BEARISH_PGR rule, waived for an elite
 # breakout (R&D #13). Until 2026-11-19 it was S10+L60 >= 9.5 (the DEFENSIVE profile) + PGR Bu/Bu+,
 # so "missed" counted names the live game would have bought.
+# This is a THIRD copy of the entry gates (with steps.screen_buys and rule_walkforward), and
+# LIVE_MIN_GAIN repeats admit_mask's 5% literal. Planned exit: plan F11 (#303) folds it into the one
+# buy-spec set (aether/buy_specs.py), so the "missed" verdict and the live gates cannot drift apart.
 LIVE_S10_FLOOR, _LIVE_SETUP, LIVE_MIN_RR = wf.CURRENT[0], wf.CURRENT[1], wf.CURRENT[2]
 LIVE_MIN_GAIN = 5.0
 HORIZONS            = {"s10": 10, "l60": 60}
