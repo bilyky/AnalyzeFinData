@@ -34,6 +34,7 @@ from aether.services.portfolio.errors import UnknownPortfolio
 KEEP_BACKUPS = 15
 REPLACE_TRIES = 10       # os.replace attempts while a reader holds the file open
 REPLACE_WAIT_S = 0.5     # pause between attempts (about 5 s in all)
+RUNBOOK = "aether/services/portfolio/README.md (When a run logs NOT saved)"
 
 
 @dataclass(frozen=True)
@@ -174,7 +175,8 @@ class JsonPortfolioRepository:
         except Exception as q:
             where = f"nowhere (the quarantine write failed: {q})"
         self._log.error(f"  [PORTFOLIO] State for {portfolio_id} NOT saved: {why}. "
-                        f"The file keeps its last good state. Unsaved state kept in: {where}")
+                        f"The file keeps its last good state. Unsaved state kept in: {where}. "
+                        f"To recover before the next run, see {RUNBOOK}.")
         raise StorageError(f"state for {portfolio_id} not saved: {why}; unsaved copy: {where}") from cause
 
 

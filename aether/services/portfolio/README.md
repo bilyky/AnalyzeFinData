@@ -36,6 +36,21 @@ for about 5 s while another process has the file open (Windows refuses it then).
 failure the file keeps its last good state, the state goes to `<file>.unsaved-<time>`, an
 ERROR is logged and `StorageError` is raised.
 
+**When a run logs `NOT saved` (recovery runbook).** The save is the run's last step, so the
+run ends with an error. The state file still holds the state from before the run, and the
+Excel log (`Data/ai_portfolio_performance.xlsx`) has no rows for it: the Summary row and the
+Transaction_Log rows are written only after a good save. Before the next scheduled run:
+1. Read the ERROR line for the cause (the backup failed, the file stayed locked, or the write
+   failed) and fix it, for example free disk space or close what holds the file open.
+2. Back up the current `Data/ai_portfolio_game.json` (for example into `Data/Backup/`).
+3. Copy the `Data/ai_portfolio_game.json.unsaved-<time>` named in the ERROR line over
+   `Data/ai_portfolio_game.json`. It is the run's full state, positions and history included.
+4. The Excel log is not rebuilt. That run's transactions are in the state's `history`; add the
+   missing rows by hand if the sheet must be complete.
+
+If the line says `nowhere (the quarantine write failed …)`, there is no unsaved copy. The run's
+changes are then only in the log text, and the next run starts from the last good state.
+
 **Data owned:** `Data/ai_portfolio_game.json` (portfolio `ai_game`) and its backups in
 `Data/Backup/Game/` (the newest 15 are kept).
 

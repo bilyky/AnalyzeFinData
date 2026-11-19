@@ -151,6 +151,8 @@ class TestSafeWrite(_Base):
         self.assertEqual(json.loads(unsaved.read_text(encoding="utf-8")), _STATE)  # nothing is lost
         self.assertIn(why, str(ctx.exception))
         self.assertIn("NOT saved", self.log.error.call_args[0][0])
+        self.assertIn(str(unsaved), self.log.error.call_args[0][0])  # names the file to restore
+        self.assertIn("README.md (When a run logs NOT saved)", self.log.error.call_args[0][0])
         self.assertEqual(list(self.root.glob("*.tmp")), [])  # no temp file left behind
 
     def test_a_failed_backup_stops_the_save(self):
@@ -210,6 +212,17 @@ class TestSafeWrite(_Base):
         self.store.save_state(_STATE)
         (backup,) = self.backups.glob("ai_portfolio_game_*.json")
         self.assertEqual(json.loads(backup.read_text(encoding="utf-8")), self.good)
+
+
+class TestRecoveryRunbook(unittest.TestCase):
+    """#300 review: the ERROR line points at a runbook that exists and says what to do."""
+
+    def test_runbook_section_exists(self):
+        readme = (Path(__file__).resolve().parent.parent / "aether" / "services" / "portfolio"
+                  / "README.md").read_text(encoding="utf-8")
+        self.assertIn("When a run logs `NOT saved`", readme)
+        for step in ("Back up the current", ".unsaved-<time>", "Excel log is not rebuilt"):
+            self.assertIn(step, readme)
 
 
 class TestUnmappableStateIsQuarantined(_Base):
