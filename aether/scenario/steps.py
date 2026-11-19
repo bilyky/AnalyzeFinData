@@ -2,11 +2,10 @@
 
 WHAT THIS IS
 ------------
-The fifth seam of the ``ai_portfolio_game`` -> ``aether/scenario`` refactor
-(design doc ``plans/scenario-refactor.md``, R&D #44). B1 gave the *action* ports
-(``prices.py``); B2 the *entity* views (``schema.py``); B3 the stateless helper
-surface (``helpers.py``); B4 the ``ResearchRow`` lens (``schema.py``). This module
-begins lifting the god-function's *stateful stages* out of
+The stateful seam of the ``ai_portfolio_game`` -> ``aether/scenario`` refactor
+(design doc ``plans/scenario-refactor.md``, R&D #44, now superseded by R&D #78). The
+earlier price-port, entity-view and helper modules were never used and were deleted
+in R&D #78 step S2. This module began lifting the god-function's *stateful stages* out of
 ``run_daily_ai_management`` as plain functions that take the raw ``state`` dict,
 mutate it in place, and return their result — the shape a ``RunContext`` step will
 compose in B7.
@@ -43,7 +42,7 @@ function, and avoids a top-level import cycle once the root becomes a facade.
 """
 from __future__ import annotations
 
-from aether import preflight_status
+from aether import data_completeness, preflight_status
 
 
 def _pkg():
@@ -53,7 +52,7 @@ def _pkg():
     looked up on the live module object each call — a ``mock.patch.object(game,
     ...)`` then keeps intercepting after callers move into this package, and there
     is no circular-import hazard with the root script. Mirrors
-    ``aether/scenario/helpers.py::_pkg()`` and ``aether/etrade/store.py::_pkg()``.
+    ``aether/etrade/store.py::_pkg()``.
     """
     import ai_portfolio_game as _p
     return _p
@@ -273,6 +272,65 @@ def apply_preflight_gate(state, queued, today, force):
     return [q for q in queued if q.get("type") != "BUY"]
 
 
+def data_health_reasons(report, remembered) -> tuple:
+    """Why today's inputs are not fit to buy on, and the fields to remember. Pure: returns
+    ``(reasons, fields)``; an empty ``reasons`` means fine.
+
+    ``report`` is :func:`aether.data_completeness.check` for the latest snapshot day; ``remembered`` is
+    the memory so far (``data_completeness.remembered_fields()``). A field that went empty (only fields
+    the game reads, ``data_completeness.GAME_INPUT_FIELDS``) stays in the memory and keeps the freeze on
+    until its fill rate is back to ``data_completeness.USUAL_FILL`` or the owner releases it
+    (``--accept-fields``): the check itself compares with the last 10 sessions, so after about a week an
+    outage becomes the new normal and its alarm stops (2026-09-01..09-09 alarmed, 09-10 onward silent
+    while the fields stayed empty until 11-05).
+    """
+    rates = report.get("fill_rates") or {}
+    dropped = report.get("dropped_fields") or []
+    kept = [f for f in remembered if rates.get(f, 0.0) < data_completeness.USUAL_FILL]
+    fields = sorted(set(kept) | set(dropped))
+    reasons = list(report.get("gate") or [])
+    still = [f for f in kept if f not in dropped]
+    if still:
+        reasons.append(f"{len(still)} game-input fields still empty since their outage: {', '.join(still[:6])}"
+                       + (" ..." if len(still) > 6 else ""))
+    return reasons, fields
+
+
+def apply_data_health_gate(state, queued, force):
+    """No buys on broken inputs: freeze new buys and scale-ins when the data-completeness check of the
+    latest snapshot day fails (fields gone empty, snapshot count drop, bad values, missing price
+    bars), until the inputs recover. Exits, stops and queued SELLs still run. --force bypasses with a
+    warning, like the pre-flight gate.
+
+    PROD 2026-08-31..09-15: the Chaikin API switch left 44 fields empty and the game kept buying; the
+    11 buys of that window trailed SPY by 4.75 pp on average over the next 10 sessions (1 of 11 beat it).
+    A failure of the check itself also freezes buys (doubt in the data means wait).
+    """
+    game = _pkg()
+    try:
+        # The memory is data_completeness's file, not the portfolio state. A state saved by the first
+        # #288 build may still carry it: move it over once (save_game then drops the key).
+        legacy = state.get(data_completeness.LEGACY_STATE_KEY) or []
+        stored = data_completeness.remembered_fields()
+        reasons, fields = data_health_reasons(data_completeness.check(), sorted(set(stored) | set(legacy)))
+        if fields != stored:
+            data_completeness.save_remembered_fields(fields)
+        state.pop(data_completeness.LEGACY_STATE_KEY, None)   # only once the file holds it
+    except Exception as e:                      # the check could not run: we do not know the data is sound
+        reasons = [f"data-completeness check failed: {type(e).__name__}: {e}"]
+    if not reasons:
+        return queued
+    if force:
+        game._log.warning("⚠️ [Data-Health Gate] bypassed by --force: " + "; ".join(reasons))
+        return queued
+    reason = "Data-health freeze: " + "; ".join(reasons)
+    state.setdefault(game.circuit_breaker.FREEZE_KEY, reason)
+    dropped = [q["symbol"] for q in queued if q.get("type") == "BUY"]
+    game._log.warning(f"🛑 [Data-Health Gate] [SKIPPED] new buys and scale-ins this run: {reason}."
+                      + (f" Dropped queued BUYs: {', '.join(dropped)}." if dropped else ""))
+    return [q for q in queued if q.get("type") != "BUY"]
+
+
 def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new_transactions):
     """Execute queued strategic-override orders, then clear the queue (B6).
 
@@ -384,10 +442,12 @@ def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new
                     q_l60 = 0.0
                     q_score = 0.0
                     q_industry = "Unknown"
+                    q_setup = None
                     for r_row in ws.iter_rows(min_row=2, values_only=True):
                         if r_row[3] == sym:
                             q_pgr = r_row[6] or "Neutral"
                             q_industry = r_row[4] or "Unknown"
+                            q_setup = str(r_row[20] or '') in ('1', 'OK') if len(r_row) > 20 else None
                             try:
                                 q_s10 = float(r_row[24] or 0.0)
                                 q_l60 = float(r_row[25] or 0.0)
@@ -407,7 +467,8 @@ def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new
                             "l60": q_l60,
                             "score": q_score,
                             "z_score": 0.0,
-                            "industry": q_industry
+                            "industry": q_industry,
+                            "setup": q_setup,
                         }
                     }
                     tx = {
@@ -868,7 +929,8 @@ def screen_buys(state, prices, rules, ws, profile, today):
                     "s10": row[24] or 0.0,
                     "l60": row[25] or 0.0,
                     "bottom_desc": bottom_desc,
-                    "industry": row[4]
+                    "industry": row[4],
+                    "setup": True,      # only active-setup rows reach here; the buy DNA records it
                 })
             else:
                 game._log.warning(f"🛑 AI BUY REJECTED (Profile Threshold): {sym} - Combined score {round(total_score, 2)} is below the {profile} minimum of {rules['min_score_threshold']} and no confirmed bottom.")
@@ -955,6 +1017,17 @@ def rotate_positions(state, prices, profile, available_slots, max_positions, top
     return available_slots
 
 
+# Pyramiding adds only to a position trading within 2% of its peak close since entry.
+PYRAMID_PEAK_TOLERANCE = 0.98
+
+
+def _near_peak(current_px, peak_close):
+    """True when ``current_px`` is at or above ``PYRAMID_PEAK_TOLERANCE`` of ``peak_close``.
+
+    No recorded peak (0 or missing) is never near a peak."""
+    return bool(peak_close) and current_px >= peak_close * PYRAMID_PEAK_TOLERANCE
+
+
 def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash_required,
                    today, now_time, new_transactions):
     """Buy the ranked candidates, scale into winners and write covered calls (B6).
@@ -976,8 +1049,9 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
       * **Pyramiding** (R&D #31) — only when cash is above
         ``CFG.system_pyramiding_cash_ratio`` of equity. A symbol with a SELL
         dated today in ``state["history"]`` is skipped (no buying back what was
-        just sold, #181). Otherwise a held position in profit and within 2% of
-        its peak close, passing
+        just sold, #181).
+        Otherwise a held position in profit and trading at or above
+        ``PYRAMID_PEAK_TOLERANCE`` (98%) of its peak close, passing
         ``should_pyramid_into_winner`` on its Research-sheet s10/l60, gets more
         shares if it has more than $500 of room under
         ``rules["max_allocation_pct"]`` of equity. The cost comes out of cash, the
@@ -1035,7 +1109,7 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
                     current_px = prices.get(sym, pos["cost"])
                     # A winner is in profit and trading at or near its peak close
                     is_winner = (current_px > pos["cost"])
-                    has_peak = (pos.get("highest_close_since_acq", 0.0) >= current_px * 0.98) # within 2% of peak close
+                    has_peak = _near_peak(current_px, pos.get("highest_close_since_acq", 0.0))
 
                     # Retrieve its Short10 and Long60 momentum scores from row
                     s10 = 0.0

@@ -9,6 +9,14 @@ import tempfile as _tempfile_early
 _test_cache_dir = _tempfile_early.TemporaryDirectory(ignore_cleanup_errors=True)
 _os_early.environ["AETHER_CACHE_DIR"] = _test_cache_dir.name
 
+# The machine's shared-store opt-in must not reach the suite: with AETHER_ETRADE_STORE=db set for
+# the user (dev and PROD, PR #268), 79 E*TRADE tests failed or errored on a clean tree (11-18).
+# Tests that need the DB backend set these themselves (tests/test_etrade_client_store.py).
+# A live run (AETHER_LIVE_TESTS=1) keeps them, like the other live-gated guards below.
+if not _os_early.environ.get("AETHER_LIVE_TESTS"):
+    for _k in ("AETHER_ETRADE_STORE", "DATABASE_URL"):
+        _os_early.environ.pop(_k, None)
+
 # Globally mock notify.send_email during all unit test executions
 # to completely prevent test email spam and keep production code clean.
 import unittest.mock as _mock
@@ -98,6 +106,12 @@ _seed_wb.save(_test_xlsx_path)
 _test_game_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
 _test_game_file = Path(_test_game_dir.name) / "ai_portfolio_game.json"
 
+# The portfolio service's default store (aether.bootstrap) -> the same temp dir, and its
+# store switch is never inherited from the developer's environment (R&D #78 S4).
+import aether.bootstrap as _bootstrap
+_bootstrap.DEFAULT_DATA_DIR = Path(_test_game_dir.name)
+_os.environ.pop("AETHER_PORTFOLIO_STORE", None)
+
 for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomous_pipeline", "bootstrap_dna"):
     try:
         _mod = _importlib.import_module(_mod_name)
@@ -107,13 +121,10 @@ for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomou
     # (Data/autonomous_run.log, read by watchdog and the dashboard) — redirect it too.
     if hasattr(_mod, "LOG_FILE_PATH"):
         _mod.LOG_FILE_PATH = Path(_test_log_dir.name) / "autonomous_run.log"
-    # Game state: ai_portfolio_game is the only writer (save_game, load_game's backup
-    # restore). Its backups MUST move with it — save_game prunes GAME_BACKUP_DIR to the
-    # last 15, so redirecting the file alone would delete real backups. Readers
-    # (workbook_read / bootstrap_dna GAME_FILE) point at the same temp file.
-    if hasattr(_mod, "AI_GAME_FILE"):
-        _mod.AI_GAME_FILE = _test_game_file
-        _mod.GAME_BACKUP_DIR = Path(_test_game_dir.name) / "Backup" / "Game"
+    # Game state: the game writes it through the portfolio service, whose file AND backups
+    # follow aether.bootstrap.DEFAULT_DATA_DIR (redirected above; a save prunes the backup
+    # folder to the last 15, so redirecting the file alone would delete real backups).
+    # Readers (workbook_read / bootstrap_dna GAME_FILE) point at the same temp file.
     if hasattr(_mod, "GAME_FILE"):
         _mod.GAME_FILE = _test_game_file
     _orig_xlsx_const = getattr(_mod, "XLSX_FILE", None)
@@ -205,6 +216,10 @@ import aether.oceanview_context as _oceanview_context
 (_lock_tmp / "oceanview").mkdir(exist_ok=True)
 _oceanview_context._default_data_dir = lambda: str(_lock_tmp / "oceanview")
 _run_guard._DATA_DIR = _lock_tmp
+# The data-health buy-freeze memory (Data/data_gate_memory.json) -> temp: the gate step writes it
+# on every trade run. Tests that need their own file pass a path.
+import aether.data_completeness as _data_completeness
+_data_completeness.gate_memory_file = lambda: str(_lock_tmp / _data_completeness.GATE_MEMORY_NAME)
 for _mod_name, _attrs in (("watchdog", ("WATCHDOG_LOCK_FILE", "SELF_HEAL_LOCK", "SELF_HEAL_PROMPT_FILE",
                                        "DATA_SENTINEL_FILE", "BACKUP_STATUS_FILE", "DATA_ALERT_MARKER",
                                        "PACK_STATUS_FILE", "SCHEDULER_AUDIT_STATE",
@@ -345,3 +360,15 @@ if not _os.getenv("AETHER_LIVE_TESTS"):
 
     _subprocess.run = _guarded_run
     _subprocess.Popen = _GuardedPopen
+
+# ---------------------------------------------------------------------------
+# Wall-clock independence: aether.circuit_breaker.is_market_opening_window() reads the real
+# New York clock (9:30-10:00 ET on weekdays). A suite run inside that window took a different
+# path (the opening gap guard) and test_exit_reason_logging failed on main on 2026-11-18 at
+# 09:43 ET in CI. Pin it to "not the opening window" for every test; tests that need the window
+# open still patch it explicitly (tests/test_custom_sprints.py), which overrides this.
+# Guarded by tests/test_log_hermetic.py::TestWallClockPinned.
+import aether.circuit_breaker as _cb  # noqa: E402
+
+REAL_IS_MARKET_OPENING_WINDOW = _cb.is_market_opening_window  # kept for the guard test
+_cb.is_market_opening_window = lambda: False

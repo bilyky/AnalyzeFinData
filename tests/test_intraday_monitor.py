@@ -17,7 +17,7 @@ class TestIntradayMonitor(unittest.TestCase):
     @mock.patch("intraday_monitor.save_state")
     @mock.patch("intraday_monitor.get_monitored_positions")
     @mock.patch("intraday_monitor.get_live_prices")
-    @mock.patch("intraday_monitor.generate_ai_analysis")
+    @mock.patch("intraday_monitor.breach_note")
     @mock.patch("notify.send_email")
     def test_monitor_no_breaches(self, mock_send_email, mock_ai, mock_prices, mock_positions, mock_save, mock_load):
         """If no positions are in breach, no email is sent."""
@@ -34,7 +34,7 @@ class TestIntradayMonitor(unittest.TestCase):
     @mock.patch("intraday_monitor.save_state")
     @mock.patch("intraday_monitor.get_monitored_positions")
     @mock.patch("intraday_monitor.get_live_prices")
-    @mock.patch("intraday_monitor.generate_ai_analysis")
+    @mock.patch("intraday_monitor.breach_note")
     @mock.patch("notify.send_email")
     def test_monitor_unchanged_breaches(self, mock_send_email, mock_ai, mock_prices, mock_positions, mock_save, mock_load):
         """If breaches exist but are unchanged, duplicate emails are bypassed."""
@@ -51,7 +51,7 @@ class TestIntradayMonitor(unittest.TestCase):
     @mock.patch("intraday_monitor.save_state")
     @mock.patch("intraday_monitor.get_monitored_positions")
     @mock.patch("intraday_monitor.get_live_prices")
-    @mock.patch("intraday_monitor.generate_ai_analysis")
+    @mock.patch("intraday_monitor.breach_note")
     @mock.patch("notify.send_email")
     def test_monitor_new_breach_only_analyses_new(self, mock_send_email, mock_ai, mock_prices, mock_positions, mock_save, mock_load):
         """If a new breach occurs, an email is sent but AI analysis is generated ONLY for the new breach."""
@@ -80,7 +80,7 @@ class TestIntradayMonitor(unittest.TestCase):
     @mock.patch("intraday_monitor.save_state")
     @mock.patch("intraday_monitor.get_monitored_positions")
     @mock.patch("intraday_monitor.get_live_prices")
-    @mock.patch("intraday_monitor.generate_ai_analysis")
+    @mock.patch("intraday_monitor.breach_note")
     @mock.patch("notify.send_email")
     def test_monitor_cleared_breach(self, mock_send_email, mock_ai, mock_prices, mock_positions, mock_save, mock_load):
         """If a previously breached position is cleared (sold/recovered), an email alert is sent."""
@@ -105,7 +105,7 @@ class TestBreachIsEmailedOnce(unittest.TestCase):
     def _run(self, stops, prices, state):
         saved = {}
         with mock.patch.object(monitor, "load_state", return_value=state),              mock.patch.object(monitor, "save_state", side_effect=saved.update),              mock.patch.object(monitor, "get_monitored_positions",
-                               return_value=[{"symbol": s, "stop": v} for s, v in stops.items()]),              mock.patch.object(monitor, "get_live_prices", return_value=prices),              mock.patch.object(monitor, "generate_ai_analysis", return_value="AI") as ai,              mock.patch("notify.send_email") as send:
+                               return_value=[{"symbol": s, "stop": v} for s, v in stops.items()]),              mock.patch.object(monitor, "get_live_prices", return_value=prices),              mock.patch.object(monitor, "breach_note", return_value="AI") as ai,              mock.patch("notify.send_email") as send:
             monitor.monitor()
         return send, ai, saved
 
@@ -173,6 +173,33 @@ class TestBreachIsEmailedOnce(unittest.TestCase):
         send, ai, _ = self._run({"TT": 100.0}, {"TT": 90.0}, state)
         ai.assert_called_once_with("TT", 90.0, 100.0)
         self.assertNotIn("out of date", send.call_args.args[1])
+
+    def test_a_symbol_listed_twice_is_emailed_once(self):
+        """PROD 11-14..16: one name on two rows, the price between the two stops. Old code: breach by
+        the higher-stop row, 'recovered' by the lower-stop row, so an email every other run."""
+        rows = [{"symbol": "XX", "stop": 7}, {"symbol": "AA", "stop": 10}, {"symbol": "XX", "stop": 5.21}]
+        saved, sends = {"last_breached": {}}, []
+        for _ in range(4):
+            out = {}
+            with mock.patch.object(monitor, "load_state", return_value=saved), \
+                    mock.patch.object(monitor, "save_state", side_effect=out.update), \
+                    mock.patch.object(monitor, "get_monitored_positions", return_value=rows), \
+                    mock.patch.object(monitor, "get_live_prices", return_value={"XX": 5.755, "AA": 11}), \
+                    mock.patch.object(monitor, "breach_note", return_value="AI"), \
+                    mock.patch("notify.send_email") as send:
+                monitor.monitor()
+            sends.append(send.call_count)
+            saved = out
+        self.assertEqual(sends, [1, 0, 0, 0])
+        self.assertEqual(saved["alerted"], {"XX": {"stop": 7, "price": 5.755}})
+
+    def test_one_stop_per_symbol_keeps_the_highest_and_says_so(self):
+        rows = [{"symbol": "XX", "stop": 5.21}, {"symbol": "AA", "stop": 10}, {"symbol": "XX", "stop": 7}]
+        with self.assertLogs("aether.monitor", level="WARNING") as logs:
+            self.assertEqual(monitor.one_stop_per_symbol(rows), [{"symbol": "XX", "stop": 7}, {"symbol": "AA", "stop": 10}])
+        self.assertIn("XX 7", logs.output[0])
+        with self.assertNoLogs("aether.monitor", level="WARNING"):
+            self.assertEqual(monitor.one_stop_per_symbol(rows[1:2]), rows[1:2])
 
     def test_a_sold_name_is_forgotten(self):
         # GONE is no longer in the workbook (sold): it leaves the alerted memory even though no
