@@ -7,7 +7,7 @@
   "services": [
     {"id": "market_data", "title": "Market data", "owns": "prices (E*TRADE, Google, OHLCV cache), OHLCV bars, freshness and heal, calendar and session", "status": "todo", "step": "S5"},
     {"id": "research", "title": "Research", "owns": "screener workbook as ResearchRow (one column map), regime inputs", "status": "todo", "step": "S6"},
-    {"id": "portfolio", "title": "Portfolio", "owns": "Portfolio aggregate, registry of portfolios, repository (JSON, PostgreSQL opt-in), read model", "status": "todo", "step": "S4"},
+    {"id": "portfolio", "title": "Portfolio", "owns": "Portfolio aggregate, registry of portfolios, repository (JSON, PostgreSQL opt-in), read model", "status": "in_progress", "step": "S4"},
     {"id": "trading", "title": "Trading", "owns": "daily run per portfolio: exits, entries, sizing, circuit breaker, covered calls", "status": "todo", "step": "S8"},
     {"id": "reporting", "title": "Reporting", "owns": "daily summary, morning report, excel performance log, email", "status": "todo", "step": "S10"},
     {"id": "ledger", "title": "Ledger", "owns": "trade DNA, decision log, failure rules, scorecard (event subscribers)", "status": "todo", "step": "S7"}
@@ -18,8 +18,8 @@
     {"id": "S1", "title": "Golden split (behaviour + audit logs); must still catch the 56 mutants", "status": "done", "pr": 260, "prod": false},
     {"id": "S1b", "title": "CI job runs the unit, contract and architecture suites", "status": "done", "pr": 269, "prod": false},
     {"id": "S2", "title": "Delete dead code (scenario prices/schema/helpers, unused CLI bits)", "status": "done", "pr": 276, "prod": false},
-    {"id": "S3", "title": "Shared kernel (aether/core) + architecture test", "status": "in_review", "pr": 294, "prod": false},
-    {"id": "S4", "title": "Portfolio service: domain model, JSON repository, unit of work, read model", "status": "todo", "pr": null, "prod": true},
+    {"id": "S3", "title": "Shared kernel (aether/core) + architecture test", "status": "done", "pr": 294, "prod": false},
+    {"id": "S4", "title": "Portfolio service: domain model, JSON repository, unit of work, read model", "status": "in_progress", "pr": null, "prod": true},
     {"id": "S5", "title": "Market data service: session once per run, OHLCV store, price chain", "status": "todo", "pr": null, "prod": true},
     {"id": "S6", "title": "Research service: ResearchRow column map, read once per run", "status": "todo", "pr": null, "prod": true},
     {"id": "S7", "title": "Ledger service: event subscribers", "status": "todo", "pr": null, "prod": true},
