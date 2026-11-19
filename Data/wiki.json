@@ -387,6 +387,7 @@
     "config": [
       "Slot Expansion: (cash ratio - profile cash buffer) > 15% AND all slots full -> max_positions += 1",
       "Dynamic Pyramiding: add idle cash to existing green winners near peak closes; only when the stop is at or above cost, and the added shares may lose at most max_trade_risk_pct (default 1%) of equity at the stop",
+      "Pyramiding guards: price must be at or above 98% of the peak close since entry (PYRAMID_PEAK_TOLERANCE, aether/scenario/steps.py); no scale-in on a symbol sold earlier the same day",
       "Bounded: still clamped by the per-position ceiling and the Scarcity-core cap",
       "Source: ai_portfolio_game.py slot-expansion + pyramiding blocks"
     ]

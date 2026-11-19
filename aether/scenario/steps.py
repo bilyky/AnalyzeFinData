@@ -1011,6 +1011,17 @@ def rotate_positions(state, prices, profile, available_slots, max_positions, top
     return available_slots
 
 
+# Pyramiding adds only to a position trading within 2% of its peak close since entry.
+PYRAMID_PEAK_TOLERANCE = 0.98
+
+
+def _near_peak(current_px, peak_close):
+    """True when ``current_px`` is at or above ``PYRAMID_PEAK_TOLERANCE`` of ``peak_close``.
+
+    No recorded peak (0 or missing) is never near a peak."""
+    return bool(peak_close) and current_px >= peak_close * PYRAMID_PEAK_TOLERANCE
+
+
 def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash_required,
                    today, now_time, new_transactions):
     """Buy the ranked candidates, scale into winners and write covered calls (B6).
@@ -1032,8 +1043,9 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
       * **Pyramiding** (R&D #31) — only when cash is above
         ``CFG.system_pyramiding_cash_ratio`` of equity. A symbol with a SELL
         dated today in ``state["history"]`` is skipped (no buying back what was
-        just sold, #181). Otherwise a held position in profit and within 2% of
-        its peak close, passing
+        just sold, #181).
+        Otherwise a held position in profit and trading at or above
+        ``PYRAMID_PEAK_TOLERANCE`` (98%) of its peak close, passing
         ``should_pyramid_into_winner`` on its Research-sheet s10/l60, gets more
         shares if it has more than $500 of room under
         ``rules["max_allocation_pct"]`` of equity. The cost comes out of cash, the
@@ -1091,7 +1103,7 @@ def deploy_capital(state, prices, rules, ws, top_buys, available_slots, min_cash
                     current_px = prices.get(sym, pos["cost"])
                     # A winner is in profit and trading at or near its peak close
                     is_winner = (current_px > pos["cost"])
-                    has_peak = (pos.get("highest_close_since_acq", 0.0) >= current_px * 0.98) # within 2% of peak close
+                    has_peak = _near_peak(current_px, pos.get("highest_close_since_acq", 0.0))
 
                     # Retrieve its Short10 and Long60 momentum scores from row
                     s10 = 0.0
