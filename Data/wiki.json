@@ -291,7 +291,7 @@
       "Replay date: target ~3-4 weeks back so both 10d and 60d windows have settled OHLCV data",
       "Schedule: AETHER_PatternDiscovery, Sat 10:00, scripts/backtesting/rd_pattern_discovery.py (replay date today \u2212 25 days; --date to pick one)",
       "Reconstruction: reads Data/Symbol/{sym}/{sym}_{date}.json Chaikin cache (no live session needed)",
-      "Thresholds: score \u2265 9.5 AND pgr \u2208 {Bu, Bu+} AND setup=True to qualify as 'bought'",
+      "Bought = passes the live entry gates (rule_walkforward.CURRENT): s10 \u2265 2.0, combined \u2265 5.0, Setup, R:R \u2265 2 and target gain \u2265 5% unless elite (R&D #32), Bearish PGR only if elite (R&D #13); until 2026-11-19 it was score \u2265 9.5 + PGR Bu/Bu+",
       "Validation: 16 sampled dates across 9-month range, |z|\u22652.0 + N\u226530 for promotion",
       "Output: Data/pattern_discovery_{DATE}.json \u2014 machine-readable for the /pattern-discover skill",
       "Weekly cadence: run same date each week; pattern recurring in 3+ weeks = strong validation signal"
