@@ -319,7 +319,8 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
    **Order of the S4 PRs:** (1) the domain model, the JSON mapper, `JsonPortfolioRepository`
    (load/save moved as they are), the unit of work, a storage-free API keyed by `portfolio_id`,
    and the wiring in `bootstrap`; the game reaches its state dict through `LegacyStateGateway`
-   until S8; (2) F1; (3) F2; (4) `PortfolioQueries` and the direct readers.
+   until S8; (2) F1; (3) F2; (4) `PortfolioQueries` and the direct readers, plus the one other writer
+   (`aether/data_completeness.accept_fields()`, from #288).
 6. **S5 `market_data`:** clock/session (computed once per run), `OhlcvStore` (freshness and heal,
    per-run caches), `ChainedPriceFeed`. The game's functions delegate, so external importers keep
    working. (F3 already landed early, as step 1c.)

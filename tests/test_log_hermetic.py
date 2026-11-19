@@ -21,6 +21,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import aether.bootstrap as _bootstrap
+from aether.core import DEFAULT_PORTFOLIO
+
 import pytz
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -86,15 +89,16 @@ class TestLogPathsRedirected(unittest.TestCase):
 class TestGameStateRedirected(unittest.TestCase):
     """The game state file and its backups never resolve into the repo's Data/.
 
-    save_game() backs the file up into GAME_BACKUP_DIR and then PRUNES that folder to
+    save_game() backs the file up into the backup dir and then PRUNES that folder to
     the last 15 backups, so redirecting the file alone would delete real backups. Each
     behavioural test asserts the redirect first, so a broken harness fails here
     without ever writing a production file.
     """
 
     def _assert_redirected(self):
-        for name, path in [("ai_portfolio_game.AI_GAME_FILE", ai_portfolio_game.AI_GAME_FILE),
-                           ("ai_portfolio_game.GAME_BACKUP_DIR", ai_portfolio_game.GAME_BACKUP_DIR),
+        game = _bootstrap.default_portfolio_files()[DEFAULT_PORTFOLIO]  # the game's store
+        for name, path in [("game state file", game.path),
+                           ("game backup dir", game.backup_dir),
                            ("workbook_read.GAME_FILE", workbook_read.GAME_FILE),
                            ("bootstrap_dna.GAME_FILE", bootstrap_dna.GAME_FILE)]:
             self.assertFalse(_inside_repo_data(path), f"{name} -> {path}")
@@ -108,7 +112,8 @@ class TestGameStateRedirected(unittest.TestCase):
         ai_portfolio_game.save_game(state)
         ai_portfolio_game.save_game(state)  # 2nd save backs up the 1st into GAME_BACKUP_DIR
         self.assertEqual(ai_portfolio_game.load_game()["balance"], 123.0)
-        self.assertTrue(any(ai_portfolio_game.GAME_BACKUP_DIR.glob("ai_portfolio_game_*.json")))
+        game = _bootstrap.default_portfolio_files()[DEFAULT_PORTFOLIO]
+        self.assertTrue(any(game.backup_dir.glob("ai_portfolio_game_*.json")))
 
 
 class TestMarketDataCachesRedirected(unittest.TestCase):

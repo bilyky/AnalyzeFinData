@@ -14,14 +14,16 @@ from pathlib import Path
 
 from aether.core import DEFAULT_PORTFOLIO, Clock, EventBus, StorageError, SystemClock
 from aether.services.portfolio.adapters.json_repository import JsonPortfolioRepository, PortfolioFile
+from aether.services.portfolio.adapters.legacy_state import LegacyStateGateway
 from aether.services.portfolio.api import PortfolioRepository, PortfolioService
 
 PORTFOLIO_STORE_ENV = "AETHER_PORTFOLIO_STORE"
 STARTING_CAPITAL = 10000.0
 
-__all__ = ["App", "PortfolioFile", "bootstrap", "default_portfolio_files", "portfolio_store_kind"]
+__all__ = ["App", "LegacyStateGateway", "PortfolioFile", "bootstrap", "default_portfolio_files", "portfolio_store_kind"]
 
-# The checkout's Data/ folder, where the game keeps its state today. Whether the state should
+# The checkout's Data/ folder, where the game keeps its state today. This is the one place
+# that names the game's state file (the game itself asks bootstrap). Whether the state should
 # follow $AETHER_DATA_DIR instead is open item B9 (it would also move the E*TRADE token), so
 # this deliberately does not read it. The test harness points it at a temp dir.
 DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "Data"
@@ -46,18 +48,20 @@ def portfolio_store_kind() -> str:
 class App:
     clock: Clock
     portfolio: PortfolioService
+    portfolio_state: LegacyStateGateway  # the raw state dict for the game, until S9
     events: EventBus = field(default_factory=EventBus)
 
 
 def bootstrap(*, clock: Clock | None = None, portfolio_repository: PortfolioRepository | None = None,
               portfolio_files: dict | None = None, starting_capital: float = STARTING_CAPITAL,
               log=None) -> App:
-    """The wired app. The CLI and the dashboard pass nothing, or only their own paths."""
+    """The wired app. The CLI and the dashboard pass nothing; tests pass fakes or temp paths."""
     events = EventBus()
     if portfolio_repository is None:
         portfolio_store_kind()  # json, or a loud error
         portfolio_repository = JsonPortfolioRepository(
             portfolio_files if portfolio_files is not None else default_portfolio_files(),
             starting_capital=starting_capital, log=log)
-    return App(clock=clock or SystemClock(), portfolio=PortfolioService(portfolio_repository, events),
-               events=events)
+    service = PortfolioService(portfolio_repository, events)
+    gateway = LegacyStateGateway(service, quarantine=getattr(portfolio_repository, "quarantine", None), log=log)
+    return App(clock=clock or SystemClock(), portfolio=service, portfolio_state=gateway, events=events)

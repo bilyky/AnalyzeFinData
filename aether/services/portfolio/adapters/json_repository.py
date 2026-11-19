@@ -65,6 +65,15 @@ class JsonPortfolioRepository:
     def save(self, portfolio: Portfolio) -> None:
         self._write(portfolio.id, json_mapper.to_dict(portfolio))
 
+    def quarantine(self, portfolio_id: PortfolioId, state) -> str:
+        """Write a state that could not be saved next to its file, untouched; returns the path."""
+        f = self._file(portfolio_id)
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        target = Path(f.path).with_name(f"{Path(f.path).name}.unsaved-{ts}")
+        with open(target, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=4, default=repr)
+        return str(target)
+
     # -- the file (today's load_game / save_game, moved as-is) -----------------------------
     def _restore_from_backup(self, f: PortfolioFile, success_message: str):
         """Newest readable backup, copied back over the file; None if there is none."""

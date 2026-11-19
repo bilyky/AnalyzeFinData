@@ -17,6 +17,7 @@ from pathlib import Path
 import aether_oracle
 from aether.utils import _to_float
 from aether.config import CFG
+from aether.bootstrap import STARTING_CAPITAL, bootstrap
 from aether.run_guard import DailyRunGuard, RunSkipped
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
@@ -26,13 +27,11 @@ console_safe.install()
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
-AI_GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
-GAME_BACKUP_DIR = BASE_DIR / "Data" / "Backup" / "Game"   # timestamped save_game backups (keeps last 15)
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
 
 AI_PERF_XLSX = BASE_DIR / "Data" / "ai_portfolio_performance.xlsx"
 SYMBOL_FULL_DIR = Path(paths.ohlcv_dir())   # OHLCV cache — one source of truth ($AETHER_CACHE_DIR-aware)
-INITIAL_BALANCE = 10000.0
+INITIAL_BALANCE = STARTING_CAPITAL  # one home: aether.bootstrap
 
 # Import risk utils safely
 import risk_utils
@@ -41,9 +40,7 @@ import decision_eval
 import instruments
 from aether import options
 from aether.scenario import runners
-from aether.bootstrap import PortfolioFile, bootstrap
 from aether.core import DEFAULT_PORTFOLIO
-from aether.services.portfolio import api as portfolio_api
 from aether.market_calendar import NYSE_HOLIDAYS, is_session, last_session_on_or_before
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
@@ -881,11 +878,9 @@ def should_pyramid_into_winner(is_winner: bool, has_peak: bool, s10: float, l60:
     )
 
 def _portfolio_state():
-    """The game's state, through the portfolio service (R&D #78). Built per call with the
-    game's own paths, so a redirected AI_GAME_FILE / GAME_BACKUP_DIR (tests) applies."""
-    app = bootstrap(portfolio_files={DEFAULT_PORTFOLIO: PortfolioFile(AI_GAME_FILE, GAME_BACKUP_DIR)},
-                    starting_capital=INITIAL_BALANCE, log=_log)
-    return portfolio_api.LegacyStateGateway(app.portfolio)
+    """The game's state, through the portfolio service (R&D #78). Built per call, so the
+    store follows bootstrap's current configuration (the test harness redirects it)."""
+    return bootstrap(log=_log).portfolio_state
 
 
 def load_game():

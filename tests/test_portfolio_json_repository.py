@@ -14,9 +14,11 @@ from pathlib import Path
 from unittest import mock
 
 import ai_portfolio_game
+import aether.bootstrap as boot_module
 from aether.bootstrap import PortfolioFile, bootstrap
 from aether.core import DEFAULT_PORTFOLIO, PortfolioId
-from aether.services.portfolio.api import LegacyStateGateway, Portfolio, UnknownPortfolio
+from aether.core import StorageError
+from aether.services.portfolio.api import Portfolio, UnknownPortfolio
 
 _STATE = {"balance": 812.5, "equity": 10450.0, "positions": {"AAA": {"qty": 3, "cost": 10.0, "stop_loss": 9.0}},
           "history": [{"date": "2026-11-02", "type": "BUY", "symbol": "AAA", "price": 10.0, "qty": 3}]}
@@ -31,7 +33,7 @@ class _Base(unittest.TestCase):
         self.log = mock.Mock()
         self.app = bootstrap(portfolio_files={DEFAULT_PORTFOLIO: PortfolioFile(self.file, self.backups)},
                              starting_capital=10000.0, log=self.log)
-        self.store = LegacyStateGateway(self.app.portfolio)
+        self.store = self.app.portfolio_state
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -140,24 +142,54 @@ class TestSave(_Base):
         self.assertIn("Game backup failed: disk full", self.log.warning.call_args[0][0])
 
 
+class TestUnmappableStateIsQuarantined(_Base):
+    """#295 review: a state the mapper refuses is kept in a file, logged, and the save fails."""
+
+    def test_wrong_shape_goes_to_quarantine_and_raises(self):
+        self.file.write_text(json.dumps(_STATE), encoding="utf-8")
+        bad = dict(_STATE, queued_orders=None)
+        with self.assertRaises(StorageError) as ctx:
+            self.store.save_state(bad)
+        (unsaved,) = self.root.glob("ai_portfolio_game.json.unsaved-*")
+        self.assertRegex(unsaved.name, r"^ai_portfolio_game\.json\.unsaved-\d{8}_\d{6}$")
+        self.assertEqual(json.loads(unsaved.read_text(encoding="utf-8")), bad)
+        self.assertIn(str(unsaved), str(ctx.exception))
+        self.assertEqual(json.loads(self.file.read_text(encoding="utf-8")), _STATE)  # last good state untouched
+        self.assertIn("NOT saved", self.log.error.call_args[0][0])
+
+    def test_a_failed_quarantine_does_not_hide_the_error(self):
+        with mock.patch.object(self.store, "_quarantine", side_effect=OSError("disk")):
+            with self.assertRaises(StorageError) as ctx:
+                self.store.save_state({"history": "x"})
+        self.assertIn("history", str(ctx.exception))
+        self.assertIn("quarantine write failed: disk", self.log.error.call_args[0][0])
+
+    def test_values_json_cannot_write_are_still_kept(self):
+        bad = {"positions": [], "when": datetime.date(2026, 11, 19)}
+        with self.assertRaises(StorageError):
+            self.store.save_state(bad)
+        (unsaved,) = self.root.glob("ai_portfolio_game.json.unsaved-*")
+        self.assertEqual(json.loads(unsaved.read_text(encoding="utf-8"))["when"], "datetime.date(2026, 11, 19)")
+
+
 class TestGameUsesTheService(unittest.TestCase):
-    """ai_portfolio_game.load_game/save_game go through bootstrap with the game's own config."""
+    """ai_portfolio_game.load_game/save_game go through bootstrap; the store is bootstrap's."""
 
     def test_wiring(self):
         with mock.patch.object(ai_portfolio_game, "bootstrap", wraps=ai_portfolio_game.bootstrap) as boot:
             ai_portfolio_game.load_game()
-        boot.assert_called_once_with(
-            portfolio_files={DEFAULT_PORTFOLIO: PortfolioFile(ai_portfolio_game.AI_GAME_FILE,
-                                                              ai_portfolio_game.GAME_BACKUP_DIR)},
-            starting_capital=ai_portfolio_game.INITIAL_BALANCE, log=ai_portfolio_game._log)
+        boot.assert_called_once_with(log=ai_portfolio_game._log)
 
-    def test_paths_are_read_at_call_time(self):
-        with tempfile.TemporaryDirectory() as d, \
-                mock.patch.object(ai_portfolio_game, "AI_GAME_FILE", Path(d) / "g.json"), \
-                mock.patch.object(ai_portfolio_game, "GAME_BACKUP_DIR", Path(d) / "b"):
+    def test_one_home_for_path_and_capital(self):
+        self.assertFalse(hasattr(ai_portfolio_game, "AI_GAME_FILE"))
+        self.assertFalse(hasattr(ai_portfolio_game, "GAME_BACKUP_DIR"))
+        self.assertEqual(ai_portfolio_game.INITIAL_BALANCE, boot_module.STARTING_CAPITAL)
+
+    def test_store_follows_bootstrap_at_call_time(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(boot_module, "DEFAULT_DATA_DIR", Path(d)):
             ai_portfolio_game.save_game(_STATE)
             self.assertEqual(ai_portfolio_game.load_game(), _STATE)
-            self.assertTrue((Path(d) / "g.json").exists())
+            self.assertTrue((Path(d) / "ai_portfolio_game.json").exists())
 
 
 if __name__ == "__main__":

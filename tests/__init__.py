@@ -121,13 +121,10 @@ for _mod_name in ("ai_portfolio_game", "powergauge", "workbook_read", "autonomou
     # (Data/autonomous_run.log, read by watchdog and the dashboard) — redirect it too.
     if hasattr(_mod, "LOG_FILE_PATH"):
         _mod.LOG_FILE_PATH = Path(_test_log_dir.name) / "autonomous_run.log"
-    # Game state: ai_portfolio_game is the only writer (save_game, load_game's backup
-    # restore). Its backups MUST move with it — save_game prunes GAME_BACKUP_DIR to the
-    # last 15, so redirecting the file alone would delete real backups. Readers
-    # (workbook_read / bootstrap_dna GAME_FILE) point at the same temp file.
-    if hasattr(_mod, "AI_GAME_FILE"):
-        _mod.AI_GAME_FILE = _test_game_file
-        _mod.GAME_BACKUP_DIR = Path(_test_game_dir.name) / "Backup" / "Game"
+    # Game state: the game writes it through the portfolio service, whose file AND backups
+    # follow aether.bootstrap.DEFAULT_DATA_DIR (redirected above; a save prunes the backup
+    # folder to the last 15, so redirecting the file alone would delete real backups).
+    # Readers (workbook_read / bootstrap_dna GAME_FILE) point at the same temp file.
     if hasattr(_mod, "GAME_FILE"):
         _mod.GAME_FILE = _test_game_file
     _orig_xlsx_const = getattr(_mod, "XLSX_FILE", None)
