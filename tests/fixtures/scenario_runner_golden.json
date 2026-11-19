@@ -132,6 +132,7 @@
       "pgr": "Bullish",
       "s10": 5.0,
       "score": 11.0,
+      "setup": true,
       "z_score": null
      },
      "cost": 50.0,
@@ -147,6 +148,7 @@
       "pgr": "Bullish",
       "s10": 4.5,
       "score": 8.5,
+      "setup": true,
       "z_score": null
      },
      "cost": 30.0,
@@ -169,6 +171,7 @@
       "pgr": "Bullish",
       "s10": 3.0,
       "score": 6.0,
+      "setup": true,
       "z_score": 0.0
      },
      "cost": 40.0,
@@ -387,6 +390,7 @@
       "pgr": "Bullish",
       "s10": 5.0,
       "score": 11.0,
+      "setup": true,
       "z_score": null
      },
      "cost": 50.0,
@@ -402,6 +406,7 @@
       "pgr": "Bullish",
       "s10": 4.5,
       "score": 8.5,
+      "setup": true,
       "z_score": null
      },
      "cost": 30.0,
@@ -417,6 +422,7 @@
       "pgr": "Bullish",
       "s10": 3.0,
       "score": 6.0,
+      "setup": true,
       "z_score": 0.0
      },
      "cost": 40.0,
@@ -671,6 +677,7 @@
       "pgr": "Bullish",
       "s10": 5.0,
       "score": 11.0,
+      "setup": true,
       "z_score": null
      },
      "cost": 50.0,
@@ -846,6 +853,7 @@
       "pgr": "Bullish",
       "s10": 3.0,
       "score": 6.0,
+      "setup": true,
       "z_score": 0.0
      },
      "cost": 40.0,
@@ -1022,6 +1030,7 @@
       "pgr": "Bullish",
       "s10": 5.0,
       "score": 11.0,
+      "setup": true,
       "z_score": null
      },
      "cost": 50.0,
@@ -1037,6 +1046,7 @@
       "pgr": "Bullish",
       "s10": 4.5,
       "score": 8.5,
+      "setup": true,
       "z_score": null
      },
      "cost": 30.0,
@@ -1059,6 +1069,7 @@
       "pgr": "Bullish",
       "s10": 3.0,
       "score": 6.0,
+      "setup": true,
       "z_score": 0.0
      },
      "cost": 40.0,
@@ -1281,6 +1292,7 @@
       "pgr": "Bullish",
       "s10": 5.0,
       "score": 11.0,
+      "setup": true,
       "z_score": null
      },
      "cost": 50.0,
@@ -1296,6 +1308,7 @@
       "pgr": "Bullish",
       "s10": 4.5,
       "score": 8.5,
+      "setup": true,
       "z_score": null
      },
      "cost": 30.0,
@@ -1318,6 +1331,7 @@
       "pgr": "Bullish",
       "s10": 3.0,
       "score": 6.0,
+      "setup": true,
       "z_score": 0.0
      },
      "cost": 40.0,

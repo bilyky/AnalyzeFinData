@@ -436,10 +436,12 @@ def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new
                     q_l60 = 0.0
                     q_score = 0.0
                     q_industry = "Unknown"
+                    q_setup = None
                     for r_row in ws.iter_rows(min_row=2, values_only=True):
                         if r_row[3] == sym:
                             q_pgr = r_row[6] or "Neutral"
                             q_industry = r_row[4] or "Unknown"
+                            q_setup = str(r_row[20] or '') in ('1', 'OK') if len(r_row) > 20 else None
                             try:
                                 q_s10 = float(r_row[24] or 0.0)
                                 q_l60 = float(r_row[25] or 0.0)
@@ -459,7 +461,8 @@ def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new
                             "l60": q_l60,
                             "score": q_score,
                             "z_score": 0.0,
-                            "industry": q_industry
+                            "industry": q_industry,
+                            "setup": q_setup,
                         }
                     }
                     tx = {
@@ -920,7 +923,8 @@ def screen_buys(state, prices, rules, ws, profile, today):
                     "s10": row[24] or 0.0,
                     "l60": row[25] or 0.0,
                     "bottom_desc": bottom_desc,
-                    "industry": row[4]
+                    "industry": row[4],
+                    "setup": True,      # only active-setup rows reach here; the buy DNA records it
                 })
             else:
                 game._log.warning(f"🛑 AI BUY REJECTED (Profile Threshold): {sym} - Combined score {round(total_score, 2)} is below the {profile} minimum of {rules['min_score_threshold']} and no confirmed bottom.")
