@@ -268,10 +268,26 @@ def gate_memory_file() -> str:
     return os.path.join(paths.data_dir(), GATE_MEMORY_NAME)
 
 
+class GateMemoryUnreadable(RuntimeError):
+    """The buy-freeze memory file exists but can't be read: the freeze must not lift silently."""
+
+
 def remembered_fields(path: str | None = None) -> list:
-    """The game-input fields the buy freeze still remembers as empty ([] when none or unreadable)."""
-    m = _read(path or gate_memory_file())
-    return [str(f) for f in (m.get("fields") or [])] if isinstance(m, dict) else []
+    """The game-input fields the buy freeze still remembers as empty. No file means nothing is
+    remembered ([]). A file that exists but can't be read or isn't the expected shape raises
+    GateMemoryUnreadable: fail closed (the trade-run gate turns it into a freeze), because a damaged
+    file must not read as "nothing remembered" (PR #297 review)."""
+    path = path or gate_memory_file()
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            m = json.load(f)
+    except (OSError, ValueError) as e:
+        raise GateMemoryUnreadable(f"{path}: {type(e).__name__}: {e}") from e
+    if not isinstance(m, dict) or not isinstance(m.get("fields", []), list):
+        raise GateMemoryUnreadable(f"{path}: not a {{'fields': [...]}} object")
+    return [str(f) for f in m.get("fields") or []]
 
 
 def save_remembered_fields(fields: list, path: str | None = None, now: datetime.datetime | None = None) -> None:
@@ -291,7 +307,11 @@ def save_remembered_fields(fields: list, path: str | None = None, now: datetime.
 
 def frozen_alarm(path: str | None = None) -> str | None:
     """A line for the evening email while the remembered fields keep new buys frozen."""
-    f = remembered_fields(path)
+    try:
+        f = remembered_fields(path)
+    except GateMemoryUnreadable as e:   # the trade run freezes on this too: say why
+        return (f"New buys frozen: the buy-freeze memory can't be read ({e}). Check or restore it from "
+                "Data/Backup/*_pre_accept_fields; delete it only if no outage is open.")
     if not f:
         return None
     return (f"New buys frozen: {len(f)} game-input fields still empty since their outage ({', '.join(f[:6])}"
@@ -305,7 +325,10 @@ def accept_fields(names: list, path: str | None = None, now: datetime.datetime |
     module's memory file, after copying it to Data/Backup/<time>_pre_accept_fields; the game file
     is never touched."""
     path = path or gate_memory_file()
-    before = remembered_fields(path)
+    try:
+        before = remembered_fields(path)
+    except GateMemoryUnreadable as e:
+        return {"status": "error", "reason": str(e)}
     unknown = [n for n in names if n not in before]
     after = [f for f in before if f not in names]
     if after == before:

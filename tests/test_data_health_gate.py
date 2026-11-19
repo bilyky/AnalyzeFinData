@@ -136,6 +136,23 @@ class TestGateStep(unittest.TestCase):
         self.assertEqual(state[dc.LEGACY_STATE_KEY], [FIELD])
         self.assertIn("check failed", state[circuit_breaker.FREEZE_KEY])
 
+    def test_a_damaged_memory_file_freezes_instead_of_lifting_the_freeze(self):
+        """PR #297 review: a truncated file read as "nothing remembered" let a queued BUY through
+        on a day the remembered field was still empty."""
+        dc.save_remembered_fields([FIELD], self.mem)
+        with open(self.mem, encoding="utf-8") as f:
+            text = f.read()
+        for damaged in (text[: len(text) // 2], "[]", '{"fields": "pgr.Financials"}'):
+            with self.subTest(damaged=damaged):
+                with open(self.mem, "w", encoding="utf-8") as f:
+                    f.write(damaged)
+                state, out = self.run_gate(report(rates={FIELD: 0.0}))       # a clean-looking day
+                self.assertIn("check failed", state[circuit_breaker.FREEZE_KEY])
+                self.assertIn("GateMemoryUnreadable", state[circuit_breaker.FREEZE_KEY])
+                self.assertEqual([q["type"] for q in out], ["SELL"])         # the queued BUY is dropped
+                with open(self.mem, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), damaged)                       # left as found, for the owner
+
     def run_gate(self, rep=None, force=False, state=None, exc=None):
         state = state if state is not None else {}
         kw = {"side_effect": exc} if exc else {"return_value": rep}
@@ -217,6 +234,12 @@ class TestReleaseAndNotice(unittest.TestCase):
         with mock.patch.object(dc, "gate_memory_file", return_value=self.path), mock.patch.object(dc.sys, "stdout"):
             self.assertEqual(dc.main(["--accept-fields", FIELD]), 0)
         self.assertEqual(dc.remembered_fields(self.path), ["pgr.Earnings"])
+
+    def test_a_damaged_file_shows_in_the_email_and_blocks_a_release(self):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write('{"fields": ["pgr.Fin')
+        self.assertIn("buy-freeze memory can't be read", dc.frozen_alarm(self.path))
+        self.assertEqual(dc.accept_fields([FIELD], self.path)["status"], "error")
 
     def test_the_suite_never_uses_the_real_memory_file(self):
         real = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Data")
