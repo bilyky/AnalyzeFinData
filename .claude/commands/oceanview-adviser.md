@@ -101,6 +101,25 @@ still realizes STCG; a protective put keeps the clock running to long-term." Alw
 pass through the tax **disclaimer** — these are considerations, not advice; confirm
 with a CPA.
 
+## Rebuy and swap candidates: show the loss flags
+
+When the advice names a stock to buy or buy back (a harvest "sell and swap" name, a rebuy after the
+31-day wash window, an Oracle idea), show the R&D #113 checks next to it. These are the same shared
+checks the Oracle uses (`aether/buy_specs.py`), so OceanView and the Oracle agree:
+
+```bash
+python -c "from aether import risk_utils, buy_specs as b; c=risk_utils._load_ohlcv_series('SYM')[2]; f=b.trend_features(c); print(f, b.loss_flags(c))"
+```
+
+- **Far below its 52-week high** (`below_high` over 0.10): if the idea leans on an "elite breakout"
+  with near-zero reward/risk, don't recommend it. Waiver admits like this hit a -15% path low about
+  twice as often (R&D #113). SA on 2026-11-18 was 38% below its high.
+- **Below a falling 200-day:** say so. It is mostly a volatility sign (R&D #113's ATR-matched check),
+  so size it smaller or wait; a tested volatility rule is R&D #114.
+- **Index funds** (SPY, RSP in the dated plan) are not single stocks. These checks were tested on
+  single stocks only; don't apply them to the plan's index buys.
+- Bars must be current: check the last bar date. On dev the cache can be days old.
+
 ## Live validation (only when explicitly asked)
 
 `--live` performs a single ban-safe `options_chain` fetch through the shared E*TRADE

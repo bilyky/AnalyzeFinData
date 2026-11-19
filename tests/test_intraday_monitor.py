@@ -17,7 +17,7 @@ class TestIntradayMonitor(unittest.TestCase):
     @mock.patch("intraday_monitor.save_state")
     @mock.patch("intraday_monitor.get_monitored_positions")
     @mock.patch("intraday_monitor.get_live_prices")
-    @mock.patch("intraday_monitor.generate_ai_analysis")
+    @mock.patch("intraday_monitor.breach_note")
     @mock.patch("notify.send_email")
     def test_monitor_no_breaches(self, mock_send_email, mock_ai, mock_prices, mock_positions, mock_save, mock_load):
         """If no positions are in breach, no email is sent."""
@@ -34,7 +34,7 @@ class TestIntradayMonitor(unittest.TestCase):
     @mock.patch("intraday_monitor.save_state")
     @mock.patch("intraday_monitor.get_monitored_positions")
     @mock.patch("intraday_monitor.get_live_prices")
-    @mock.patch("intraday_monitor.generate_ai_analysis")
+    @mock.patch("intraday_monitor.breach_note")
     @mock.patch("notify.send_email")
     def test_monitor_unchanged_breaches(self, mock_send_email, mock_ai, mock_prices, mock_positions, mock_save, mock_load):
         """If breaches exist but are unchanged, duplicate emails are bypassed."""
@@ -51,7 +51,7 @@ class TestIntradayMonitor(unittest.TestCase):
     @mock.patch("intraday_monitor.save_state")
     @mock.patch("intraday_monitor.get_monitored_positions")
     @mock.patch("intraday_monitor.get_live_prices")
-    @mock.patch("intraday_monitor.generate_ai_analysis")
+    @mock.patch("intraday_monitor.breach_note")
     @mock.patch("notify.send_email")
     def test_monitor_new_breach_only_analyses_new(self, mock_send_email, mock_ai, mock_prices, mock_positions, mock_save, mock_load):
         """If a new breach occurs, an email is sent but AI analysis is generated ONLY for the new breach."""
@@ -80,7 +80,7 @@ class TestIntradayMonitor(unittest.TestCase):
     @mock.patch("intraday_monitor.save_state")
     @mock.patch("intraday_monitor.get_monitored_positions")
     @mock.patch("intraday_monitor.get_live_prices")
-    @mock.patch("intraday_monitor.generate_ai_analysis")
+    @mock.patch("intraday_monitor.breach_note")
     @mock.patch("notify.send_email")
     def test_monitor_cleared_breach(self, mock_send_email, mock_ai, mock_prices, mock_positions, mock_save, mock_load):
         """If a previously breached position is cleared (sold/recovered), an email alert is sent."""
@@ -105,7 +105,7 @@ class TestBreachIsEmailedOnce(unittest.TestCase):
     def _run(self, stops, prices, state):
         saved = {}
         with mock.patch.object(monitor, "load_state", return_value=state),              mock.patch.object(monitor, "save_state", side_effect=saved.update),              mock.patch.object(monitor, "get_monitored_positions",
-                               return_value=[{"symbol": s, "stop": v} for s, v in stops.items()]),              mock.patch.object(monitor, "get_live_prices", return_value=prices),              mock.patch.object(monitor, "generate_ai_analysis", return_value="AI") as ai,              mock.patch("notify.send_email") as send:
+                               return_value=[{"symbol": s, "stop": v} for s, v in stops.items()]),              mock.patch.object(monitor, "get_live_prices", return_value=prices),              mock.patch.object(monitor, "breach_note", return_value="AI") as ai,              mock.patch("notify.send_email") as send:
             monitor.monitor()
         return send, ai, saved
 
@@ -185,7 +185,7 @@ class TestBreachIsEmailedOnce(unittest.TestCase):
                     mock.patch.object(monitor, "save_state", side_effect=out.update), \
                     mock.patch.object(monitor, "get_monitored_positions", return_value=rows), \
                     mock.patch.object(monitor, "get_live_prices", return_value={"XX": 5.755, "AA": 11}), \
-                    mock.patch.object(monitor, "generate_ai_analysis", return_value="AI"), \
+                    mock.patch.object(monitor, "breach_note", return_value="AI"), \
                     mock.patch("notify.send_email") as send:
                 monitor.monitor()
             sends.append(send.call_count)

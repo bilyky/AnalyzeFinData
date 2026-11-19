@@ -19,6 +19,36 @@ pre-flight (test command, linters, commit conventions) comes from the repo's own
   building a parallel one; if a new piece is still right, say why. Name the existing features it
   builds on in the PR body. The list can lag the code, so a grep of the code is part of the search.
 
+- **Fit the architecture plan, on every PR, a one-line fix included.** The plan is
+  `plans/aether-services.md` (services, layers, P1-P9, the migration steps); the decisions behind it
+  are in `docs/adr/`. Before writing code, decide where the change belongs in it, then check:
+  - **One writer per store, and no private path to it.** Never open, edit and write back a file
+    another module owns, and don't build your own path to read it. The portfolio state
+    (`Data/ai_portfolio_game.json`) belongs to the portfolio service (`aether/services/portfolio`,
+    since #295): `JsonPortfolioRepository` owns the file, its backups (keep 15) and its format, and
+    `aether/bootstrap.py` is the one place that names the path. The game reads and writes it through
+    `load_game()` / `save_game()` (the service's `LegacyStateGateway`); other code reads it through the
+    service (or `load_game()` until S4's read model, `PortfolioQueries`, exists).
+  - **A module's own data lives in its own file**, under `paths.data_dir()`, with its redirect in
+    `tests/__init__.py` in the same PR. Never park a module's memory inside another store (the
+    portfolio state, the workbook, a shared cache).
+  - **New rules are pure where they can be:** input in, decision out, with the caller doing the I/O.
+    Logic added to `aether/scenario/steps.py` (it reaches the game through `_pkg()`, listed as debt in
+    `tests/test_architecture.py`) is migration debt: keep it small and pure so it moves with S9, and
+    don't change the state dict from a new rule when it can return a value (P1 puts such rules on
+    domain objects).
+  - **Dependency rules** (`tests/test_architecture.py`, enforced): nothing under `aether/` imports
+    root code (shrink `KNOWN_ROOT_IMPORTS`, never grow it); `aether/core` depends on nothing; a service
+    is used only through its `api`; a domain does no I/O; only `aether/bootstrap.py` and a service's
+    own `adapters/` import its adapters. Shared needs go to `aether/core` or the composition root, not a
+    new `_pkg()`-style lookup.
+  - **Use the owner's API, not its constants or paths.** Another module's file name, format or
+    backup folder copied into your code is a second home for it.
+  - **Say it in the body:** an "Architecture fit" line naming the part of the plan the change
+    follows, or the debt it adds and why it can't wait. #288 broke the first two rules (its memory
+    in the game file, a second writer with its own backup and indent); #297 had to undo it. #289's
+    first version added a reader with its own copy of the path; it now reads through `load_game()`.
+
 - **Start from the latest default branch, in its own worktree or branch** — never commit feature work
   to `main`: `git fetch origin && git switch -c feat/<slug> origin/main`. Use a conventional prefix
   (`feat/ fix/ chore/ refactor/ ci/ docs/ perf/`); the Auto-PR workflow keys off it. Pick a branch name
@@ -76,6 +106,13 @@ git add <paths> && git commit -m "<type>: <summary>" && git push -u origin HEAD
   removes one), update the feature docs in the same PR: `AETHER_REFERENCE.md`, the `Data/wiki.json`
   entry and its About-tab card (`.claude/commands/doc-sentry.md`). Otherwise write **"No feature-doc
   change"** in the body, with the reason (bug fix, study, refactor, tests). Reviewers check the choice.
+- **Multi-stage projects live on the Development page, and every PR updates it** (owner, 2026-11-19).
+  A project with several stages or PRs (the services migration's S-steps and F-fixes, the one
+  buy-idea spec set, a study series that ends in a rule change) gets its items in
+  `plans/aether-services-progress.json`, which the Development page shows. Each PR in it sets its
+  item's `status` (todo → in_progress → in_review → done) and `pr` in the same PR; `tests/test_dev_progress.py`
+  fails on an `in_review` or `done` item without a PR. A new multi-stage effort adds its items
+  before its first PR, not after.
 - **Keep title and body true.** When a later push changes the payload or the conclusion (a study's
   verdict, a scope cut), edit them: `gh pr edit <n> --title … --body-file …`.
 - **Several open PRs at once?** Each merge puts the others behind. Re-merge `main` into each, and when

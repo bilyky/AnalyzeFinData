@@ -12,7 +12,7 @@ import html
 
 import ai_portfolio_game
 import data_api
-from aether import drop_risk, earnings_calendar, margin_watch, pick_eval, pick_lists, sell_rules
+from aether import buy_specs, drop_risk, earnings_calendar, margin_watch, pick_eval, pick_lists, risk_utils, sell_rules
 from aether.config import CFG
 from aether.risk_utils import calculate_atr, is_elite_breakout_candidate
 from aether_logger import get_logger as _get_logger
@@ -137,10 +137,13 @@ def audit_oracle_portfolio(acct):
             
     return sells, holds
 
-def get_oracle_buy_candidates(acct):
+def get_oracle_buy_candidates(acct, held_back=None):
     """
     Query the research rows to find the top active setups that we don't already hold.
-    Returns sorted list of top candidates.
+    Returns sorted list of top candidates. A candidate the R&D #113 loss filters hold back
+    (aether.buy_specs: a waiver admit far below its 52-week high, or below a falling 200-day) is
+    left out and, when ``held_back`` is a list, appended to it as {"symbol", "reasons"}; a
+    candidate below a falling 200-day stays in with that as a flag (mostly a volatility sign).
     """
     held_syms = {h.get("symbol", "").upper() for h in acct.get("holdings", [])}
     candidates = []
@@ -190,7 +193,17 @@ def get_oracle_buy_candidates(acct):
                 
                 if rr_ratio < min_rr and not is_elite_breakout:
                     continue  # Fail-safe R:R check: reject unfavorable narrow-upside setups
-                    
+
+                # R&D #113 loss filters (shared checks in aether.buy_specs; split-adjusted closes)
+                closes = risk_utils._load_ohlcv_series(sym)[2]
+                reasons = buy_specs.loss_filter_reasons(rr_ratio < min_rr, closes)
+                if reasons:
+                    _oracle_log.info(f"[R&D #113] Oracle held back {sym}: {'; '.join(reasons)}")
+                    if held_back is not None:
+                        held_back.append({"symbol": sym, "reasons": reasons})
+                    continue
+                flags = buy_specs.loss_flags(closes)
+
                 candidates.append({
                     "symbol": sym,
                     "price": price,
@@ -200,7 +213,10 @@ def get_oracle_buy_candidates(acct):
                     "l60": l60,
                     "combined": combined,
                     "pgr": r.get("pgr", "N/A"),
-                    "patterns": r.get("patterns", "")
+                    "patterns": r.get("patterns", ""),
+                    "rr": rr_ratio,
+                    "rr_waived": rr_ratio < min_rr,   # admitted only by the elite-breakout waiver
+                    "flags": flags,                   # R&D #113 warnings shown with the idea
                 })
                 
         # Sort by combined score descending
@@ -210,6 +226,22 @@ def get_oracle_buy_candidates(acct):
         
     return candidates
 
+def _checked_note(b: dict) -> str:
+    """What the Oracle actually checked for a buy idea: no bottom detection, no news. The setup
+    flag, the scores and the reward/risk, and whether the elite-breakout waiver let it in."""
+    parts = ["Setup OK"]
+    if b.get("s10") is not None:
+        parts.append(f"S10 {b['s10']:+.1f}")
+    parts.append(f"S10+L60 {b.get('combined', 0.0):+.1f} (PGR: {b.get('pgr', 'N/A')})")
+    if b.get("rr") is not None:
+        parts.append(f"reward/risk {b['rr']:.2f}"
+                     + (" (under the minimum: admitted only by the elite-breakout waiver)" if b.get("rr_waived") else ""))
+    note = ", ".join(parts) + f". Patterns: {b.get('patterns') or 'none'}. "
+    if b.get("flags"):
+        note += "⚠️ " + "; ".join(b["flags"]) + ". "
+    return note + "Not checked: news, earnings, legal or regulatory events."
+
+
 def _target_date() -> datetime.date | None:
     raw = (CFG.oracle_target_date or "").strip()
     try:
@@ -218,7 +250,7 @@ def _target_date() -> datetime.date | None:
         return None
 
 
-def generate_oracle_html(acct, sells, holds, buys):
+def generate_oracle_html(acct, sells, holds, buys, held_back=None):
     """Render the AETHER Oracle advisory section as HTML."""
     today = datetime.date.today()
     target_date = _target_date()
@@ -313,13 +345,17 @@ def generate_oracle_html(acct, sells, holds, buys):
             buys_html += f"""
             <div style="background-color: #0f1c13; border: 1px solid #56d364; border-radius: 6px; padding: 12px; margin-bottom: 10px; border-left: 5px solid #56d364;">
                 <div style="font-weight: bold; font-size: 15px; color: #7ee787;">🟢 TRIGGER ACTIVE: {b['symbol']} (Entry Price: ${b['price']:.2f})</div>
-                <div style="font-size: 13px; color: #c9d1d9; margin: 5px 0;"><b>Advisor Note:</b> Confirmed bottom setup, trend-momentum score +{b['combined']:.1f} (PGR: {b['pgr']}). Patterns: {b['patterns'] or 'Breakout'}.</div>
+                <div style="font-size: 13px; color: #c9d1d9; margin: 5px 0;"><b>Checked:</b> {_checked_note(b)}</div>
                 <div style="font-size: 12px; color: #8b949e;">Est. Stop-Loss: ${b['stop'] or 0.0:.2f} | Profit Target: ${b['target'] or 0.0:.2f}</div>
                 {due_html}
             </div>
             """
     else:
         buys_html = "<div style='color: #8b949e; font-style: italic; padding: 10px;'>No new buy setups meet our strict qualification threshold today.</div>"
+    if held_back:
+        buys_html += ("<div style='font-size: 12px; color: #8b949e; padding: 6px 2px;'><b>Held back by the loss filters "
+                      "(R&D #113):</b> " + "; ".join(f"{html.escape(h['symbol'])}: {html.escape(', '.join(h['reasons']))}"
+                                                    for h in held_back[:5]) + "</div>")
 
     acct_mask = f"...{acct_id}" if acct_id else "real account"
     days_str = str(days_left) if days_left is not None else "N/A"
@@ -446,9 +482,10 @@ def run_oracle_advisory():
         if acct is None:
             return _unavailable_html() + margin_section(data)
         sells, holds = audit_oracle_portfolio(acct)
-        buys = get_oracle_buy_candidates(acct)
+        held_back = []
+        buys = get_oracle_buy_candidates(acct, held_back)
         pick_eval.log_picks(pick_lists.ORACLE_BUYS, buys[:3])    # what the email shows
-        return generate_oracle_html(acct, sells, holds, buys) + margin_section(data)
+        return generate_oracle_html(acct, sells, holds, buys, held_back) + margin_section(data)
     except Exception as e:
         _oracle_log.error("Fatal failure running AETHER Oracle advisory", exc_info=True)
         return f"<div style='color:#ff7b72; padding:20px; border:1px solid #f85149; background:#1c1313;'>AETHER Oracle Advisory failed to run today: {e}</div>"

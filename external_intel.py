@@ -22,24 +22,27 @@ BASE_DIR = Path(__file__).resolve().parent
 STOCK_KEYWORDS = ["BUY", "SELL", "STOCK", "TICKER", "NEWSLETTER", "PICK", "ALPHA", "PORTFOLIO", "EARNINGS"]
 
 def get_ai_reasoning(symbol, industry, pgr, s10, l60):
-    """Advisory risk audit via the configured AI provider (see ai_client).
-    Falls back to a deterministic alignment string when no provider is available."""
+    """Advisory risk audit via the configured AI provider (see ai_client): one skeptical sentence.
+
+    The AI sees only the symbol, industry, rating and two scores, so it is asked for a risk to
+    check, never for facts about the company. It used to be asked for a "Strategic Catalyst" too,
+    and with no news to read it invented them (2026-11-18: "a pending acquisition of a high-grade
+    ore deposit" for SA, the day before a court ruling sank it 29%). Falls back to a deterministic
+    alignment string when no provider is available."""
     system = ("You are Project AETHER, an elite, highly skeptical hedge fund risk "
               "manager. Your tone is professional, concise, and critical.")
     user = f"""
     Analyze stock {symbol} (Industry: {industry}, Chaikin Rating: {pgr}, Short10 Score: {s10}, Long60 Score: {l60}).
-    Generate a 2-sentence analysis:
-    Sentence 1: (Devil's Advocate) Ruthlessly criticize why this trade might fail. Be highly skeptical.
-    Sentence 2: (Strategic Catalyst) Identify the 'Strategic Requirement' or 'AI Force Multiplier' if it exists, or the primary momentum driver.
-    Keep the output extremely tight, professional, and under 50 words. Do not use prefixes like 'Devil's Advocate:'.
+    In ONE sentence, ruthlessly say why this trade might fail and what risk to check before buying.
+    You have no news, filings or company data: do not state any fact about the company (deals,
+    acquisitions, partnerships, catalysts, short interest, earnings). Under 35 words, no prefix.
     """
-    content = ai_client.evaluate(system, user, max_tokens=100, temperature=0.3, tier="cheap")
+    content = ai_client.evaluate(system, user, max_tokens=80, temperature=0.3, tier="cheap")
     if not content:
         return f"<b>Standard Audit:</b> Technicals and Fundamentals aligned ({pgr})."
-    sentences = content.split(". ")
-    devils_advocate = sentences[0] + "." if len(sentences) > 0 else ""
-    catalyst = ". ".join(sentences[1:]) if len(sentences) > 1 else ""
-    return f"🚨 <b>Devil's Advocate:</b> {devils_advocate}<br>💡 <b>Catalyst:</b> {catalyst}"
+    first = content.strip().split(". ")[0].rstrip(".") + "."
+    return f"🚨 <b>Devil's Advocate</b> (AI, from the scores only; no news read): {first}"
+
 
 def get_existing_symbols():
     """Load the valid symbols from the root Research sheet to prevent false positives."""
