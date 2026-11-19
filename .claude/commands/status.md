@@ -49,9 +49,8 @@ python -c "import watchdog; errors = watchdog.check_logs(); [print(e) for e in e
 
 ```bash
 python -c "
-import data_api, workbook_read
-label, _ = workbook_read.get_market_regime()   # the regime the emails use (SPY Long60)
-print(f'Regime: {label}')
+import ai_portfolio_game, data_api
+print(f'Regime: {ai_portfolio_game.get_market_regime_label()[0]}')   # the regime the game trades on
 print(f'Data fresh: {data_api.get_system_health().get(\"data_fresh\", False)}')
 "
 ```

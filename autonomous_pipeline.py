@@ -27,9 +27,9 @@ import external_intel
 
 # Custom modules
 import performance_tracker
+from ai_portfolio_game import get_market_regime_label   # the traded regime (Development page F5)
 from workbook_read import (
     get_top_5_picks,
-    get_market_regime,
     get_replacement_pairs,
     get_reserves_data,
 )
@@ -114,7 +114,7 @@ def cleanup_orphaned_processes():
 
 def format_html_report(status_msg, picks, replacements, intel_ideas, reserves=None):
     today = datetime.date.today()
-    regime, color = get_market_regime()
+    regime, color = get_market_regime_label()
     
     # 0. Format External Ideas + Structural Intel
     # All email-sourced strings (from/subject) and AI-extracted text (event/impact/rd_topics)
