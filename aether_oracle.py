@@ -12,7 +12,7 @@ import html
 
 import ai_portfolio_game
 import data_api
-from aether import margin_watch, pick_eval, pick_lists, sell_rules
+from aether import earnings_calendar, margin_watch, pick_eval, pick_lists, sell_rules
 from aether.config import CFG
 from aether.risk_utils import calculate_atr, is_elite_breakout_candidate
 from aether_logger import get_logger as _get_logger
@@ -293,12 +293,19 @@ def generate_oracle_html(acct, sells, holds, buys):
     # Buys Table/Cards
     buys_html = ""
     if buys:
+        earnings = earnings_calendar.load()
         for b in buys[:3]:
+            # Advisory only (PROD 11-19: SA fell ~30% the day after it was recommended): a known
+            # report date, or "unknown" when neither E*TRADE nor Chaikin has one.
+            due = earnings_calendar.note(b['symbol'], today, earnings, unknown=True)
+            due_html = (f'<div style="font-size: 12px; color: #f0883e; margin-top: 4px;">&#9888; {due}</div>'
+                        if due else "")
             buys_html += f"""
             <div style="background-color: #0f1c13; border: 1px solid #56d364; border-radius: 6px; padding: 12px; margin-bottom: 10px; border-left: 5px solid #56d364;">
                 <div style="font-weight: bold; font-size: 15px; color: #7ee787;">🟢 TRIGGER ACTIVE: {b['symbol']} (Entry Price: ${b['price']:.2f})</div>
                 <div style="font-size: 13px; color: #c9d1d9; margin: 5px 0;"><b>Advisor Note:</b> Confirmed bottom setup, trend-momentum score +{b['combined']:.1f} (PGR: {b['pgr']}). Patterns: {b['patterns'] or 'Breakout'}.</div>
                 <div style="font-size: 12px; color: #8b949e;">Est. Stop-Loss: ${b['stop'] or 0.0:.2f} | Profit Target: ${b['target'] or 0.0:.2f}</div>
+                {due_html}
             </div>
             """
     else:

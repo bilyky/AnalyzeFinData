@@ -390,6 +390,18 @@
       "Source: ai_portfolio_game.py slot-expansion + pyramiding blocks"
     ]
   },
+  "earnings_calendar": {
+    "title": "Earnings Date Flag",
+    "summary": "An advisory flag on recommendations: the evening email marks a pick whose earnings report is due within 7 days, and the Oracle's buy cards show the date, or \"earnings date unknown\" when no source has one. Nothing is blocked.",
+    "origin": "AETHER Internal (November 2026), after SA was recommended on 2026-11-18 and fell ~30% the next day.",
+    "body": "<p>Each evening <code>daily_task</code> builds <code>Data/earnings_calendar.json</code> for the screen from two sources and keeps the earliest date on or after today:</p>\n<ul class=\"list-disc pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>E*TRADE</b> quotes (<code>nextEarningDate</code>), read with the data-plane client, which cannot renew a token or open a browser. It is often empty, or the date of the last report.</li>\n  <li><b>Chaikin</b>'s raw response (<code>epsData.nextReportDate</code>, kept in <code>Data/Symbol_raw</code>).</li>\n</ul>\n<p class=\"mt-2\">Coverage is partial (7 of 50 sampled symbols had a future date on 2026-11-19), so \"unknown\" is common. A calendar older than 4 days is not shown. The flag is a warning for a person; a buy rule that uses it would need a study first.</p>",
+    "config": [
+      "Module: aether/earnings_calendar.py (build, load, note)",
+      "Built by: daily_task.py, after the evening data refresh; non-fatal if E*TRADE or the write fails",
+      "Window: WARN_DAYS = 7; a calendar older than MAX_AGE_DAYS = 4 is ignored",
+      "File: Data/earnings_calendar.json"
+    ]
+  },
   "aether_oracle": {
     "title": "AETHER Oracle (Project Oracle)",
     "summary": "A read-only real-account advisory engine. Audits live holdings in the configured real account, calculates stop breaches and momentum decay, and surfaces top breakout setups toward a doubling goal set in config.",

@@ -212,6 +212,8 @@ _trash.TRASH_DIR = str(_lock_tmp / ".trash")
 import aether.oceanview_context as _oceanview_context
 (_lock_tmp / "oceanview").mkdir(exist_ok=True)
 _oceanview_context._default_data_dir = lambda: str(_lock_tmp / "oceanview")
+from aether import earnings_calendar as _earnings_calendar  # noqa: E402
+_earnings_calendar._path = lambda: str(_lock_tmp / "earnings_calendar.json")
 _run_guard._DATA_DIR = _lock_tmp
 for _mod_name, _attrs in (("watchdog", ("WATCHDOG_LOCK_FILE", "SELF_HEAL_LOCK", "SELF_HEAL_PROMPT_FILE",
                                        "DATA_SENTINEL_FILE", "BACKUP_STATUS_FILE", "DATA_ALERT_MARKER",

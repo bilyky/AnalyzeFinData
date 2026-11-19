@@ -9,7 +9,7 @@ import traceback
 from pathlib import Path
 
 import notify
-from aether import data_completeness, oceanview_context, paths, pick_eval, pick_lists
+from aether import data_completeness, earnings_calendar, oceanview_context, paths, pick_eval, pick_lists
 import powergauge
 import rapidapi
 import watchdog
@@ -336,6 +336,14 @@ def main():
             fatal = True
             return 1
 
+        # 3b. Next earnings dates for the screen (an advisory flag in this email and the Oracle's).
+        #     Non-fatal: the report goes out without the flags if E*TRADE or the file write fails.
+        try:
+            earnings_calendar.build([r['symbol'] for r in all_symbols_data], today)
+        except Exception as e:
+            _log.warning(f"Earnings calendar not built (non-fatal): {type(e).__name__}: {e}")
+        earnings = earnings_calendar.load()
+
         # 4. Generate Tables (Same logic as Excel Picks sheet)
         p_map = {'Bu+': 5, 'Bu': 4, 'N': 3, 'Be': 2, 'Be-': 1}
         bearish = [r for r in all_symbols_data if p_map.get(r['pgr'], 0) < 4]
@@ -387,10 +395,12 @@ def main():
                 pgr_val = p_map.get(r['pgr'], 0)
                 pgr_style = "pgr-high" if pgr_val >= 4 else ("pgr-low" if pgr_val <= 2 else "")
                 score = round(r['s10'] + r['br'], 1)
+                due = earnings_calendar.note(r['symbol'], today, earnings)
+                due_html = f'<br><small style="color:#c0392b;">&#9888; {due}</small>' if due else ""
                 res += f"""
                     <tr class="{row_class}">
                         <td>{i}</td>
-                        <td class="symbol">{r['symbol']}</td>
+                        <td class="symbol">{r['symbol']}{due_html}</td>
                         <td class="{pgr_style}">{r['pgr']}</td>
                         <td>{r['s10']:.1f}</td>
                         <td>{r['br']:.1f}</td>
