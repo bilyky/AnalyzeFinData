@@ -1,0 +1,68 @@
+{
+ "project": "Winner hunt (Track G)",
+ "goal": "Find at least one strategy, or a combination, that beats SPY after costs.",
+ "updated": "2026-11-20",
+ "stages": [
+  {
+   "id": "G-A",
+   "title": "Combination of confirmed cards as a satellite (#110/#107)",
+   "status": "decision",
+   "pr": null,
+   "prod": false,
+   "note": "needs the owner's bar"
+  },
+  {
+   "id": "G-B",
+   "title": "Replacement order (rotation)",
+   "status": "decision",
+   "pr": null,
+   "prod": false,
+   "note": "needs the owner's bar"
+  },
+  {
+   "id": "G-C",
+   "title": "Range surfing of sideways high-amplitude stocks (#122)",
+   "status": "decision",
+   "pr": null,
+   "prod": false,
+   "note": "needs the bar and the channel parameters"
+  },
+  {
+   "id": "G1",
+   "title": "Circuit-breaker tightened-stop study",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "G2",
+   "title": "#113 A in the game: wire or kill",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "G3",
+   "title": "#114 ATR cap vs drop count",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "G4",
+   "title": "#116 regime with the 200-day",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "R123",
+   "title": "Sell-everything detector (#123)",
+   "status": "done",
+   "pr": 311,
+   "prod": false,
+   "note": "INCONCLUSIVE, not wired"
+  }
+ ],
+ "plan": "approved plan 2026-11-20 (private); R&D items in plans/roadmap.md"
+}

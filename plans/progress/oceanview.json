@@ -1,0 +1,66 @@
+{
+ "project": "OceanView year-end (Track O)",
+ "goal": "Harvest, margin pay-down and INTC trims from data, by the year-end dates.",
+ "updated": "2026-11-20",
+ "stages": [
+  {
+   "id": "O1",
+   "title": "Loser-recovery test: buy back after the wash window, or swap?",
+   "status": "in_review",
+   "pr": 312,
+   "prod": false,
+   "note": "INCONCLUSIVE: swap into SPY/RSP, no buy-back"
+  },
+  {
+   "id": "O2a",
+   "title": "Harvest engine (aether/harvest.py): per-lot ST/LT, tax effect, year net",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "O2b",
+   "title": "Wash-sale calendar across all accounts",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "O3",
+   "title": "#39 phase 2: margin stress before and after pay-down",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "O4",
+   "title": "Position-watch and invest_plan scheduled on PROD",
+   "status": "decision",
+   "pr": null,
+   "prod": false,
+   "note": "needs the owner's OK"
+  },
+  {
+   "id": "O5",
+   "title": "Marketable-limit guidance for deadline sales",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "O6",
+   "title": "Fill reconciliation from the lots refresh",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "P1",
+   "title": "Plan stop: support, never closer than 8% or further than 30% under the average",
+   "status": "done",
+   "pr": 311,
+   "prod": true
+  }
+ ],
+ "plan": "approved plan 2026-11-20 (private); R&D items in plans/roadmap.md"
+}

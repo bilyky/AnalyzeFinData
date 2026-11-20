@@ -527,12 +527,13 @@
   },
   "dev_project_model": {
     "title": "Development Tab: Project Model",
-    "summary": "A dashboard tab that shows the AETHER services redesign (R&amp;D #78): each step, fix and service with its status and PR, plus code metrics measured live from the source tree.",
+    "summary": "A dashboard tab that shows the AETHER services redesign (R&amp;D #78): each step, fix and service with its status and PR, plus code metrics measured live from the source tree. Below it, every other multi-stage project with its stages, status and PR.",
     "origin": "PR #242 (2026-11-06), step S0b of R&D #78.",
-    "body": "<p>The progress comes from <code>plans/aether-services-progress.json</code>, which each R&amp;D #78 PR updates. The metrics are measured on every load, so they show the code as it is: lines in <code>ai_portfolio_game.py</code>, <code>aether/scenario</code> and <code>aether/services</code>, <code>game.X</code> calls and <code>_pkg()</code> shims in the new packages, and magic <code>row[N]</code> indexes. Read-only; no login needed.</p>",
+    "body": "<p>The progress comes from <code>plans/aether-services-progress.json</code>, which each R&amp;D #78 PR updates. The metrics are measured on every load, so they show the code as it is: lines in <code>ai_portfolio_game.py</code>, <code>aether/scenario</code> and <code>aether/services</code>, <code>game.X</code> calls and <code>_pkg()</code> shims in the new packages, and magic <code>row[N]</code> indexes. Under <b>Other projects</b>, each multi-stage project has its own file in <code>plans/progress/</code> (goal, stages, status, PR, PROD flag, note), updated in every PR of that project. Read-only; no login needed.</p>",
     "config": [
       "Endpoint: GET /api/dev/project-model",
-      "Source: plans/aether-services-progress.json"
+      "Source: plans/aether-services-progress.json",
+      "Other projects: plans/progress/*.json (one file per project)"
     ]
   },
   "dashboard_login": {
