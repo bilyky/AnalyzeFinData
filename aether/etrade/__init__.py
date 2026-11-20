@@ -194,6 +194,21 @@ def _proxies():
     return {"http": p, "https": p} if p else {}
 
 
+def manual_login_store_note(env: str = "production", backend: str | None = None) -> str:
+    """A warning for a person about to log in by hand, or "" when there is nothing to say.
+
+    PROD 2026-11-17: a manual login ran in a window without AETHER_ETRADE_STORE=db (opened before
+    it was set), so the token and the breaker reset went to this machine's files only; the shared
+    failure count stayed at 3 and still blocked the 21:00 automated login."""
+    backend = backend or make_etrade_store().backend
+    if env != "production" or backend == "db" or not CFG.database_url:
+        return ""
+    return ("WARNING: this window uses the '" + backend + "' token store, not the shared one. The new "
+            "token and the breaker reset go to this machine's files only. If this machine uses the "
+            "shared store, open a NEW PowerShell window (AETHER_ETRADE_STORE is set for the user) or "
+            "run $env:AETHER_ETRADE_STORE='db' first, then run this again.")
+
+
 def _save_tokens(tokens, env):
     """Shim → ``make_etrade_store().tokens.save``: the file adapter by default; with
     ``AETHER_ETRADE_STORE=db`` the shared store plus this machine's file (PROD review 11-13)."""
@@ -637,6 +652,8 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str,
             reset_reauth_circuit_breaker(env)   # success retracts the pre-armed failure
             _set_profile_trust(env, "trusted")  # a clean mint through the profile proves trust
             return tokens
+        _log.warning("E*TRADE automated re-auth attempt failed: no verifier captured "
+                     "(the login page did not complete).")
     except SmsRequired:
         # OTP wall in a headless run: the browser and login WORKED — trust merely lapsed. That
         # is not a ban-risk failure, so retract the pre-armed breaker (don't let it escalate)
@@ -644,12 +661,27 @@ def _login_headless(ck: str, cs: str, username: str, password: str, env: str,
         reset_reauth_circuit_breaker(env)
         raise SmsRequired(env)
     except Exception as e:
-        _log.debug(f"_login_headless: {e}")
+        # WARNING, not DEBUG: since the breaker (08-18) and the 3-strike block (#113) a failure
+        # counts, and PROD logs at INFO. On 2026-11-17 three failures blocked the automated
+        # login with no reason in the log.
+        _log.warning(f"E*TRADE automated re-auth attempt failed: {type(e).__name__}: {_redact_auth_text(e)}")
     # This attempt failed (no verifier, or an exception that isn't SmsRequired). The breaker was
     # already bumped up-front; if that pushed the streak to the hard-block threshold, alert now so
     # even an end-of-day 3rd failure reports without waiting for a 4th (blocked) attempt.
     _maybe_alert_reauth_blocked(env)
     return None
+
+
+# The authorize URL carries the consumer key and the request token (and a page error can quote it).
+# Values after "=" or ":", bare or quoted: query strings, OAuth headers (oauth_token="..."), dict reprs.
+_AUTH_SECRET_QS = _re.compile(
+    r"((?:key|token|oauth_[a-z_]+|verifier|password|pwd)['\"]?\s*[=:]\s*['\"]?)[^&\s'\",}]+", _re.I)
+
+
+def _redact_auth_text(text) -> str:
+    """An exception text safe to log: on one line (a Playwright error spans several), auth values
+    masked, cut to 300 characters."""
+    return _AUTH_SECRET_QS.sub(r"\1<redacted>", " ".join(str(text).split()))[:300]
 
 
 def _get_verifier_via_totp(auth_url, username, password, totp_secret, headless=True):
@@ -1431,7 +1463,7 @@ def get_tokens(env="sandbox", allow_browser=False, headless=False):
                 if tokens and tokens.get("issued_date_et") == _et_today():
                     _log.info("E*TRADE: automatic re-authentication succeeded.")
                     return tokens
-                _log.warning("E*TRADE: automatic re-authentication failed (browser state may be stale).")
+                _log.warning("E*TRADE: automatic re-authentication failed (the reason is logged above).")
             except SmsRequired:
                 # Trust lapsed mid-renewal; don't swallow it as a generic error — let the
                 # dedicated door (scheduled_reauth) latch sms_required and alert a human.
@@ -1845,6 +1877,19 @@ def _walk(d, key):
             if r:
                 return r
     return []
+
+
+def account_keys(tokens, env="sandbox") -> dict:
+    """{last 4 digits: accountIdKey} for every account the broker lists. Read-only."""
+    raw = get_accounts(tokens, env).list_accounts(resp_format="json")
+    return {str(a.get("accountId", ""))[-4:]: a.get("accountIdKey")
+            for a in _walk(raw, "Account") if a.get("accountIdKey")}
+
+
+def position_lots(tokens, symbol, account_key, env="sandbox") -> list:
+    """The broker's tax lots of ``symbol`` in one account (raw PositionLot dicts). Read-only."""
+    resp = get_accounts(tokens, env).get_portfolio_position_lot(symbol, account_key, resp_format="json")
+    return _walk(resp, "PositionLot")
 
 
 def _last_trade(container, key="All") -> float:

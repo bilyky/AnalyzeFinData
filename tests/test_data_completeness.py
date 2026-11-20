@@ -4,7 +4,10 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
+
+import openpyxl
 
 import daily_task
 from aether import data_completeness as dc
@@ -201,11 +204,66 @@ class TestCheck(Base):
         self.assertIn("<li>x went empty</li>", html)
         self.assertIn("&lt;script&gt;", dc.html_banner({"day": "d", "alarms": ["signals '<script>'"]}))
         with mock.patch.object(dc, "check", return_value={"day": "d", "alarms": ["a"], "notes": []}), \
+                mock.patch.object(dc, "screen_symbols", return_value=[]), \
                 mock.patch.object(dc.sys.stdout, "write"):
             self.assertEqual(dc.main(["--date", "d"]), 1)
         with mock.patch.object(dc, "check", return_value={"day": "d", "alarms": [], "notes": []}), \
+                mock.patch.object(dc, "screen_symbols", return_value=[]), \
                 mock.patch.object(dc.sys.stdout, "write"):
             self.assertEqual(dc.main([]), 0)
+
+
+class TestCliChecksTheScreen(Base):
+    """The banner's "Check with: python -m aether.data_completeness" must show the same alarms as
+    the email. PROD 2026-11-11: the email said "1 screen symbols missing today: ROKU", the CLI said
+    OK, because it ran check() without the screen list."""
+
+    def _cli(self, screen):
+        self.history(syms=("AAA", "BBB", "CCC", "DDD", "EEE"))
+        for s in ("AAA", "BBB", "CCC", "DDD", "EEE"):
+            self.bars(s, DAYS + ["2026-09-01"])
+        for s in ("AAA", "BBB", "CCC", "DDD", "EEE"):
+            if s != "EEE":
+                self.write(s, "2026-09-01", _snap())
+        out = []
+        with mock.patch.object(dc.paths, "symbol_dir", return_value=self.base), \
+                mock.patch.object(dc, "screen_symbols", **screen), \
+                mock.patch.object(dc.sys.stdout, "write", side_effect=out.append):
+            code = dc.main(["--date", "2026-09-01"])
+        return code, "".join(out)
+
+    def test_the_cli_names_a_missing_screen_symbol(self):
+        code, out = self._cli({"return_value": ["eee", "AAA"]})
+        self.assertEqual(code, 1)
+        self.assertIn("ALARM: 1 screen symbols missing today: EEE", out)
+
+    def test_an_unreadable_screen_still_runs_the_rest_of_the_check(self):
+        code, out = self._cli({"side_effect": OSError("locked")})
+        self.assertIn("screen list not read", out)
+        self.assertNotIn("screen symbols missing", out)
+        self.assertIn("ALARM: 4 snapshots, usually 5", out)
+        self.assertEqual(code, 1)
+
+    def test_screen_symbols_reads_column_d_of_research(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Research"
+        ws.append(["a", "b", "c", "Symbol"])
+        ws.append([1, 2, 3, "ROKU"])
+        ws.append([1, 2, 3, None])
+        ws.append([1, 2, 3, "AAPL"])
+        wb.create_sheet("Picks").append(["x", "y", "z", "NOTME"])
+        path = os.path.join(self._tmp.name, "s.xlsx")
+        wb.save(path)
+        self.assertEqual(dc.screen_symbols(path), ["ROKU", "AAPL"])
+        with mock.patch.object(dc, "SCREEN_XLSX", path):
+            self.assertEqual(dc.screen_symbols(), ["ROKU", "AAPL"])
+        with mock.patch.object(daily_task, "BASE_DIR", Path(self._tmp.name)):
+            os.replace(path, os.path.join(self._tmp.name, "state_of_the_day.xlsx"))
+            self.assertEqual(daily_task.get_symbols_from_xls(), ["ROKU", "AAPL"])   # one reader for both
+        with mock.patch.object(daily_task, "BASE_DIR", Path(self._tmp.name) / "none"), \
+                self.assertLogs("aether.daily_task", level="ERROR"):
+            self.assertEqual(daily_task.get_symbols_from_xls(), [])
 
 
 class TestDailyTaskBanner(unittest.TestCase):

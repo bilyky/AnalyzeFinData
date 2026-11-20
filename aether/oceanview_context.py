@@ -27,6 +27,8 @@ import json
 import os
 
 from aether import etrade
+from aether.bootstrap import bootstrap
+from aether.core import DEFAULT_PORTFOLIO, StorageError
 from aether.config import CFG
 from aether import paths
 from aether.paths import data_dir as _default_data_dir
@@ -170,21 +172,25 @@ def read_broker(env: str = "production") -> dict:
 
 # ── Local state (always re-read fresh) ──────────────────────────────────────────
 
-def _portfolio_summary(ddir: str) -> dict | None:
-    path = os.path.join(ddir, "ai_portfolio_game.json")
+def _portfolio_summary() -> dict | None:
+    """The paper game in brief, from the portfolio service's read view (R&D #78); None if unreadable.
+
+    It follows the service's store, not ``data_dir``: the game's state lives where the game
+    writes it (plan item B9 decides whether that should follow $AETHER_DATA_DIR)."""
     try:
-        with open(path, encoding="utf-8") as f:
-            g = json.load(f)
-    except (OSError, json.JSONDecodeError):
+        g = bootstrap().portfolio_queries.view(DEFAULT_PORTFOLIO)
+    except StorageError:
         return None
-    hist = g.get("history") or []
-    sells = [h for h in hist if h.get("type") == "SELL"]
+    if g is None:
+        return None
+    hist = g.history
+    sells = [h for h in hist if h.type == "SELL"]
     return {
-        "cash": g.get("balance"), "equity": g.get("equity"), "profile": g.get("profile"),
-        "start_date": g.get("start_date"), "positions": sorted((g.get("positions") or {}).keys()),
+        "cash": g.balance, "equity": g.equity, "profile": g.profile,
+        "start_date": g.start_date, "positions": sorted(g.held_symbols),
         "transactions": len(hist), "closed_sells": len(sells),
-        "realized_pnl": round(sum(h.get("pnl") or 0 for h in sells), 2),
-        "last_transaction": max((h.get("date", "") for h in hist), default=None),
+        "realized_pnl": round(sum(h.pnl or 0 for h in sells), 2),
+        "last_transaction": max((h.date if h.date is not None else "" for h in hist), default=None),
     }
 
 
@@ -298,7 +304,7 @@ def build_oceanview_context(live: bool = True, *, max_stale_hours: float | None 
             health = "degraded"
             warnings.append(f"broker numbers are from cache, as of {broker_as_of} ({staleness}h old)")
 
-    portfolio = _portfolio_summary(ddir)
+    portfolio = _portfolio_summary()
     if portfolio is None:
         warnings.append("ai_portfolio_game.json unreadable — paper-game summary missing")
     held = [p.get("symbol") for p in (broker or {}).get("positions", []) if p.get("symbol")]

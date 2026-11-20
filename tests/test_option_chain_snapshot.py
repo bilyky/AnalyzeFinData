@@ -14,6 +14,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import aether.bootstrap as _bootstrap
+
 import pytz
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "monitoring"))
@@ -101,11 +103,11 @@ class TestSymbols(unittest.TestCase):
                 json.dump({"positions": {"NVDA": {"written_call": {"strike": 1}},
                                          "INTC": {"written_call": {"strike": 2}},
                                          "AMD": {"written_call": {"strike": 3}}}}, f)
-            with mock.patch.dict(os.environ, {"AETHER_DATA_DIR": tmp}):
+            with mock.patch.object(_bootstrap, "DEFAULT_DATA_DIR", Path(tmp)):  # the game's store
                 self.assertEqual(snap.default_symbols(), ["INTC", "AMD", "NVDA"])
 
-    def test_snapshots_go_to_the_same_data_dir_the_state_is_read_from(self):
-        # AETHER_DATA_DIR moves both: symbols are read from it and snapshots appended under it.
+    def test_snapshots_go_under_the_data_dir(self):
+        # AETHER_DATA_DIR moves the snapshots. The symbols come from the game's own store.
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ, {"AETHER_DATA_DIR": tmp}), \
                 mock.patch.object(snap, "OUT_DIR", None):
@@ -114,8 +116,11 @@ class TestSymbols(unittest.TestCase):
             self.assertTrue(out.exists())
 
     def test_default_symbols_unreadable_state_is_intc_only(self):
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"AETHER_DATA_DIR": tmp}):
-            self.assertEqual(snap.default_symbols(), ["INTC"])
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(_bootstrap, "DEFAULT_DATA_DIR", Path(tmp)):
+            self.assertEqual(snap.default_symbols(), ["INTC"])  # never saved
+            with open(os.path.join(tmp, "ai_portfolio_game.json"), "w", encoding="utf-8") as f:
+                f.write("{broken")
+            self.assertEqual(snap.default_symbols(), ["INTC"])  # unreadable
 
 
 class TestTradingDay(unittest.TestCase):

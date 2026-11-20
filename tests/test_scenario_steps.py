@@ -17,8 +17,7 @@ profile string. These tests pin three things:
    gate forwards ``min_score=9.5`` verbatim.
 
 The root's collaborators (``get_market_regime``, ``_has_strong_setups_today``,
-``_log``) are patched on the module, so no network / disk / real logging — the
-same call-time-differential style as ``test_scenario_helpers``.
+``_log``) are patched on the module, so no network / disk / real logging.
 """
 import inspect
 import os
