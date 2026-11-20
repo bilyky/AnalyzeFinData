@@ -34,7 +34,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game  # noqa: E402
-from aether.scenario.steps import decide_exits, stop_check_line  # noqa: E402
+from aether.scenario.steps import decide_exits, _stop_check_line  # noqa: E402
 
 
 _TODAY = "2026-09-29"
@@ -219,9 +219,9 @@ class TestStopCheckLine(unittest.TestCase):
         self.assertIn("price $80.00 (no quote, cost used)", h.logged())
 
     def test_gap_guard_is_shown(self):
-        line = stop_check_line("SA", 18.06, True, 20.43, True, "HOLD")
+        line = _stop_check_line("SA", 18.06, True, 20.43, True, "HOLD")
         self.assertEqual(line, "[Stop check] SA: price $18.06 (live quote), stop $20.43 (gap guard: stop held) -> HOLD")
-        self.assertIn("stop none", stop_check_line("SA", 18.06, True, None, False, "HOLD"))
+        self.assertIn("stop none", _stop_check_line("SA", 18.06, True, None, False, "HOLD"))
 
 
 class TestProfitLock(unittest.TestCase):

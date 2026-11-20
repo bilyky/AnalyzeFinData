@@ -483,7 +483,7 @@ def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new
     state["queued_orders"] = []
 
 
-def stop_check_line(sym, price, quoted, stop, gap_frozen, action):
+def _stop_check_line(sym, price, quoted, stop, gap_frozen, action):
     """One log line per held position at the exit check: the price, where it came from, the stop
     and the action. PROD 11-19: SA crossed its stop minutes after the 07:00 check, and nothing in
     the logs showed which price that check used."""
@@ -676,7 +676,7 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             game._log.info(f"🛑 [AI Override] {sym}: AI verdict not applied ({ignored_reason}).")
 
         decision_entries.append(entry)
-        game._log.info(stop_check_line(sym, price, sym in prices, pos.get("stop_loss"),
+        game._log.info(_stop_check_line(sym, price, sym in prices, pos.get("stop_loss"),
                                        is_gap_frozen, entry["rules_action"]))
         if entry["rules_action"] == "SELL":
             exit_reason = entry["rules_reason"] or "Technical exit"
