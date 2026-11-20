@@ -82,7 +82,7 @@ class TestResearchAndSummary(unittest.TestCase):
                 "rules": {"index_stop": -0.08}, "fills": [{"date": "2030-03-04", "symbol": "SPY", "shares": 20,
                                                            "price": 100.0, "stop": None, "account": "x1234"}]}
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(ov.pw, "watch_dir", return_value=tmp):
+            with mock.patch.object(ov.store, "watch_dir", return_value=tmp):
                 self.assertIsNone(ov.plan(D(2030, 3, 6)))                     # no plan file: no card
                 with open(os.path.join(tmp, "invest_plan.json"), "w", encoding="utf-8") as f:
                     json.dump(plan, f)
@@ -102,7 +102,7 @@ class TestResearchAndSummary(unittest.TestCase):
             with open(os.path.join(tmp, "INTC_journal.jsonl"), "w", encoding="utf-8") as f:
                 f.write(json.dumps({"date": "2026-11-04", "action": "TRIM"}) + "\n")
             rep = {"price": 20.0, "call": {"action": "WAIT"}}
-            with mock.patch.object(ov.pw, "watch_dir", return_value=tmp), \
+            with mock.patch.object(ov.store, "watch_dir", return_value=tmp), \
                     mock.patch.object(ov.pw, "load_config", return_value={**ov.pw.DEFAULTS,
                                                                          "acquisition_dates": ["2026-11-30"]}), \
                     mock.patch.object(ov.pw, "run", return_value=rep) as run, \
@@ -125,7 +125,7 @@ class TestTrimDayAndFileShape(unittest.TestCase):
             rep = {"price": 20.0, "call": {"action": "TRIM"},
                    "lots": {"shares": 1, "est_tax": 1.0,
                             "lots": [{"acquired": "2020-01-02", "sell_qty": 1, "account": "Brokerage 1234"}]}}
-            with mock.patch.object(ov.pw, "watch_dir", return_value=tmp), \
+            with mock.patch.object(ov.store, "watch_dir", return_value=tmp), \
                     mock.patch.object(ov.pw, "load_config", return_value=dict(ov.pw.DEFAULTS)), \
                     mock.patch.object(ov.pw, "run", return_value=rep), \
                     mock.patch.object(ov, "research", return_value=[]):

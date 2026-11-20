@@ -14,8 +14,10 @@ from pathlib import Path
 
 from aether.core import DEFAULT_PORTFOLIO, Clock, EventBus, StorageError, SystemClock
 from aether.services.portfolio.adapters.json_repository import JsonPortfolioRepository, PortfolioFile
+from aether.services.portfolio.adapters.json_queries import JsonPortfolioQueries
 from aether.services.portfolio.adapters.legacy_state import LegacyStateGateway
-from aether.services.portfolio.api import PortfolioRepository, PortfolioService
+from aether.services.portfolio.adapters.memory import InMemoryPortfolioQueries, InMemoryPortfolioRepository
+from aether.services.portfolio.api import PortfolioQueries, PortfolioRepository, PortfolioService
 
 PORTFOLIO_STORE_ENV = "AETHER_PORTFOLIO_STORE"
 STARTING_CAPITAL = 10000.0
@@ -49,6 +51,7 @@ class App:
     clock: Clock
     portfolio: PortfolioService
     portfolio_state: LegacyStateGateway  # the raw state dict for the game, until S9
+    portfolio_queries: PortfolioQueries  # read-only views for the dashboard, reports and tools
     events: EventBus = field(default_factory=EventBus)
 
 
@@ -57,11 +60,15 @@ def bootstrap(*, clock: Clock | None = None, portfolio_repository: PortfolioRepo
               log=None) -> App:
     """The wired app. The CLI and the dashboard pass nothing; tests pass fakes or temp paths."""
     events = EventBus()
+    portfolio_queries = None
     if portfolio_repository is None:
         portfolio_store_kind()  # json, or a loud error
-        portfolio_repository = JsonPortfolioRepository(
-            portfolio_files if portfolio_files is not None else default_portfolio_files(),
-            starting_capital=starting_capital, log=log)
+        files = portfolio_files if portfolio_files is not None else default_portfolio_files()
+        portfolio_repository = JsonPortfolioRepository(files, starting_capital=starting_capital, log=log)
+        portfolio_queries = JsonPortfolioQueries(files)
+    elif isinstance(portfolio_repository, InMemoryPortfolioRepository):
+        portfolio_queries = InMemoryPortfolioQueries(portfolio_repository)
     service = PortfolioService(portfolio_repository, events)
     gateway = LegacyStateGateway(service, quarantine=getattr(portfolio_repository, "quarantine", None), log=log)
-    return App(clock=clock or SystemClock(), portfolio=service, portfolio_state=gateway, events=events)
+    return App(clock=clock or SystemClock(), portfolio=service, portfolio_state=gateway,
+               portfolio_queries=portfolio_queries, events=events)

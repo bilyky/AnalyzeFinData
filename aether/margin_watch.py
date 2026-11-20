@@ -30,20 +30,19 @@ import datetime
 import json
 import os
 
-from aether import paths
+from aether import paths, position_watch_store
 
 DEFAULT_REQ = 0.30
 WASH_DAYS = 30
 
 
 def load_purchases(path: str | None = None) -> dict:
-    """{SYMBOL: [purchase dates]} from position-watch's private config (vests / ESPP), or {}."""
-    path = path or os.path.join(paths.data_dir(), "position_watch", "config.json")
+    """{SYMBOL: [purchase dates]} from position-watch's private config (vests / ESPP), or {}.
+    Read through position_watch_store, the config's one home (PR #271 re-review)."""
     try:
-        with open(path, encoding="utf-8") as f:
-            cfg = json.load(f)
+        cfg = position_watch_store.read_config(path=path)
         return {str(cfg["symbol"]).upper(): [str(d) for d in cfg.get("acquisition_dates", [])]}
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError):   # no file (None), unreadable, or wrong shape
         return {}
 
 
