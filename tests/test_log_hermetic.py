@@ -99,8 +99,7 @@ class TestGameStateRedirected(unittest.TestCase):
         game = _bootstrap.default_portfolio_files()[DEFAULT_PORTFOLIO]  # the game's store
         for name, path in [("game state file", game.path),
                            ("game backup dir", game.backup_dir),
-                           ("workbook_read.GAME_FILE", workbook_read.GAME_FILE),
-                           ("bootstrap_dna.GAME_FILE", bootstrap_dna.GAME_FILE)]:
+]:
             self.assertFalse(_inside_repo_data(path), f"{name} -> {path}")
 
     def test_game_paths_redirected(self):

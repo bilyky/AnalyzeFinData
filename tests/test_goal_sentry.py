@@ -15,6 +15,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import aether.bootstrap as _bootstrap
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "utils"))
 import goal_sentry as gs
 
@@ -27,7 +29,8 @@ class TestOracleAuditGate(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.target = Path(self.tmp.name) / "Data" / "active_targets.json"
-        for p in (mock.patch.object(gs, "BASE_DIR", Path(self.tmp.name)),   # no game file -> Project 1 skipped
+        for p in (mock.patch.object(gs, "BASE_DIR", Path(self.tmp.name)),
+                  mock.patch.object(_bootstrap, "DEFAULT_DATA_DIR", Path(self.tmp.name)),  # no game file -> Project 1 skipped
                   mock.patch.object(gs, "TARGET_PATH", str(self.target)),
                   mock.patch.object(gs.CFG, "oracle_account", "ACCT-1", create=True),
                   mock.patch.object(gs.CFG, "oracle_start_equity", self.START, create=True),

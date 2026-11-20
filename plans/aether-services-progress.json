@@ -19,7 +19,7 @@
     {"id": "S1b", "title": "CI job runs the unit, contract and architecture suites", "status": "done", "pr": 269, "prod": false},
     {"id": "S2", "title": "Delete dead code (scenario prices/schema/helpers, unused CLI bits)", "status": "done", "pr": 276, "prod": false},
     {"id": "S3", "title": "Shared kernel (aether/core) + architecture test", "status": "done", "pr": 294, "prod": false},
-    {"id": "S4", "title": "Portfolio service: domain model, JSON repository, unit of work, read model", "status": "in_progress", "pr": null, "prod": true},
+    {"id": "S4", "title": "Portfolio service: domain model, JSON repository, unit of work, read model", "status": "in_review", "pr": 308, "prod": true},
     {"id": "S5", "title": "Market data service: session once per run, OHLCV store, price chain", "status": "todo", "pr": null, "prod": true},
     {"id": "S6", "title": "Research service: ResearchRow column map, read once per run", "status": "todo", "pr": null, "prod": true},
     {"id": "S7", "title": "Ledger service: event subscribers", "status": "todo", "pr": null, "prod": true},
@@ -33,7 +33,7 @@
   ],
   "fixes": [
     {"id": "F1", "title": "Save aborts if the backup fails; atomic write", "trading": false, "evidence": "unit tests", "status": "done", "pr": 300},
-    {"id": "F2", "title": "No silent fresh $10k state on a corrupt file", "trading": false, "evidence": "unit tests", "status": "in_review", "pr": 307},
+    {"id": "F2", "title": "No silent fresh $10k state on a corrupt file", "trading": false, "evidence": "unit tests", "status": "done", "pr": 307},
     {"id": "F3", "title": "Run gate respects market holidays (early, before 2026-11-26)", "trading": true, "evidence": "red test on a holiday", "status": "done", "pr": 250},
     {"id": "F4", "title": "Remove the 4 doubled log lines", "trading": false, "evidence": "audit log test", "status": "todo", "pr": null},
     {"id": "F5", "title": "Dashboard regime equals the traded regime", "trading": false, "evidence": "unit test", "status": "in_review", "pr": 303},

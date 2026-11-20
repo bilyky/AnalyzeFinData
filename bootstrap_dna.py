@@ -11,12 +11,13 @@ import datetime
 from pathlib import Path
 import openpyxl
 from aether import ledgers
+from aether.bootstrap import bootstrap as _wire_app  # this module has its own bootstrap()
+from aether.core import DEFAULT_PORTFOLIO, StorageError
 from aether_logger import get_logger as _get_logger
 
 _log = _get_logger("bootstrap_dna")
 
 BASE_DIR = Path(__file__).resolve().parent
-GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
 BACKUP_DIR = BASE_DIR / "Data" / "Backup"
 
 def find_backup_for_date(date_str: str) -> Path:
@@ -74,14 +75,17 @@ def extract_dna_from_backup(backup_path: Path, symbol: str) -> dict:
 def bootstrap():
     _log.info("Initialising historical Trade DNA recovery pass...")
     
-    if not GAME_FILE.exists():
-        _log.error(f"Game file {GAME_FILE} not found. Cannot bootstrap.")
+    # The game's history, from the portfolio service's read view (R&D #78).
+    try:
+        game = _wire_app().portfolio_queries.view(DEFAULT_PORTFOLIO)
+    except StorageError as e:
+        _log.error(f"Game state unreadable ({e}). Cannot bootstrap.")
         return
-        
-    with open(GAME_FILE, "r", encoding="utf-8") as f:
-        state = json.load(f)
-        
-    history = state.get("history", [])
+    if game is None:
+        _log.error("Game state not found. Cannot bootstrap.")
+        return
+
+    history = game.history
     _log.info(f"Loaded {len(history)} historical transaction events.")
     
     # Pair up BUY and SELL transactions
@@ -89,11 +93,11 @@ def bootstrap():
     open_buys = {} # symbol -> list of BUY transactions (FIFO order)
     
     for tx in history:
-        sym = tx.get("symbol")
-        tx_type = tx.get("type")
-        tx_date = tx.get("date")
-        price = float(tx.get("price", 0.0))
-        qty = int(tx.get("qty", 0))
+        sym = tx.symbol
+        tx_type = tx.type
+        tx_date = tx.date
+        price = float(tx.price if tx.price is not None else 0.0)
+        qty = int(tx.qty if tx.qty is not None else 0)
         
         if not sym:
             continue
@@ -108,24 +112,24 @@ def bootstrap():
                 # FIFO matching
                 buy_tx = open_buys[sym].pop(0)
                 
-                b_date = datetime.date.fromisoformat(buy_tx["date"])
+                b_date = datetime.date.fromisoformat(buy_tx.date)
                 s_date = datetime.date.fromisoformat(tx_date)
                 holding_days = (s_date - b_date).days
                 
-                b_price = float(buy_tx["price"])
+                b_price = float(buy_tx.price)
                 pnl_pct = round(((price - b_price) / b_price) * 100, 2) if b_price else 0.0
                 
-                backup_file = find_backup_for_date(buy_tx["date"])
+                backup_file = find_backup_for_date(buy_tx.date)
                 if backup_file:
-                    _log.info(f"Mapping {sym} closed trade (PnL {pnl_pct:+.1f}%) -> Loading backup for {buy_tx['date']}...")
+                    _log.info(f"Mapping {sym} closed trade (PnL {pnl_pct:+.1f}%) -> Loading backup for {buy_tx.date}...")
                 else:
-                    _log.warning(f"Mapping {sym} closed trade (PnL {pnl_pct:+.1f}%) -> No backup found for {buy_tx['date']}.")
+                    _log.warning(f"Mapping {sym} closed trade (PnL {pnl_pct:+.1f}%) -> No backup found for {buy_tx.date}.")
                     
                 buy_dna = extract_dna_from_backup(backup_file, sym)
                 
                 closed_trades.append({
                     "symbol": sym,
-                    "buy_date": buy_tx["date"],
+                    "buy_date": buy_tx.date,
                     "sell_date": tx_date,
                     "buy_price": b_price,
                     "sell_price": price,

@@ -22,6 +22,8 @@ sys.path.insert(0, str(BASE_DIR))
 
 import data_api
 from aether import etrade
+from aether.bootstrap import bootstrap
+from aether.core import DEFAULT_PORTFOLIO, StorageError
 from aether.config import CFG
 from aether.logger import get_logger as _get_logger
 
@@ -36,13 +38,17 @@ def run_sentry():
     results = {}
 
     # ── 1. Audit Project 1: The AI Portfolio Game ──
-    game_path = os.path.join(BASE_DIR, "Data", "ai_portfolio_game.json")
-    if os.path.exists(game_path):
+    # Read through the portfolio service's read view (R&D #78), never the file itself.
+    try:
+        game = bootstrap().portfolio_queries.view(DEFAULT_PORTFOLIO)
+        game_error = None
+    except StorageError as e:
+        game, game_error = None, e
+    if game_error is not None:
+        results["ai_portfolio_game"] = {"error": f"Failed to audit AI Portfolio Game: {game_error}"}
+    elif game is not None:
         try:
-            with open(game_path) as f:
-                game_state = json.load(f)
-            
-            equity = game_state.get("equity", 10000.0)
+            equity = game.equity if game.equity is not None else 10000.0
             
             # The AI Game's start is hardcoded at $10k to $20k over 90 days
             start_equity = 10000.0
@@ -52,7 +58,7 @@ def run_sentry():
             # Use the authoritative top-level start_date field (the state has no
             # "transactions" key — the trade log is "history"; and history[-1] would be the
             # NEWEST entry, not the start). Only fall back if start_date is genuinely absent.
-            start_date_str = game_state.get("start_date") or "2026-06-17"
+            start_date_str = game.start_date or "2026-06-17"
             try:
                 start_date = datetime.date.fromisoformat(str(start_date_str))
                 days_active = (today - start_date).days
