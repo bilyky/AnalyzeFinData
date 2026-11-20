@@ -34,7 +34,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game  # noqa: E402
-from aether.scenario.steps import decide_exits  # noqa: E402
+from aether.scenario.steps import decide_exits, _stop_check_line  # noqa: E402
 
 
 _TODAY = "2026-09-29"
@@ -76,7 +76,8 @@ class _Harness:
                  market=True, gap=False, soft=False, plan=(0.0, "none")):
         self.log = mock.MagicMock()
         self.build = mock.MagicMock(side_effect=lambda **kw: {
-            "rules_action": action, "rules_reason": reason, "verdicts": dict(verdicts or {})})
+            "rules_action": action, "rules_reason": reason, "verdicts": dict(verdicts or {}),
+            "stop": game.sell_rules.applied_stop(kw.get("stop_loss"), kw.get("cost"))})
         self.log_decisions = mock.MagicMock()
         self.atr = mock.MagicMock(return_value=atr)
         self.plan = mock.MagicMock(return_value=plan)
@@ -199,6 +200,35 @@ class TestResearchRead(unittest.TestCase):
             _run(state, prices={}, rows=[_row("AAA", s10=3.5, l60=-1.0)])
         kw = h.build.call_args.kwargs
         self.assertEqual((kw["price"], kw["s10"], kw["l60"], kw["date"]), (80.0, 3.5, -1.0, _TODAY))
+
+
+class TestStopCheckLine(unittest.TestCase):
+    """PROD 11-19 (SA): one line per held position shows the price, its source, the stop and the action."""
+
+    def test_live_quote_line(self):
+        state = _state()
+        state["positions"]["AAA"]["stop_loss"] = 90.0
+        with _Harness(action="HOLD") as h:
+            _run(state, prices={"AAA": 95.5})
+        self.assertIn("[Stop check] AAA: price $95.50 (live quote), stop $90.00 -> HOLD", h.logged())
+        self.assertEqual(h.build.call_args.kwargs["time"], _NOW)
+
+    def test_unquoted_position_says_cost_was_used(self):
+        state = _state(cost=80.0)
+        with _Harness() as h:
+            _run(state, prices={})
+        self.assertIn("price $80.00 (no quote, cost used)", h.logged())
+
+    def test_gap_guard_shows_the_stop_the_decision_applied(self):
+        # Review of #311: with the gap guard on, decide_exits passes no stop and the decision falls back to its
+        # hard floor (8% under cost); the line must show that stop, not the stored one.
+        state = _state(cost=100.0)
+        state["positions"]["AAA"]["stop_loss"] = 80.0
+        with _Harness(action="SELL", gap=True) as h:
+            _run(state, prices={"AAA": 90.0})
+        self.assertIn("[Stop check] AAA: price $90.00 (live quote), stop $92.00 "
+                      "(gap guard: stored stop $80.00 not applied) -> SELL", h.logged())
+        self.assertIn("stop none", _stop_check_line("SA", 18.06, True, None, None, False, "HOLD"))
 
 
 class TestProfitLock(unittest.TestCase):
