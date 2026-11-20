@@ -8,6 +8,7 @@ import datetime
 from aether.core import PortfolioId
 from aether.services.portfolio.adapters import json_mapper
 from aether.services.portfolio.domain.model import Portfolio
+from aether.services.portfolio.domain.views import portfolio_view
 from aether.services.portfolio.errors import UnknownPortfolio
 
 
@@ -31,3 +32,17 @@ class InMemoryPortfolioRepository:
     def save(self, portfolio: Portfolio) -> None:
         self._check(portfolio.id)
         self.stored[portfolio.id] = json_mapper.to_dict(portfolio)
+
+
+class InMemoryPortfolioQueries:
+    """Read-only views over an ``InMemoryPortfolioRepository`` (for tests and tools)."""
+
+    def __init__(self, repository: InMemoryPortfolioRepository):
+        self._repository = repository
+
+    def view(self, portfolio_id: PortfolioId):
+        self._repository._check(portfolio_id)
+        stored = self._repository.stored.get(portfolio_id)
+        if stored is None:
+            return None
+        return portfolio_view(json_mapper.from_dict(portfolio_id, stored))

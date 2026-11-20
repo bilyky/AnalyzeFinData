@@ -42,6 +42,7 @@ import numpy as np
 
 import console_safe
 from aether import market_calendar, patterns, paths
+from aether import position_watch_store as store
 from bar_provenance import real_dates
 from aether.etrade.client import ETradeClient
 from aether.logger import get_logger
@@ -73,15 +74,13 @@ def _out(line: str = "") -> None:
 
 
 def watch_dir() -> str:
-    return os.path.join(paths.data_dir(), "position_watch")
+    """Position-watch's private folder; one home for it in aether/position_watch_store.py."""
+    return store.watch_dir()
 
 
 def load_config(path=None) -> dict:
     cfg = dict(DEFAULTS)
-    path = path or os.path.join(watch_dir(), "config.json")
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            cfg.update(json.load(f))
+    cfg.update(store.read_config(watch_dir(), path) or {})
     return cfg
 
 
@@ -409,12 +408,12 @@ def run(symbol=None, live=False, journal=True, config_path=None) -> dict:
                          meta.get("health"), live, bool(live_px), today)
     last_session = market_calendar.last_session_on_or_before(today - datetime.timedelta(days=1)).isoformat()
     call = apply_doubts(decide(m, rb, tags, repl, conc, cfg, bar_is_current=m["date"] >= last_session), doubts)
-    lots_path = os.path.join(watch_dir(), f"{symbol}_lots.json")
     lots = None
-    if call["action"] == "TRIM" and os.path.exists(lots_path):
-        with open(lots_path, encoding="utf-8") as f:
-            lots = pick_lots(json.load(f), call["tranche_usd"], price, today, cfg)
-    jpath = os.path.join(watch_dir(), f"{symbol}_journal.jsonl")
+    if call["action"] == "TRIM":
+        held = store.read_lots(symbol, watch_dir())
+        if held is not None:
+            lots = pick_lots(held, call["tranche_usd"], price, today, cfg)
+    jpath = store.journal_path(symbol, watch_dir())
     past = read_journal(jpath)
     r = retro(past, price, {k: v["close"] for k, v in repl.items()}, today.isoformat(), m["date"])
     report = {"symbol": symbol, "rules": RULES_VERSION, "as_of_bar": m["date"], "price": price,
@@ -481,7 +480,7 @@ def main(argv=None) -> int:
     cfg = load_config()
     sym = (a.symbol or cfg["symbol"]).upper()
     if a.lesson:
-        ok = add_lesson(os.path.join(watch_dir(), f"{sym}_journal.jsonl"), a.lesson)
+        ok = add_lesson(store.journal_path(sym, watch_dir()), a.lesson)
         _out("lesson saved" if ok else "no journal entry yet")
         return 0 if ok else 1
     rep = run(sym, live=a.live, journal=not a.no_journal)

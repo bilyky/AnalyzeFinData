@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import aether.bootstrap as _bootstrap
 import data_api
 
 _FLAT = data_api.PricingDiscrepancyError(
@@ -30,7 +31,7 @@ class TestPricingWarningDedupe(unittest.TestCase):
         game = Path(self.tmp.name) / "ai_portfolio_game.json"
         game.write_text(json.dumps({"balance": 1000.0, "history": [],
                                     "positions": {"ULTA": {"qty": 1, "cost": 500.0, "stop_loss": 450.0}}}))
-        for p in (mock.patch.object(data_api, "_GAME", game),
+        for p in (mock.patch.object(_bootstrap, "DEFAULT_DATA_DIR", game.parent),
                   mock.patch.object(data_api, "_load_latest_close_from_cache", return_value=549.13)):
             p.start()
             self.addCleanup(p.stop)
