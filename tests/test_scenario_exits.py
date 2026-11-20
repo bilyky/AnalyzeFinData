@@ -76,7 +76,8 @@ class _Harness:
                  market=True, gap=False, soft=False, plan=(0.0, "none")):
         self.log = mock.MagicMock()
         self.build = mock.MagicMock(side_effect=lambda **kw: {
-            "rules_action": action, "rules_reason": reason, "verdicts": dict(verdicts or {})})
+            "rules_action": action, "rules_reason": reason, "verdicts": dict(verdicts or {}),
+            "stop": game.sell_rules.applied_stop(kw.get("stop_loss"), kw.get("cost"))})
         self.log_decisions = mock.MagicMock()
         self.atr = mock.MagicMock(return_value=atr)
         self.plan = mock.MagicMock(return_value=plan)
@@ -218,10 +219,16 @@ class TestStopCheckLine(unittest.TestCase):
             _run(state, prices={})
         self.assertIn("price $80.00 (no quote, cost used)", h.logged())
 
-    def test_gap_guard_is_shown(self):
-        line = _stop_check_line("SA", 18.06, True, 20.43, True, "HOLD")
-        self.assertEqual(line, "[Stop check] SA: price $18.06 (live quote), stop $20.43 (gap guard: stop held) -> HOLD")
-        self.assertIn("stop none", _stop_check_line("SA", 18.06, True, None, False, "HOLD"))
+    def test_gap_guard_shows_the_stop_the_decision_applied(self):
+        # Review of #311: with the gap guard on, decide_exits passes no stop and the decision falls back to its
+        # hard floor (8% under cost); the line must show that stop, not the stored one.
+        state = _state(cost=100.0)
+        state["positions"]["AAA"]["stop_loss"] = 80.0
+        with _Harness(action="SELL", gap=True) as h:
+            _run(state, prices={"AAA": 90.0})
+        self.assertIn("[Stop check] AAA: price $90.00 (live quote), stop $92.00 "
+                      "(gap guard: stored stop $80.00 not applied) -> SELL", h.logged())
+        self.assertIn("stop none", _stop_check_line("SA", 18.06, True, None, None, False, "HOLD"))
 
 
 class TestProfitLock(unittest.TestCase):

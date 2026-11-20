@@ -483,13 +483,15 @@ def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new
     state["queued_orders"] = []
 
 
-def _stop_check_line(sym, price, quoted, stop, gap_frozen, action):
-    """One log line per held position at the exit check: the price, where it came from, the stop
-    and the action. PROD 11-19: SA crossed its stop minutes after the 07:00 check, and nothing in
-    the logs showed which price that check used."""
+def _stop_check_line(sym, price, quoted, applied, stored, gap_frozen, action):
+    """One log line per held position at the exit check: the price, where it came from, the stop the
+    decision APPLIED and the action. PROD 11-19: SA crossed its stop minutes after the 07:00 check, and
+    nothing in the logs showed which price that check used. With the gap guard on, the stored stop is
+    not passed to the decision, which falls back to its hard floor; the line says so (review of #311)."""
     src = "live quote" if quoted else "no quote, cost used"
-    stop_txt = f"${stop:.2f}" if stop else "none"
-    frozen = " (gap guard: stop held)" if gap_frozen else ""
+    stop_txt = f"${applied:.2f}" if applied else "none"
+    frozen = (f" (gap guard: stored stop ${stored:.2f} not applied)" if gap_frozen and stored
+              else " (gap guard)" if gap_frozen else "")
     px = f"${price:.2f}" if price else "none"
     return f"[Stop check] {sym}: price {px} ({src}), stop {stop_txt}{frozen} -> {action}"
 
@@ -676,8 +678,8 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             game._log.info(f"🛑 [AI Override] {sym}: AI verdict not applied ({ignored_reason}).")
 
         decision_entries.append(entry)
-        game._log.info(_stop_check_line(sym, price, sym in prices, pos.get("stop_loss"),
-                                       is_gap_frozen, entry["rules_action"]))
+        game._log.info(_stop_check_line(sym, price, sym in prices, entry.get("stop"), pos.get("stop_loss"),
+                                        is_gap_frozen, entry["rules_action"]))
         if entry["rules_action"] == "SELL":
             exit_reason = entry["rules_reason"] or "Technical exit"
             if not game.is_market_hours():

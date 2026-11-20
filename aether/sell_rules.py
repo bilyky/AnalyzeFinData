@@ -172,6 +172,17 @@ def ai_exit_override(action, reason, *, price, cost, atr, live_verdicts=None, ho
     return OVERRIDE_ACTIONS[verdict], source, ""
 
 
+def applied_stop(stop_loss, cost):
+    """The stop exit_decision actually uses: the stored stop, or, when none is valid, the hard floor
+    cost * (1 - DEFAULT_STOP_PCT) (Rule of Loss Minimization). One place, so the decision record and the
+    run log show the same stop the decision applied."""
+    stop = _num(stop_loss)
+    cost = _num(cost)
+    if (stop is None or stop <= 0) and cost:
+        stop = round(cost * (1 - DEFAULT_STOP_PCT), 2)
+    return stop
+
+
 def exit_decision(price, cost, stop_loss, s10, l60, sma50=None, in_profit=None):
     """Return (action, reason) where action is 'SELL' | 'REVIEW' | 'HOLD'.
 
@@ -184,12 +195,7 @@ def exit_decision(price, cost, stop_loss, s10, l60, sma50=None, in_profit=None):
     """
     price = _num(price)
     cost = _num(cost)
-    stop = _num(stop_loss)
-
-    # Ensure a hard floor always exists (Rule of Loss Minimization): if no valid
-    # stop was stored, fall back to cost * (1 - DEFAULT_STOP_PCT).
-    if (stop is None or stop <= 0) and cost:
-        stop = round(cost * (1 - DEFAULT_STOP_PCT), 2)
+    stop = applied_stop(stop_loss, cost)
 
     if in_profit is None and price is not None and cost:
         in_profit = price > cost

@@ -39,7 +39,7 @@ def build_entry(symbol, price, cost, stop_loss, s10, l60, sma50=None,
     True/False. The reference price is the live decision-time quote — the same price
     the sim would transact at — measured later against the forward daily close.
 
-    The record also keeps the stop the decision used and the run time, so a late or missed stop can
+    The record also keeps the stop the decision applied (the stored stop, or the hard-floor fallback) and the run time, so a late or missed stop can
     be traced afterwards (PROD 11-19: SA crossed its stop minutes after the 07:00 check)."""
     action, reason = sell_rules.exit_decision(
         price=price, cost=cost, stop_loss=stop_loss, s10=s10, l60=l60, sma50=sma50)
@@ -48,7 +48,7 @@ def build_entry(symbol, price, cost, stop_loss, s10, l60, sma50=None,
     pnl_pct = ((price - cost) / cost * 100) if (price and cost) else None
     entry = {
         "date": date, "symbol": symbol, "price": price, "cost": cost,
-        "s10": s10, "l60": l60, "pnl_pct": pnl_pct, "stop": stop_loss, "time": time,
+        "s10": s10, "l60": l60, "pnl_pct": pnl_pct, "stop": sell_rules.applied_stop(stop_loss, cost), "time": time,
         "rules_action": action, "rules_reason": reason, "verdicts": {},
     }
     if run_shadow:
