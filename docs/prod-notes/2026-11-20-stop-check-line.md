@@ -38,3 +38,17 @@ No behaviour change: no buy, sell or stop rule moved.
    copy is at fault, not the code.
 
 Rollback: revert the PR.
+
+## Plan stop on index funds (owner decision 2026-11-20)
+`scripts/monitoring/invest_plan.py` now sets one stop per index fund, not per lot:
+- 1% under the confirmed support below the fund's average cost. The support comes from the bars up to its last
+  buy, so it doesn't slide down with the price. This is the game's own support rule (`risk_utils.detect_support`,
+  times 0.99).
+- With no support, the plan's `index_stop` (8%) under the average cost over all fills. A new buy moves it.
+- When the stop is hit, one SELL line covers every lot of that fund.
+- A holding whose price bars end before SPY's is now a doubt, so every BUY/SELL waits until the cache is refreshed.
+  On 11-20 dev's RSP bars ended 11-17 while SPY's ended 11-19, and nothing said so.
+
+PROD check: run `python scripts/monitoring/invest_plan.py` after the pull. Each index holding shows the same stop
+on all its lots, with `stop_source` `support` or `pct` in `--json`. No plan-file change is needed;
+`"index_stop_from": "lot"` in the plan's rules brings back the old per-lot stop.

@@ -7,7 +7,7 @@ values, not a real plan):
   {"name": "example plan", "total": 10000, "return_by": "2030-04-30",
    "safe": {"amount": 4000, "where": "money market"},
    "steps": [{"date": "2030-03-04", "amount": 2500, "buy": "SPY"}, ...],
-   "rules": {"wait_if_market_day": -0.02, "index_stop": -0.08,
+   "rules": {"wait_if_market_day": -0.02, "index_stop": -0.08, "index_stop_from": "average",
              "sell_from": "2030-04-15", "sell_to": "2030-04-22", "latest_sell": "2030-04-29"},
    "fills": [{"date": "2030-03-04", "symbol": "SPY", "shares": 5, "price": 500.0, "stop": null}]}
 
@@ -20,7 +20,10 @@ Each day it says, from the cached daily bars:
     session (the owner's rule after a big drop);
   - whether RSP is stretched (position-watch's replacement_timing: more than 5% above its
     50-day average, or RSI >= 70), so an "RSP" step buys SPY or waits instead;
-  - each fill's gain/loss and its stop: index funds at index_stop from cost, other names at
+  - each fill's gain/loss and its stop. Index funds (owner 2026-11-20): 1% under the confirmed support below
+    the symbol's average cost (taken from bars up to its last buy); with no support, index_stop under the
+    average cost over all its fills (rules "index_stop_from": "average", the default; "lot" uses each fill's
+    own price), so a new buy moves the stop. Other names at
     their own "stop" price (an ATR stop the owner records);
   - the days left to the sell window and to the latest sell date.
 
@@ -46,6 +49,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import console_safe  # noqa: E402
 import position_watch as pw  # noqa: E402
 from aether import market_calendar  # noqa: E402
+from aether import risk_utils  # noqa: E402
 
 INDEX_FUNDS = {"SPY", "RSP"}
 SLACK = 1.0          # dollars of rounding slack when fills cover a step
@@ -103,14 +107,53 @@ def step_status(plan: dict, today: datetime.date, fills: list) -> list:
     return out
 
 
-def fill_status(fills: list, prices: dict, index_stop: float) -> list:
+def average_costs(fills: list) -> dict:
+    """{symbol: share-weighted average buy price} over all of a symbol's fills."""
+    tot, sh = {}, {}
+    for f in fills:
+        tot[f["symbol"]] = tot.get(f["symbol"], 0.0) + f["shares"] * f["price"]
+        sh[f["symbol"]] = sh.get(f["symbol"], 0.0) + f["shares"]
+    return {s: tot[s] / sh[s] for s in tot if sh[s] > 0}
+
+
+def entry_support(fills: list, symbol: str, bars) -> float | None:
+    """The confirmed swing-low support under the symbol's average cost, from bars up to its LAST buy, so the
+    level stays put as new bars arrive (a support taken from today's bars would keep sliding under a falling
+    price and never trigger). Same detector as the game's stops (risk_utils.detect_support)."""
+    if not bars:
+        return None
+    last_buy = max(f["date"] for f in fills if f["symbol"] == symbol)
+    upto = [i for i, d in enumerate(bars["days"]) if d <= last_buy]
+    if not upto:
+        return None
+    return risk_utils.detect_support(average_costs(fills)[symbol], bars["l"][:upto[-1] + 1])
+
+
+def fill_status(fills: list, prices: dict, index_stop: float, basis: str = "average",
+                supports: dict | None = None) -> list:
+    """Each fill's gain/loss and stop. Index funds (owner 2026-11-20): the stop sits 1% under the confirmed
+    support below the symbol's average cost (the game's support stop, support x 0.99); with no support it is
+    index_stop under the AVERAGE cost over all fills, so a new buy moves it (basis="lot" uses each fill's own
+    price instead). Other names use their own recorded "stop"."""
+    avg = average_costs(fills)
+    supports = supports or {}
     out = []
     for f in fills:
         px = prices.get(f["symbol"])
         cost = f["shares"] * f["price"]
-        stop = f["price"] * (1 + index_stop) if f["symbol"] in INDEX_FUNDS else f.get("stop")
+        src = None
+        if f["symbol"] in INDEX_FUNDS:
+            sup = supports.get(f["symbol"])
+            if sup:
+                stop, src = round(sup * 0.99, 2), "support"
+            else:
+                ref = avg[f["symbol"]] if basis == "average" else f["price"]
+                stop, src = ref * (1 + index_stop), "pct"
+        else:
+            stop = f.get("stop")
         out.append({**f, "last": px, "pnl": None if px is None else f["shares"] * px - cost,
-                    "pnl_pct": None if px is None else px / f["price"] - 1, "stop": stop,
+                    "pnl_pct": None if px is None else px / f["price"] - 1, "stop": stop, "stop_source": src,
+                    "avg_cost": avg.get(f["symbol"]),
                     "stopped": bool(px is not None and stop and px <= stop)})
     return out
 
@@ -130,6 +173,10 @@ def check(plan: dict, today: datetime.date, bars: dict) -> dict:
     missing = sorted({f["symbol"] for f in fills if not bars.get(f["symbol"])})
     if missing:
         doubts.append(f"no price bars for {', '.join(missing)}: its stop can't be checked")
+    behind_spy = sorted(s for s in {f["symbol"] for f in fills}
+                        if bars.get(s) and last_day and bars[s]["days"][-1] < last_day)
+    if behind_spy:                   # 11-20: RSP's cache ended 11-17 while SPY's ended 11-19, and nothing said so
+        doubts.append(f"price bars for {', '.join(behind_spy)} end before SPY's ({last_day}): refresh first")
     steps = step_status(plan, today, fills)
     actions, notes = [], []
     wait = spy_ret is not None and spy_ret <= rules.get("wait_if_market_day", -0.02)
@@ -148,9 +195,23 @@ def check(plan: dict, today: datetime.date, bars: dict) -> dict:
                                f"use SPY now or hold the RSP part for a later step")
             else:
                 actions.append(f"BUY step {s['date']}: {amt} {s['buy']} (limit order)")
-    fstat = fill_status(fills, prices, rules.get("index_stop", -0.08))
+    basis = rules.get("index_stop_from", "average")
+    supports = {sym: entry_support(fills, sym, bars.get(sym))
+                for sym in {f["symbol"] for f in fills} if sym in INDEX_FUNDS}
+    fstat = fill_status(fills, prices, rules.get("index_stop", -0.08), basis, supports)
+    sold = set()
     for f in fstat:
-        if f["stopped"]:
+        if not f["stopped"]:
+            continue
+        if f["symbol"] in INDEX_FUNDS and basis == "average":
+            if f["symbol"] in sold:
+                continue                     # one stop for the whole symbol: sell every lot once
+            sold.add(f["symbol"])
+            n = sum(x["shares"] for x in fstat if x["symbol"] == f["symbol"])
+            why = (f"1% under support {supports[f['symbol']]:.2f}" if f["stop_source"] == "support" else
+                   f"{-rules.get('index_stop', -0.08):.0%} under the average cost {f['avg_cost']:.2f}, no support seen")
+            actions.append(f"SELL {f['symbol']} (all {n:g} sh): {f['last']:.2f} is at/below its stop {f['stop']:.2f} ({why})")
+        else:
             actions.append(f"SELL {f['symbol']}: {f['last']:.2f} is at/below its stop {f['stop']:.2f}")
     sell_from = rules.get("sell_from")
     latest = rules.get("latest_sell") or plan.get("return_by")
