@@ -32,6 +32,8 @@ import numpy as np
 import requests
 
 from aether import paths, trash
+from aether.bootstrap import bootstrap
+from aether.core import DEFAULT_PORTFOLIO, StorageError
 from aether.batch_failures import most_failed
 from aether.logger import get_logger as _get_logger
 from bar_provenance import is_provisional, real_dates
@@ -245,15 +247,14 @@ def _fetch_and_merge(symbol: str, path: str, outputsize: str = "compact") -> Non
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def held_symbols(game_path: str | None = None) -> set[str]:
-    """Symbols the paper game holds (Data/ai_portfolio_game.json), read-only; empty on any error.
+def held_symbols() -> set[str]:
+    """Symbols the paper game holds, from the portfolio service's read view; empty if unreadable.
     Their stops and the pricing checks read these bars, so the recovery pass repairs them first."""
-    game_path = game_path or os.path.join(paths.data_dir(), "ai_portfolio_game.json")
     try:
-        with open(game_path, encoding="utf-8") as f:
-            return {s.upper() for s in (json.load(f).get("positions") or {})}
-    except (OSError, ValueError, AttributeError):
+        game = bootstrap().portfolio_queries.view(DEFAULT_PORTFOLIO)
+    except StorageError:
         return set()
+    return {s.upper() for s in game.held_symbols} if game is not None else set()
 
 
 def run_symbols(explicit: list[str], held: set[str], sheet=None) -> list[str]:

@@ -44,6 +44,8 @@ import pytz
 
 from aether import options_adviser as oa
 from aether import paths
+from aether.bootstrap import bootstrap
+from aether.core import DEFAULT_PORTFOLIO, StorageError
 from aether.market_calendar import is_session
 from aether.options import written_call_symbols
 from aether.etrade.client import ETradeClient
@@ -53,8 +55,8 @@ from aether.logger import get_logger as _get_logger
 _log = _get_logger("option_chain_snapshot")
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-# None = <Data dir>/option_chains, resolved at write time so AETHER_DATA_DIR applies (the game
-# state is read from the same place). Tests point it at a temp dir.
+# None = <Data dir>/option_chains, resolved at write time so AETHER_DATA_DIR applies. (The game
+# state comes from the portfolio service.) Tests point it at a temp dir.
 OUT_DIR = None
 _FIXTURE = BASE_DIR / "tests" / "fixtures" / "intc_option_chain.json"
 CORE_SYMBOLS = ("INTC",)
@@ -62,11 +64,16 @@ _ET = pytz.timezone("America/New_York")
 
 
 def default_symbols() -> list:
-    """INTC first, then the game's covered-call symbols (unreadable state -> INTC only)."""
+    """INTC first, then the game's covered-call symbols (unreadable state -> INTC only).
+
+    The game's positions come from the portfolio service's read view (R&D #78), which reads the
+    file the game writes; snapshots still go under ``paths.data_dir()``."""
     try:
-        with open(os.path.join(paths.data_dir(), "ai_portfolio_game.json"), encoding="utf-8") as f:
-            calls = written_call_symbols(json.load(f))
-    except (OSError, ValueError) as e:
+        game = bootstrap().portfolio_queries.view(DEFAULT_PORTFOLIO)
+        if game is None:
+            raise FileNotFoundError("the game state has never been saved")
+        calls = game.written_call_symbols()
+    except (StorageError, OSError) as e:
         _log.warning("Game state unreadable (%s); snapshotting %s only.", e, ", ".join(CORE_SYMBOLS))
         calls = []
     return list(CORE_SYMBOLS) + [s for s in calls if s not in CORE_SYMBOLS]

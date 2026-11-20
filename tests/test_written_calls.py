@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import aether.bootstrap as _bootstrap
 import data_api
 
 
@@ -26,7 +27,7 @@ class TestReadWrittenCalls(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.game = Path(self.tmp.name) / "ai_portfolio_game.json"
-        patcher = mock.patch.object(data_api, "_GAME", self.game)
+        patcher = mock.patch.object(_bootstrap, "DEFAULT_DATA_DIR", self.game.parent)  # the service reads <dir>/ai_portfolio_game.json
         patcher.start()
         self.addCleanup(patcher.stop)
         self.addCleanup(self.tmp.cleanup)
@@ -61,6 +62,19 @@ class TestReadWrittenCalls(unittest.TestCase):
         self.game.write_text("{not json", encoding="utf-8")
         self.assertEqual(data_api.read_written_calls(), [])
 
+
+
+
+class TestUnreadableStateIsLogged(unittest.TestCase):
+    """#308 review: a broken state file reads as "no portfolio", with a warning saying why."""
+
+    def test_warning_names_the_reason(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(_bootstrap, "DEFAULT_DATA_DIR", Path(d)), \
+                mock.patch.object(data_api, "_log") as log:
+            Path(d, "ai_portfolio_game.json").write_text("{broken", encoding="utf-8")
+            self.assertEqual(data_api.read_written_calls(), [])
+            self.assertEqual(data_api.read_history()["total"], 0)
+        self.assertIn("Game state unreadable", log.warning.call_args[0][0])
 
 if __name__ == "__main__":
     unittest.main()
