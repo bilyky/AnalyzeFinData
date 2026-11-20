@@ -29,7 +29,7 @@ class TestFormatHtmlReport(unittest.TestCase):
         }]
         # No picks/reserves -> get_reasoning is never invoked; stub the workbook
         # readers so the test needs no live workbook.
-        with mock.patch.object(ap, "get_market_regime", return_value=("NEUTRAL", "#000")), \
+        with mock.patch.object(ap, "get_market_regime_label", return_value=("NEUTRAL", "#000")), \
              mock.patch.object(ap, "get_reserves_data", return_value=[]):
             html_out = ap.format_html_report("OK", [], [], intel)
 
@@ -41,7 +41,7 @@ class TestFormatHtmlReport(unittest.TestCase):
 
     def test_empty_intel_renders_placeholder(self):
         """With no intel, the report still builds and shows the empty-feed notice."""
-        with mock.patch.object(ap, "get_market_regime", return_value=("NEUTRAL", "#000")), \
+        with mock.patch.object(ap, "get_market_regime_label", return_value=("NEUTRAL", "#000")), \
              mock.patch.object(ap, "get_reserves_data", return_value=[]):
             html_out = ap.format_html_report("OK", [], [], [])
         self.assertIsInstance(html_out, str)

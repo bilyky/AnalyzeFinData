@@ -214,9 +214,10 @@
     "origin": "Nassim Nicholas Taleb - Author of 'Fooled by Randomness', 'The Black Swan', 'Antifragile'.",
     "body": "Employs zero-trust risk safety principles. Operates a closed-loop retrospective feedback analyzer that dynamically clusters true losses (bad habits) into active rejections to immunize the portfolio against repeating errors.",
     "config": [
-      "DNA Capture: Freezes PGR, scores, and Z-scores on purchase, logging completed trades to Data/trade_history_dna.json.",
+      "DNA Capture: Freezes PGR, scores, Z-score and the Setup flag on purchase, logging completed trades to Data/trade_history_dna.json. Live buys did not record Setup until 2026-11, so DNA rows bought from late July show Setup=None.",
       "Retrospective Loop: retrospective_analyzer.py filters out market-panic days and statistically clusters failures into failure_dna_rules.json when run by hand. The Saturday AETHER_PatternDiscovery run calls it with --report-only: it proposes rules in failure_dna_rules_proposed.json and leaves the live rules alone.",
-      "Action: Dynamic buy-rejection guard (check_failure_rules) blocks any new buy candidate matching our toxic clusters on autopilot."
+      "Action: Dynamic buy-rejection guard (check_failure_rules) blocks any new buy candidate matching our toxic clusters on autopilot.",
+      "Behaviour reflection (read-only, aether/behaviour_reflection.py): the weekly report also shows the game's own actions from the ledger: sells by exit type per month and what the stock did 10 sessions after the sale vs SPY, each new buy's 10-session result vs SPY, buys whose S10+L60 fell below 0 within 3 logged days, buys/sells per month and median days held, and Rule B scale-outs followed by a scale-in within 5 sessions. Trades with under 10 sessions of bars are skipped and counted. A flat trade (0.00%) is no longer counted as a win."
     ]
   },
   "decision_eval": {
@@ -386,6 +387,7 @@
     "config": [
       "Slot Expansion: (cash ratio - profile cash buffer) > 15% AND all slots full -> max_positions += 1",
       "Dynamic Pyramiding: add idle cash to existing green winners near peak closes; only when the stop is at or above cost, and the added shares may lose at most max_trade_risk_pct (default 1%) of equity at the stop",
+      "Pyramiding guards: price must be at or above 98% of the peak close since entry (PYRAMID_PEAK_TOLERANCE, aether/scenario/steps.py); no scale-in on a symbol sold earlier the same day",
       "Bounded: still clamped by the per-position ceiling and the Scarcity-core cap",
       "Source: ai_portfolio_game.py slot-expansion + pyramiding blocks"
     ]
@@ -400,7 +402,7 @@
       "Execution: Runs daily at 7:00 AM PST immediately following ai_portfolio_game.py.",
       "Auditing: Flags CRITICAL BREACHES when current price <= technical stop loss.",
       "Override: Seamlessly integrates the AI Second-Opinion Exit Override Gate, auditing shadow verdicts to downgrade a momentum collapse to HOLD or WATCH (sell_rules.ai_exit_override), only for a holding more than 1 ATR in profit. A stop-loss breach or a losing position is never downgraded.",
-      "Rotations: Chooses the single highest-scoring, non-overlapping bullish setup (s10 >= 2.5).",
+      "Rotations: Chooses the single highest-scoring, non-overlapping bullish setup (s10 >= 2.5).", "Loss filters (R&D #113, aether/buy_specs.py): an idea that gets in only through the elite-breakout waiver must be within 10% of its 52-week high, or it is held back and listed as such; an idea below a falling 200-day average is flagged. Each idea shows what was checked (Setup, scores, reward/risk) and that news, earnings and legal events were not.",
       "Zero-Risk: Operational read-only advisory (no automated orders are placed on your brokerage)."
     ]
   },
@@ -422,11 +424,12 @@
     "title": "Position Watch (concentrated holding)",
     "summary": "A daily, recommend-only check of one concentrated holding (default INTC): <b>TRIM</b> a small tranche, <b>HOLD</b> or <b>WAIT</b>, with reasons, tax lots and a RETRO of the last call. Never places an order, never sells below the floor.",
     "origin": "Built for OceanView (R&D #79): bring a concentrated position down slowly and on evidence. Rules are heuristics, reviewed against the RETRO hit rate.",
-    "body": "<p>Each run measures the symbol (SMA 20/50/200, drawdown from the 52-week high, 1/5/20/60-day returns), separates <b>the sector's move from the symbol's own</b> (beta to an equal-weight peer basket and the residual return with a z-score), checks each replacement's entry timing (stretch vs its 50-day average, RSI-14), and computes concentration against the total, including stock-plan shares and outside assets.</p><p class=\"mt-2\">A <b>TRIM</b> needs all of: below the 50-day average, weak on its own (20-day residual z &lt; -1), no recovery pattern forming, not a crash day, and a replacement with an OK entry. Any doubt in the inputs (stale bars, a missing peer, a failed account snapshot or live quote) turns a TRIM into <b>WAIT</b>; so does the day after a big drop. Suggested lots: losses first (outside the &plusmn;30-day vest/ESPP wash windows), then long-term lots with the smallest gain, short-term last.</p><p class=\"mt-2\">Every call goes to a journal; the next run scores it (RETRO) and a one-line lesson can be attached.</p>",
+    "body": "<p>Each run measures the symbol (SMA 20/50/200, drawdown from the 52-week high, 1/5/20/60-day returns), separates <b>the sector's move from the symbol's own</b> (beta to an equal-weight peer basket and the residual return with a z-score), checks each replacement's entry timing (stretch vs its 50-day average, RSI-14), and computes concentration against the total, including stock-plan shares and outside assets.</p><p class=\"mt-2\">A <b>TRIM</b> needs all of: below the 50-day average, weak on its own (20-day residual z &lt; -1), no recovery pattern forming, not a crash day, and a replacement with an OK entry. Any doubt in the inputs (stale bars, a missing peer, a failed account snapshot or live quote) turns a TRIM into <b>WAIT</b>; so does the day after a big drop. Suggested lots: losses first (outside the &plusmn;30-day vest/ESPP wash windows), then long-term lots with the smallest gain, short-term last.</p><p class=\"mt-2\">Every call goes to a journal; the next run scores it (RETRO) and a one-line lesson can be attached.</p><p class=\"mt-2\">The lots file is kept current from E*TRADE during the workbook update (<code>aether/lots_refresh.py</code>): it reads only the lots, uses the positions the update has just read, and changes only labels mapped in <code>lot_sources</code>. Nothing is written unless the lots add up to the position; the old file is backed up first. Unmapped labels (stock-plan ESPP/RSU) stay as they are. It never logs in.</p>",
     "config": [
       "scripts/monitoring/position_watch.py --symbol INTC [--live] (one read-only E*TRADE quote with --live)",
       "Floor: floor_pct (default 30% of the total); tranche: tranche_pct (default 5% of the position)",
       "Private inputs in Data/position_watch/: config (peers, replacements, vest/ESPP dates), lots, journal",
+      "Lots refresh: runs inside check_from_xls; by hand: python -m aether.lots_refresh [--write] (dry run by default); private config: \"lot_sources\": {\"<lots label>\": \"<last 4>\"}",
       "Rules version v2; skill: .claude/commands/position-watch.md"
     ]
   },
@@ -541,9 +544,9 @@
   },
   "preflight_buy_gate": {
     "title": "Pre-Flight Buy Gate",
-    "summary": "After a failed morning pre-flight, the scheduled trade run makes no new buys, scale-ins or queued buys. Stops, exits and queued sells still run.",
+    "summary": "After a failed morning pre-flight, or when the latest data is broken (fields gone empty, missing snapshots or bars), the scheduled trade run makes no new buys, scale-ins or queued buys. Stops, exits and queued sells still run.",
     "origin": "PR #251 (2026-11-10): on 2026-11-09 the pre-flight failed on an expired Chaikin session, yet the 07:00 run bought on stale data. PR #259 added the log lines.",
-    "body": "<p>The morning pipeline records its verdict in <code>Data/preflight_status.json</code>. A FAIL for today, or a record that can't be read, sets the same buy freeze the circuit breaker uses and drops queued BUY orders. A run started by hand with <code>--run --force</code> may still buy, and logs that it bypassed the gate. Each pre-flight logs one <i>Pre-flight summary</i> line naming any failed check.</p>",
+    "body": "<p>The morning pipeline records its verdict in <code>Data/preflight_status.json</code>. A FAIL for today, or a record that can't be read, sets the same buy freeze the circuit breaker uses and drops queued BUY orders. A run started by hand with <code>--run --force</code> may still buy, and logs that it bypassed the gate. Each pre-flight logs one <i>Pre-flight summary</i> line naming any failed check.</p><p class=\"mt-2\"><b>Data-health freeze.</b> The same run also checks the latest Chaikin snapshots (<code>aether/data_completeness.py</code>): fields that went empty, a drop in the snapshot count, bad values or missing price bars freeze new buys the same way. Only fields the game reads count (PGR rating, the four factor groups, price, signals, industry, the strength/timing counts); they are remembered in <code>Data/data_gate_memory.json</code>, so the freeze holds until they fill again (the check's own 10-session baseline stops alarming after about a week), and the evening email says buys are frozen while it lasts. If the newest snapshots are older than the last session, or the check cannot run, buys are frozen too. A field that stays empty for good can be released by hand: <code>python -m aether.data_completeness --accept-fields &lt;field&gt;</code> (edits only <code>Data/data_gate_memory.json</code>, after a backup; the game file is never touched). <code>--force</code> bypasses it with a <i>[Data-Health Gate] bypassed</i> log line.</p>",
     "config": [
       "Data/preflight_status.json (written by autonomous_pipeline.py)",
       "Manual override: ai_portfolio_game.py --run --force"

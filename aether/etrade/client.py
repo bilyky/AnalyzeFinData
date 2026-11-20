@@ -169,6 +169,14 @@ class _AccountsInterface:
     def raw_accounts(self, tokens: Optional[dict] = None):
         return _pkg.get_accounts(self._c._tokens(tokens), self._c.env)
 
+    def account_keys(self, tokens: Optional[dict] = None) -> dict:
+        """{last 4 digits: accountIdKey} for every listed account. Read-only."""
+        return _pkg.account_keys(self._c._tokens(tokens), self._c.env)
+
+    def position_lots(self, symbol: str, account_key: str, tokens: Optional[dict] = None) -> list:
+        """One account's tax lots of ``symbol`` (raw PositionLot dicts). Read-only."""
+        return _pkg.position_lots(self._c._tokens(tokens), symbol, account_key, self._c.env)
+
 
 class _OrdersInterface:
     """Order placement — EXTENSION STUB (Phase 3).

@@ -330,11 +330,17 @@ class TestHeldPositionsFirst(unittest.TestCase):
         self.assertEqual(self._fetched(None), (["OLD"], 1))
 
     def test_held_symbols_reads_the_game_positions(self):
-        game = os.path.join(self.dir, "ai_portfolio_game.json")
-        with open(game, "w") as f:
-            json.dump({"positions": {"sedg": {"qty": 1}, "MNST": {"qty": 2}}}, f)
-        self.assertEqual(rapidapi.held_symbols(game), {"SEDG", "MNST"})
-        self.assertEqual(rapidapi.held_symbols(os.path.join(self.dir, "missing.json")), set())
+        import aether.bootstrap as _bootstrap
+        from pathlib import Path
+        with mock.patch.object(_bootstrap, "DEFAULT_DATA_DIR", Path(self.dir)):  # the game's store
+            self.assertEqual(rapidapi.held_symbols(), set())  # never saved
+            game = os.path.join(self.dir, "ai_portfolio_game.json")
+            with open(game, "w") as f:
+                f.write("{broken")
+            self.assertEqual(rapidapi.held_symbols(), set())  # unreadable
+            with open(game, "w") as f:
+                json.dump({"positions": {"sedg": {"qty": 1}, "MNST": {"qty": 2}}}, f)
+            self.assertEqual(rapidapi.held_symbols(), {"SEDG", "MNST"})
 
 
 class TestRunSymbols(unittest.TestCase):
