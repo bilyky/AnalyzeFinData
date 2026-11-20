@@ -86,6 +86,16 @@ class BuildAndNoteTest(unittest.TestCase):
         self.assertEqual(ec.note("B", today, stale), "")                    # an old calendar says nothing
         self.assertEqual(ec.note("B", today, {}), "")
 
+    def test_the_window_edges(self):
+        """Exactly WARN_DAYS ahead is still shown; a calendar exactly MAX_AGE_DAYS old still counts."""
+        today = D(2026, 11, 19)
+        cal = {"built": "2026-11-19", "symbols": {"W": {"next": "2026-11-26"}, "P": {"next": "2026-11-18"}}}
+        self.assertEqual(ec.WARN_DAYS, 7)
+        self.assertEqual(ec.note("W", today, cal), "earnings in 7 days (2026-11-26)")
+        self.assertEqual(ec.note("P", today, cal), "")                     # already reported
+        self.assertEqual(ec.note("W", today, dict(cal, built="2026-11-15")), "earnings in 7 days (2026-11-26)")
+        self.assertEqual(ec.note("W", today, dict(cal, built="2026-11-14")), "")   # 5 days old
+
     def test_a_failed_etrade_batch_keeps_the_rest(self):
         ok = {"QuoteResponse": {"QuoteData": [{"Product": {"symbol": "BABA"}, "All": {"nextEarningDate": "11/20/2026"}}]}}
         market = mock.Mock()
