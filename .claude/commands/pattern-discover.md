@@ -52,7 +52,7 @@ Read `Data/pattern_discovery_{DATE}.json`. Focus on:
 
 For each missed winner in both S10 and L60 lists, answer:
 
-**1. Rejection cause**: Which filter triggered? (score < threshold, pgr not Bu/Bu+, setup=False?)
+**1. Rejection cause**: Which live gate failed? (s10 < 2.0, combined < 5.0, setup=False, R:R < 2 or gain < 5% without the elite waiver, Bearish PGR without the elite bypass) — the `reasons` field lists them.
 
 **2. Contrarian factor check**: Was any currently-penalized factor actually bullish here?
    - `lt_trend=Strong` is penalized -1.5 in S10 — but was this stock in an accelerating uptrend?
@@ -174,8 +174,9 @@ CANDIDATE GUARD SIGNALS — false positives (ranked by fp_rate)
     Recommendation: {text}
 
 RECOMMENDED NEXT STEPS
-  [ ] Validate top missed-winner pattern: {command}
-  [ ] Validate top guard signal: {command}
+  [ ] Validate the candidates: python scripts/backtesting/pattern_discovery.py --date {DATE} --validate
+      (`--validate` checks EVERY candidate of that date on the 10-day horizon; there is no option to
+      validate a single pattern, and no `--pattern` flag)
   [ ] If validated (|z|>=2.0, N>=30): add to Aug 22 R&D backlog
   [ ] Note recurrence: did any pattern appear in previous runs?
 ```
