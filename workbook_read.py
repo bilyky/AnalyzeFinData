@@ -24,7 +24,6 @@ _log = _get_logger("workbook_read")
 
 BASE_DIR = Path(__file__).resolve().parent
 XLSX_FILE = BASE_DIR / "Data" / "state_of_the_day.xlsx"
-GAME_FILE = BASE_DIR / "Data" / "ai_portfolio_game.json"
 ACCOUNT_RISK_USD = 500  # Dollars to lose if a stop is hit (position-sizing basis).
 
 
@@ -111,19 +110,3 @@ def get_reserves_data():
     This was a hard-coded EIX, AMAT, URI, VLO, RS fallback: nothing ever wrote the game state's
     "reserves" key, so the same five names were audited every day since 2026-06-26."""
     return _morning_list(pick_lists.MORNING_RESERVES, skip=5)
-
-
-def get_market_regime():
-    """Detect current market regime based on SPY momentum. Returns (label, color)."""
-    try:
-        wb = openpyxl.load_workbook(XLSX_FILE, read_only=True, data_only=True)
-        ws = wb["Research"]
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if row[3] == "SPY":
-                l60 = row[25] or 0  # 60-day momentum drives the regime label
-                if l60 > 2: return "🚀 BULLISH (Risk-On)", "#2ecc71"
-                if l60 < -2: return "⚠️ BEARISH (Risk-Off / Defensive)", "#e74c3c"
-                return "⚖️ NEUTRAL (Consolidation)", "#f39c12"
-    except Exception as e:
-        _log.warning("Could not determine market regime", extra={"error": str(e)})
-    return "Unknown", "#7f8c8d"

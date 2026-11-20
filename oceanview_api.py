@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(_ROOT, "scripts", "monitoring"))
 
 import invest_plan as ip  # noqa: E402
 import position_watch as pw  # noqa: E402
-from aether import paths  # noqa: E402
+from aether import paths, position_watch_store as store  # noqa: E402
 
 LOT_FIELDS = ("acquired", "qty", "price")
 
@@ -96,7 +96,7 @@ def research() -> list:
 def plan(today: datetime.date) -> dict | None:
     """invest_plan.py's check of Data/position_watch/invest_plan.json on the cached bars, or None
     when there is no plan (or no SPY bars to check it with). Fills lose their account field."""
-    p = _read_json(os.path.join(pw.watch_dir(), "invest_plan.json"))
+    p = _read_json(store.plan_path())
     if not p:
         return None
     syms = {"SPY", "RSP"} | {f["symbol"] for f in p.get("fills", [])}
@@ -116,10 +116,13 @@ def summary(symbol: str | None = None) -> dict:
     if rep.get("lots") and rep["lots"].get("lots"):          # a TRIM day's picked lots carry the account
         rep = {**rep, "lots": {**rep["lots"],
                                "lots": [{k: v for k, v in x.items() if k != "account"} for x in rep["lots"]["lots"]]}}
-    lots_raw = _read_json(os.path.join(pw.watch_dir(), f"{symbol}_lots.json")) or []
+    try:
+        lots_raw = store.read_lots(symbol) or []
+    except (OSError, ValueError):
+        lots_raw = []
     if isinstance(lots_raw, dict):
         lots_raw = lots_raw.get("lots") or []
-    journal = pw.read_journal(os.path.join(pw.watch_dir(), f"{symbol}_journal.jsonl"))
+    journal = pw.read_journal(store.journal_path(symbol))
     return {"symbol": symbol, "as_of": today.isoformat(), "floor_pct": cfg["floor_pct"],
             "tranche_pct": cfg["tranche_pct"], "today": rep,
             "journal": journal, "lots": lots_table(lots_raw, rep["price"], today),

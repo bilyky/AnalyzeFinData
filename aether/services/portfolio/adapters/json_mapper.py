@@ -10,6 +10,7 @@ raises ``StorageError``: the mapper never guesses.
 import copy
 
 from aether.core import PortfolioId, StorageError
+from aether.services.portfolio.domain.records import as_record
 from aether.services.portfolio.domain.model import (ABSENT, BuyDNA, Portfolio, Position, QueuedOrder,
                                                    Transaction)
 
@@ -23,28 +24,7 @@ def _split(cls, data: dict, where: str):
 
 
 def _join(obj, convert=None) -> dict:
-    """The stored keys in their stored order, then new fields, then new extra keys."""
-    convert = convert or {}
-    out = {}
-
-    def emit(key):
-        if key in out:
-            return
-        if key in obj.FIELDS:
-            value = getattr(obj, key)
-            if value is ABSENT:
-                return
-            out[key] = convert[key](value) if key in convert else copy.deepcopy(value)
-        elif key in obj.extra:
-            out[key] = copy.deepcopy(obj.extra[key])
-
-    for key in obj.key_order:
-        emit(key)
-    for key in obj.FIELDS:
-        emit(key)
-    for key in obj.extra:
-        emit(key)
-    return out
+    return as_record(obj, convert)
 
 
 def _list(value, where, load):
