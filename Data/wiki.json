@@ -226,7 +226,7 @@
     "origin": "Decision Quality Theory & Backtracking Analytics standards.",
     "body": "Evaluates exits with a hybrid qualitative rubric combining fundamental risks with technical charts. Automatically logs, scores, and audits decision quality for both closed trades and active reviews.",
     "config": [
-      "Logging: Data/decision_log.jsonl updated on every run.",
+      "Logging: Data/decision_log.jsonl updated on every run; each record keeps the price, the stop it was checked against and the run time, and the run log has one [Stop check] line per held position.",
       "Scorecard: Runs decision_eval.py scoring all mature decisions after a 10-day forward window.",
       "Verification: Automatically emails the Retrospective Scorecard directly to your inbox daily."
     ]

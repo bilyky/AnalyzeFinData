@@ -34,7 +34,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game  # noqa: E402
-from aether.scenario.steps import decide_exits  # noqa: E402
+from aether.scenario.steps import decide_exits, stop_check_line  # noqa: E402
 
 
 _TODAY = "2026-09-29"
@@ -199,6 +199,29 @@ class TestResearchRead(unittest.TestCase):
             _run(state, prices={}, rows=[_row("AAA", s10=3.5, l60=-1.0)])
         kw = h.build.call_args.kwargs
         self.assertEqual((kw["price"], kw["s10"], kw["l60"], kw["date"]), (80.0, 3.5, -1.0, _TODAY))
+
+
+class TestStopCheckLine(unittest.TestCase):
+    """PROD 11-19 (SA): one line per held position shows the price, its source, the stop and the action."""
+
+    def test_live_quote_line(self):
+        state = _state()
+        state["positions"]["AAA"]["stop_loss"] = 90.0
+        with _Harness(action="HOLD") as h:
+            _run(state, prices={"AAA": 95.5})
+        self.assertIn("[Stop check] AAA: price $95.50 (live quote), stop $90.00 -> HOLD", h.logged())
+        self.assertEqual(h.build.call_args.kwargs["time"], _NOW)
+
+    def test_unquoted_position_says_cost_was_used(self):
+        state = _state(cost=80.0)
+        with _Harness() as h:
+            _run(state, prices={})
+        self.assertIn("price $80.00 (no quote, cost used)", h.logged())
+
+    def test_gap_guard_is_shown(self):
+        line = stop_check_line("SA", 18.06, True, 20.43, True, "HOLD")
+        self.assertEqual(line, "[Stop check] SA: price $18.06 (live quote), stop $20.43 (gap guard: stop held) -> HOLD")
+        self.assertIn("stop none", stop_check_line("SA", 18.06, True, None, False, "HOLD"))
 
 
 class TestProfitLock(unittest.TestCase):

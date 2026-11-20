@@ -483,6 +483,17 @@ def execute_queued_orders(state, queued, prices, rules, ws, today, now_time, new
     state["queued_orders"] = []
 
 
+def stop_check_line(sym, price, quoted, stop, gap_frozen, action):
+    """One log line per held position at the exit check: the price, where it came from, the stop
+    and the action. PROD 11-19: SA crossed its stop minutes after the 07:00 check, and nothing in
+    the logs showed which price that check used."""
+    src = "live quote" if quoted else "no quote, cost used"
+    stop_txt = f"${stop:.2f}" if stop else "none"
+    frozen = " (gap guard: stop held)" if gap_frozen else ""
+    px = f"${price:.2f}" if price else "none"
+    return f"[Stop check] {sym}: price {px} ({src}), stop {stop_txt}{frozen} -> {action}"
+
+
 def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
     """Run the per-position SELL decision loop; return the symbols to liquidate (B6).
 
@@ -646,7 +657,7 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             symbol=sym, price=price, cost=pos.get("cost"),
             stop_loss=None if is_gap_frozen else pos.get("stop_loss"),
             s10=s10, l60=l60, sma50=sma50,
-            date=today, run_shadow=None)
+            date=today, run_shadow=None, time=now_time)
 
         # AI Second-Opinion Exit Override Gate (R&D Item 14), one rule in sell_rules.ai_exit_override:
         # an AI HOLD / FLAG-FOR-REVIEW downgrades a momentum SELL of a position safely in profit;
@@ -665,6 +676,8 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
             game._log.info(f"🛑 [AI Override] {sym}: AI verdict not applied ({ignored_reason}).")
 
         decision_entries.append(entry)
+        game._log.info(stop_check_line(sym, price, sym in prices, pos.get("stop_loss"),
+                                       is_gap_frozen, entry["rules_action"]))
         if entry["rules_action"] == "SELL":
             exit_reason = entry["rules_reason"] or "Technical exit"
             if not game.is_market_hours():
