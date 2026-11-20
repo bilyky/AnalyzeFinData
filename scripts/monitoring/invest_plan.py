@@ -20,9 +20,9 @@ Each day it says, from the cached daily bars:
     session (the owner's rule after a big drop);
   - whether RSP is stretched (position-watch's replacement_timing: more than 5% above its
     50-day average, or RSI >= 70), so an "RSP" step buys SPY or waits instead;
-  - each fill's gain/loss and its stop. Index funds (owner 2026-11-20): 1% under the confirmed support below
-    the symbol's average cost (taken from bars up to its last buy); with no support, index_stop under the
-    average cost over all its fills (rules "index_stop_from": "average", the default; "lot" uses each fill's
+  - each fill's gain/loss and its stop. Index funds (owner 2026-11-20): index_stop (8%) under the average
+    cost over all its fills, or 1% under the confirmed support below the average cost (taken from bars up to
+    its last buy) when that is lower: support, but never closer than 8%. The average uses all fills (rules "index_stop_from": "average", the default; "lot" uses each fill's
     own price), so a new buy moves the stop. Other names at
     their own "stop" price (an ATR stop the owner records);
   - the days left to the sell window and to the latest sell date.
@@ -131,10 +131,10 @@ def entry_support(fills: list, symbol: str, bars) -> float | None:
 
 def fill_status(fills: list, prices: dict, index_stop: float, basis: str = "average",
                 supports: dict | None = None) -> list:
-    """Each fill's gain/loss and stop. Index funds (owner 2026-11-20): the stop sits 1% under the confirmed
-    support below the symbol's average cost (the game's support stop, support x 0.99); with no support it is
-    index_stop under the AVERAGE cost over all fills, so a new buy moves it (basis="lot" uses each fill's own
-    price instead). Other names use their own recorded "stop"."""
+    """Each fill's gain/loss and stop. Index funds (owner 2026-11-20): index_stop (8%) under the AVERAGE cost over
+    all fills, so a new buy moves it (basis="lot" uses each fill's own price), or 1% under the confirmed support
+    below the average cost (the game's support stop, support x 0.99) when that is lower: support, but never
+    closer than 8%. Other names use their own recorded "stop"."""
     avg = average_costs(fills)
     supports = supports or {}
     out = []
@@ -143,12 +143,13 @@ def fill_status(fills: list, prices: dict, index_stop: float, basis: str = "aver
         cost = f["shares"] * f["price"]
         src = None
         if f["symbol"] in INDEX_FUNDS:
+            ref = avg[f["symbol"]] if basis == "average" else f["price"]
+            pct_stop = ref * (1 + index_stop)
             sup = supports.get(f["symbol"])
-            if sup:
+            if sup and round(sup * 0.99, 2) < pct_stop:      # support, but never closer than index_stop
                 stop, src = round(sup * 0.99, 2), "support"
             else:
-                ref = avg[f["symbol"]] if basis == "average" else f["price"]
-                stop, src = ref * (1 + index_stop), "pct"
+                stop, src = pct_stop, "pct"
         else:
             stop = f.get("stop")
         out.append({**f, "last": px, "pnl": None if px is None else f["shares"] * px - cost,
@@ -209,7 +210,7 @@ def check(plan: dict, today: datetime.date, bars: dict) -> dict:
             sold.add(f["symbol"])
             n = sum(x["shares"] for x in fstat if x["symbol"] == f["symbol"])
             why = (f"1% under support {supports[f['symbol']]:.2f}" if f["stop_source"] == "support" else
-                   f"{-rules.get('index_stop', -0.08):.0%} under the average cost {f['avg_cost']:.2f}, no support seen")
+                   f"{-rules.get('index_stop', -0.08):.0%} under the average cost {f['avg_cost']:.2f}")
             actions.append(f"SELL {f['symbol']} (all {n:g} sh): {f['last']:.2f} is at/below its stop {f['stop']:.2f} ({why})")
         else:
             actions.append(f"SELL {f['symbol']}: {f['last']:.2f} is at/below its stop {f['stop']:.2f}")

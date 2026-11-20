@@ -119,17 +119,19 @@ class TestFillsAndWindow(unittest.TestCase):
         sells = [a for a in r["actions"] if a.startswith(("SELL SPY", "WAIT (not sure): SELL SPY"))]
         self.assertEqual(len(sells), 1)
         self.assertIn("all 20 sh", sells[0])
-        self.assertIn("8% under the average cost 95.00, no support seen", sells[0])
+        self.assertIn("8% under the average cost 95.00", sells[0])
 
-    def test_support_under_the_average_sets_the_stop(self):
-        # Owner 2026-11-20: the stop sits at support (x 0.99, the game's rule); 8% is only the fallback.
+    def test_support_but_never_closer_than_8_percent(self):
+        # Owner 2026-11-20: the stop sits at support (x 0.99, the game's rule) only when that is at least 8% down.
         fills = [{"date": "2030-03-06", "symbol": "SPY", "shares": 10, "price": 100.0}]
         closes = [100.0] * 30 + [97, 95, 93, 91, 93, 95, 97, 99] + [100.0] * 2      # a confirmed swing low at 91
         bars = _bars(closes, end=D(2030, 3, 6))
         self.assertEqual(ip.entry_support(fills, "SPY", bars), 91)
-        st = ip.fill_status(fills, {"SPY": 90.0}, -0.08, supports={"SPY": 91.0})
-        self.assertEqual((st[0]["stop"], st[0]["stop_source"], st[0]["stopped"]), (90.09, "support", True))
-        st = ip.fill_status(fills, {"SPY": 90.5}, -0.08, supports={"SPY": None})
+        st = ip.fill_status(fills, {"SPY": 90.5}, -0.08, supports={"SPY": 91.0})    # 90.09 is below 92: support
+        self.assertEqual((st[0]["stop"], st[0]["stop_source"], st[0]["stopped"]), (90.09, "support", False))
+        st = ip.fill_status(fills, {"SPY": 93.0}, -0.08, supports={"SPY": 96.0})    # support 95.04 too close: 8%
+        self.assertEqual((round(st[0]["stop"], 2), st[0]["stop_source"], st[0]["stopped"]), (92.0, "pct", False))
+        st = ip.fill_status(fills, {"SPY": 91.5}, -0.08, supports={"SPY": None})
         self.assertEqual((round(st[0]["stop"], 2), st[0]["stop_source"], st[0]["stopped"]), (92.0, "pct", True))
 
     def test_support_ignores_bars_after_the_last_buy(self):
