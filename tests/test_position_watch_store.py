@@ -58,6 +58,14 @@ class TestStore(unittest.TestCase):
         self.assertEqual(store.read_lots("XYZ", self.folder), LOTS)
         self.assertFalse(os.path.exists(store.lots_path("XYZ", self.folder) + ".tmp"))
 
+    def test_a_failed_write_leaves_no_tmp_and_the_old_file_intact(self):
+        store.write_lots("XYZ", LOTS[:1], self.folder)
+        with mock.patch.object(store.json, "dump", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                store.write_lots("XYZ", LOTS, self.folder)
+        self.assertFalse(os.path.exists(store.lots_path("XYZ", self.folder) + ".tmp"))
+        self.assertEqual(store.read_lots("XYZ", self.folder), LOTS[:1])
+
     def test_same_lots_ignores_order_and_number_type(self):
         self.assertTrue(store.same_lots(LOTS, [dict(LOTS[1], qty=5), LOTS[0]]))
         self.assertFalse(store.same_lots(LOTS, LOTS[:1]))
@@ -76,6 +84,19 @@ class TestCallersUseTheStore(unittest.TestCase):
 
     def test_position_watch_reads_the_config_through_the_store(self):
         self.assertEqual(pw.load_config()["floor_pct"], 0.25)
+
+    def test_margin_watch_reads_the_config_through_the_store(self):
+        from aether import margin_watch
+        with open(store.config_path(), "w", encoding="utf-8") as f:
+            json.dump({"symbol": "xyz", "acquisition_dates": ["2026-11-01"]}, f)
+        with mock.patch.object(store, "read_config", wraps=store.read_config) as rc:
+            self.assertEqual(margin_watch.load_purchases(), {"XYZ": ["2026-11-01"]})
+        rc.assert_called_once()
+        with open(store.config_path(), "w", encoding="utf-8") as f:
+            f.write("{broken")
+        self.assertEqual(margin_watch.load_purchases(), {})               # broken: {} as before
+        os.remove(store.config_path())
+        self.assertEqual(margin_watch.load_purchases(), {})               # missing: {} as before
 
     def test_lots_refresh_reads_the_config_through_the_store(self):
         r = lr.refresh(mock.Mock(), cfg=None)                  # no positions: stops after the config read

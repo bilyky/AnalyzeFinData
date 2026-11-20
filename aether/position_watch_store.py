@@ -90,7 +90,12 @@ def write_lots(symbol: str, lots: list, folder: str | None = None,
         os.makedirs(bdir, exist_ok=True)
         shutil.copy2(path, os.path.join(bdir, os.path.basename(path)))
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(lots, f, indent=1)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(lots, f, indent=1)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):          # the old file and its backup are intact; drop the partial copy
+            os.remove(tmp)
+        raise
     return bdir
