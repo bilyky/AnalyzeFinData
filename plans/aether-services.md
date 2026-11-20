@@ -341,6 +341,10 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
 6. **S5 `market_data`:** clock/session (computed once per run), `OhlcvStore` (freshness and heal,
    per-run caches), `ChainedPriceFeed`. The game's functions delegate, so external importers keep
    working. (F3 already landed early, as step 1c.)
+
+   **Order of the S5 PRs:** (1) session and clock: the rules, a `MarketClock` port with the
+   E*TRADE adapter, and `run_scope` so a run asks the live clock once; (2) the price chain
+   (`ChainedPriceFeed`); (3) the OHLCV store (freshness, heal, per-run caches).
 7. **S6 `research`:** `ResearchSource` plus the column map, read once per run. Then **F6**.
 8. **S7 `ledger`:** DNA, decision log and failure rules as event subscribers.
 9. **S8 `trading`:** `StrategyProfile`, the policies and the spec sets, then `DailyRunService`
