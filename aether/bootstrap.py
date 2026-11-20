@@ -14,6 +14,8 @@ from pathlib import Path
 
 from aether.core import DEFAULT_PORTFOLIO, Clock, EventBus, StorageError, SystemClock
 from aether.services.portfolio.adapters.json_repository import JsonPortfolioRepository, PortfolioFile
+from aether.services.market_data.adapters.etrade_clock import EtradeMarketClock
+from aether.services.market_data.api import SessionService
 from aether.services.portfolio.adapters.json_queries import JsonPortfolioQueries
 from aether.services.portfolio.adapters.legacy_state import LegacyStateGateway
 from aether.services.portfolio.adapters.memory import InMemoryPortfolioQueries, InMemoryPortfolioRepository
@@ -52,10 +54,12 @@ class App:
     portfolio: PortfolioService
     portfolio_state: LegacyStateGateway  # the raw state dict for the game, until S9
     portfolio_queries: PortfolioQueries  # read-only views for the dashboard, reports and tools
+    market_data: SessionService  # is the market open (session rules + the live E*TRADE clock)
     events: EventBus = field(default_factory=EventBus)
 
 
 def bootstrap(*, clock: Clock | None = None, portfolio_repository: PortfolioRepository | None = None,
+              market_clock=None,
               portfolio_files: dict | None = None, starting_capital: float = STARTING_CAPITAL,
               log=None) -> App:
     """The wired app. The CLI and the dashboard pass nothing; tests pass fakes or temp paths."""
@@ -70,5 +74,7 @@ def bootstrap(*, clock: Clock | None = None, portfolio_repository: PortfolioRepo
         portfolio_queries = InMemoryPortfolioQueries(portfolio_repository)
     service = PortfolioService(portfolio_repository, events)
     gateway = LegacyStateGateway(service, quarantine=getattr(portfolio_repository, "quarantine", None), log=log)
-    return App(clock=clock or SystemClock(), portfolio=service, portfolio_state=gateway,
-               portfolio_queries=portfolio_queries, events=events)
+    clock = clock or SystemClock()
+    market = SessionService(clock, market_clock or EtradeMarketClock(log=log), log=log)
+    return App(clock=clock, portfolio=service, portfolio_state=gateway,
+               portfolio_queries=portfolio_queries, market_data=market, events=events)
