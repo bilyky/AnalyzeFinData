@@ -43,6 +43,10 @@ class TestFeaturesAndOutcome(unittest.TestCase):
         self.assertFalse(shallow["big_loss"])                            # 175 > 170
         self.assertIsNone(st.outcome([1.0] * 15, 0, lambda k: 1.0))       # window not complete
 
+    def test_features_read_no_bar_after_the_decision_day(self):
+        closes = [50.0] * 300 + [500.0]                                  # a spike the day after bar 299
+        self.assertEqual(round(st.bar_features(closes, 299)["below_high"], 6), 0.0)
+
     def test_thin_keeps_one_event_per_window(self):
         evs = [{"sym": "X", "i": i} for i in (10, 15, 30, 31, 52)]
         self.assertEqual([e["i"] for e in st.thin(evs)], [10, 31, 52])
@@ -76,6 +80,19 @@ class TestVerdict(unittest.TestCase):
         evs = [e for e in self.series(0.5, 0.1) if e["day"] < st.SPLIT_MONTH] + \
               [e for e in self.series(0.1, 0.1) if e["day"] >= st.SPLIT_MONTH]
         self.assertNotEqual(self.judge(evs)["verdict"], "FILTER_HELPS")
+
+    def test_a_positive_but_noisy_difference_is_not_a_pass(self):
+        """Mean > 0, both halves > 0, return no better, but HAC t below 1.96: INCONCLUSIVE."""
+        diffs = [(m, d, -0.01) for m, d in zip(self.months(24), [0.6, -0.5, 0.0] * 8)]
+        r = st.verdict(diffs, 200)
+        self.assertGreater(r["d_loss"], 0)
+        self.assertTrue(all(h > 0 for h in r["d_loss_halves"]))
+        self.assertLess(r["t_loss"], st.GATE_T)
+        self.assertEqual(r["verdict"], "INCONCLUSIVE")
+
+    def test_a_month_needs_both_groups(self):
+        evs = [ev("2024-01", True, 1, 0.0), ev("2024-01", False, 0, 0.0), ev("2024-02", True, 1, 0.0)]
+        self.assertEqual(st.monthly_diffs(evs, "far"), [("2024-01", 1.0, 0.0)])
 
     def test_too_few_months_or_events(self):
         self.assertEqual(self.judge(self.series(0.5, 0.1, n=6))["verdict"], "INSUFFICIENT")
