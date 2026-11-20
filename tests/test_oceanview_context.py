@@ -10,7 +10,10 @@ import os
 import shutil
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
+
+import aether.bootstrap as _bootstrap
 
 from aether import oceanview_context as ovc
 
@@ -40,6 +43,9 @@ class _FakeAccounts:
 class _Base(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
+        _game_store = mock.patch.object(_bootstrap, "DEFAULT_DATA_DIR", Path(self.dir))  # the game's store
+        _game_store.start()
+        self.addCleanup(_game_store.stop)
         os.makedirs(os.path.join(self.dir, "Symbol_full"))
         with open(os.path.join(self.dir, "ai_portfolio_game.json"), "w", encoding="utf-8") as f:
             json.dump({"balance": 100.0, "equity": 200.0, "profile": "BALANCED",
