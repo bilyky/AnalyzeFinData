@@ -345,8 +345,65 @@ class TestHeldPositionsFirst(unittest.TestCase):
 
 class TestRunSymbols(unittest.TestCase):
     def test_held_names_off_the_sheet_are_added_once(self):
-        syms = rapidapi.run_symbols([], {"SEDG", "AAPL"}, sheet=lambda: ["AAPL", "MSFT"])
+        syms = rapidapi.run_symbols([], {"SEDG", "AAPL"}, sheet=lambda: ["AAPL", "MSFT"], reference=())
         self.assertEqual(syms, ["AAPL", "MSFT", "SEDG"])
 
     def test_explicit_symbols_are_used_as_given(self):
         self.assertEqual(rapidapi.run_symbols(["sedg"], {"MNST"}, sheet=lambda: ["AAPL"]), ["SEDG"])
+
+    def test_reference_etfs_off_the_sheet_are_added_once(self):
+        syms = rapidapi.run_symbols([], {"SEDG"}, sheet=lambda: ["AAPL", "SPY"], reference=("SPY", "QQQ"))
+        self.assertEqual(syms, ["AAPL", "SPY", "SEDG", "QQQ"])
+
+    def test_the_default_run_includes_every_reference_etf(self):
+        with mock.patch.object(rapidapi.CFG, "reference_symbols", ("QQQ", "VXX")):
+            syms = rapidapi.run_symbols([], set(), sheet=lambda: ["AAPL"])
+        self.assertEqual(syms, ["AAPL", "QQQ", "VXX"])                         # the configured list
+
+
+class TestReferenceEtfsStayCurrent(unittest.TestCase):
+    """2026-11-17: SMH/SOXX bars stopped at 2026-11-02. A real bar is "current" for the repair
+    pass until it is MAX_GAP_DAYS old, so an off-sheet ETF was refreshed about once a month.
+    Symbols passed as ``daily`` are fetched once they miss the latest session's bar."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._orig_dir = rapidapi.OHLCV_DIR
+        rapidapi.OHLCV_DIR = self._tmp.name
+        self.addCleanup(lambda: setattr(rapidapi, "OHLCV_DIR", self._orig_dir))
+        # TODAY (Wed 2026-08-05) is a session; SMH's newest real bar is Mon 08-03.
+        _write(self._tmp.name, "SMH", _cache({"2026-08-03": _real_bar(10, 11, 9, 10, 1000)}, "2026-08-03"))
+        _write(self._tmp.name, "NOW", _cache({TODAY: _real_bar(10, 11, 9, 10, 1000)}, TODAY))
+
+    def _fetched(self, daily):
+        with mock.patch.object(rapidapi, "_fetch_and_merge") as fetch, mock.patch("rapidapi.time.sleep"):
+            rapidapi.repair_missing(["SMH", "NOW"], TODAY, daily=daily)
+        return [c.args[0] for c in fetch.call_args_list]
+
+    def test_a_reference_etf_behind_the_session_is_fetched(self):
+        self.assertEqual(self._fetched({"SMH", "NOW"}), ["SMH"])
+
+    def test_other_symbols_keep_the_gap_rule(self):
+        self.assertEqual(self._fetched(None), [])
+
+    def test_the_cli_passes_reference_etfs_as_daily_and_priority(self):
+        with mock.patch.object(rapidapi, "held_symbols", return_value={"SEDG"}), \
+             mock.patch.object(rapidapi, "load_symbols", return_value=["AAPL"]), \
+             mock.patch.object(rapidapi, "repair_missing", return_value={}) as rep, \
+             mock.patch.object(rapidapi, "log_run_summary"), \
+             mock.patch.object(rapidapi._log, "console"):
+            rapidapi.main([])
+        syms, kw = rep.call_args.args[0], rep.call_args.kwargs
+        ref = set(rapidapi.reference_symbols())
+        self.assertTrue(ref <= set(syms))
+        self.assertEqual(kw["daily"], ref)
+        self.assertEqual(kw["priority"], ref | {"SEDG"})
+
+    def test_explicit_cli_symbols_are_unchanged(self):
+        with mock.patch.object(rapidapi, "held_symbols", return_value={"SEDG"}), \
+             mock.patch.object(rapidapi, "repair_missing", return_value={}) as rep, \
+             mock.patch.object(rapidapi, "log_run_summary"), \
+             mock.patch.object(rapidapi._log, "console"):
+            rapidapi.main(["mnst"])
+        self.assertEqual(rep.call_args.args[0], ["MNST"])
