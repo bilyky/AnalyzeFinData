@@ -100,7 +100,6 @@ FIELDS = ("day", "sym", "s10", "s10w", "l60", "above", "up3", "rr", "gain", "lea
 EXTRA_FIELDS = ("pgr", "worst10", "drops756")
 TAIL_HORIZON = 10
 HIST_SESSIONS = 756
-DROP_PCT = -10.0
 
 
 # ── Extraction ────────────────────────────────────────────────────────────────
@@ -125,8 +124,9 @@ def tail_series(ts) -> dict:
     Placeholder bars are dropped (bar_provenance.real_dates) and closes are back-adjusted with
     the production splitter (risk_utils.split_adjust_ohlcv). A return across a session gap
     (risk_utils.session_gaps: a hole in the real bars) is a multi-day move and is set to NaN.
-    A drop day is a return <= DROP_PCT that the next session does not fully reverse (a next
-    return >= -DROP_PCT marks a bad bar). drop_cum[k] = drop days among returns 0..k-1."""
+    Drop days come from risk_utils.drop_day_flags, the one definition the live drop-risk flag
+    (aether/drop_risk) also uses: a return <= -10% that the next session does not fully reverse.
+    drop_cum[k] = drop days among returns 0..k-1."""
     dates = real_dates(ts)
     opens = [float(ts[d].get("1. open", 0) or 0) for d in dates]
     highs = [float(ts[d].get("2. high", 0) or 0) for d in dates]
@@ -135,13 +135,7 @@ def tail_series(ts) -> dict:
     _, _, adj = risk_utils.split_adjust_ohlcv(opens, highs, lows, closes)
     adj = np.asarray(adj, dtype=float)
     gaps = np.asarray(risk_utils.session_gaps(dates) if dates else [], dtype=bool)
-    ret = np.full(len(adj), np.nan)
-    if len(adj) > 1:
-        prev = adj[:-1]
-        ret[1:] = np.where(prev > 0, (adj[1:] / np.where(prev > 0, prev, 1.0) - 1) * 100, np.nan)
-    ret[gaps] = np.nan
-    nxt = np.append(ret[1:], np.nan)
-    drop = (ret <= DROP_PCT) & ~(nxt >= -DROP_PCT)
+    drop = np.asarray(risk_utils.drop_day_flags(dates, adj.tolist()), dtype=bool)
     return {"pos": {d: i for i, d in enumerate(dates)}, "adj": adj, "gaps": gaps,
             "drop_cum": np.concatenate(([0], np.cumsum(drop)))}
 
