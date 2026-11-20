@@ -177,11 +177,16 @@ def load(refresh=False):
     px = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
     out = {}
     for s in SYMBOLS:
-        r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{s}?range=max&interval=1d",
+        # range=max silently returns MONTHLY bars; an explicit period keeps them daily (found on the first run).
+        p2 = int(dt.datetime.now(dt.timezone.utc).timestamp())
+        r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{s}?period1=946684800&period2={p2}&interval=1d",
                          headers={"User-Agent": "Mozilla/5.0"}, proxies={"https": px} if px else None, timeout=30)
         j = r.json()["chart"]["result"][0]
+        gran = j["meta"].get("dataGranularity")
+        if gran != "1d":
+            raise ValueError(f"Yahoo returned {gran} bars for {s}, not daily")
         closes = j["indicators"]["quote"][0]["close"]
-        out[s] = {str(dt.datetime.utcfromtimestamp(t).date()): c for t, c in zip(j["timestamp"], closes) if c}
+        out[s] = {str(dt.datetime.fromtimestamp(t, dt.timezone.utc).date()): c for t, c in zip(j["timestamp"], closes) if c}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(out, f)
     return out
