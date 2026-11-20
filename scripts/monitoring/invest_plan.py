@@ -22,7 +22,8 @@ Each day it says, from the cached daily bars:
     50-day average, or RSI >= 70), so an "RSP" step buys SPY or waits instead;
   - each fill's gain/loss and its stop. Index funds (owner 2026-11-20): index_stop (8%) under the average
     cost over all its fills, or 1% under the confirmed support below the average cost (taken from bars up to
-    its last buy) when that is lower: support, but never closer than 8%. The average uses all fills (rules "index_stop_from": "average", the default; "lot" uses each fill's
+    its last buy) when that is lower: support, but never closer than 8% and never further than
+    "index_stop_max" (default 30%). The average uses all fills (rules "index_stop_from": "average", the default; "lot" uses each fill's
     own price), so a new buy moves the stop. Other names at
     their own "stop" price (an ATR stop the owner records);
   - the days left to the sell window and to the latest sell date.
@@ -129,12 +130,15 @@ def entry_support(fills: list, symbol: str, bars) -> float | None:
     return risk_utils.detect_support(average_costs(fills)[symbol], bars["l"][:upto[-1] + 1])
 
 
+INDEX_STOP_MAX = -0.30   # owner 2026-11-20: a support stop goes no further than 30% under the average (Chaikin's 30%)
+
+
 def fill_status(fills: list, prices: dict, index_stop: float, basis: str = "average",
-                supports: dict | None = None) -> list:
+                supports: dict | None = None, index_stop_max: float = INDEX_STOP_MAX) -> list:
     """Each fill's gain/loss and stop. Index funds (owner 2026-11-20): index_stop (8%) under the AVERAGE cost over
     all fills, so a new buy moves it (basis="lot" uses each fill's own price), or 1% under the confirmed support
     below the average cost (the game's support stop, support x 0.99) when that is lower: support, but never
-    closer than 8%. Other names use their own recorded "stop"."""
+    closer than 8% and never further than index_stop_max (30%). Other names use their own recorded "stop"."""
     avg = average_costs(fills)
     supports = supports or {}
     out = []
@@ -146,8 +150,9 @@ def fill_status(fills: list, prices: dict, index_stop: float, basis: str = "aver
             ref = avg[f["symbol"]] if basis == "average" else f["price"]
             pct_stop = ref * (1 + index_stop)
             sup = supports.get(f["symbol"])
+            floor = ref * (1 + index_stop_max)
             if sup and round(sup * 0.99, 2) < pct_stop:      # support, but never closer than index_stop
-                stop, src = round(sup * 0.99, 2), "support"
+                stop, src = (round(sup * 0.99, 2), "support") if round(sup * 0.99, 2) >= floor else (floor, "cap")
             else:
                 stop, src = pct_stop, "pct"
         else:
@@ -199,7 +204,8 @@ def check(plan: dict, today: datetime.date, bars: dict) -> dict:
     basis = rules.get("index_stop_from", "average")
     supports = {sym: entry_support(fills, sym, bars.get(sym))
                 for sym in {f["symbol"] for f in fills} if sym in INDEX_FUNDS}
-    fstat = fill_status(fills, prices, rules.get("index_stop", -0.08), basis, supports)
+    fstat = fill_status(fills, prices, rules.get("index_stop", -0.08), basis, supports,
+                        rules.get("index_stop_max", INDEX_STOP_MAX))
     sold = set()
     for f in fstat:
         if not f["stopped"]:
@@ -210,6 +216,8 @@ def check(plan: dict, today: datetime.date, bars: dict) -> dict:
             sold.add(f["symbol"])
             n = sum(x["shares"] for x in fstat if x["symbol"] == f["symbol"])
             why = (f"1% under support {supports[f['symbol']]:.2f}" if f["stop_source"] == "support" else
+                   f"{-rules.get('index_stop_max', INDEX_STOP_MAX):.0%} cap under the average cost {f['avg_cost']:.2f}"
+                   if f["stop_source"] == "cap" else
                    f"{-rules.get('index_stop', -0.08):.0%} under the average cost {f['avg_cost']:.2f}")
             actions.append(f"SELL {f['symbol']} (all {n:g} sh): {f['last']:.2f} is at/below its stop {f['stop']:.2f} ({why})")
         else:

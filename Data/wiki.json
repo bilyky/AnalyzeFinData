@@ -476,7 +476,7 @@
     "config": [
       "scripts/monitoring/invest_plan.py (reads Data/position_watch/invest_plan.json)",
       "Fills are recorded in the plan's fills list (date, symbol, shares, price, optional stop)",
-      "Index-fund stop: the plan's index_stop (8%) under the symbol's average cost over all fills, so a new buy moves the stop; or 1% under the confirmed support below the average cost (bars up to its last buy) when that is lower: support, but never closer than 8%. One SELL covers every lot of the symbol",
+      "Index-fund stop: the plan's index_stop (8%) under the symbol's average cost over all fills, so a new buy moves the stop; or 1% under the confirmed support below the average cost (bars up to its last buy) when that is lower: support, but never closer than 8% and never further than 30% (index_stop_max). One SELL covers every lot of the symbol",
       "Shown on the OceanView tab when the plan file exists"
     ]
   },

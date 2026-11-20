@@ -131,6 +131,10 @@ class TestFillsAndWindow(unittest.TestCase):
         self.assertEqual((st[0]["stop"], st[0]["stop_source"], st[0]["stopped"]), (90.09, "support", False))
         st = ip.fill_status(fills, {"SPY": 93.0}, -0.08, supports={"SPY": 96.0})    # support 95.04 too close: 8%
         self.assertEqual((round(st[0]["stop"], 2), st[0]["stop_source"], st[0]["stopped"]), (92.0, "pct", False))
+        st = ip.fill_status(fills, {"SPY": 69.0}, -0.08, supports={"SPY": 60.0})    # support 59.40: capped at 30%
+        self.assertEqual((round(st[0]["stop"], 2), st[0]["stop_source"], st[0]["stopped"]), (70.0, "cap", True))
+        st = ip.fill_status(fills, {"SPY": 75.0}, -0.08, supports={"SPY": 60.0}, index_stop_max=-0.20)
+        self.assertEqual(round(st[0]["stop"], 2), 80.0)
         st = ip.fill_status(fills, {"SPY": 91.5}, -0.08, supports={"SPY": None})
         self.assertEqual((round(st[0]["stop"], 2), st[0]["stop_source"], st[0]["stopped"]), (92.0, "pct", True))
 

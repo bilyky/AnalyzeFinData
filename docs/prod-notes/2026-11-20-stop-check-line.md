@@ -42,7 +42,8 @@ Rollback: revert the PR.
 ## Plan stop on index funds (owner decision 2026-11-20)
 `scripts/monitoring/invest_plan.py` now sets one stop per index fund, not per lot:
 - 8% (the plan's `index_stop`) under the fund's average cost over all fills, so a new buy moves it;
-- or 1% under the confirmed support below the average cost when that is lower: support, but never closer than 8%.
+- or 1% under the confirmed support below the average cost when that is lower: support, but never closer than 8%
+  and never further than 30% (`index_stop_max` in the plan's rules; owner 2026-11-20, Chaikin's 30%); `stop_source` is `cap` when that limit applies.
   The support comes from the bars up to its last buy, so it doesn't slide down with the price. This is the
   game's own support rule (`risk_utils.detect_support`, times 0.99).
 - On the 11-20 plan: SPY 674.05 and RSP 201.30, both 8% under the average (RSP's support at 214.75 is closer
