@@ -291,7 +291,7 @@
       "Replay date: target ~3-4 weeks back so both 10d and 60d windows have settled OHLCV data",
       "Schedule: AETHER_PatternDiscovery, Sat 10:00, scripts/backtesting/rd_pattern_discovery.py (replay date today \u2212 25 days; --date to pick one)",
       "Reconstruction: reads Data/Symbol/{sym}/{sym}_{date}.json Chaikin cache (no live session needed)",
-      "Thresholds: score \u2265 9.5 AND pgr \u2208 {Bu, Bu+} AND setup=True to qualify as 'bought'",
+      "Bought = passes the entry gates as modelled by rule_walkforward (CURRENT): s10 \u2265 2.0, combined \u2265 5.0, Setup, R:R \u2265 2 and target gain \u2265 5% unless elite (R&D #32), Bearish PGR only if elite (R&D #13); until 2026-11-19 it was score \u2265 9.5 + PGR Bu/Bu+",
       "Validation: 16 sampled dates across 9-month range, |z|\u22652.0 + N\u226530 for promotion",
       "Output: Data/pattern_discovery_{DATE}.json \u2014 machine-readable for the /pattern-discover skill",
       "Weekly cadence: run same date each week; pattern recurring in 3+ weeks = strong validation signal"
@@ -390,6 +390,30 @@
       "Pyramiding guards: price must be at or above 98% of the peak close since entry (PYRAMID_PEAK_TOLERANCE, aether/scenario/steps.py); no scale-in on a symbol sold earlier the same day",
       "Bounded: still clamped by the per-position ceiling and the Scarcity-core cap",
       "Source: ai_portfolio_game.py slot-expansion + pyramiding blocks"
+    ]
+  },
+  "drop_risk": {
+    "title": "Drop-Risk Flag and Size Hint",
+    "summary": "Marks a recommended stock with 4 or more drop days (-10% or worse, not reversed the next session) in the last 3 years, the count R&D #115 tested, and gives the Oracle a size hint so that a stop-out or a worst-1% day costs the game's per-trade risk cap of the account. Advisory; nothing is blocked.",
+    "origin": "AETHER Internal (November 2026), after SA was recommended on 2026-11-18 and fell ~30% the next day. R&D #115 then found such buys hit a -15% worst close within 10 sessions 8.9% of the time vs 1.2%.",
+    "body": "<p>The count comes from <code>risk_utils.drop_day_flags</code>, the one definition shared with the R&D #115 study: a return of -10% or worse that the next session does not fully reverse, returns across session gaps left out, on real, split-adjusted bars (<code>risk_utils._load_ohlcv_bars</code>). It covers the 756 sessions before the latest bar; with fewer, nothing is shown.</p>\n<p class=\"mt-2\">History says how likely a big move is, not when. R&D #117 found that skipping these buys did not help a portfolio and half-sizing them passed only on one simulated path, so this stays a warning. Junk bars in the cache still count (RS); repairing the cache is a separate job.</p>",
+    "config": [
+      "Module: aether/drop_risk.py (profile, note, size_hint); rule: risk_utils.drop_day_flags",
+      "Window: LOOKBACK = 756 sessions; flag at HIGH_DROPS = 4 (R&D #115's HIGH group)",
+      "Size hint: config system.max_trade_risk_pct of account equity per stop-out or worst-1% day",
+      "Shown in: the evening email's pick tables and the Oracle's buy cards"
+    ]
+  },
+  "earnings_calendar": {
+    "title": "Earnings Date Flag",
+    "summary": "An advisory flag on recommendations: the evening email marks a pick whose earnings report is due within 7 days, and the Oracle's buy cards show the date, or \"earnings date unknown\" when no source has one. Nothing is blocked.",
+    "origin": "AETHER Internal (November 2026), after SA was recommended on 2026-11-18 and fell ~30% the next day.",
+    "body": "<p>Each evening <code>daily_task</code> builds <code>Data/earnings_calendar.json</code> for the screen from two sources and keeps the earliest date on or after today:</p>\n<ul class=\"list-disc pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>E*TRADE</b> quotes (<code>nextEarningDate</code>), read with the data-plane client, which cannot renew a token or open a browser. It is often empty, or the date of the last report.</li>\n  <li><b>Chaikin</b>'s raw response (<code>epsData.nextReportDate</code>, kept in <code>Data/Symbol_raw</code>).</li>\n</ul>\n<p class=\"mt-2\">Coverage is partial (7 of 50 sampled symbols had a future date on 2026-11-19), so \"unknown\" is common. A calendar older than 4 days is not shown. The flag is a warning for a person; a buy rule that uses it would need a study first.</p>",
+    "config": [
+      "Module: aether/earnings_calendar.py (build, load, note)",
+      "Built by: daily_task.py, after the evening data refresh; non-fatal if E*TRADE or the write fails",
+      "Window: WARN_DAYS = 7; a calendar older than MAX_AGE_DAYS = 4 is ignored",
+      "File: Data/earnings_calendar.json"
     ]
   },
   "aether_oracle": {
