@@ -12,7 +12,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 4.0,
+     "stop": 116.0,
      "symbol": "WIN",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -24,7 +26,9 @@
      "rules_action": "SELL",
      "rules_reason": "stop breached (price 78.0 <= stop 80.0)",
      "s10": -3.0,
+     "stop": 80.0,
      "symbol": "LOSE",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -36,7 +40,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 0.5,
+     "stop": 51.0,
      "symbol": "OLD",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -48,7 +54,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 3.0,
+     "stop": 35.0,
      "symbol": "QUEUED",
+     "time": "10:15:00",
      "verdicts": {}
     }
    ]
@@ -264,7 +272,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 4.0,
+     "stop": 114.0,
      "symbol": "WIN",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -276,7 +286,9 @@
      "rules_action": "SELL",
      "rules_reason": "stop breached (price 78.0 <= stop 80.0)",
      "s10": -3.0,
+     "stop": 80.0,
      "symbol": "LOSE",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -288,7 +300,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 0.5,
+     "stop": 50.0,
      "symbol": "OLD",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -300,7 +314,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 3.0,
+     "stop": 33.0,
      "symbol": "QUEUED",
+     "time": "10:15:00",
      "verdicts": {}
     }
    ]
@@ -516,7 +532,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 4.0,
+     "stop": 116.0,
      "symbol": "WIN",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -528,7 +546,9 @@
      "rules_action": "SELL",
      "rules_reason": "stop breached (price 78.0 <= stop 80.0)",
      "s10": -3.0,
+     "stop": 80.0,
      "symbol": "LOSE",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -540,7 +560,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 0.5,
+     "stop": 51.0,
      "symbol": "OLD",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -552,7 +574,9 @@
      "rules_action": "HOLD",
      "rules_reason": "AI Override: Stored position shadow_verdict returned HOLD (was momentum decay (S10+L60=-3.0))",
      "s10": -2.0,
+     "stop": 101.0,
      "symbol": "FADE",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -564,7 +588,9 @@
      "rules_action": "WATCH",
      "rules_reason": "AI Override: Stored position verdicts (gemini) returned FLAG-FOR-REVIEW (was momentum decay (S10+L60=-3.0))",
      "s10": -2.0,
+     "stop": 101.0,
      "symbol": "FLAG",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -576,7 +602,9 @@
      "rules_action": "SELL",
      "rules_reason": "stop breached (price 84.0 <= stop 85.0)",
      "s10": -2.0,
+     "stop": 85.0,
      "symbol": "SLIP",
+     "time": "10:15:00",
      "verdicts": {}
     }
    ]
@@ -771,7 +799,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 4.0,
+     "stop": 116.0,
      "symbol": "WIN",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -783,7 +813,9 @@
      "rules_action": "SELL",
      "rules_reason": "stop breached (price 78.0 <= stop 80.0)",
      "s10": -3.0,
+     "stop": 80.0,
      "symbol": "LOSE",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -795,7 +827,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 0.5,
+     "stop": 51.0,
      "symbol": "OLD",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -807,7 +841,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 3.0,
+     "stop": 35.0,
      "symbol": "QUEUED",
+     "time": "10:15:00",
      "verdicts": {}
     }
    ]
@@ -910,7 +946,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 4.0,
+     "stop": 116.0,
      "symbol": "WIN",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -922,7 +960,9 @@
      "rules_action": "SELL",
      "rules_reason": "stop breached (price 78.0 <= stop 80.0)",
      "s10": -3.0,
+     "stop": 80.0,
      "symbol": "LOSE",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -934,7 +974,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 0.5,
+     "stop": 51.0,
      "symbol": "OLD",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -946,7 +988,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 3.0,
+     "stop": 35.0,
      "symbol": "QUEUED",
+     "time": "10:15:00",
      "verdicts": {}
     }
    ]
@@ -1172,7 +1216,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 4.0,
+     "stop": 116.0,
      "symbol": "WIN",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -1184,7 +1230,9 @@
      "rules_action": "SELL",
      "rules_reason": "stop breached (price 78.0 <= stop 80.0)",
      "s10": -3.0,
+     "stop": 80.0,
      "symbol": "LOSE",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -1196,7 +1244,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 0.5,
+     "stop": 51.0,
      "symbol": "OLD",
+     "time": "10:15:00",
      "verdicts": {}
     },
     {
@@ -1208,7 +1258,9 @@
      "rules_action": "HOLD",
      "rules_reason": "",
      "s10": 3.0,
+     "stop": 35.0,
      "symbol": "QUEUED",
+     "time": "10:15:00",
      "verdicts": {}
     }
    ]

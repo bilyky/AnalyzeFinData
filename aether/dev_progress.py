@@ -1,4 +1,5 @@
-"""Development > Project Model: progress of the AETHER services redesign (R&D #78).
+"""Development > Project Model: progress of the AETHER services redesign (R&D #78), plus every other
+multi-stage project (one progress file each in plans/progress/, updated in each PR of that project).
 
 Two parts:
 
@@ -12,6 +13,7 @@ import re
 from pathlib import Path
 
 PROGRESS_FILE = Path("plans") / "aether-services-progress.json"
+PROJECTS_DIR = Path("plans") / "progress"     # every other multi-stage project: one file each (plan T0.3)
 
 _GAME_ATTR = re.compile(r"\bgame\.[A-Za-z_]\w*")
 _MAGIC_ROW = re.compile(r"\brow\[\d+\]")
@@ -66,11 +68,24 @@ def _summary(items) -> dict:
     return counts
 
 
+def load_projects(root) -> list:
+    """Every plans/progress/*.json project with its stage summary, sorted by file name. Raises on a bad file
+    (fail loudly, as load_progress does)."""
+    out = []
+    for path in sorted((Path(root) / PROJECTS_DIR).glob("*.json")):
+        p = json.loads(_read(path))
+        p["file"] = path.name
+        p["summary"] = _summary(p["stages"])
+        out.append(p)
+    return out
+
+
 def project_model(root) -> dict:
-    """Everything the Project Model page shows."""
+    """Everything the Project Model page shows: R&D #78 in full, then every other multi-stage project."""
     progress = load_progress(root)
     return {
         **progress,
         "summary": {"steps": _summary(progress["steps"]), "fixes": _summary(progress["fixes"])},
         "metrics": code_metrics(root),
+        "projects": load_projects(root),
     }

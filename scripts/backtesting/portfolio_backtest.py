@@ -305,7 +305,7 @@ def _bar(bars, sym, day):
 def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
              initial=INITIAL_EQUITY, excluded=frozenset(), max_trade_risk_pct=None,
              disable=frozenset(), hurst_filter=None, admit=None, rank=None,
-             min_fill_pct=None, exit_rules=None, profile_fn=None) -> dict:
+             min_fill_pct=None, exit_rules=None, profile_fn=None, size_fn=None) -> dict:
     """Replay `panel` ({sym: {date: [s10, l60]}}) over `calendar` (sorted trading days).
 
     max_trade_risk_pct: when set (and risk_rules is on), each buy is trimmed so
@@ -330,7 +330,10 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
     never down. "day" takes the multiple from the day's profile, as live does; "entry" keeps
     the multiple the position was bought with.
     profile_fn: optional callable(day) -> profile name, used instead of the SPY-L60 band when
-    the regime rule is on (e.g. the live breadth downgrade, prod_review_rules_study.py)."""
+    the regime rule is on (e.g. the live breadth downgrade, prod_review_rules_study.py).
+    size_fn: optional callable(sym, day) -> float, a multiple of the per-name cap for that buy
+    (e.g. 0.5 = half size, drop_risk_portfolio_study.py). Default None = 1.0, today's sizing;
+    the slot count and the loss-cap trim are unchanged."""
     unknown = set(disable) - set(RULES)
     if unknown:
         raise ValueError(f"unknown rules: {sorted(unknown)}")
@@ -479,7 +482,7 @@ def simulate(panel, bars, calendar, *, risk_rules=True, cost_bps=10.0,
         for _score, sym in cands:
             if remaining >= max_pos:
                 break
-            usd = min(per_cap, investable)
+            usd = min(per_cap if size_fn is None else per_cap * size_fn(sym, day), investable)
             if usd < MIN_TICKET_USD:
                 break
             pending_buys.append((sym, usd, rules["atr_multiplier"]))

@@ -534,9 +534,18 @@ def rsi_divergence_score(ohlcv_ts: dict, date_str: str,
 # ── Short-term and long-term scores ─────────────────────────────────────────
 # These take plain dicts extracted from PowerGauge fields — no class dependency.
 
-def short_score(pg_fields: dict) -> float:
+SHORT_SCORE_WAIVERS = ("bull_or_setup", "bull_only", "none")
+
+
+def short_score(pg_fields: dict, waiver: str = "bull_or_setup") -> float:
     """
     10-day entry-quality score: -10 to +10.
+
+    `waiver` picks when the R&D #34 breakout waiver applies (see below):
+      "bull_or_setup"  Bull regime OR setup_ok is True (live rule since f05e685, 2026-08-24; default)
+      "bull_only"      Bull regime only (what the live game ran before 2026-08-24)
+      "none"           never waive
+    Only the R&D #112 study passes the other two modes.
 
     Factor weights (backtest, 336k obs 2023-2025, NA-filtered):
       Rel Volume     4.4% spread: High +2.5, Very High +0.5, Low -2.0
@@ -555,6 +564,8 @@ def short_score(pg_fields: dict) -> float:
       RBR (V-recov)  1.26% 10d spread: BULLISH, weight +0.5 (score [0,+2]); confirmed
                      overreaction-recovery bar; validated pocket win 0.552 > knife 0.544
     """
+    if waiver not in SHORT_SCORE_WAIVERS:
+        raise ValueError(f"unknown waiver mode {waiver!r}; expected one of {SHORT_SCORE_WAIVERS}")
     score = 0.0
     rv = pg_fields.get('rel_vol')
     score += {'High': 2.5, 'Very High': 0.5, 'Normal': 0.0, 'Low': -2.0}.get(rv or '', 0.0)
@@ -569,7 +580,12 @@ def short_score(pg_fields: dict) -> float:
     # triggers the waiver; None (indeterminate) must not.
     regime = pg_fields.get('market_regime', 'Neutral')
     setup_ok = pg_fields.get('setup_ok')
-    is_bullish_breakout = (regime == 'Bull' or setup_ok is True)
+    if waiver == "bull_or_setup":
+        is_bullish_breakout = (regime == 'Bull' or setup_ok is True)
+    elif waiver == "bull_only":
+        is_bullish_breakout = (regime == 'Bull')
+    else:
+        is_bullish_breakout = False
 
     if is_bullish_breakout:
         # Waive the strong industry and strong trend penalties (set to 0.0 instead of -2.0 / -1.5)

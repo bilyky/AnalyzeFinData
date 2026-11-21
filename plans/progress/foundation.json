@@ -1,0 +1,59 @@
+{
+ "project": "Foundation (Track 0)",
+ "goal": "What every other stage needs: fresh data, a working decision log, shadow mode and an impact report.",
+ "updated": "2026-11-20",
+ "stages": [
+  {
+   "id": "T0.1",
+   "title": "Dev freshness: main pulled, PROD drop read, watch re-run",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "T0.2",
+   "title": "Decision-log check + [Stop check] line per held position",
+   "status": "done",
+   "pr": 311,
+   "prod": true,
+   "note": "PROD check: 2 trading days of lines and fresh .jsonl files in the drop"
+  },
+  {
+   "id": "T0.3",
+   "title": "Development page lists every multi-stage project",
+   "status": "in_review",
+   "pr": 312,
+   "prod": false
+  },
+  {
+   "id": "T0.4",
+   "title": "Shadow log for buy rules (Data/rule_shadow.jsonl)",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "T0.5",
+   "title": "Deploy-dated impact report",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "T0.6",
+   "title": "#67 Phase 0: one honest evaluation in portfolio_backtest",
+   "status": "todo",
+   "pr": null,
+   "prod": false
+  },
+  {
+   "id": "T0.7",
+   "title": "Shared Chaikin session in the DB",
+   "status": "in_progress",
+   "pr": null,
+   "prod": false,
+   "note": "stage 0: works from dev; PROD probe pending"
+  }
+ ],
+ "plan": "approved plan 2026-11-20 (private); R&D items in plans/roadmap.md"
+}

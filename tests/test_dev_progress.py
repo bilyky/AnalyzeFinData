@@ -131,6 +131,43 @@ class TestCodeMetrics(unittest.TestCase):
         self.assertTrue(all(isinstance(v, int) and v >= 0 for v in m.values()), m)
 
 
+class TestOtherProjects(unittest.TestCase):
+    """plans/progress/*.json (plan T0.3): every multi-stage project has one file, edited by hand in its PRs."""
+
+    def setUp(self):
+        self.projects = dev_progress.load_projects(_REPO)
+        self.allowed = set(dev_progress.load_progress(_REPO)["statuses"])
+
+    def test_the_three_plan_tracks_are_listed(self):
+        self.assertEqual({p["file"] for p in self.projects}, {"foundation.json", "game-edge.json", "oceanview.json"})
+
+    def test_fields_statuses_and_unique_ids(self):
+        for p in self.projects:
+            for field in ("project", "goal", "plan", "updated", "stages"):
+                self.assertIn(field, p, p["file"])
+            ids = [st["id"] for st in p["stages"]]
+            self.assertEqual(len(ids), len(set(ids)), f"duplicate stage id in {p['file']}")
+            for st in p["stages"]:
+                with self.subTest(file=p["file"], stage=st["id"]):
+                    for field in ("id", "title", "status", "pr", "prod"):
+                        self.assertIn(field, st)
+                    self.assertIn(st["status"], self.allowed)
+                    self.assertTrue(st["pr"] is None or (isinstance(st["pr"], int) and st["pr"] > 0))
+                    if st["status"] in ("done", "in_review"):
+                        self.assertIsNotNone(st["pr"])
+
+    def test_summary_counts_every_stage(self):
+        for p in self.projects:
+            self.assertEqual(sum(p["summary"].values()), len(p["stages"]), p["file"])
+
+    def test_a_folder_without_projects_is_an_empty_list_and_a_bad_file_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(dev_progress.load_projects(Path(d)), [])
+            _write(Path(d), "plans/progress/x.json", "{bad")
+            with self.assertRaises(json.JSONDecodeError):
+                dev_progress.load_projects(Path(d))
+
+
 class TestProjectModel(unittest.TestCase):
     def test_model_has_progress_summary_and_metrics(self):
         model = dev_progress.project_model(_REPO)
@@ -138,6 +175,7 @@ class TestProjectModel(unittest.TestCase):
         self.assertEqual(sum(model["summary"]["steps"].values()), len(model["steps"]))
         self.assertEqual(sum(model["summary"]["fixes"].values()), len(model["fixes"]))
         self.assertIn("root_file_lines", model["metrics"])
+        self.assertEqual([p["file"] for p in model["projects"]], [p["file"] for p in dev_progress.load_projects(_REPO)])
         json.dumps(model)  # the endpoint returns it as JSON
 
     def test_missing_progress_file_raises(self):
