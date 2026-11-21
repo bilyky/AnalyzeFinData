@@ -384,6 +384,16 @@ class TestReferenceEtfsStayCurrent(unittest.TestCase):
     def test_a_reference_etf_behind_the_session_is_fetched(self):
         self.assertEqual(self._fetched({"SMH", "NOW"}), ["SMH"])
 
+    def test_behind_means_the_last_session_not_the_calendar_day(self):
+        """Friday's bar is current on Saturday and on a Monday holiday: no extra fetch."""
+        fri = _cache({"2026-08-07": _real_bar(10, 11, 9, 10, 1000)}, "2026-08-07")
+        self.assertFalse(rapidapi._behind_session(fri, "2026-08-08"))           # Saturday
+        thu = _cache({"2026-08-06": _real_bar(10, 11, 9, 10, 1000)}, "2026-08-06")
+        self.assertTrue(rapidapi._behind_session(thu, "2026-08-08"))            # Friday missing
+        before_labor_day = _cache({"2026-09-04": _real_bar(10, 11, 9, 10, 1000)}, "2026-09-04")
+        self.assertFalse(rapidapi._behind_session(before_labor_day, "2026-09-07"))
+        self.assertTrue(rapidapi._behind_session(None, "2026-08-08"))           # no file yet
+
     def test_other_symbols_keep_the_gap_rule(self):
         self.assertEqual(self._fetched(None), [])
 
