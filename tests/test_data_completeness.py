@@ -238,8 +238,9 @@ class TestReferenceBars(Base):
         self.history(upto=7)
         os.remove(os.path.join(self.ohlcv, "QQQ_daily.json"))
         self.bars("SMH", DAYS[:5])                                   # last bar 08-28, 08-31 missing
-        self.assertEqual(dc.check("2026-09-01", self.base)["alarms"],
-                         ["2 reference ETFs have no OHLCV bar for 2026-08-31: QQQ, SMH"])
+        report = dc.check("2026-09-01", self.base)
+        self.assertEqual(report["alarms"], ["2 reference ETFs have no OHLCV bar for 2026-08-31: QQQ, SMH"])
+        self.assertEqual(report["gate"], [])          # an email alarm only: never the game's buy freeze
 
     def test_bar_of_the_previous_session_is_enough(self):
         self.history(upto=7)
