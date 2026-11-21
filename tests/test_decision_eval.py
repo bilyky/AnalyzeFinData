@@ -77,6 +77,15 @@ class TestBuildEntry(unittest.TestCase):
                            s10=0, l60=0, date="2026-06-01", run_shadow=False)
         self.assertEqual(e["rules_action"], "SELL")
 
+    def test_record_keeps_the_stop_and_the_run_time(self):
+        # PROD 11-19 (SA): the log must show which stop and when the check ran.
+        e = de.build_entry("XXX", price=49, cost=60, stop_loss=50, s10=0, l60=0,
+                           date="2026-06-01", run_shadow=False, time="07:00:04")
+        self.assertEqual((e["stop"], e["time"]), (50, "07:00:04"))
+        e = de.build_entry("XXX", price=55, cost=60, stop_loss=None, s10=0, l60=0, run_shadow=False)
+        self.assertEqual(e["stop"], 55.2)                  # no stored stop: the hard floor the decision applied
+        self.assertEqual(e["rules_action"], "SELL")
+
     def test_auto_shadow_skips_ai_on_hold(self):
         # run_shadow=None + a HOLD action must make zero AI calls.
         with mock.patch("ai_client.enabled_providers") as ep:
