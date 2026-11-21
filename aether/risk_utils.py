@@ -113,6 +113,38 @@ def session_gaps(dates):
     return [False] + [(b - a).days > MAX_SESSION_GAP_DAYS for a, b in zip(ds, ds[1:])]
 
 
+DROP_DAY_PCT = 10.0     # a drop day: a close-to-close return of -10% or worse ...
+
+
+def drop_day_flags(dates, closes, drop_pct: float = DROP_DAY_PCT) -> list:
+    """Per-bar flags: True where the return INTO that bar is a drop day.
+
+    The one definition the drop-risk flag (aether/drop_risk) and the R&D #115 tail-risk study
+    use: a return <= -drop_pct% that the next session does not fully reverse (a next return
+    >= +drop_pct% marks a bad bar, not a drop), with returns across a session gap (session_gaps:
+    a hole in the real bars) left out as multi-day moves. Callers pass real, split-adjusted
+    bars (``_load_ohlcv_bars``). The first bar is never flagged."""
+    n = len(closes)
+    gaps = session_gaps(dates) if dates else [False] * n
+    ret = [None] * n
+    for i in range(1, n):
+        a, b = closes[i - 1], closes[i]
+        if a and a > 0 and b and b > 0 and not gaps[i]:
+            ret[i] = (b / a - 1) * 100
+    out = [False] * n
+    for i in range(1, n):
+        nxt = ret[i + 1] if i + 1 < n else None
+        out[i] = ret[i] is not None and ret[i] <= -drop_pct and not (nxt is not None and nxt >= drop_pct)
+    return out
+
+
+def daily_returns(dates, closes) -> list:
+    """Close-to-close returns (fractions), one per bar after the first; None across a session gap."""
+    gaps = session_gaps(dates) if dates else [False] * len(closes)
+    return [(closes[i] / closes[i - 1] - 1) if closes[i - 1] and closes[i - 1] > 0 and not gaps[i] else None
+            for i in range(1, len(closes))]
+
+
 # --- split adjustment -------------------------------------------------------
 # Alpha-Vantage daily bars are UNADJUSTED. Across a split, pre-split pivots sit at the
 # wrong price scale and poison detect_support / detect_resistance / ATR (the leveraged

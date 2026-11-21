@@ -213,6 +213,8 @@ _trash.TRASH_DIR = str(_lock_tmp / ".trash")
 import aether.oceanview_context as _oceanview_context
 (_lock_tmp / "oceanview").mkdir(exist_ok=True)
 _oceanview_context._default_data_dir = lambda: str(_lock_tmp / "oceanview")
+from aether import earnings_calendar as _earnings_calendar  # noqa: E402
+_earnings_calendar._path = lambda: str(_lock_tmp / "earnings_calendar.json")
 _run_guard._DATA_DIR = _lock_tmp
 # The data-health buy-freeze memory (Data/data_gate_memory.json) -> temp: the gate step writes it
 # on every trade run. Tests that need their own file pass a path.
