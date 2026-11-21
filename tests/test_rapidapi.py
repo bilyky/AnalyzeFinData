@@ -405,7 +405,7 @@ class TestReferenceEtfsStayCurrent(unittest.TestCase):
              mock.patch.object(rapidapi._log, "console"):
             rapidapi.main([])
         syms, kw = rep.call_args.args[0], rep.call_args.kwargs
-        ref = set(rapidapi.reference_symbols())
+        ref = set(rapidapi.CFG.reference_symbols)
         self.assertTrue(ref <= set(syms))
         self.assertEqual(kw["daily"], ref)
         self.assertEqual(kw["priority"], ref | {"SEDG"})

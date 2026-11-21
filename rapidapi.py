@@ -10,7 +10,7 @@ This module handles recovery only:
   - Files with gap > MAX_GAP_DAYS               → compact fetch (last 100 days merged)
   - Latest bar is provisional (Chaikin close-only, volume 0) → compact fetch to
     overwrite it with settled real-volume OHLCV (see bar_provenance.is_provisional)
-  - Reference ETFs (data_completeness.reference_symbols(), set in config) missing the latest session's
+  - Reference ETFs (CFG.reference_symbols, set in config) missing the latest session's
     bar → compact fetch; they are fetched even when off the Research sheet
 
 Usage:
@@ -37,7 +37,6 @@ from aether import market_calendar, paths, trash
 from aether.bootstrap import bootstrap
 from aether.core import DEFAULT_PORTFOLIO, StorageError
 from aether.batch_failures import most_failed
-from aether.data_completeness import reference_symbols
 from aether.logger import get_logger as _get_logger
 from bar_provenance import is_provisional, real_dates
 from config import CFG
@@ -267,7 +266,7 @@ def run_symbols(explicit: list[str], held: set[str], sheet=None, reference=None)
         return [s.upper() for s in explicit]
     syms = list((sheet or load_symbols)())
     syms += sorted(held - {s.upper() for s in syms})
-    reference = reference_symbols() if reference is None else reference
+    reference = tuple(CFG.reference_symbols) if reference is None else reference
     return syms + [s for s in reference if s not in {x.upper() for x in syms}]
 
 
@@ -469,7 +468,7 @@ def log_run_summary(result: dict) -> None:
     if not result["errors"]:
         return
     failed = result.get("failed_priority") or []
-    ref = [s for s in failed if s.upper() in reference_symbols()]
+    ref = [s for s in failed if s.upper() in CFG.reference_symbols]
     held = [s for s in failed if s not in ref]
     msg = ("  [RapidAPI] %d symbol(s) failed this run (retried next run): %s%s%s"
            % (len(result["errors"]), ", ".join(sym for sym, _ in result["errors"]),
@@ -496,7 +495,7 @@ def main(argv=None) -> None:
     syms = run_symbols(cli.symbols, held)
     # Reference ETFs go first with the held names: at most a handful of fetches, and the
     # regime and pick checks read them.
-    reference = set(reference_symbols())
+    reference = set(CFG.reference_symbols)
     _log.console("[RapidAPI] Recovery pass — %d symbols (%d held), today=%s, force=%s",
                  len(syms), len(held), today_str, force)
     result = repair_missing(syms, today_str, force=force, max_fetches=max_fetches,
