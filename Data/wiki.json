@@ -477,6 +477,8 @@
       "scripts/monitoring/invest_plan.py (reads Data/position_watch/invest_plan.json)",
       "Fills are recorded in the plan's fills list (date, symbol, shares, price, optional stop)",
       "Index-fund stop: the plan's index_stop (8%) under the symbol's average cost over all fills, so a new buy moves the stop; or 1% under the confirmed support below the average cost (bars up to its last buy) when that is lower: support, but never closer than 8% and never further than 30% (index_stop_max). One SELL covers every lot of the symbol",
+      "Long-term lots: a fill with \"hold\": \"long\" counts in its symbol's average stop but never covers a dated step and is left out of the sell window (money held into the next year)",
+      "Win/loss odds per index fund (descriptive): past days in the same band of distance from the 50-day average, 20+ sessions apart, with the share up after 60 sessions, the median return, and how often -8% came before +8%",
       "Shown on the OceanView tab when the plan file exists"
     ]
   },
@@ -527,12 +529,13 @@
   },
   "dev_project_model": {
     "title": "Development Tab: Project Model",
-    "summary": "A dashboard tab that shows the AETHER services redesign (R&amp;D #78): each step, fix and service with its status and PR, plus code metrics measured live from the source tree.",
+    "summary": "A dashboard tab that shows the AETHER services redesign (R&amp;D #78): each step, fix and service with its status and PR, plus code metrics measured live from the source tree. Below it, every other multi-stage project with its stages, status and PR.",
     "origin": "PR #242 (2026-11-06), step S0b of R&D #78.",
-    "body": "<p>The progress comes from <code>plans/aether-services-progress.json</code>, which each R&amp;D #78 PR updates. The metrics are measured on every load, so they show the code as it is: lines in <code>ai_portfolio_game.py</code>, <code>aether/scenario</code> and <code>aether/services</code>, <code>game.X</code> calls and <code>_pkg()</code> shims in the new packages, and magic <code>row[N]</code> indexes. Read-only; no login needed.</p>",
+    "body": "<p>The progress comes from <code>plans/aether-services-progress.json</code>, which each R&amp;D #78 PR updates. The metrics are measured on every load, so they show the code as it is: lines in <code>ai_portfolio_game.py</code>, <code>aether/scenario</code> and <code>aether/services</code>, <code>game.X</code> calls and <code>_pkg()</code> shims in the new packages, and magic <code>row[N]</code> indexes. Under <b>Other projects</b>, each multi-stage project has its own file in <code>plans/progress/</code> (goal, stages, status, PR, PROD flag, note), updated in every PR of that project. Read-only; no login needed.</p>",
     "config": [
       "Endpoint: GET /api/dev/project-model",
-      "Source: plans/aether-services-progress.json"
+      "Source: plans/aether-services-progress.json",
+      "Other projects: plans/progress/*.json (one file per project)"
     ]
   },
   "dashboard_login": {

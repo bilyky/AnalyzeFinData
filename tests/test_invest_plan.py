@@ -146,14 +146,62 @@ class TestFillsAndWindow(unittest.TestCase):
     def test_sell_window(self):
         plan = {**PLAN, "fills": [_fill("2030-03-06", 100)]}
         r = ip.check(plan, D(2030, 4, 15), {"SPY": _bars([100.0] * 80, end=D(2030, 4, 12)), "RSP": FLAT})
-        self.assertIn("SELL WINDOW: sell everything with limit orders by 2030-04-22 (latest 2030-04-29)",
+        self.assertIn("SELL WINDOW: sell the plan's lots with limit orders by 2030-04-22 (latest 2030-04-29)",
                       r["actions"])
         r = ip.check(plan, D(2030, 4, 1), {"SPY": _bars([100.0] * 80, end=D(2030, 3, 29)), "RSP": FLAT})
         self.assertIn("14 days to the sell window", r["notes"][0])
 
+    def test_long_term_lots_skip_the_sell_window_but_share_the_stop(self):
+        # Owner 2026-11-21: new money held into next year sits in the same plan, marked "hold": "long".
+        plan = {**PLAN, "fills": [_fill("2030-03-06", 100),
+                                  {"date": "2030-04-01", "symbol": "SPY", "shares": 1, "price": 80.0, "hold": "long"}]}
+        r = ip.check(plan, D(2030, 4, 15), {"SPY": _bars([100.0] * 80, end=D(2030, 4, 12)), "RSP": FLAT})
+        win = [a for a in r["actions"] if "SELL WINDOW" in a]
+        self.assertEqual(len(win), 1)
+        self.assertIn("keep the 1 long-term lot(s) (SPY)", win[0])
+        self.assertEqual({round(f["avg_cost"], 2) for f in r["fills"]}, {90.0})          # (1x100 + 1x80) / 2
+        only_long = {**PLAN, "fills": [plan["fills"][1]]}
+        r = ip.check(only_long, D(2030, 4, 15), {"SPY": _bars([100.0] * 80, end=D(2030, 4, 12)), "RSP": FLAT})
+        self.assertFalse([a for a in r["actions"] if "SELL WINDOW" in a])
+
+    def test_long_term_lots_never_cover_a_step(self):
+        long_fill = {"date": "2030-03-06", "symbol": "SPY", "shares": 20, "price": 100.0, "hold": "long"}
+        r = ip.check({**PLAN, "fills": [long_fill]}, TODAY, {"SPY": FLAT, "RSP": FLAT})
+        self.assertEqual(r["steps"][0]["state"], "due today")
+
     def test_sell_window_needs_holdings(self):
         r = ip.check(PLAN, D(2030, 4, 15), {"SPY": _bars([100.0] * 80, end=D(2030, 4, 12)), "RSP": FLAT})
         self.assertFalse([a for a in r["actions"] if "SELL WINDOW" in a])
+
+
+class TestOdds(unittest.TestCase):
+    """Owner 2026-11-21: every index holding shows the win/loss odds of today's setup (descriptive)."""
+
+    def test_counts_past_setups_in_the_same_band_without_look_ahead(self):
+        # 100 flat, a drop to 90 (10% under the 50-day), a recovery to 100, repeated; today is in the drop.
+        cycle = [100.0] * 60 + [90.0] * 5 + [100.0] * 60
+        closes = cycle * 3 + [100.0] * 60 + [90.0]
+        o = ip.odds(closes)
+        self.assertEqual(o["bucket"], "8%+ under the 50-day average")
+        self.assertEqual(o["n"], 3)                       # one per past drop (5 days each, 20+ apart)
+        self.assertEqual((o["p_up"], o["p_up_first"], o["p_down_first"]), (1.0, 1.0, 0.0))
+        self.assertAlmostEqual(o["median"], 100 / 90 - 1)
+        self.assertEqual(ip.odds(closes + [50.0] * 70, len(closes) - 1), o)   # later bars change nothing
+
+    def test_short_history_and_no_past_setup(self):
+        self.assertIsNone(ip.odds([100.0] * 40))
+        self.assertEqual(ip.odds([100.0] * 200 + [80.0])["n"], 0)
+
+    def test_check_adds_one_odds_note_per_index_fund(self):
+        cycle = [100.0] * 60 + [90.0] * 5 + [100.0] * 60
+        spy = _bars(cycle * 3 + [100.0] * 60 + [90.0], end=D(2030, 3, 5))
+        plan = {**PLAN, "fills": [_fill("2030-03-01", 100)]}
+        r = ip.check(plan, TODAY, {"SPY": spy, "RSP": FLAT})
+        notes = [n for n in r["notes"] if n.startswith("SPY odds")]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("n=3, descriptive", notes[0])
+        self.assertIn("-8% first 0%, +8% first 100%", notes[0])
+        self.assertEqual(r["odds"]["SPY"]["n"], 3)
 
 
 class TestNotSure(unittest.TestCase):
