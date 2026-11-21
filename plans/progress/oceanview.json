@@ -1,7 +1,7 @@
 {
  "project": "OceanView year-end (Track O)",
  "goal": "Harvest, margin pay-down and INTC trims from data, by the year-end dates.",
- "updated": "2026-11-20",
+ "updated": "2026-11-21",
  "stages": [
   {
    "id": "O1",
@@ -59,6 +59,13 @@
    "title": "Plan stop: support, never closer than 8% or further than 30% under the average",
    "status": "done",
    "pr": 311,
+   "prod": true
+  },
+  {
+   "id": "P2",
+   "title": "Plan tool: long-term lots and win/loss odds per index fund",
+   "status": "in_review",
+   "pr": 312,
    "prod": true
   }
  ],

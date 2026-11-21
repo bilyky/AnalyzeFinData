@@ -26,7 +26,12 @@ Each day it says, from the cached daily bars:
     "index_stop_max" (default 30%). The average uses all fills (rules "index_stop_from": "average", the default; "lot" uses each fill's
     own price), so a new buy moves the stop. Other names at
     their own "stop" price (an ATR stop the owner records);
-  - the days left to the sell window and to the latest sell date.
+  - the days left to the sell window and to the latest sell date. A fill marked "hold": "long" (owner
+    2026-11-21: money held into the next year) counts in its symbol's average stop but never covers a dated
+    step and is left out of the sell window;
+  - per index fund held, the win/loss odds of today's setup from the fund's own history (descriptive): days in
+    the same band of distance from the 50-day average, 20+ sessions apart, with the share up after 60
+    sessions, the median return, and how often -8% came before +8% within 60.
 
 Never act when not sure (position-watch rules v2): if SPY's last bar is older than the last
 completed session, or a holding has no bars, it says so and turns every BUY/SELL into WAIT
@@ -117,6 +122,58 @@ def average_costs(fills: list) -> dict:
     return {s: tot[s] / sh[s] for s in tot if sh[s] > 0}
 
 
+ODDS_BUCKETS = (-0.08, -0.04, 0.0, 0.04)      # distance from the 50-day average: <=-8%, -8..-4, -4..0, 0..+4, >+4
+ODDS_HORIZON = 60
+ODDS_MOVE = 0.08
+ODDS_GAP = 20
+
+
+def _bucket(x: float) -> int:
+    return sum(x > e for e in ODDS_BUCKETS)
+
+
+def _bucket_label(k: int) -> str:
+    edges = [None, *ODDS_BUCKETS, None]
+    lo, hi = edges[k], edges[k + 1]
+    if lo is None:
+        return f"{-hi:.0%}+ under the 50-day average"
+    if hi is None:
+        return f"{lo:.0%}+ over the 50-day average"
+    return f"{lo:+.0%} to {hi:+.0%} vs the 50-day average"
+
+
+def odds(closes: list, i: int | None = None) -> dict | None:
+    """Win/loss base rate for today's setup (owner 2026-11-21), descriptive, from the symbol's own history:
+    past days in the same bucket of distance from the 50-day average, at least ODDS_GAP sessions apart, whose
+    ODDS_HORIZON-session outcome was complete by day i (no look-ahead). Returns the share up after the horizon,
+    the median return, and which came first within it: -8% or +8%."""
+    i = len(closes) - 1 if i is None else i
+    if i < 50:
+        return None
+    sma = lambda j: sum(closes[j - 49:j + 1]) / 50
+    k = _bucket(closes[i] / sma(i) - 1)
+    ev, last = [], -10 ** 9
+    for j in range(49, i - ODDS_HORIZON + 1):
+        if _bucket(closes[j] / sma(j) - 1) == k and j - last >= ODDS_GAP:
+            ev.append(j)
+            last = j
+    if not ev:
+        return {"bucket": _bucket_label(k), "n": 0}
+    r = sorted(closes[j + ODDS_HORIZON] / closes[j] - 1 for j in ev)
+    down = up = 0
+    for j in ev:
+        for m in range(j + 1, j + ODDS_HORIZON + 1):
+            if closes[m] <= closes[j] * (1 - ODDS_MOVE):
+                down += 1
+                break
+            if closes[m] >= closes[j] * (1 + ODDS_MOVE):
+                up += 1
+                break
+    n = len(ev)
+    return {"bucket": _bucket_label(k), "n": n, "p_up": sum(x > 0 for x in r) / n, "median": r[n // 2],
+            "p_down_first": down / n, "p_up_first": up / n, "since": None}
+
+
 def entry_support(fills: list, symbol: str, bars) -> float | None:
     """The confirmed swing-low support under the symbol's average cost, from bars up to its LAST buy, so the
     level stays put as new bars arrive (a support taken from today's bars would keep sliding under a falling
@@ -183,7 +240,8 @@ def check(plan: dict, today: datetime.date, bars: dict) -> dict:
                         if bars.get(s) and last_day and bars[s]["days"][-1] < last_day)
     if behind_spy:                   # 11-20: RSP's cache ended 11-17 while SPY's ended 11-19, and nothing said so
         doubts.append(f"price bars for {', '.join(behind_spy)} end before SPY's ({last_day}): refresh first")
-    steps = step_status(plan, today, fills)
+    plan_fills = [f for f in fills if f.get("hold") != "long"]      # long-term lots never cover a dated step
+    steps = step_status(plan, today, plan_fills)
     actions, notes = [], []
     wait = spy_ret is not None and spy_ret <= rules.get("wait_if_market_day", -0.02)
     for s in steps:
@@ -224,19 +282,33 @@ def check(plan: dict, today: datetime.date, bars: dict) -> dict:
             actions.append(f"SELL {f['symbol']}: {f['last']:.2f} is at/below its stop {f['stop']:.2f}")
     sell_from = rules.get("sell_from")
     latest = rules.get("latest_sell") or plan.get("return_by")
-    if sell_from and today >= datetime.date.fromisoformat(sell_from) and fills:
-        actions.append(f"SELL WINDOW: sell everything with limit orders by {rules.get('sell_to')} "
-                       f"(latest {latest})")
+    long_lots = [f for f in fills if f.get("hold") == "long"]
+    if sell_from and today >= datetime.date.fromisoformat(sell_from) and plan_fills:
+        keep = (f"; keep the {len(long_lots)} long-term lot(s) ({', '.join(sorted({f['symbol'] for f in long_lots}))})"
+                if long_lots else "")
+        actions.append(f"SELL WINDOW: sell the plan's lots with limit orders by {rules.get('sell_to')} "
+                       f"(latest {latest}){keep}")
     elif sell_from:
         notes.append(f"{(datetime.date.fromisoformat(sell_from) - today).days} days to the sell window "
                      f"({sell_from}); latest sell {latest}")
+    odds_by = {}
+    for sym in sorted({f["symbol"] for f in fills if f["symbol"] in INDEX_FUNDS}):
+        o = odds(bars[sym]["c"]) if bars.get(sym) else None
+        if o:
+            o["since"] = bars[sym]["days"][0]
+            odds_by[sym] = o
+            if o["n"]:
+                notes.append(f"{sym} odds (history since {o['since']}, {o['bucket']}, n={o['n']}, descriptive): "
+                             f"up after {ODDS_HORIZON} sessions {o['p_up']:.0%}, median {o['median']:+.1%}; "
+                             f"within {ODDS_HORIZON}: -{ODDS_MOVE:.0%} first {o['p_down_first']:.0%}, "
+                             f"+{ODDS_MOVE:.0%} first {o['p_up_first']:.0%}")
     if doubts:                       # never act when not sure: every BUY/SELL waits for fresh data
         actions = [f"WAIT (not sure): {a}" for a in actions if not a.startswith("WAIT")] or actions
     total_cost = sum(f["shares"] * f["price"] for f in fstat)
     total_pnl = sum(f["pnl"] for f in fstat if f["pnl"] is not None)
     return {"date": today.isoformat(), "last_bar": last_day, "sessions_behind": behind, "spy_day": spy_ret,
             "rsp_timing": rsp_timing, "steps": steps, "fills": fstat, "invested": total_cost, "pnl": total_pnl,
-            "doubts": doubts, "actions": actions or ["Nothing to do today."], "notes": notes}
+            "doubts": doubts, "actions": actions or ["Nothing to do today."], "notes": notes, "odds": odds_by}
 
 
 def main(argv=None) -> int:
