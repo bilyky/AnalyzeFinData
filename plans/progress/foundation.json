@@ -49,8 +49,8 @@
   {
    "id": "T0.7",
    "title": "Shared Chaikin session in the DB",
-   "status": "in_progress",
-   "pr": null,
+   "status": "in_review",
+   "pr": 313,
    "prod": false,
    "note": "stage 0 passed 11-22 (one session on both machines); store built, off until AETHER_CHAIKIN_STORE=db"
   }
