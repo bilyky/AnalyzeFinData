@@ -557,7 +557,8 @@
     "config": [
       "Task: scripts/monitoring/chaikin_reauth.py --weekday-aware",
       "Reminder: --notify-days 2.5",
-      "System page: --check, and --cdp --force"
+      "System page: --check, and --cdp --force",
+      "Shared session (opt-in, AETHER_CHAIKIN_STORE=db): the session is also kept, encrypted, in the shared database, so PROD and dev use one renewed session; session.json stays as the local copy and the newer of the two is used. python -m aether.chaikin_store --status shows both"
     ]
   },
   "data_completeness": {
