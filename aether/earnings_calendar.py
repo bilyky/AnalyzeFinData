@@ -74,7 +74,14 @@ def etrade_next(symbols: list) -> dict:
     """{SYMBOL: date} from E*TRADE quotes. A failed batch is logged and skipped."""
     out = {}
     try:
-        market = etrade.ETradeClient("production", role="data").market.raw_market()
+        client = etrade.ETradeClient("production", role="data")
+        if client.store.tokens.load("production") is None:
+            # PROD 2026-11-21: with no saved session raw_market() failed inside on None tokens and
+            # the warning read "TypeError: 'NoneType' object is not subscriptable".
+            _log.warning("Earnings calendar: no E*TRADE session (no saved token; the data client "
+                         "never logs in); Chaikin dates only.")
+            return out
+        market = client.market.raw_market()
     except Exception as e:
         _log.warning(f"Earnings calendar: no E*TRADE data client ({type(e).__name__}: {e}); Chaikin dates only.")
         return out

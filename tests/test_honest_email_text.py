@@ -18,6 +18,19 @@ import aether_oracle as oracle
 import external_intel
 import intraday_monitor as monitor
 
+
+# monitor() skips non-trading days (PROD review 11-22); these tests check a session day's logic,
+# so the suite must not depend on the weekday it runs on.
+_TRADING_DAY = mock.patch.object(monitor, "_trading_day", return_value=True)
+
+
+def setUpModule():
+    _TRADING_DAY.start()
+
+
+def tearDownModule():
+    _TRADING_DAY.stop()
+
 # The Oracle's SA row on 2026-11-18 (entry, stop and target from that morning's email).
 SA_ROW = {"symbol": "SA", "setup": True, "s10": 6.9, "l60": 8.7, "price": 26.28, "stop": 23.03,
           "target": 26.76, "pgr": "Be", "patterns": "MACD+"}

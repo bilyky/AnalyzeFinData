@@ -15,6 +15,7 @@ _BASE_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_BASE_DIR))
 
 import notify
+from aether import market_calendar
 from aether_logger import get_logger
 from data_api import _SL  # canonical Short_Long column map (single source of truth)
 from ai_portfolio_game import get_live_prices
@@ -31,7 +32,9 @@ STATE_FILE = _BASE_DIR / "Data" / "intraday_monitor_state.json"
 # drops at least this fraction below the last-alerted price, or the stop moves.
 # Without this, ordinary sub-percent ticks flip "changed" on every 30-min run and
 # re-send the alert — the duplicate-email spam this monitor is meant to cure.
-_MATERIAL_DROP_PCT = 0.01
+# 3%, not 1%: on a falling day (PROD 2026-11-20) a 1% step re-sent the email on all 12 runs.
+# A new breach still alerts at once.
+_MATERIAL_DROP_PCT = 0.03
 # An alerted breach is forgotten (so a later breach alerts again) only once the price is
 # this far back above the stop; a bounce around the stop must not re-send the email.
 _CLEAR_MARGIN_PCT = 0.02
@@ -41,6 +44,12 @@ _STALE_STOP_PCT = 0.20
 
 def _today() -> str:
     return str(datetime.date.today())
+
+
+def _trading_day() -> bool:
+    """True on an NYSE session day. On a weekend or holiday the prices are the last close's
+    cached bars, so a check repeats Friday's breaches (PROD 2026-11-21/22: an email each day)."""
+    return market_calendar.is_session(datetime.date.today())
 
 
 def load_state() -> dict:
@@ -118,6 +127,9 @@ def breach_note(sym: str, price: float, stop: float) -> str:
 
 def monitor():
     _log.console(f"[{datetime.datetime.now()}] Starting Intraday Stop Monitor...")
+    if not _trading_day():
+        _log.info("Not a trading day: no stop check (prices would be the last close).")
+        return
     monitored = one_stop_per_symbol(get_monitored_positions())
     if not monitored:
         _log.info("No positions with valid stops found to monitor.")
