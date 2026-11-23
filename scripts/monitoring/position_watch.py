@@ -216,7 +216,11 @@ def decide(m: dict, rb: dict | None, rbr_tags: list, repl: dict, conc: dict, cfg
     if not bar_is_current:
         reasons.append(f"crash-day check skipped: the last bar ({m.get('date', '?')}) is not the last session")
     elif m["ret_1"] is not None and m["ret_1"] < CRASH_DAY:
-        return {"action": "WAIT", "reasons": reasons + [f"crash day ({m['ret_1']:+.1%}): don't sell into it"],
+        # The owner's rule (2026-11-03, clarified 11-23): after a big drop, wait a day before selling. The move is
+        # the last session's, which is not always today: on 11-23 the report said "crash day" for Friday's -8.0%
+        # next to a live price up 13.8%. Name the session.
+        return {"action": "WAIT", "reasons": reasons + [
+                    f"last session ({m.get('date', '?')}) fell {m['ret_1']:+.1%}: wait a day after a big drop before selling"],
                 "tranche_usd": 0.0, "replacement": None}
     if best is None:
         return {"action": "WAIT", "reasons": reasons + ["every replacement is stretched: wait for a better entry"],
@@ -395,6 +399,7 @@ def run(symbol=None, live=False, journal=True, config_path=None) -> dict:
     live_px = _live_price(symbol) if live else None
     if live_px:
         price = live_px
+        m["ret_today"] = live_px / m["close"] - 1      # today's move vs the last cached close (the last session)
     shares, acct_other, meta = _pack_holdings(symbol)
     if shares is None:      # no account snapshot: the share of the total is unknown, so no TRIM
         conc = {"value": None, "total": None, "pct": None, "headroom_usd": None}
@@ -433,8 +438,9 @@ def print_report(rep: dict) -> None:
     m, c, k = rep["metrics"], rep["concentration"], rep["call"]
     f = lambda x, p="+.1%": "-" if x is None else format(x, p)
     _out(f"\n{rep['symbol']} position watch ({rep['rules']}), {rep['price_source']}, pack {rep['pack_health']}")
-    _out(f"  price {rep['price']:.2f} | 1d {f(m['ret_1'])} 5d {f(m['ret_5'])} 20d {f(m['ret_20'])} 60d {f(m['ret_60'])}"
-         f" | from 52w high {f(m['drawdown_52w'])}")
+    today = f"today {f(m['ret_today'])} (live vs {m['date']}) | " if m.get("ret_today") is not None else ""
+    _out(f"  price {rep['price']:.2f} | {today}last session {m['date']}: 1d {f(m['ret_1'])} 5d {f(m['ret_5'])}"
+         f" 20d {f(m['ret_20'])} 60d {f(m['ret_60'])} | from 52w high {f(m['drawdown_52w'])}")
     _out(f"  vs SMA20 {f(m['vs_sma20'])} SMA50 {f(m['vs_sma50'])} SMA200 {f(m['vs_sma200'])} | gap {f(m['gap'])}"
          f" | volume {f(m['vol_ratio'], '.2f')}x | RBR {rep['rbr']['score']} {rep['rbr']['tags']}")
     p = rep["vs_peers"]
