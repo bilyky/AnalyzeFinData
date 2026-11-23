@@ -42,7 +42,7 @@ function, and avoids a top-level import cycle once the root becomes a facade.
 """
 from __future__ import annotations
 
-from aether import data_completeness, preflight_status
+from aether import data_completeness, preflight_status, rule_shadow
 
 
 def _pkg():
@@ -801,11 +801,14 @@ def screen_buys(state, prices, rules, ws, profile, today):
     # Always build top_buys list and track active position scores
     top_buys = []
     active_position_scores = {}
+    shadow = []             # plan T0.4: what the R&D #113 loss filter would do to each admitted buy (no effect)
 
     for row in ws.iter_rows(min_row=2, values_only=True):
         sym = row[3]
         if not sym:
             continue
+        rr_waived = False
+        shadow_closes = None    # reuse the series the S/R branch loads (one load per row)
         total_score = (row[24] or 0.0) + (row[25] or 0.0)
 
         # If sym is currently in positions, record its current score
@@ -900,6 +903,7 @@ def screen_buys(state, prices, rules, ws, profile, today):
                 min_rr = game.CFG.system_default_min_rr
                 if rr_ratio < min_rr:
                     if is_elite_breakout:
+                        rr_waived = True
                         game._log.info(f"🛡️ [R&D #32 Breakout Waiver] Waived {min_rr}:1 R:R limit for elite breakout leader: {sym} (Combined Score: {total_score}, PGR: {pgr_val}, R:R: {rr_ratio}:1).")
                     else:
                         game._log.warning(f"🛑 AI BUY REJECTED (Risk-Reward Gate): {sym} - Reward-to-Risk ratio of {rr_ratio}:1 is less than the required {min_rr}:1 minimum (Upside: ${round(upside, 2)}, Downside: ${round(downside, 2)}).")
@@ -929,6 +933,7 @@ def screen_buys(state, prices, rules, ws, profile, today):
                 # already read above. Freshness is guaranteed by the gate, so the resolvers'
                 # internal staleness check is redundant here and passing the series skips it.
                 _hi, _lo, _cl, _ = game.risk_utils._load_ohlcv_series(sym)
+                shadow_closes = _cl
                 _sd = game.risk_utils.resolve_stop_detailed(price, highs=_hi, lows=_lo, closes=_cl, exclude_swing=excl)
                 _td = game.risk_utils.resolve_target_detailed(price, highs=_hi, lows=_lo, closes=_cl, exclude_swing=excl)
                 _wb_sr = f"workbook stop={row[9]!r}/target={row[11]!r} incomplete"
@@ -947,6 +952,9 @@ def screen_buys(state, prices, rules, ws, profile, today):
                     "industry": row[4],
                     "setup": True,      # only active-setup rows reach here; the buy DNA records it
                 })
+                if shadow_closes is None:
+                    shadow_closes = game.risk_utils._load_ohlcv_series(sym)[2]
+                shadow.append(rule_shadow.record("game", sym, today, price, rr_waived, shadow_closes, admitted=True))
             else:
                 game._log.warning(f"🛑 AI BUY REJECTED (Profile Threshold): {sym} - Combined score {round(total_score, 2)} is below the {profile} minimum of {rules['min_score_threshold']} and no confirmed bottom.")
 
@@ -965,6 +973,7 @@ def screen_buys(state, prices, rules, ws, profile, today):
                 game._log.info(f"🛡️ [R&D #32 Guard] Applied -1.5 score penalty to {sym_upper} (overbought/weak-sector: strength={strength_count}, timing={timing_count}, industry={industry_rating})")
 
     top_buys.sort(key=lambda x: x["total"], reverse=True)
+    rule_shadow.log(shadow)
     return {
         "max_positions": max_positions,
         "available_slots": available_slots,
