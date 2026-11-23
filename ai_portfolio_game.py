@@ -1077,6 +1077,7 @@ def get_live_prices(symbols):
             return get_google_prices_fallback(symbols)
 
         quotes = _et.market.quotes(symbols, tokens)
+        _log.info(f"  [AETHER] Prices: E*TRADE quotes for {len(quotes)}/{len(symbols)} symbols.")
 
         # Fill only the gaps from Google — keep the E*TRADE quotes we already have.
         # Surface dead/delisted/misaligned tickers loudly instead of discarding

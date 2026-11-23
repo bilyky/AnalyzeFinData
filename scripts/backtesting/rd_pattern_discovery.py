@@ -49,7 +49,11 @@ def analysis_instructions() -> str:
     """The skill's analysis steps (Step 3 to the end): one source for what the analysis should do."""
     text = SKILL.read_text(encoding="utf-8")
     start = text.find("## Step 3")
-    return text[start:] if start >= 0 else text
+    # 11-19: the analysis suggested `--validate --pattern "industry_strength=Strong"`; there is no
+    # --pattern option, so the command failed.
+    return (text[start:] if start >= 0 else text) + (
+        "\n\nUse only the commands and options written in these steps. Never invent a command-line "
+        "option; if a step has no command for what you want to suggest, say so in words.")
 
 
 def _counts(report: dict) -> str:

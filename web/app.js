@@ -2114,6 +2114,16 @@ async function loadProjectModel() {
     $("pm-fixes").innerHTML = (d.fixes || []).map((f) =>
         `<tr class="border-t border-slate-800"><td class="py-1 pr-2 font-mono text-xs">${esc(f.id)}</td><td class="py-1 pr-2">${esc(f.title)}${f.trading ? ' <span class="text-xs text-rose-400">trading</span>' : ""}
          <div class="text-xs text-slate-500">${esc(f.evidence)}</div></td><td class="py-1 pr-2 whitespace-nowrap">${_pmStatus(f.status)}</td><td class="py-1">${_pmPr(f.pr)}</td></tr>`).join("");
+    $("pm-projects").innerHTML = (d.projects || []).map((p) =>
+        `<div class="card"><div class="flex justify-between items-baseline"><span class="font-medium">${esc(p.project)}</span>
+         <span class="text-xs text-slate-500">updated ${esc(p.updated || "–")}</span></div>
+         <div class="text-xs text-slate-400 mt-1">${esc(p.goal || "")}</div>
+         <div class="text-xs text-slate-500 mt-1">${esc(_pmSummary(p.summary))}</div>
+         <div class="overflow-x-auto"><table class="w-full text-sm mt-2"><tbody>${(p.stages || []).map((s) =>
+            `<tr class="border-t border-slate-800"><td class="py-1 pr-2 font-mono text-xs">${esc(s.id)}</td><td class="py-1 pr-2">${esc(s.title)}${s.prod ? ' <span class="text-xs text-amber-400">PROD</span>' : ""}
+             ${s.note ? `<div class="text-xs text-slate-500">${esc(s.note)}</div>` : ""}</td>
+             <td class="py-1 pr-2 whitespace-nowrap">${_pmStatus(s.status)}</td><td class="py-1">${_pmPr(s.pr)}</td></tr>`).join("")}</tbody></table></div></div>`).join("")
+        || '<span class="text-slate-500">No other projects.</span>';
 }
 
 function _muted(el, msg) {

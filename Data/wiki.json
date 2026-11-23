@@ -226,7 +226,7 @@
     "origin": "Decision Quality Theory & Backtracking Analytics standards.",
     "body": "Evaluates exits with a hybrid qualitative rubric combining fundamental risks with technical charts. Automatically logs, scores, and audits decision quality for both closed trades and active reviews.",
     "config": [
-      "Logging: Data/decision_log.jsonl updated on every run.",
+      "Logging: Data/decision_log.jsonl updated on every run; each record keeps the price, the stop it was checked against and the run time, and the run log has one [Stop check] line per held position.",
       "Scorecard: Runs decision_eval.py scoring all mature decisions after a 10-day forward window.",
       "Verification: Automatically emails the Retrospective Scorecard directly to your inbox daily."
     ]
@@ -291,7 +291,7 @@
       "Replay date: target ~3-4 weeks back so both 10d and 60d windows have settled OHLCV data",
       "Schedule: AETHER_PatternDiscovery, Sat 10:00, scripts/backtesting/rd_pattern_discovery.py (replay date today \u2212 25 days; --date to pick one)",
       "Reconstruction: reads Data/Symbol/{sym}/{sym}_{date}.json Chaikin cache (no live session needed)",
-      "Thresholds: score \u2265 9.5 AND pgr \u2208 {Bu, Bu+} AND setup=True to qualify as 'bought'",
+      "Bought = passes the entry gates as modelled by rule_walkforward (CURRENT): s10 \u2265 2.0, combined \u2265 5.0, Setup, R:R \u2265 2 and target gain \u2265 5% unless elite (R&D #32), Bearish PGR only if elite (R&D #13); until 2026-11-19 it was score \u2265 9.5 + PGR Bu/Bu+",
       "Validation: 16 sampled dates across 9-month range, |z|\u22652.0 + N\u226530 for promotion",
       "Output: Data/pattern_discovery_{DATE}.json \u2014 machine-readable for the /pattern-discover skill",
       "Weekly cadence: run same date each week; pattern recurring in 3+ weeks = strong validation signal"
@@ -392,6 +392,30 @@
       "Source: ai_portfolio_game.py slot-expansion + pyramiding blocks"
     ]
   },
+  "drop_risk": {
+    "title": "Drop-Risk Flag and Size Hint",
+    "summary": "Marks a recommended stock with 4 or more drop days (-10% or worse, not reversed the next session) in the last 3 years, the count R&D #115 tested, and gives the Oracle a size hint so that a stop-out or a worst-1% day costs the game's per-trade risk cap of the account. Advisory; nothing is blocked.",
+    "origin": "AETHER Internal (November 2026), after SA was recommended on 2026-11-18 and fell ~30% the next day. R&D #115 then found such buys hit a -15% worst close within 10 sessions 8.9% of the time vs 1.2%.",
+    "body": "<p>The count comes from <code>risk_utils.drop_day_flags</code>, the one definition shared with the R&D #115 study: a return of -10% or worse that the next session does not fully reverse, returns across session gaps left out, on real, split-adjusted bars (<code>risk_utils._load_ohlcv_bars</code>). It covers the 756 sessions before the latest bar; with fewer, nothing is shown.</p>\n<p class=\"mt-2\">History says how likely a big move is, not when. R&D #117 found that skipping these buys did not help a portfolio and half-sizing them passed only on one simulated path, so this stays a warning. Junk bars in the cache still count (RS); repairing the cache is a separate job.</p>",
+    "config": [
+      "Module: aether/drop_risk.py (profile, note, size_hint); rule: risk_utils.drop_day_flags",
+      "Window: LOOKBACK = 756 sessions; flag at HIGH_DROPS = 4 (R&D #115's HIGH group)",
+      "Size hint: config system.max_trade_risk_pct of account equity per stop-out or worst-1% day",
+      "Shown in: the evening email's pick tables and the Oracle's buy cards"
+    ]
+  },
+  "earnings_calendar": {
+    "title": "Earnings Date Flag",
+    "summary": "An advisory flag on recommendations: the evening email marks a pick whose earnings report is due within 7 days, and the Oracle's buy cards show the date, or \"earnings date unknown\" when no source has one. Nothing is blocked.",
+    "origin": "AETHER Internal (November 2026), after SA was recommended on 2026-11-18 and fell ~30% the next day.",
+    "body": "<p>Each evening <code>daily_task</code> builds <code>Data/earnings_calendar.json</code> for the screen from two sources and keeps the earliest date on or after today:</p>\n<ul class=\"list-disc pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>E*TRADE</b> quotes (<code>nextEarningDate</code>), read with the data-plane client, which cannot renew a token or open a browser. It is often empty, or the date of the last report.</li>\n  <li><b>Chaikin</b>'s raw response (<code>epsData.nextReportDate</code>, kept in <code>Data/Symbol_raw</code>).</li>\n</ul>\n<p class=\"mt-2\">Coverage is partial (7 of 50 sampled symbols had a future date on 2026-11-19), so \"unknown\" is common. A calendar older than 4 days is not shown. The flag is a warning for a person; a buy rule that uses it would need a study first.</p>",
+    "config": [
+      "Module: aether/earnings_calendar.py (build, load, note)",
+      "Built by: daily_task.py, after the evening data refresh; non-fatal if E*TRADE or the write fails",
+      "Window: WARN_DAYS = 7; a calendar older than MAX_AGE_DAYS = 4 is ignored",
+      "File: Data/earnings_calendar.json"
+    ]
+  },
   "aether_oracle": {
     "title": "AETHER Oracle (Project Oracle)",
     "summary": "A read-only real-account advisory engine. Audits live holdings in the configured real account, calculates stop breaches and momentum decay, and surfaces top breakout setups toward a doubling goal set in config.",
@@ -424,11 +448,12 @@
     "title": "Position Watch (concentrated holding)",
     "summary": "A daily, recommend-only check of one concentrated holding (default INTC): <b>TRIM</b> a small tranche, <b>HOLD</b> or <b>WAIT</b>, with reasons, tax lots and a RETRO of the last call. Never places an order, never sells below the floor.",
     "origin": "Built for OceanView (R&D #79): bring a concentrated position down slowly and on evidence. Rules are heuristics, reviewed against the RETRO hit rate.",
-    "body": "<p>Each run measures the symbol (SMA 20/50/200, drawdown from the 52-week high, 1/5/20/60-day returns), separates <b>the sector's move from the symbol's own</b> (beta to an equal-weight peer basket and the residual return with a z-score), checks each replacement's entry timing (stretch vs its 50-day average, RSI-14), and computes concentration against the total, including stock-plan shares and outside assets.</p><p class=\"mt-2\">A <b>TRIM</b> needs all of: below the 50-day average, weak on its own (20-day residual z &lt; -1), no recovery pattern forming, not a crash day, and a replacement with an OK entry. Any doubt in the inputs (stale bars, a missing peer, a failed account snapshot or live quote) turns a TRIM into <b>WAIT</b>; so does the day after a big drop. Suggested lots: losses first (outside the &plusmn;30-day vest/ESPP wash windows), then long-term lots with the smallest gain, short-term last.</p><p class=\"mt-2\">Every call goes to a journal; the next run scores it (RETRO) and a one-line lesson can be attached.</p>",
+    "body": "<p>Each run measures the symbol (SMA 20/50/200, drawdown from the 52-week high, 1/5/20/60-day returns), separates <b>the sector's move from the symbol's own</b> (beta to an equal-weight peer basket and the residual return with a z-score), checks each replacement's entry timing (stretch vs its 50-day average, RSI-14), and computes concentration against the total, including stock-plan shares and outside assets.</p><p class=\"mt-2\">A <b>TRIM</b> needs all of: below the 50-day average, weak on its own (20-day residual z &lt; -1), no recovery pattern forming, not a crash day, and a replacement with an OK entry. Any doubt in the inputs (stale bars, a missing peer, a failed account snapshot or live quote) turns a TRIM into <b>WAIT</b>; so does the day after a big drop. Suggested lots: losses first (outside the &plusmn;30-day vest/ESPP wash windows), then long-term lots with the smallest gain, short-term last.</p><p class=\"mt-2\">Every call goes to a journal; the next run scores it (RETRO) and a one-line lesson can be attached.</p><p class=\"mt-2\">The lots file is kept current from E*TRADE during the workbook update (<code>aether/lots_refresh.py</code>): it reads only the lots, uses the positions the update has just read, and changes only labels mapped in <code>lot_sources</code>. Nothing is written unless the lots add up to the position; the old file is backed up first. Unmapped labels (stock-plan ESPP/RSU) stay as they are. It never logs in.</p>",
     "config": [
       "scripts/monitoring/position_watch.py --symbol INTC [--live] (one read-only E*TRADE quote with --live)",
       "Floor: floor_pct (default 30% of the total); tranche: tranche_pct (default 5% of the position)",
       "Private inputs in Data/position_watch/: config (peers, replacements, vest/ESPP dates), lots, journal",
+      "Lots refresh: runs inside check_from_xls; by hand: python -m aether.lots_refresh [--write] (dry run by default); private config: \"lot_sources\": {\"<lots label>\": \"<last 4>\"}",
       "Rules version v2; skill: .claude/commands/position-watch.md"
     ]
   },
@@ -451,6 +476,9 @@
     "config": [
       "scripts/monitoring/invest_plan.py (reads Data/position_watch/invest_plan.json)",
       "Fills are recorded in the plan's fills list (date, symbol, shares, price, optional stop)",
+      "Index-fund stop: the plan's index_stop (8%) under the symbol's average cost over all fills, so a new buy moves the stop; or 1% under the confirmed support below the average cost (bars up to its last buy) when that is lower: support, but never closer than 8% and never further than 30% (index_stop_max). One SELL covers every lot of the symbol",
+      "Long-term lots: a fill with \"hold\": \"long\" counts in its symbol's average stop but never covers a dated step and is left out of the sell window (money held into the next year)",
+      "Win/loss odds per index fund (descriptive): past days in the same band of distance from the 50-day average, 20+ sessions apart, with the share up after 60 sessions, the median return, and how often -8% came before +8%",
       "Shown on the OceanView tab when the plan file exists"
     ]
   },
@@ -501,12 +529,13 @@
   },
   "dev_project_model": {
     "title": "Development Tab: Project Model",
-    "summary": "A dashboard tab that shows the AETHER services redesign (R&amp;D #78): each step, fix and service with its status and PR, plus code metrics measured live from the source tree.",
+    "summary": "A dashboard tab that shows the AETHER services redesign (R&amp;D #78): each step, fix and service with its status and PR, plus code metrics measured live from the source tree. Below it, every other multi-stage project with its stages, status and PR.",
     "origin": "PR #242 (2026-11-06), step S0b of R&D #78.",
-    "body": "<p>The progress comes from <code>plans/aether-services-progress.json</code>, which each R&amp;D #78 PR updates. The metrics are measured on every load, so they show the code as it is: lines in <code>ai_portfolio_game.py</code>, <code>aether/scenario</code> and <code>aether/services</code>, <code>game.X</code> calls and <code>_pkg()</code> shims in the new packages, and magic <code>row[N]</code> indexes. Read-only; no login needed.</p>",
+    "body": "<p>The progress comes from <code>plans/aether-services-progress.json</code>, which each R&amp;D #78 PR updates. The metrics are measured on every load, so they show the code as it is: lines in <code>ai_portfolio_game.py</code>, <code>aether/scenario</code> and <code>aether/services</code>, <code>game.X</code> calls and <code>_pkg()</code> shims in the new packages, and magic <code>row[N]</code> indexes. Under <b>Other projects</b>, each multi-stage project has its own file in <code>plans/progress/</code> (goal, stages, status, PR, PROD flag, note), updated in every PR of that project. Read-only; no login needed.</p>",
     "config": [
       "Endpoint: GET /api/dev/project-model",
-      "Source: plans/aether-services-progress.json"
+      "Source: plans/aether-services-progress.json",
+      "Other projects: plans/progress/*.json (one file per project)"
     ]
   },
   "dashboard_login": {
@@ -528,7 +557,18 @@
     "config": [
       "Task: scripts/monitoring/chaikin_reauth.py --weekday-aware",
       "Reminder: --notify-days 2.5",
-      "System page: --check, and --cdp --force"
+      "System page: --check, and --cdp --force",
+      "Shared session (opt-in, AETHER_CHAIKIN_STORE=db): the session is also kept, encrypted, in the shared database, so PROD and dev use one renewed session; session.json stays as the local copy and the newer of the two is used. python -m aether.chaikin_store --status shows both"
+    ]
+  },
+  "data_completeness": {
+    "title": "Data Completeness Check & Reference ETFs",
+    "summary": "Each evening the Chaikin download is compared with the sessions before it: fields that went empty, fewer snapshots, bad values, missing price bars and screen symbols that disappeared put a <b>[DATA]</b> banner on top of the evening email. A short list of reference ETFs is kept current every night even when they are off the screen.",
+    "origin": "Built after the 2026-09-01 Chaikin API switch emptied 44 snapshot fields for two months unnoticed (PR #235). Reference ETFs added 2026-11-17 (PR #281) after SMH and SOXX bars stopped on 11-02 with no alarm.",
+    "body": "<p><code>aether/data_completeness.py</code> counts how often every snapshot field is filled and compares it with the median of the last 10 sessions; a usually-filled field that empties is an alarm, without anyone listing which fields matter. It also checks the snapshot count, value ranges (the 12-char signal string, the PGR rating) and that each stock has an OHLCV bar for the session.</p><p class=\"mt-2\"><b>Reference ETFs</b> (default QQQ, SMH, SOXX, XLK, SPY, RSP, GDX, VXX, UVXY; VXX/UVXY stand in for the VIX index, which the data API does not serve) are fetched by the nightly repair pass as soon as they miss the latest session's bar, and the check alarms when one has no bar for the session before the checked day.</p>",
+    "config": [
+      "Run by hand: python -m aether.data_completeness [--date YYYY-MM-DD]",
+      "Reference list: rapidapi.reference_symbols in config.json (a list or \"A,B\") or AETHER_REFERENCE_SYMBOLS; default in aether/config.py DEFAULT_REFERENCE_SYMBOLS"
     ]
   },
   "preflight_buy_gate": {

@@ -55,6 +55,9 @@ class TestRunSummary(unittest.TestCase):
                                  (1, 0) if level == "error" else (0, 1))
         log = self._summary(two, updated=398, held=["BSY"])
         self.assertIn("held positions among them: BSY", log.error.call_args.args[0])
+        log = self._summary([("QQQ", "Read timed out")], updated=398, held=["QQQ"])   # a reference ETF
+        self.assertIn("; reference ETFs among them: QQQ", log.error.call_args.args[0])
+        self.assertNotIn("held positions", log.error.call_args.args[0])
 
 
 class TestPerSymbolFailureIsAWarning(unittest.TestCase):

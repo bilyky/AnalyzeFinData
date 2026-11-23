@@ -37,12 +37,14 @@ from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import notify
 from aether_logger import get_logger as _get_logger
 import powergauge
 import instruments
-from aether import ledgers
+from aether import ledgers, risk_utils
+import rule_walkforward as wf
 from aether.scoring import short_score as _short_score, long_score as _long_score
 
 _log = _get_logger("pattern_discovery")
@@ -56,6 +58,16 @@ OUT_DIR   = BASE_DIR / "Data"
 SCORE_THRESHOLD_S10 = 10.0   # min S10+L60 for a BUY in BALANCED
 SCORE_THRESHOLD_DEF =  9.5   # min S10+L60 for DEFENSIVE
 PGR_REQUIRED        = {4, 5}  # Bu / Bu+  (pgr_corrected_value)
+# "Would the game have bought it" uses today's live entry gates, as modelled by rule_walkforward
+# (the replay R&D #57/#75 use): S10 floor, combined minimum, Setup, R:R >= 2 and target gain >= 5%
+# unless an elite breakout (R&D #32), and the live TOXIC_BEARISH_PGR rule, waived for an elite
+# breakout (R&D #13). Until 2026-11-19 it was S10+L60 >= 9.5 (the DEFENSIVE profile) + PGR Bu/Bu+,
+# so "missed" counted names the live game would have bought.
+# This is a THIRD copy of the entry gates (with steps.screen_buys and rule_walkforward), and
+# LIVE_MIN_GAIN repeats admit_mask's 5% literal. Planned exit: plan F11 (#303) folds it into the one
+# buy-spec set (aether/buy_specs.py), so the "missed" verdict and the live gates cannot drift apart.
+LIVE_S10_FLOOR, _LIVE_SETUP, LIVE_MIN_RR = wf.CURRENT[0], wf.CURRENT[1], wf.CURRENT[2]
+LIVE_MIN_GAIN = 5.0
 HORIZONS            = {"s10": 10, "l60": 60}
 
 
@@ -156,6 +168,13 @@ def reconstruct_scores(replay_date: str, symbols: list[str] | None = None) -> li
             return None
         s10 = f.get("short_score", 0.0)
         l60 = f.get("long_score",  0.0)
+        rr = gain = None
+        try:
+            dates = sorted(d for d in ts if d <= use_date)
+            if dates:
+                rr, gain = wf._risk(pg.price, len(dates) - 1, dates, ts)
+        except Exception:
+            pass
         return {
             "symbol":            sym,
             "cache_date":        use_date,
@@ -180,6 +199,8 @@ def reconstruct_scores(replay_date: str, symbols: list[str] | None = None) -> li
             "pattern_text":      f.get("pattern_text", ""),
             "digit_sum":         round(f.get("digit_sum", 0.0), 2),
             "setup_ok":          f.get("setup_ok"),
+            "rr":                None if rr is None else round(rr, 2),
+            "gain":              None if gain is None else round(gain, 2),
         }
 
     results = []
@@ -214,28 +235,38 @@ def compute_forward_returns(replay_date: str, symbols: list[str]) -> dict[str, d
 
 # ── Phase 3: missed winners ───────────────────────────────────────────────────
 
-def _would_have_bought(row: dict, threshold: float = SCORE_THRESHOLD_DEF) -> bool:
-    return (row["combined"] >= threshold
-            and row["pgr_val"] in PGR_REQUIRED
-            and row.get("setup_ok") is not False)
-
-
-def _rejection_reasons(row: dict, threshold: float = SCORE_THRESHOLD_DEF) -> list[str]:
-    reasons = []
-    if row["combined"] < threshold:
-        reasons.append(f"score={row['combined']:.1f} < {threshold}")
-    if row["pgr_val"] not in PGR_REQUIRED:
-        reasons.append(f"pgr={row['pgr']} not Bu/Bu+")
+def _gate_failures(row: dict) -> list[str]:
+    """The live entry gates this row fails (empty: the game would have bought it)."""
+    s10, comb = row["s10"], row["combined"]
+    elite = risk_utils.is_elite_breakout_candidate(comb, s10)
+    out = []
+    if s10 < LIVE_S10_FLOOR:
+        out.append(f"s10={s10:.1f} < {LIVE_S10_FLOOR}")
+    if comb < wf.MIN_COMBINED:
+        out.append(f"combined={comb:.1f} < {wf.MIN_COMBINED}")
     if row.get("setup_ok") is False:
-        reasons.append("setup=False")
-    return reasons or ["passed_all_filters"]
+        out.append("setup=False")
+    rr, gain = row.get("rr"), row.get("gain")
+    if not elite and not (rr is not None and gain is not None and rr >= LIVE_MIN_RR and gain >= LIVE_MIN_GAIN):
+        out.append(f"R:R {'?' if rr is None else f'{rr:.2f}'} / gain {'?' if gain is None else f'{gain:.1f}'}% "
+                   f"below {LIVE_MIN_RR} / {LIVE_MIN_GAIN}% (not elite)")
+    if str(row.get("pgr") or "").startswith("Be") and not elite:
+        out.append(f"pgr={row['pgr']} Bearish (not elite)")
+    return out
+
+
+def _would_have_bought(row: dict) -> bool:
+    return not _gate_failures(row)
+
+
+def _rejection_reasons(row: dict) -> list[str]:
+    return _gate_failures(row) or ["passed_all_filters"]
 
 
 def find_missed_winners(scores: list[dict], returns: dict[str, dict],
                         top_n: int = 10, horizon: str = "s10") -> dict:
     """Classify top-N actual winners as bought/missed/not_in_universe."""
     r_key = "r10" if horizon == "s10" else "r60"
-    threshold = SCORE_THRESHOLD_DEF
 
     score_map = {r["symbol"]: r for r in scores}
 
@@ -255,13 +286,13 @@ def find_missed_winners(scores: list[dict], returns: dict[str, dict],
             status = "not_in_universe"
             reasons = ["no_chaikin_cache"]
             entry = {}
-        elif _would_have_bought(row, threshold):
+        elif _would_have_bought(row):
             status = "bought"
             reasons = ["passed_all_filters"]
             entry = row
         else:
             status = "missed"
-            reasons = _rejection_reasons(row, threshold)
+            reasons = _rejection_reasons(row)
             entry = row
 
         winners.append({
@@ -290,7 +321,7 @@ def find_missed_winners(scores: list[dict], returns: dict[str, dict],
         ret = returns.get(sym, {}).get(r_key)
         if ret is None:
             continue
-        if _would_have_bought(row, threshold) and ret < 0:
+        if _would_have_bought(row) and ret < 0:
             false_positives.append({
                 "symbol":  sym,
                 f"fwd_{r_key}": round(ret, 2),
@@ -448,14 +479,19 @@ def extract_candidate_patterns(missed: list[dict], all_scores: list[dict],
             ret = returns.get(sym, {}).get(r_key)
             if ret is not None:
                 combo_hits.append((sym, ret, row.get("combined", 0)))
-    if len(combo_hits) >= 5:
-        avg_ret = sum(r for _, r, _ in combo_hits) / len(combo_hits)
+    universe = [v.get(r_key) for v in returns.values() if v.get(r_key) is not None]
+    universe_avg = sum(universe) / len(universe) if universe else 0.0
+    avg_ret = sum(r for _, r, _ in combo_hits) / len(combo_hits) if combo_hits else 0.0
+    # A candidate is a pattern that did BETTER than the universe. 10-22: n=19, -5.27% vs -3.48%
+    # universe, and it was still listed as a missed-winner pattern.
+    if len(combo_hits) >= 5 and avg_ret > universe_avg:
         candidates.append({
             "type":           "combo_signal",
             "name":           "StrongMF+PositiveChart",
             "condition":      {"money_flow": "Strong", "chart_score": ">0"},
             "n":              len(combo_hits),
             "avg_return":     round(avg_ret, 2),
+            "universe_avg":   round(universe_avg, 2),
             "hypothesis":     "Strong money flow combined with positive chart pattern score — the contrarian chart weight may be too aggressive when MF confirms",
         })
 
