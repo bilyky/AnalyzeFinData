@@ -101,20 +101,115 @@ class TestFillsAndWindow(unittest.TestCase):
         self.assertFalse(ip.fill_status(fills, {"SPY": 92.01, "ABC": 45.0}, -0.08)[0]["stopped"])
         self.assertTrue(ip.fill_status(fills, {"SPY": 99.0, "ABC": 45.0}, -0.08)[1]["stopped"])
 
+    def test_index_stop_follows_the_average_cost(self):
+        # Owner 2026-11-20: buying more SPY moves its stop to 8% under the new average, for every lot.
+        fills = [{"date": "2030-03-06", "symbol": "SPY", "shares": 10, "price": 100.0},
+                 {"date": "2030-03-13", "symbol": "SPY", "shares": 10, "price": 90.0}]
+        st = ip.fill_status(fills, {"SPY": 88.0}, -0.08)
+        self.assertEqual([round(f["stop"], 2) for f in st], [87.4, 87.4])          # 95 * 0.92
+        self.assertEqual([f["stopped"] for f in st], [False, False])                # the first lot alone would be
+        self.assertTrue(ip.fill_status(fills, {"SPY": 88.0}, -0.08, basis="lot")[0]["stopped"])   # stopped at 92
+
+    def test_one_sell_for_the_whole_symbol(self):
+        plan = {**PLAN, "fills": [{"date": "2030-03-06", "symbol": "SPY", "shares": 10, "price": 100.0},
+                                  {"date": "2030-03-13", "symbol": "SPY", "shares": 10, "price": 90.0}]}
+        falling = [120.0 - 0.4 * i for i in range(80)]            # lows only fall: no confirmed support anywhere
+        falling[-1] = 87.0
+        r = ip.check(plan, D(2030, 3, 20), {"SPY": _bars(falling, end=D(2030, 3, 19)), "RSP": FLAT})
+        sells = [a for a in r["actions"] if a.startswith(("SELL SPY", "WAIT (not sure): SELL SPY"))]
+        self.assertEqual(len(sells), 1)
+        self.assertIn("all 20 sh", sells[0])
+        self.assertIn("8% under the average cost 95.00", sells[0])
+
+    def test_support_but_never_closer_than_8_percent(self):
+        # Owner 2026-11-20: the stop sits at support (x 0.99, the game's rule) only when that is at least 8% down.
+        fills = [{"date": "2030-03-06", "symbol": "SPY", "shares": 10, "price": 100.0}]
+        closes = [100.0] * 30 + [97, 95, 93, 91, 93, 95, 97, 99] + [100.0] * 2      # a confirmed swing low at 91
+        bars = _bars(closes, end=D(2030, 3, 6))
+        self.assertEqual(ip.entry_support(fills, "SPY", bars), 91)
+        st = ip.fill_status(fills, {"SPY": 90.5}, -0.08, supports={"SPY": 91.0})    # 90.09 is below 92: support
+        self.assertEqual((st[0]["stop"], st[0]["stop_source"], st[0]["stopped"]), (90.09, "support", False))
+        st = ip.fill_status(fills, {"SPY": 93.0}, -0.08, supports={"SPY": 96.0})    # support 95.04 too close: 8%
+        self.assertEqual((round(st[0]["stop"], 2), st[0]["stop_source"], st[0]["stopped"]), (92.0, "pct", False))
+        st = ip.fill_status(fills, {"SPY": 69.0}, -0.08, supports={"SPY": 60.0})    # support 59.40: capped at 30%
+        self.assertEqual((round(st[0]["stop"], 2), st[0]["stop_source"], st[0]["stopped"]), (70.0, "cap", True))
+        st = ip.fill_status(fills, {"SPY": 75.0}, -0.08, supports={"SPY": 60.0}, index_stop_max=-0.20)
+        self.assertEqual(round(st[0]["stop"], 2), 80.0)
+        st = ip.fill_status(fills, {"SPY": 91.5}, -0.08, supports={"SPY": None})
+        self.assertEqual((round(st[0]["stop"], 2), st[0]["stop_source"], st[0]["stopped"]), (92.0, "pct", True))
+
+    def test_support_ignores_bars_after_the_last_buy(self):
+        fills = [{"date": "2030-03-06", "symbol": "SPY", "shares": 10, "price": 100.0}]
+        later = [100.0] * 40 + [97, 95, 93, 91, 93, 95, 97, 99]          # the swing low forms after the buy
+        self.assertIsNone(ip.entry_support(fills, "SPY", _bars(later, end=D(2030, 3, 18))))
+
     def test_sell_window(self):
         plan = {**PLAN, "fills": [_fill("2030-03-06", 100)]}
         r = ip.check(plan, D(2030, 4, 15), {"SPY": _bars([100.0] * 80, end=D(2030, 4, 12)), "RSP": FLAT})
-        self.assertIn("SELL WINDOW: sell everything with limit orders by 2030-04-22 (latest 2030-04-29)",
+        self.assertIn("SELL WINDOW: sell the plan's lots with limit orders by 2030-04-22 (latest 2030-04-29)",
                       r["actions"])
         r = ip.check(plan, D(2030, 4, 1), {"SPY": _bars([100.0] * 80, end=D(2030, 3, 29)), "RSP": FLAT})
         self.assertIn("14 days to the sell window", r["notes"][0])
+
+    def test_long_term_lots_skip_the_sell_window_but_share_the_stop(self):
+        # Owner 2026-11-21: new money held into next year sits in the same plan, marked "hold": "long".
+        plan = {**PLAN, "fills": [_fill("2030-03-06", 100),
+                                  {"date": "2030-04-01", "symbol": "SPY", "shares": 1, "price": 80.0, "hold": "long"}]}
+        r = ip.check(plan, D(2030, 4, 15), {"SPY": _bars([100.0] * 80, end=D(2030, 4, 12)), "RSP": FLAT})
+        win = [a for a in r["actions"] if "SELL WINDOW" in a]
+        self.assertEqual(len(win), 1)
+        self.assertIn("keep the 1 long-term lot(s) (SPY)", win[0])
+        self.assertEqual({round(f["avg_cost"], 2) for f in r["fills"]}, {90.0})          # (1x100 + 1x80) / 2
+        only_long = {**PLAN, "fills": [plan["fills"][1]]}
+        r = ip.check(only_long, D(2030, 4, 15), {"SPY": _bars([100.0] * 80, end=D(2030, 4, 12)), "RSP": FLAT})
+        self.assertFalse([a for a in r["actions"] if "SELL WINDOW" in a])
+
+    def test_long_term_lots_never_cover_a_step(self):
+        long_fill = {"date": "2030-03-06", "symbol": "SPY", "shares": 20, "price": 100.0, "hold": "long"}
+        r = ip.check({**PLAN, "fills": [long_fill]}, TODAY, {"SPY": FLAT, "RSP": FLAT})
+        self.assertEqual(r["steps"][0]["state"], "due today")
 
     def test_sell_window_needs_holdings(self):
         r = ip.check(PLAN, D(2030, 4, 15), {"SPY": _bars([100.0] * 80, end=D(2030, 4, 12)), "RSP": FLAT})
         self.assertFalse([a for a in r["actions"] if "SELL WINDOW" in a])
 
 
+class TestOdds(unittest.TestCase):
+    """Owner 2026-11-21: every index holding shows the win/loss odds of today's setup (descriptive)."""
+
+    def test_counts_past_setups_in_the_same_band_without_look_ahead(self):
+        # 100 flat, a drop to 90 (10% under the 50-day), a recovery to 100, repeated; today is in the drop.
+        cycle = [100.0] * 60 + [90.0] * 5 + [100.0] * 60
+        closes = cycle * 3 + [100.0] * 60 + [90.0]
+        o = ip.odds(closes)
+        self.assertEqual(o["bucket"], "8%+ under the 50-day average")
+        self.assertEqual(o["n"], 3)                       # one per past drop (5 days each, 20+ apart)
+        self.assertEqual((o["p_up"], o["p_up_first"], o["p_down_first"]), (1.0, 1.0, 0.0))
+        self.assertAlmostEqual(o["median"], 100 / 90 - 1)
+        self.assertEqual(ip.odds(closes + [50.0] * 70, len(closes) - 1), o)   # later bars change nothing
+
+    def test_short_history_and_no_past_setup(self):
+        self.assertIsNone(ip.odds([100.0] * 40))
+        self.assertEqual(ip.odds([100.0] * 200 + [80.0])["n"], 0)
+
+    def test_check_adds_one_odds_note_per_index_fund(self):
+        cycle = [100.0] * 60 + [90.0] * 5 + [100.0] * 60
+        spy = _bars(cycle * 3 + [100.0] * 60 + [90.0], end=D(2030, 3, 5))
+        plan = {**PLAN, "fills": [_fill("2030-03-01", 100)]}
+        r = ip.check(plan, TODAY, {"SPY": spy, "RSP": FLAT})
+        notes = [n for n in r["notes"] if n.startswith("SPY odds")]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("n=3, descriptive", notes[0])
+        self.assertIn("-8% first 0%, +8% first 100%", notes[0])
+        self.assertEqual(r["odds"]["SPY"]["n"], 3)
+
+
 class TestNotSure(unittest.TestCase):
+    def test_a_holding_older_than_spy_is_a_doubt(self):
+        plan = {**PLAN, "fills": [{"date": "2030-02-20", "symbol": "RSP", "shares": 10, "price": 100.0}]}
+        r = ip.check(plan, TODAY, {"SPY": FLAT, "RSP": _bars([100.0] * 80, end=D(2030, 3, 1))})
+        self.assertIn("price bars for RSP end before SPY's (2030-03-05): refresh first", r["doubts"])
+
     def test_stale_prices_turn_buys_and_sells_into_wait(self):
         stale = _bars([100.0] * 79 + [96.0], end=D(2030, 2, 26))           # last bar a week old
         plan = {**PLAN, "fills": [{"date": "2030-03-06", "symbol": "SPY", "shares": 10, "price": 105.0}]}

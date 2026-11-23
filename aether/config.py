@@ -60,6 +60,33 @@ def _num_list(env_val, file_val, default):
     return list(default)
 
 
+# Reference ETFs whose OHLCV bars are kept current whether or not they are on the Research
+# sheet: the rapidapi.py repair pass always fetches them, and data_completeness alarms when one
+# is behind. Override per machine with rapidapi.reference_symbols in config.json (a list, or a
+# comma-separated string) or AETHER_REFERENCE_SYMBOLS; this list is the default.
+# VXX/UVXY stand in for the VIX index, which Alpha Vantage's daily endpoint rejects
+# ("Invalid API call", checked 2026-11-17). Both reverse-split often: split_adjust_ohlcv
+# can mistake a real volatility spike with a gap open (close >= 1.8x) for a split.
+DEFAULT_REFERENCE_SYMBOLS = ("QQQ", "SMH", "SOXX", "XLK", "SPY", "RSP", "GDX", "VXX", "UVXY")
+
+
+def _symbol_list(value, default) -> tuple:
+    """Tickers from a list or a comma-separated string, upper-cased, order kept, duplicates
+    dropped. Anything else, or an empty result, gives the default (a bad value never crashes
+    config load or empties the list)."""
+    if isinstance(value, str):
+        value = value.split(",")
+    if isinstance(value, (list, tuple)):
+        out = []
+        for x in value:
+            s = str(x).strip().upper() if isinstance(x, str) else ""
+            if s and s not in out:
+                out.append(s)
+        if out:
+            return tuple(out)
+    return tuple(default)
+
+
 class _Config:
     def __init__(self):
         raw = _load_file()
@@ -121,6 +148,11 @@ class _Config:
         # larger, so the pass works most-starved-first and the next run picks up the rest.
         self.rapidapi_max_fetches = int(
             os.environ.get("RAPIDAPI_MAX_FETCHES", "") or rapidapi.get("max_fetches_per_run", 400)
+        )
+        # Reference ETFs kept current off the Research sheet (data_completeness.reference_symbols).
+        self.reference_symbols = _symbol_list(
+            os.environ.get("AETHER_REFERENCE_SYMBOLS", "") or rapidapi.get("reference_symbols"),
+            DEFAULT_REFERENCE_SYMBOLS,
         )
 
         # ── Email Intelligence (multiple mailboxes configuration) ────────────

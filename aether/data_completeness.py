@@ -11,6 +11,7 @@ Also checked:
   - the number of snapshots vs the usual count;
   - values: the 12-char signal string is 0/1 only, the PGR rating is 1-5;
   - each stock's OHLCV (Data/Symbol_full) has a bar for the session;
+  - each reference ETF (reference_symbols()) has a bar for the session before it;
   - each snapshot has its raw copy (Data/Symbol_raw), once that folder exists;
   - screen symbols (``expected``, the Research sheet) that were there in 8 of the last 10
     sessions and are missing today are named;
@@ -38,6 +39,7 @@ import sys
 import openpyxl
 
 from aether import market_calendar, paths
+from aether.config import CFG
 
 BASELINE_DAYS = 10          # prior sessions the fill rates are compared with
 USUAL_FILL = 0.5            # a field filled for at least half the stocks counts as "usual"
@@ -79,6 +81,12 @@ GAME_INPUT_FIELDS = ("pgr.PGR Value", "pgr.Corrected PGR Value", "pgr.Financials
 
 def is_game_input(field: str) -> bool:
     return any(field == p or field.startswith(p + ".") for p in GAME_INPUT_FIELDS)
+
+
+def reference_symbols() -> tuple:
+    """Reference ETFs kept current off the Research sheet: CFG.reference_symbols (config
+    rapidapi.reference_symbols or AETHER_REFERENCE_SYMBOLS, else config.DEFAULT_REFERENCE_SYMBOLS)."""
+    return tuple(CFG.reference_symbols)
 
 
 def _filled(v) -> bool:
@@ -230,6 +238,12 @@ def check(day: str | None = None, base: str | None = None, expected: list | None
         gate.append(alarms[-1])
     elif no_bar:
         notes.append(f"{len(no_bar)} stocks without an OHLCV bar for {day}: {', '.join(no_bar[:10])}")
+    # Off-sheet reference ETFs get bars only from the recovery pass, which runs after the
+    # evening email, so the email can expect the previous session's bar, not today's.
+    prev = _sessions_before(d, 1)[0] if session else None
+    stale_ref = [s for s in reference_symbols() if not _has_bar(s, prev)] if prev else []
+    if stale_ref:
+        alarms.append(f"{len(stale_ref)} reference ETFs have no OHLCV bar for {prev}: {', '.join(stale_ref)}")
     raw_dir = os.path.join(paths.cache_dir(), "Symbol_raw")
     if os.path.isdir(raw_dir):
         no_raw = [s for s in today["symbols"]

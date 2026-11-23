@@ -14,7 +14,7 @@ _os_early.environ["AETHER_CACHE_DIR"] = _test_cache_dir.name
 # Tests that need the DB backend set these themselves (tests/test_etrade_client_store.py).
 # A live run (AETHER_LIVE_TESTS=1) keeps them, like the other live-gated guards below.
 if not _os_early.environ.get("AETHER_LIVE_TESTS"):
-    for _k in ("AETHER_ETRADE_STORE", "DATABASE_URL"):
+    for _k in ("AETHER_ETRADE_STORE", "AETHER_CHAIKIN_STORE", "DATABASE_URL"):
         _os_early.environ.pop(_k, None)
 
 # Globally mock notify.send_email during all unit test executions
@@ -213,6 +213,8 @@ _trash.TRASH_DIR = str(_lock_tmp / ".trash")
 import aether.oceanview_context as _oceanview_context
 (_lock_tmp / "oceanview").mkdir(exist_ok=True)
 _oceanview_context._default_data_dir = lambda: str(_lock_tmp / "oceanview")
+from aether import earnings_calendar as _earnings_calendar  # noqa: E402
+_earnings_calendar._path = lambda: str(_lock_tmp / "earnings_calendar.json")
 _run_guard._DATA_DIR = _lock_tmp
 # The data-health buy-freeze memory (Data/data_gate_memory.json) -> temp: the gate step writes it
 # on every trade run. Tests that need their own file pass a path.

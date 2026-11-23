@@ -12,7 +12,7 @@ try:
     from playwright_stealth import Stealth
 except ImportError:
     Stealth = None
-from aether import lots_refresh, paths
+from aether import chaikin_store, lots_refresh, paths
 from aether.batch_failures import log_batch_failures
 from aether.notify import send_email
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -675,6 +675,17 @@ class PowerGauge:
 
 
 def _load_session_from_file() -> dict:
+    """The Chaikin session: this machine's session.json, or with AETHER_CHAIKIN_STORE=db the newer of it and the
+    shared row (aether.chaikin_store, plan T0.7). Every caller goes through here."""
+    return chaikin_store.load(_load_session_file, SESSION_FILE)
+
+
+def _save_session_to_file(session_data: dict):
+    """Save the session to session.json and, with AETHER_CHAIKIN_STORE=db, to the shared row (the only writer)."""
+    chaikin_store.save(session_data, _save_session_file)
+
+
+def _load_session_file() -> dict:
     session_file = SESSION_FILE
     if not os.path.exists(session_file):
         txt_file = os.path.join(os.path.dirname(SESSION_FILE), "session.txt")
@@ -694,7 +705,7 @@ def _load_session_from_file() -> dict:
             return {}
 
 
-def _save_session_to_file(session_data: dict):
+def _save_session_file(session_data: dict):
     session_file = SESSION_FILE
     os.makedirs(os.path.dirname(session_file), exist_ok=True)
     with open(session_file, "w") as f:

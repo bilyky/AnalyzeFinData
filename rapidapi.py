@@ -10,9 +10,11 @@ This module handles recovery only:
   - Files with gap > MAX_GAP_DAYS               → compact fetch (last 100 days merged)
   - Latest bar is provisional (Chaikin close-only, volume 0) → compact fetch to
     overwrite it with settled real-volume OHLCV (see bar_provenance.is_provisional)
+  - Reference ETFs (CFG.reference_symbols, set in config) missing the latest session's
+    bar → compact fetch; they are fetched even when off the Research sheet
 
 Usage:
-    python rapidapi.py                 # repair all symbols from Research sheet
+    python rapidapi.py                 # repair the Research sheet, held positions and reference ETFs
     python rapidapi.py AAPL MSFT       # repair specific symbols (only if stale/gapped)
     python rapidapi.py INTC --force    # fetch even when the file isn't stale (re-test)
 
@@ -31,7 +33,7 @@ import time
 import numpy as np
 import requests
 
-from aether import paths, trash
+from aether import market_calendar, paths, trash
 from aether.bootstrap import bootstrap
 from aether.core import DEFAULT_PORTFOLIO, StorageError
 from aether.batch_failures import most_failed
@@ -155,7 +157,7 @@ _SYMBOL_OVERRIDES = {
 # None are in the traded universe today; the set only documents intent. Do NOT add real
 # equity tickers here — e.g. COMP is Compass, Inc. (a live NYSE stock with real-volume
 # history in the universe), NOT the Nasdaq Composite; excluding it silently starves it of repair.
-_UNSUPPORTED_SYMBOLS = {"NDX", "SPX", "DJI"}
+_UNSUPPORTED_SYMBOLS = {"NDX", "SPX", "DJI", "VIX"}   # VIX: "Invalid API call" (2026-11-17)
 
 def _fetch_raw(symbol: str, outputsize: str = "compact") -> dict:
     """Single Alpha Vantage HTTP call. Returns parsed JSON. Raises on error."""
@@ -257,17 +259,27 @@ def held_symbols() -> set[str]:
     return {s.upper() for s in game.held_symbols} if game is not None else set()
 
 
-def run_symbols(explicit: list[str], held: set[str], sheet=None) -> list[str]:
+def run_symbols(explicit: list[str], held: set[str], sheet=None, reference=None) -> list[str]:
     """The CLI's symbol list: the explicit symbols if given, else the Research sheet plus any
-    held position missing from it (a held name off the sheet still needs bars)."""
+    held position and reference ETF missing from it (off the sheet they still need bars)."""
     if explicit:
         return [s.upper() for s in explicit]
     syms = list((sheet or load_symbols)())
-    return syms + sorted(held - {s.upper() for s in syms})
+    syms += sorted(held - {s.upper() for s in syms})
+    reference = tuple(CFG.reference_symbols) if reference is None else reference
+    return syms + [s for s in reference if s not in {x.upper() for x in syms}]
+
+
+def _behind_session(existing: dict | None, today_str: str) -> bool:
+    """True when the file has no bar for the latest session on or before today_str."""
+    latest = _latest_date(existing["Time Series (Daily)"]) if existing else None
+    session = market_calendar.last_session_on_or_before(datetime.date.fromisoformat(today_str))
+    return not latest or latest < session.isoformat()
 
 
 def repair_missing(symbols: list[str], today_str: str, force: bool = False,
-                   max_fetches: int | None = None, priority: set[str] | None = None) -> dict:
+                   max_fetches: int | None = None, priority: set[str] | None = None,
+                   daily: set[str] | None = None) -> dict:
     """
     Scan Symbol_full/ and repair symbols with missing, corrupted, or stale files.
     Uses compact fetch (last 100 days) when file exists but has a gap; full fetch
@@ -289,6 +301,10 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
 
     priority: symbols repaired before everything else (the CLI passes the held positions:
     on PROD a held name's placeholder bar waited a week behind ~150 deferred symbols).
+
+    daily: symbols repaired as soon as they miss the latest session's bar, not only after
+    MAX_GAP_DAYS (the CLI passes the reference ETFs: off the sheet nothing else writes their
+    bars, and SMH/SOXX sat two weeks stale in 2026-11).
     """
     results = {"updated": 0, "skipped": 0, "errors": [], "deferred": 0, "quota_stopped": False,
                "failed_priority": []}
@@ -334,6 +350,8 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
                 continue
             path = os.path.join(OHLCV_DIR, f"{sym}_daily.json")
             needs, existing = _check_recovery(path, today_str)
+            if not needs and daily and sym.upper() in daily:
+                needs = _behind_session(existing, today_str)
             if not needs and not force:
                 results["skipped"] += 1
                 continue
@@ -449,29 +467,41 @@ def log_run_summary(result: dict) -> None:
               " (stopped: quota spent)" if result["quota_stopped"] else "")
     if not result["errors"]:
         return
-    held = result.get("failed_priority") or []
-    msg = ("  [RapidAPI] %d symbol(s) failed this run (retried next run): %s%s"
+    failed = result.get("failed_priority") or []
+    ref = [s for s in failed if s.upper() in CFG.reference_symbols]
+    held = [s for s in failed if s not in ref]
+    msg = ("  [RapidAPI] %d symbol(s) failed this run (retried next run): %s%s%s"
            % (len(result["errors"]), ", ".join(sym for sym, _ in result["errors"]),
-              f"; held positions among them: {', '.join(held)}" if held else ""))
+              f"; held positions among them: {', '.join(held)}" if held else "",
+              f"; reference ETFs among them: {', '.join(ref)}" if ref else ""))
     (_log.error if run_needs_attention(result) else _log.warning)(msg)
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
+def main(argv=None) -> None:
     today_str = str(datetime.date.today())
 
     ap = argparse.ArgumentParser(description="RapidAPI OHLCV recovery pass")
-    ap.add_argument("symbols", nargs="*", help="symbols to repair (default: the Research sheet)")
+    ap.add_argument("symbols", nargs="*",
+                    help="symbols to repair (default: the Research sheet, held positions, reference ETFs)")
     ap.add_argument("--force", action="store_true", help="fetch even symbols that look current")
     ap.add_argument("--max-fetches", type=int, default=None,
                     help=f"API calls allowed this run (default {CFG.rapidapi_max_fetches})")
-    cli = ap.parse_args()
+    cli = ap.parse_args(argv)
     force, max_fetches = cli.force, cli.max_fetches
 
     held = held_symbols()
     syms = run_symbols(cli.symbols, held)
+    # Reference ETFs go first with the held names: at most a handful of fetches, and the
+    # regime and pick checks read them.
+    reference = set(CFG.reference_symbols)
     _log.console("[RapidAPI] Recovery pass — %d symbols (%d held), today=%s, force=%s",
                  len(syms), len(held), today_str, force)
-    result = repair_missing(syms, today_str, force=force, max_fetches=max_fetches, priority=held)
+    result = repair_missing(syms, today_str, force=force, max_fetches=max_fetches,
+                            priority=held | reference, daily=reference)
     log_run_summary(result)
+
+
+if __name__ == "__main__":
+    main()
