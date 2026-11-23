@@ -14,8 +14,8 @@
   {
    "id": "O2a",
    "title": "Harvest engine (aether/harvest.py): per-lot ST/LT, tax effect, year net",
-   "status": "in_progress",
-   "pr": null,
+   "status": "in_review",
+   "pr": 316,
    "prod": false,
    "note": "harvest list from live lots: python -m aether.harvest"
   },
