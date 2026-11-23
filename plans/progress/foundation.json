@@ -1,7 +1,7 @@
 {
  "project": "Foundation (Track 0)",
  "goal": "What every other stage needs: fresh data, a working decision log, shadow mode and an impact report.",
- "updated": "2026-11-20",
+ "updated": "2026-11-22",
  "stages": [
   {
    "id": "T0.1",
@@ -21,9 +21,9 @@
   {
    "id": "T0.3",
    "title": "Development page lists every multi-stage project",
-   "status": "in_review",
+   "status": "done",
    "pr": 312,
-   "prod": false
+   "prod": true
   },
   {
    "id": "T0.4",
@@ -49,10 +49,10 @@
   {
    "id": "T0.7",
    "title": "Shared Chaikin session in the DB",
-   "status": "in_progress",
-   "pr": null,
+   "status": "in_review",
+   "pr": 313,
    "prod": false,
-   "note": "stage 0: works from dev; PROD probe pending"
+   "note": "stage 0 passed 11-22 (one session on both machines); store built, off until AETHER_CHAIKIN_STORE=db"
   }
  ],
  "plan": "approved plan 2026-11-20 (private); R&D items in plans/roadmap.md"
