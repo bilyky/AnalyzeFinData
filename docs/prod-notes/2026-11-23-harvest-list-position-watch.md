@@ -6,6 +6,10 @@
   `st_rate` / `lt_rate` in `Data\position_watch\config.json`, and the first clean buy-back date (today + 31 days).
 - **WASH RISK** marks a buy of the same symbol within the last 30 days in any listed account. Selling only the older
   lots at a loss would then be partly a wash sale: sell every lot, or wait.
+- **Scheduled buys (O2b):** the watched symbol's vest / purchase dates (`acquisition_dates` in position-watch's
+  config) are checked too. A loss sale within 30 days of one is flagged `VEST/ESPP <date>`, with the next clean day.
+- The watched symbol's loss lots are listed even when the whole position is up (`loss lots only`: sell them by
+  specific lot).
 - Not checked: accounts the API doesn't list (stock plan, 401(k), other brokers).
 - `--json` prints the full list. It holds account digits and amounts, so keep it private.
 

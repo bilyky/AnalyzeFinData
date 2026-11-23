@@ -10,6 +10,9 @@ lot turning long-term next week was easy to miss. This computes it from E*TRADE'
   * wash-sale flags: a buy of the same symbol in any listed account within the last 30 days. Selling only the old
     lots at a loss would then be (partly) a wash sale, because the new shares stay; selling every lot, the new ones
     too, avoids that. Also the first clean buy-back date (sale date + 31 days);
+  * scheduled buys of the watched symbol (vest / ESPP dates from position-watch's config, plan O2b): a loss sale
+    within 30 days of one is a wash sale, so the list shows the conflicting dates and the next clean day;
+  * the watched symbol's loss lots even when the whole position is up (specific-lot sales);
   * the list ranked by tax value.
 
 It never places an order and writes nothing. Accounts the API doesn't list (the stock plan, a 401(k), an IRA at
@@ -47,6 +50,21 @@ def is_long_term(acquired: datetime.date, sale: datetime.date) -> bool:
     return sale > anniversary(acquired)
 
 
+def scheduled_near(sale: datetime.date, dates: list) -> list:
+    """Scheduled buys (ISO dates) within 30 days either side of ``sale``: a loss sale then is a wash sale."""
+    return sorted(d for d in dates if abs((sale - datetime.date.fromisoformat(d)).days) <= WASH_DAYS)
+
+
+def next_clean_day(sale: datetime.date, dates: list, horizon_days: int = 400) -> str | None:
+    """The first day on or after ``sale`` more than 30 days from every scheduled buy (calendar days; the
+    caller picks a trading session on or after it). None when there is none within the horizon."""
+    for k in range(horizon_days + 1):
+        day = sale + datetime.timedelta(days=k)
+        if not scheduled_near(day, dates):
+            return day.isoformat()
+    return None
+
+
 def lot_row(raw: dict, symbol: str, account: str) -> dict | None:
     """One E*TRADE PositionLot as a plain row; None when it has no shares or no date."""
     acquired = et_date(raw.get("acquiredDate"))
@@ -59,8 +77,8 @@ def lot_row(raw: dict, symbol: str, account: str) -> dict | None:
             "gain": value - cost}
 
 
-def summarize(rows: list, sale: datetime.date, rates: dict) -> dict:
-    """One symbol across its accounts: losses by term, tax value, wash flags, buy-back date."""
+def summarize(rows: list, sale: datetime.date, rates: dict, scheduled: list | None = None) -> dict:
+    """One symbol across its accounts: losses by term, tax value, wash flags, buy-back date, scheduled buys."""
     st_loss = sum(min(r["gain"], 0) for r in rows if not is_long_term(datetime.date.fromisoformat(r["acquired"]), sale))
     lt_loss = sum(min(r["gain"], 0) for r in rows if is_long_term(datetime.date.fromisoformat(r["acquired"]), sale))
     gains = sum(max(r["gain"], 0) for r in rows)
@@ -76,22 +94,40 @@ def summarize(rows: list, sale: datetime.date, rates: dict) -> dict:
             "tax_value": -(st_loss * rates["st_rate"] + lt_loss * rates["lt_rate"]),
             "wash_risk_buys": recent,                       # buys within 30 days: a loss sale now is (partly) a wash
             "st_lots_turning_lt": turning,                  # a short-term loss lot turning long-term within 30 days
-            "buy_back_after": (sale + datetime.timedelta(days=WASH_DAYS + 1)).isoformat()}
+            "buy_back_after": (sale + datetime.timedelta(days=WASH_DAYS + 1)).isoformat(),
+            "scheduled_buys_near": scheduled_near(sale, scheduled or []),
+            "next_clean_day": next_clean_day(sale, scheduled) if scheduled else sale.isoformat(),
+            "lots_only": False}
 
 
-def harvest_list(rows: list, sale: datetime.date, rates: dict | None = None) -> list:
-    """Symbols with a net loss, ranked by the tax value of selling them on ``sale``."""
+def harvest_list(rows: list, sale: datetime.date, rates: dict | None = None, scheduled: dict | None = None,
+                 lot_level: tuple = ()) -> list:
+    """Symbols with a net loss, ranked by the tax value of selling them on ``sale``. ``scheduled``: {symbol:
+    [ISO dates]} of planned buys (vest / ESPP). ``lot_level``: symbols whose loss lots are listed even when the
+    whole position is up (sold by specific lot; the entry has ``lots_only`` True)."""
     rates = {**DEFAULT_RATES, **(rates or {})}
+    scheduled = scheduled or {}
     by = {}
     for r in rows:
         by.setdefault(r["symbol"], []).append(r)
-    out = [summarize(v, sale, rates) for v in by.values()]
-    return sorted([s for s in out if s["value"] < s["cost"]], key=lambda s: -s["tax_value"])
+    out = []
+    for sym, v in by.items():
+        s = summarize(v, sale, rates, scheduled.get(sym))
+        if s["value"] < s["cost"]:
+            out.append(s)
+        elif sym in lot_level and any(r["gain"] < 0 for r in v):
+            losers = [r for r in v if r["gain"] < 0]
+            s = summarize(losers, sale, rates, scheduled.get(sym))
+            s["wash_risk_buys"] = summarize(v, sale, rates)["wash_risk_buys"]   # recent buys of any lot count
+            s["lots_only"] = True
+            out.append(s)
+    return sorted(out, key=lambda s: -s["tax_value"])
 
 
 # ── live read (thin adapter; read-only) ─────────────────────────────────────────────────────────
-def live_rows(client=None) -> list:
-    """Every lot of every position that is below cost in some account, through the ETradeClient facade."""
+def live_rows(client=None, always: tuple = ()) -> list:
+    """Every lot of every position that is below cost in some account (and of the ``always`` symbols, whose loss
+    lots can be sold on their own), through the ETradeClient facade."""
     client = client or ETradeClient("production", role="data")
     keys = client.accounts.account_keys()
     positions = client.accounts.positions()
@@ -100,7 +136,7 @@ def live_rows(client=None) -> list:
     rows = []
     for p in positions:
         sym, last4 = str(p["symbol"]).upper(), str(p.get("account_last4") or "")
-        if sym not in losers or last4 not in keys:
+        if (sym not in losers and sym not in always) or last4 not in keys:
             continue
         for raw in client.accounts.position_lots(sym, keys[last4]):
             row = lot_row(raw, sym, last4)
@@ -109,11 +145,14 @@ def live_rows(client=None) -> list:
     return rows
 
 
-def _rates() -> dict:
+def _config() -> dict:
     try:
-        cfg = store.read_config() or {}
+        return store.read_config() or {}
     except (OSError, ValueError):
-        cfg = {}
+        return {}
+
+
+def _rates(cfg: dict) -> dict:
     return {k: float(cfg.get(k, v)) for k, v in DEFAULT_RATES.items()}
 
 
@@ -122,8 +161,12 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     sale = datetime.date.today()
-    rates = _rates()
-    lst = harvest_list(live_rows(), sale, rates)
+    cfg = _config()
+    rates = _rates(cfg)
+    watched = str(cfg.get("symbol") or "").upper()
+    scheduled = {watched: list(cfg.get("acquisition_dates") or [])} if watched else {}
+    lst = harvest_list(live_rows(always=(watched,) if watched else ()), sale, rates, scheduled,
+                       lot_level=(watched,) if watched else ())
     if a.json:
         sys.stdout.write(json.dumps({"sale_date": sale.isoformat(), "rates": rates, "note": NOT_CHECKED,
                                      "list": lst}, indent=1) + "\n")
@@ -134,6 +177,10 @@ def main(argv=None) -> int:
         flags = []
         if s["wash_risk_buys"]:
             flags.append(f"WASH RISK: bought {', '.join(s['wash_risk_buys'])}; sell every lot or wait")
+        if s["scheduled_buys_near"]:
+            flags.append(f"VEST/ESPP {', '.join(s['scheduled_buys_near'])}: loss sale is a wash until {s['next_clean_day']}")
+        if s["lots_only"]:
+            flags.append("loss lots only: the position is up overall, sell these lots by specific ID")
         if s["st_lots_turning_lt"]:
             flags.append(f"short-term loss lot turns long-term {', '.join(s['st_lots_turning_lt'])}")
         sys.stdout.write(f"  {s['symbol']:6} {'/'.join('...' + x for x in s['accounts']):14} {s['qty']:>8.0f} sh"

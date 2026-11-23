@@ -76,6 +76,43 @@ class TestList(unittest.TestCase):
         self.assertEqual((s["accounts"], s["st_loss"]), (["1111", "2222"], -400))
 
 
+class TestScheduledBuys(unittest.TestCase):
+    DATES = ["2030-02-19", "2030-02-28", "2030-05-31"]          # placeholder vest / purchase dates
+
+    def test_conflicts_within_30_days_either_side(self):
+        self.assertEqual(hv.scheduled_near(D(2030, 2, 1), self.DATES), ["2030-02-19", "2030-02-28"])
+        self.assertEqual(hv.scheduled_near(D(2030, 1, 20), self.DATES), ["2030-02-19"])        # 30 days before
+        self.assertEqual(hv.scheduled_near(D(2030, 1, 18), self.DATES), [])
+
+    def test_next_clean_day(self):
+        self.assertEqual(hv.next_clean_day(D(2030, 2, 1), self.DATES), "2030-03-31")   # 31 days after 02-28
+        self.assertEqual(hv.next_clean_day(D(2030, 1, 1), self.DATES), "2030-01-01")
+        self.assertIsNone(hv.next_clean_day(D(2030, 2, 1), self.DATES, horizon_days=10))
+
+    def test_the_list_shows_scheduled_conflicts(self):
+        rows = [_row("ABC", "2023-01-02", 1000, 500)]
+        (s,) = hv.harvest_list(rows, D(2030, 2, 1), RATES, scheduled={"ABC": self.DATES})
+        self.assertEqual((s["scheduled_buys_near"], s["next_clean_day"]), (["2030-02-19", "2030-02-28"], "2030-03-31"))
+        (s,) = hv.harvest_list(rows, D(2030, 2, 1), RATES)
+        self.assertEqual((s["scheduled_buys_near"], s["next_clean_day"]), ([], "2030-02-01"))
+
+
+class TestLotLevel(unittest.TestCase):
+    def test_loss_lots_of_a_gaining_position_are_listed_only_when_asked(self):
+        rows = [_row("ABC", "2017-01-02", 1000, 5000), _row("ABC", "2026-01-05", 2000, 1500)]   # up overall
+        self.assertEqual(hv.harvest_list(rows, D(2026, 11, 23), RATES), [])
+        (s,) = hv.harvest_list(rows, D(2026, 11, 23), RATES, lot_level=("ABC",))
+        self.assertTrue(s["lots_only"])
+        self.assertEqual((s["st_loss"], s["lt_loss"], s["lots"]), (-500, 0, 1))      # only the loss lot
+        self.assertAlmostEqual(s["tax_value"], 500 * 0.40)
+
+    def test_a_recent_buy_of_any_lot_still_flags_wash_risk(self):
+        rows = [_row("ABC", "2017-01-02", 1000, 5000), _row("ABC", "2026-01-05", 2000, 1500),
+                _row("ABC", "2026-11-10", 100, 120)]                                          # recent, at a gain
+        (s,) = hv.harvest_list(rows, D(2026, 11, 23), RATES, lot_level=("ABC",))
+        self.assertEqual(s["wash_risk_buys"], ["2026-11-10"])
+
+
 class TestLiveAdapter(unittest.TestCase):
     def test_reads_lots_only_for_losing_positions_through_the_facade(self):
         ms = int(datetime.datetime(2024, 1, 2, 12, tzinfo=datetime.timezone.utc).timestamp() * 1000)
@@ -89,6 +126,14 @@ class TestLiveAdapter(unittest.TestCase):
         rows = hv.live_rows(client)
         client.accounts.position_lots.assert_called_once_with("LOSE", "k1")
         self.assertEqual([(r["symbol"], r["gain"]) for r in rows], [("LOSE", -400.0)])
+
+    def test_the_watched_symbol_is_always_read(self):
+        client = mock.Mock()
+        client.accounts.account_keys.return_value = {"1111": "k1"}
+        client.accounts.positions.return_value = [{"symbol": "WIN", "account_last4": "1111", "qty": 10, "cost": 5.0, "mval": 100.0}]
+        client.accounts.position_lots.return_value = []
+        hv.live_rows(client, always=("WIN",))
+        client.accounts.position_lots.assert_called_once_with("WIN", "k1")
 
 
 if __name__ == "__main__":

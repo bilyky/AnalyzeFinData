@@ -22,10 +22,10 @@
   {
    "id": "O2b",
    "title": "Wash-sale calendar across all accounts",
-   "status": "todo",
-   "pr": null,
+   "status": "in_review",
+   "pr": 316,
    "prod": false,
-   "note": "30-day buy flags and buy-back date are in O2a; the vest/ESPP calendar is still open"
+   "note": "vest / purchase dates and loss lots of the watched symbol in python -m aether.harvest"
   },
   {
    "id": "O3",

@@ -490,6 +490,8 @@
     "config": [
       "python -m aether.harvest (add --json for the full list)",
       "Tax rates: st_rate / lt_rate in Data/position_watch/config.json",
+      "Scheduled buys: acquisition_dates in Data/position_watch/config.json (vest / purchase dates of the watched symbol); a loss sale within 30 days of one is flagged with the next clean day",
+      "The watched symbol's loss lots are listed even when the whole position is up (sell them by specific lot)",
       "Never places an order and writes nothing"
     ]
   },
