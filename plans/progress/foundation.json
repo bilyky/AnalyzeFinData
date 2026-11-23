@@ -28,8 +28,8 @@
   {
    "id": "T0.4",
    "title": "Shadow log for buy rules (Data/rule_shadow.jsonl)",
-   "status": "in_progress",
-   "pr": null,
+   "status": "in_review",
+   "pr": 317,
    "prod": false,
    "note": "R&D #113 in shadow for game buys and Oracle ideas; Data/rule_shadow.jsonl"
   },
