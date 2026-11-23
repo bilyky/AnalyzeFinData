@@ -503,7 +503,8 @@
     "config": [
       "aether/margin_watch.py; private Data/margin_requirements.json ({last4: {SYMBOL: rate}})",
       "Optional oracle.margin_rate_pct for the interest line",
-      "One broker read per Oracle run, shared with its audit"
+      "One broker read per Oracle run, shared with its audit",
+      "Pay-down for a buffer (plan O3): the deposit, or the sales at the account's average requirement, that keep a 20% / 30% fall from reaching a call"
     ]
   },
   "options_adviser": {

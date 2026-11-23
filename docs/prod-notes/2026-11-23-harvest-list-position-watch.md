@@ -19,6 +19,11 @@
 - With `--live`, the report adds today's move against that close (`today +13.8% (live vs 2026-11-20)`).
 - The call itself doesn't change.
 
+## Margin pay-down for a buffer (plan O3)
+- The Oracle's margin card now adds one line per margined account: "To survive a 20% fall: deposit $X or sell ~$Y;
+  a 30% fall: ..." (or "covered"). The sales are at the account's average requirement; the pay-down table below
+  it still lists the sales that free the most requirement first.
+
 ## PROD check
 After the pull:
 1. `python -m aether.harvest` should list the losing positions; a name bought within the last 30 days shows a WASH RISK flag.

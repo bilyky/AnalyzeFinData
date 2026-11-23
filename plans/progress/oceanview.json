@@ -30,9 +30,10 @@
   {
    "id": "O3",
    "title": "#39 phase 2: margin stress before and after pay-down",
-   "status": "todo",
-   "pr": null,
-   "prod": false
+   "status": "in_review",
+   "pr": 316,
+   "prod": false,
+   "note": "pay-down for a 20% / 30% buffer in the Oracle's margin card"
   },
   {
    "id": "O4",
