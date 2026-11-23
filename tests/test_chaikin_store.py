@@ -24,6 +24,8 @@ class _Base(unittest.TestCase):
                                          etrade_production_secret="secret")
         cs._ENGINES.clear()
         cs._WARNED.clear()
+        cs._STATE.update(down_until=0.0, cached=None)
+        self.addCleanup(cs._STATE.update, {"down_until": 0.0, "cached": None})
         self.addCleanup(self._dispose)                                     # runs before the temp dir is removed
         self.env = mock.patch.dict(os.environ, {cs.ENV_VAR: "db"}, clear=False)
         os.environ.pop("DATABASE_URL", None)
@@ -104,7 +106,30 @@ class TestFallback(_Base):
             self.assertEqual(self.load_file(), SESSION)
             self.assertEqual(cs.load(self.load_file, self.file, bad), SESSION)
             cs.load(self.load_file, self.file, bad)
-        self.assertEqual(warn.call_count, 2)                              # once for save, once for load
+        self.assertEqual(warn.call_count, 1)                              # the breaker opened on the save
+
+    def test_an_outage_costs_one_connection_attempt_per_breaker_window(self):
+        # Review of #313: each attempt waits CONNECT_TIMEOUT_S, and load runs per symbol fetched.
+        self.save_file(SESSION)
+        with self.env, mock.patch.object(cs, "_engine", side_effect=cs.StoreUnavailable("down")) as eng:
+            for _ in range(50):
+                self.assertEqual(cs.load(self.load_file, self.file, self.cfg), SESSION)
+            self.assertEqual(eng.call_count, 1)
+            cs._STATE["down_until"] = 0.0                                 # the window has passed
+            cs.load(self.load_file, self.file, self.cfg)
+            self.assertEqual(eng.call_count, 2)
+
+    def test_a_good_row_is_read_once_per_minute(self):
+        with self.env:
+            cs.db_write(SESSION, self.cfg)
+            with mock.patch.object(cs, "db_read", wraps=cs.db_read) as rd:
+                for _ in range(20):
+                    cs.load(lambda: {}, self.file, self.cfg)
+                self.assertEqual(rd.call_count, 1)
+                cs.save(NEWER, self.save_file, self.cfg)                   # a save clears the cache
+                os.remove(self.file)
+                self.assertEqual(cs.load(lambda: {}, self.file, self.cfg), NEWER)
+                self.assertEqual(rd.call_count, 2)
 
     def test_no_secret_no_url_is_unavailable(self):
         with self.env:

@@ -58,6 +58,9 @@ SESSIONS = Table(
 )
 _ENGINES: dict = {}
 _WARNED: set = set()
+BREAKER_S = 600          # after a database failure, use the file only for 10 minutes in this process
+READ_TTL_S = 60          # reuse a good row read for a minute
+_STATE: dict = {"down_until": 0.0, "cached": None}
 
 
 class StoreUnavailable(Exception):
@@ -130,6 +133,7 @@ def db_write(session: dict, config=None, now: float | None = None) -> None:
                 conn.execute(insert(SESSIONS).values(name=ROW, **vals))
     except SQLAlchemyError as e:
         raise StoreUnavailable(f"Chaikin shared store error: {type(e).__name__}") from e
+    _STATE["cached"] = None                    # this process's cached read is now stale
 
 
 def _warn_once(what: str, err: Exception) -> None:
@@ -138,15 +142,41 @@ def _warn_once(what: str, err: Exception) -> None:
         _log.warning(f"Chaikin shared store unavailable ({what}: {err}); using this machine's session.json")
 
 
+def _down() -> bool:
+    """True while the breaker is open: a failure in this process skips the database for BREAKER_S."""
+    return time.time() < _STATE["down_until"]
+
+
+def _trip(what: str, err: Exception) -> None:
+    _STATE["down_until"] = time.time() + BREAKER_S
+    _STATE["cached"] = None
+    _warn_once(what, err)
+
+
+def _read_cached(config=None):
+    """db_read at most once per READ_TTL_S (ensure_valid_session runs per symbol, ~533 a day)."""
+    now = time.time()
+    hit = _STATE["cached"]
+    if hit is not None and now - hit[0] < READ_TTL_S:
+        return hit[1]
+    got = db_read(config)
+    _STATE["cached"] = (now, got)
+    return got
+
+
 def load(file_loader, file_path: str, config=None) -> dict:
-    """The newer of the shared row and this machine's file; the file alone when the store is off or down."""
+    """The newer of the shared row and this machine's file; the file alone when the store is off or down.
+
+    Review of #313: with the database unreachable, each connection attempt waits CONNECT_TIMEOUT_S, and this runs
+    for every symbol fetched. A failure opens a breaker (no database for BREAKER_S), and a good read is reused for
+    READ_TTL_S, so an outage costs one timeout per BREAKER_S instead of one per symbol."""
     local = file_loader()
-    if not enabled():
+    if not enabled() or _down():
         return local
     try:
-        got = db_read(config)
+        got = _read_cached(config)
     except StoreUnavailable as e:
-        _warn_once("load", e)
+        _trip("load", e)
         return local
     if got is None:
         return local
@@ -161,12 +191,13 @@ def load(file_loader, file_path: str, config=None) -> dict:
 def save(session: dict, file_saver, config=None) -> None:
     """Write this machine's file, then (opt-in) the shared row. A database failure never blocks the file."""
     file_saver(session)
-    if not enabled():
+    _STATE["cached"] = None                    # the next load reads the row again
+    if not enabled() or _down():
         return
     try:
         db_write(session, config)
     except StoreUnavailable as e:
-        _warn_once("save", e)
+        _trip("save", e)
 
 
 def status(file_path: str, config=None) -> dict:
