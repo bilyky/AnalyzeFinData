@@ -17,7 +17,7 @@ from pathlib import Path
 import aether_oracle
 from aether.utils import _to_float
 from aether.config import CFG
-from aether.bootstrap import STARTING_CAPITAL, bootstrap
+from aether.bootstrap import STARTING_CAPITAL, bootstrap, market_data_service
 from aether.run_guard import DailyRunGuard, RunSkipped
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
@@ -41,7 +41,7 @@ import instruments
 from aether import options
 from aether.scenario import runners
 from aether.core import DEFAULT_PORTFOLIO
-from aether.market_calendar import NYSE_HOLIDAYS, is_session, last_session_on_or_before
+from aether.market_calendar import NYSE_HOLIDAYS, last_session_on_or_before  # NYSE_HOLIDAYS: re-export for tests
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
@@ -636,8 +636,9 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
 
 
 def _market():
-    """The market-data service (R&D #78 S5), built per call like the portfolio service."""
-    return bootstrap(log=_log).market_data
+    """The market-data service (R&D #78 S5), built per call. Only that service: a market
+    question must not depend on the portfolio store setting (#309 review)."""
+    return market_data_service(log=_log)
 
 
 def is_market_open():
@@ -999,10 +1000,10 @@ def is_market_hours():
     daily run the live clock is asked once (``run_scope``)."""
     try:
         now_la = datetime.datetime.now(pytz.timezone("America/Los_Angeles"))
-    except Exception:
+        return _market().market_hours(now_la)
+    except Exception:  # any failure, wiring included, means "not market hours" (#309 review)
         _log.warning("is_market_hours: timezone check failed — defaulting to False (skip run).")
         return False  # safe default: skip trade rather than run at unknown hours
-    return _market().market_hours(now_la)
 
 def get_json_prices_fallback(symbols):
     """Retrieve the latest closing prices from the local per-symbol OHLCV JSON caches.

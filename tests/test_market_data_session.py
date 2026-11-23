@@ -150,6 +150,32 @@ class TestGameUsesTheService(unittest.TestCase):
             game.is_market_hours()
             self.assertEqual(make.call_count, 2)
 
+    def test_market_checks_do_not_depend_on_the_portfolio_store(self):
+        # #309 review: AETHER_PORTFOLIO_STORE=db (refused until S14) must not break a market question.
+        import os
+        fixed = _la(2026, 11, 20, 9, 0)
+
+        class _DT(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+        dtmod = mock.Mock(wraps=datetime, datetime=_DT, date=datetime.date, timedelta=datetime.timedelta)
+        client = mock.Mock()
+        client.auth.get_tokens.return_value = {"t": 1}
+        client.market.is_open_now.return_value = True
+        with mock.patch.dict(os.environ, {"AETHER_PORTFOLIO_STORE": "db"}), \
+                mock.patch.object(game, "datetime", dtmod), \
+                mock.patch.object(etrade, "ETradeClient", mock.Mock(return_value=client)):
+            self.assertTrue(game.is_market_hours())
+            self.assertEqual(game.is_market_open(), (True, "Market is Open."))
+
+    def test_a_failing_service_means_not_market_hours(self):
+        with mock.patch.object(game, "_market", side_effect=RuntimeError("wiring")), \
+                mock.patch.object(game, "_log") as log:
+            self.assertFalse(game.is_market_hours())
+        self.assertIn("defaulting to False", log.warning.call_args[0][0])
+
     def test_the_runner_opens_a_run_scope(self):
         from aether.scenario import runners
         seen = []

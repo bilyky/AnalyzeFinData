@@ -349,7 +349,9 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
 8. **S7 `ledger`:** DNA, decision log and failure rules as event subscribers.
 9. **S8 `trading`:** `StrategyProfile`, the policies and the spec sets, then `DailyRunService`
    replacing the scenario stages one group per PR (settle/queued, exits, entries, deploy). The
-   `Portfolio` methods replace the dict mutation. Golden (a) on each PR. Then **F5**.
+   `Portfolio` methods replace the dict mutation. The run builds its `MarketSession` once and passes it
+   to each stage, and the temporary `market_data.run_scope` (S5, #309) is removed. Golden (a) on each
+   PR. Then **F5**.
 10. **S9 delete `aether/scenario/`,** `_pkg`, the validator exemptions and `test_scenario_*`.
     **Gate (measured):** before deleting the stage tests and `mutate_scenario_steps.py`, the new policy and
     service unit tests must catch all 155 mutants, or a mapped equivalent of each, listed in the PR.

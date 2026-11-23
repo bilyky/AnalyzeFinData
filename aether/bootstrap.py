@@ -24,7 +24,8 @@ from aether.services.portfolio.api import PortfolioQueries, PortfolioRepository,
 PORTFOLIO_STORE_ENV = "AETHER_PORTFOLIO_STORE"
 STARTING_CAPITAL = 10000.0
 
-__all__ = ["App", "LegacyStateGateway", "PortfolioFile", "bootstrap", "default_portfolio_files", "portfolio_store_kind"]
+__all__ = ["App", "LegacyStateGateway", "PortfolioFile", "bootstrap", "default_portfolio_files", "market_data_service",
+           "portfolio_store_kind"]
 
 # The checkout's Data/ folder, where the game keeps its state today. This is the one place
 # that names the game's state file (the game itself asks bootstrap). Whether the state should
@@ -58,6 +59,12 @@ class App:
     events: EventBus = field(default_factory=EventBus)
 
 
+def market_data_service(*, clock: Clock | None = None, market_clock=None, log=None) -> SessionService:
+    """Only the market-data service: no portfolio wiring, so a market question never depends on
+    the portfolio store setting (#309 review)."""
+    return SessionService(clock or SystemClock(), market_clock or EtradeMarketClock(log=log), log=log)
+
+
 def bootstrap(*, clock: Clock | None = None, portfolio_repository: PortfolioRepository | None = None,
               market_clock=None,
               portfolio_files: dict | None = None, starting_capital: float = STARTING_CAPITAL,
@@ -75,6 +82,6 @@ def bootstrap(*, clock: Clock | None = None, portfolio_repository: PortfolioRepo
     service = PortfolioService(portfolio_repository, events)
     gateway = LegacyStateGateway(service, quarantine=getattr(portfolio_repository, "quarantine", None), log=log)
     clock = clock or SystemClock()
-    market = SessionService(clock, market_clock or EtradeMarketClock(log=log), log=log)
+    market = market_data_service(clock=clock, market_clock=market_clock, log=log)
     return App(clock=clock, portfolio=service, portfolio_state=gateway,
                portfolio_queries=portfolio_queries, market_data=market, events=events)
