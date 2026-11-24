@@ -283,8 +283,14 @@ def execute_weekly_covered_call_pass(state: dict, today_str: str, prices: dict, 
     try:
         sym_idx = header_norm.index("symbol")
     except ValueError:
+        # powergauge writes the symbol in column 3 with an empty header cell (data_api._RESEARCH),
+        # so an empty cell there is the normal layout: PROD warned on every run (11-23, 11-24).
+        # Only a different label in that column means the layout moved.
         sym_idx = 3
-        _log.warning("[Option Write] Research sheet has no 'Symbol' header; falling back to column index 3 (may bind the wrong field).")
+        other = header_norm[3] if len(header_norm) > 3 else ""
+        if other:
+            _log.warning(f"[Option Write] Research sheet has no 'Symbol' header and column 3 is labelled "
+                         f"{other!r}; using column 3 anyway (check the sheet layout).")
     # ATR only from an exact "ATR" header. PROD's Research sheet has none, and the old fallback
     # (index 23) is "Win% 10d", so ATR otherwise comes from the OHLCV cache (PROD review 11-09).
     atr_idx = next((i for i, h in enumerate(header_norm) if h == "atr"), None)
