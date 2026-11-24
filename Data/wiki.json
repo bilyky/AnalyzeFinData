@@ -496,6 +496,17 @@
       "Never places an order and writes nothing"
     ]
   },
+  "rule_shadow": {
+    "title": "Buy Rules in Shadow",
+    "summary": "A rule that passed its study runs in shadow before it is wired: for every buy, the log records what the rule would have done, and a scorer later compares the names it would have held back with the ones it admitted. No decision changes.",
+    "origin": "Plan stage T0.4 (2026-11-23): validate a rule on PROD before it trades. The first rule in shadow is the R&D #113 loss filter, which the Oracle already applies and the game does not.",
+    "body": "<p>Each game buy candidate that passes the game's own rules, and each idea the Oracle checks, gets one line in <code>Data/rule_shadow.jsonl</code>: date, source, symbol, price, whether the live rules admitted it, and whether the #113 loss filter would hold it back and why. <code>aether/rule_shadow.py</code> is the only writer (append-only, bounded, a write failure is only a warning) and holds the scorer: forward return after 5 and 20 sessions by the rule's verdict, with n. Wiring a rule still needs its pre-registered bar and two weeks or more of shadow that agree.</p>",
+    "config": [
+      "Log: Data/rule_shadow.jsonl (one writer: aether/rule_shadow.py)",
+      "Rule in shadow: R&D #113 loss filter (aether/buy_specs.py)",
+      "Scorer: rule_shadow.score(entries, closes_by_symbol)"
+    ]
+  },
   "margin_watch": {
     "title": "Oracle Margin Watch",
     "summary": "The Oracle's daily email adds a <b>Margin watch</b> for every real account with a margin loan: debt, equity, the maintenance requirement, how far holdings can fall before a call, any open call as the broker states it, and the sales that free the most requirement first.",
