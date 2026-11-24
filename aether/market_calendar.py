@@ -1,8 +1,8 @@
 """NYSE trading calendar: the full-day closures and the last-session lookup.
 
-One home for the holiday list. ai_portfolio_game re-exports NYSE_HOLIDAYS (is_market_hours and
-the stale-workbook gate use it), and aether.options uses last_session_on_or_before to date and
-settle weekly covered calls.
+One home for the holiday list. The market-data service's session rules use it
+(aether/services/market_data/domain/session.py), ai_portfolio_game re-exports NYSE_HOLIDAYS for
+tests, and aether.options uses last_session_on_or_before to date and settle weekly covered calls.
 """
 
 import datetime

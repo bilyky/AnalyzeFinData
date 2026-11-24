@@ -69,7 +69,7 @@ R1 `get_live_prices` → `make_price_source` (guarded by `test_game_pricing.py`)
 
 1. By-reference `state` mutation shared with `circuit_breaker`/`options` → entities must be views (no copy).
 2. `ws` row-scan magic indices — preserve per-site `[8]` (SELL) vs `[10]` (BUY/report), do not unify.
-3. `is_market_hours` is evaluated late and repeatedly — keep call timing, don't hoist.
+3. `is_market_hours` is evaluated late and repeatedly — keep call timing, don't hoist. (Superseded: since R&D #78 S5, #309, the live clock is asked once per run.)
 4. `_HEAL_ATTEMPTED` / `_SYMBOL_DAY_CACHE` must stay the same object via `_pkg()`.
 5. Mandatory Backup Policy on any `save_game`/state-write seam.
 6. Non-test consumers need the re-export surface intact (R13 facade).
