@@ -542,8 +542,10 @@ def decide_exits(state, prices, rules, ws, today, now_time, new_transactions):
     caller's execution loop liquidates and records on each SELL tx (#136); the
     same ``exit_reason`` feeds the after-hours queue entry. This function sells
     nothing outright except the partial
-    scale-out. ``is_market_hours`` is still evaluated late and per position, as in
-    the root (design risk 3 — not hoisted). Every collaborator (``_log``,
+    scale-out. ``is_market_hours`` is still called late and per position, as in
+    the root; since S5 (#309) its live E*TRADE clock answer is asked once per run
+    (``market_data.run_scope``) and only the time window is checked each call.
+    Every collaborator (``_log``,
     ``risk_utils``, ``is_market_hours``, ``CFG``, ``circuit_breaker``, ``_sma50``,
     ``sell_rules``, ``decision_eval``) is resolved off the live root module at
     call time via :func:`_pkg`, so ``mock.patch.object(game, ...)`` still
