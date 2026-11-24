@@ -128,6 +128,13 @@ class TestDecide(unittest.TestCase):
         d = pw.decide(_metrics(ret_1=-0.08), _resid(-2.0), [], _repl(), self.conc, CFG)
         self.assertEqual(d["action"], "WAIT")
 
+    def test_the_wait_names_the_session_not_today(self):
+        # 2026-11-23: Friday fell 8%, INTC was +13.8% live; the report said "crash day: don't sell into it".
+        m = dict(_metrics(ret_1=-0.08), date="2026-11-20")
+        d = pw.decide(m, _resid(-2.0), [], _repl(), self.conc, CFG)
+        self.assertIn("last session (2026-11-20) fell -8.0%: wait a day after a big drop before selling", d["reasons"])
+        self.assertFalse(any(r.startswith("crash day") for r in d["reasons"]))
+
     def test_an_old_bar_is_not_todays_crash_day(self):
         # 2026-11-19: bars ended 11-16 (-7%), INTC was +2.4% live; the report said "crash day"
         d = pw.decide(_metrics(ret_1=-0.08), _resid(-2.0), [], _repl(), self.conc, CFG, bar_is_current=False)
@@ -367,6 +374,16 @@ class TestRun(unittest.TestCase):
         self.assertEqual(c["value"], (10 + 100) * 50.0)            # brokerage + stock plan
         self.assertEqual(c["total"], 500.0 + (10 + 100) * 50.0 + 1000)
         self.assertEqual((r["price"], r["price_source"]), (50.0, "live quote"))
+        self.assertAlmostEqual(r["metrics"]["ret_today"], 50.0 / r["metrics"]["close"] - 1)
+        with mock.patch.object(pw, "_out") as out:
+            pw.print_report(r)
+        line = out.call_args_list[1].args[0]
+        self.assertIn(f"today {r['metrics']['ret_today']:+.1%} (live vs {r['metrics']['date']})", line)
+        self.assertIn(f"last session {r['metrics']['date']}: 1d", line)
+
+    def test_no_live_quote_no_today_line(self):
+        r = self._run()
+        self.assertNotIn("ret_today", r["metrics"])
 
     def test_doubts_turn_a_trim_into_wait(self):
         trim = {"action": "TRIM", "reasons": ["weak"], "tranche_usd": 100.0, "replacement": "SPY"}
