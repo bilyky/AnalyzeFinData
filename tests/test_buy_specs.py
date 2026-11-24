@@ -74,6 +74,15 @@ class TestOracle(unittest.TestCase):
         self.assertIn("falling 200-day", buys[0]["flags"][0])
         self.assertIn("⚠️ below a falling 200-day", oracle._checked_note(buys[0]))
 
+    def test_the_oracle_records_each_checked_idea_in_the_shadow_log(self):
+        # Plan T0.4: the Oracle applies #113 for real; the shadow log records it so the scorer can compare.
+        from aether import rule_shadow
+        with mock.patch.object(rule_shadow, "log") as lg:
+            self.candidates([SA_ROW], falling())
+        (entries,), _ = lg.call_args
+        self.assertEqual((entries[0]["source"], entries[0]["symbol"]), ("oracle", "SA"))
+        self.assertEqual((entries[0]["admitted"], entries[0]["would_hold_back"]), (False, True))
+
     def test_a_leader_near_its_high_still_gets_the_waiver(self):
         buys, held = self.candidates([SA_ROW], near_high_uptrend())
         self.assertEqual([b["symbol"] for b in buys], ["SA"])

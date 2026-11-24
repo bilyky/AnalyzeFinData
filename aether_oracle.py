@@ -12,7 +12,7 @@ import html
 
 import ai_portfolio_game
 import data_api
-from aether import buy_specs, drop_risk, earnings_calendar, margin_watch, pick_eval, pick_lists, risk_utils, sell_rules
+from aether import buy_specs, drop_risk, earnings_calendar, margin_watch, pick_eval, pick_lists, risk_utils, rule_shadow, sell_rules
 from aether.config import CFG
 from aether.risk_utils import calculate_atr, is_elite_breakout_candidate
 from aether_logger import get_logger as _get_logger
@@ -197,6 +197,8 @@ def get_oracle_buy_candidates(acct, held_back=None):
                 # R&D #113 loss filters (shared checks in aether.buy_specs; split-adjusted closes)
                 closes = risk_utils._load_ohlcv_series(sym)[2]
                 reasons = buy_specs.loss_filter_reasons(rr_ratio < min_rr, closes)
+                rule_shadow.log([rule_shadow.record("oracle", sym, str(datetime.date.today()), price, rr_ratio < min_rr,
+                                                    closes, admitted=not reasons)])
                 if reasons:
                     _oracle_log.info(f"[R&D #113] Oracle held back {sym}: {'; '.join(reasons)}")
                     if held_back is not None:

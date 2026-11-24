@@ -18,6 +18,8 @@ reach a call unseen. This module computes, per account, from the broker's live f
   - the broker's own figures when the account carries them (data_api's "margin": marginBalance,
     regtEquity, OpenCalls.*): they replace the computed debt / equity, and an open call (a negative
     houseCall, fedCall, minEquityCall or cashCall) is shown as the broker states it;
+  - the pay-down for a buffer (plan O3): the cash deposit, or the sales at the account's average requirement,
+    that keep a uniform fall of BUFFERS (20%, 30%) from reaching the call;
   - the pay-down order: sales that free the most requirement per dollar first (a 100% name frees
     $1 per $1 sold, a 30% name $0.30), losses before gains (they also harvest a tax loss). A loss
     on a symbol bought within WASH_DAYS (a vest or ESPP purchase, from position-watch's private
@@ -34,6 +36,23 @@ from aether import paths, position_watch_store
 
 DEFAULT_REQ = 0.30
 WASH_DAYS = 30
+BUFFERS = (0.20, 0.30)       # plan O3: survive a 20% / 30% fall without a call
+
+
+def pay_down_for(buffer: float, value: float, requirement: float, debt: float) -> dict | None:
+    """What keeps a uniform fall of ``buffer`` from reaching the call. A fall f reaches it when
+    debt = (1 - f) x (value - requirement), so the debt must be at most (1 - buffer) x (value - requirement).
+      cash: a deposit that lowers the debt by that much (holdings unchanged);
+      sell: sales at the account's average requirement r; each $1 sold lowers the debt by $1 and the
+            allowed debt by (1 - buffer) x (1 - r).
+    Both are 0 when the buffer already holds; None when the holdings have no value."""
+    if value <= 0:
+        return None
+    r = requirement / value
+    gap = debt - (1 - buffer) * (value - requirement)
+    if gap <= 0:
+        return {"buffer": buffer, "cash": 0.0, "sell": 0.0}
+    return {"buffer": buffer, "cash": gap, "sell": gap / (1 - (1 - buffer) * (1 - r))}
 
 
 def load_purchases(path: str | None = None) -> dict:
@@ -114,7 +133,8 @@ def account_view(acct: dict, reqs: dict, rate_pct: float | None = None, purchase
             "source": "broker" if m.get("margin_equity") is not None else "computed", "open_calls": open_calls,
             "equity_pct": equity / value if value else None, "requirement": requirement,
             "requirement_assumed": assumed, "excess": excess, "call_drop": call_drop,
-            "interest_month": monthly, "pay_down": order[:5]}
+            "interest_month": monthly, "pay_down": order[:5],
+            "pay_down_for": [p for p in (pay_down_for(b, value, requirement, debt) for b in BUFFERS) if p]}
 
 
 def views(accounts_data: dict, real_ids: list, reqs: dict, rate_pct: float | None = None,
@@ -133,6 +153,19 @@ def views(accounts_data: dict, real_ids: list, reqs: dict, rate_pct: float | Non
 
 def _money(x):
     return "—" if x is None else f"${x:,.0f}"
+
+
+def _buffers_html(items) -> str:
+    """One line per buffer: what it takes to survive that fall without a call (plan O3)."""
+    if not items:
+        return ""
+    parts = []
+    for p in items:
+        if p["cash"] <= 0:
+            parts.append(f"a {p['buffer']:.0%} fall: covered")
+        else:
+            parts.append(f"a {p['buffer']:.0%} fall: deposit {_money(p['cash'])} or sell ~{_money(p['sell'])}")
+    return "<br>To survive " + "; ".join(parts) + "."
 
 
 def render_html(vs: list) -> str:
@@ -172,6 +205,7 @@ def render_html(vs: list) -> str:
             f"<b>Account ...{str(v['id'])[-4:]}</b>: debt {_money(v['debt'])}, equity {_money(v['equity'])} "
             f"({v['equity_pct']:.0%} of holdings), requirement {_money(v['requirement'])}; {status}."
             f"{' Interest ~' + _money(v['interest_month']) + '/month.' if v['interest_month'] else ''}{note}"
+            f"{_buffers_html(v.get('pay_down_for'))}"
             f"<table style='margin-top:8px; font-size:12px;'><tr><th align='left'>Pay down first</th><th>value</th>"
             f"<th>req</th><th>frees</th><th>P/L</th><th>interest saved/mo</th></tr>{rows}</table></div>")
     return ("<div style='font-family: monospace; color:#c9d1d9; margin-top:20px;'>"

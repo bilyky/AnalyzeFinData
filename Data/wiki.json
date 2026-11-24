@@ -238,6 +238,7 @@
     "body": "Erects an indestructible defensive shield around your portfolio during market panic. Features Two-Factor Confirmation (SPY return and VXX Volatility ETF surge), a 30-minute opening stabilization window, dynamic 1.0x ATR stop tightening, and a self-healing 'Elastic Memory' stop-loss restorer upon market recovery.",
     "config": [
       "Two-Factor Confirmation: Triggers if S&P 500 (SPY) falls > 2.0% OR VXX Volatility ETF surges > 15.0%.",
+      "Measured against the right session: a morning run compares the live SPY price with the last cached close (yesterday) and keeps that close in the 10-session window; the rolling drawdown trigger is 5% under the 10-session peak",
       "Whipsaw Protection: Stabilization window blocks stop-tightening or selling during the first 30 minutes of the market open (6:30 AM - 7:00 AM PST).",
       "Stop Tightening: Dynamically tightens stop-losses to a conservative 1.0x ATR floor on all active satellites.",
       "Elastic Memory: Automatically caches your original stop under 'original_stop_loss' and restores it once market panic settles!"
@@ -482,6 +483,30 @@
       "Shown on the OceanView tab when the plan file exists"
     ]
   },
+  "harvest_list": {
+    "title": "Tax-Loss Harvest List",
+    "summary": "A read-only list of every losing position across the listed E*TRADE accounts, built from the live tax lots: short- and long-term loss, the estimated tax value at your rates, wash-sale warnings and the first clean buy-back date. Recommend-only.",
+    "origin": "OceanView year-end harvest (R&D #81, plan stage O2a): the list used to live in hand notes, where a recent buy or a lot about to turn long-term was easy to miss.",
+    "body": "<p><code>python -m aether.harvest</code> reads each losing position's tax lots through the E*TRADE client (read-only, no login) and ranks the symbols by the tax value of selling them today. A lot is long-term once the sale date is past its one-year anniversary. A buy of the same symbol in any listed account within the last 30 days is flagged: selling only the older lots at a loss would then be partly a wash sale, so sell every lot or wait. Accounts the API doesn't list (the stock plan, a 401(k), other brokers) aren't checked. The figures are planning estimates, not tax advice.</p>",
+    "config": [
+      "python -m aether.harvest (add --json for the full list)",
+      "Tax rates: st_rate / lt_rate in Data/position_watch/config.json",
+      "Scheduled buys: acquisition_dates in Data/position_watch/config.json (vest / purchase dates of the watched symbol); a loss sale within 30 days of one is flagged with the next clean day",
+      "The watched symbol's loss lots are listed even when the whole position is up (sell them by specific lot)",
+      "Never places an order and writes nothing"
+    ]
+  },
+  "rule_shadow": {
+    "title": "Buy Rules in Shadow",
+    "summary": "A rule that passed its study runs in shadow before it is wired: for every buy, the log records what the rule would have done, and a scorer later compares the names it would have held back with the ones it admitted. No decision changes.",
+    "origin": "Plan stage T0.4 (2026-11-23): validate a rule on PROD before it trades. The first rule in shadow is the R&D #113 loss filter, which the Oracle already applies and the game does not.",
+    "body": "<p>Each game buy candidate that passes the game's own rules, and each idea the Oracle checks, gets one line in <code>Data/rule_shadow.jsonl</code>: date, source, symbol, price, whether the live rules admitted it, and whether the #113 loss filter would hold it back and why. <code>aether/rule_shadow.py</code> is the only writer (append-only, bounded, a write failure is only a warning) and holds the scorer: forward return after 5 and 20 sessions by the rule's verdict, with n. Wiring a rule still needs its pre-registered bar and two weeks or more of shadow that agree.</p>",
+    "config": [
+      "Log: Data/rule_shadow.jsonl (one writer: aether/rule_shadow.py)",
+      "Rule in shadow: R&D #113 loss filter (aether/buy_specs.py)",
+      "Scorer: rule_shadow.score(entries, closes_by_symbol)"
+    ]
+  },
   "margin_watch": {
     "title": "Oracle Margin Watch",
     "summary": "The Oracle's daily email adds a <b>Margin watch</b> for every real account with a margin loan: debt, equity, the maintenance requirement, how far holdings can fall before a call, any open call as the broker states it, and the sales that free the most requirement first.",
@@ -490,7 +515,8 @@
     "config": [
       "aether/margin_watch.py; private Data/margin_requirements.json ({last4: {SYMBOL: rate}})",
       "Optional oracle.margin_rate_pct for the interest line",
-      "One broker read per Oracle run, shared with its audit"
+      "One broker read per Oracle run, shared with its audit",
+      "Pay-down for a buffer (plan O3): the deposit, or the sales at the account's average requirement, that keep a 20% / 30% fall from reaching a call"
     ]
   },
   "options_adviser": {

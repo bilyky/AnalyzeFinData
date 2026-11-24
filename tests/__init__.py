@@ -178,6 +178,7 @@ _ledgers.FAILURE_RULES_FILE = _ledger_tmp / "failure_dna_rules.json"
 _ledgers.FAILURE_RULES_PROPOSED_FILE = _ledger_tmp / "failure_dna_rules_proposed.json"
 _ledgers.RETRO_REPORT_FILE = _ledger_tmp / "retrospective_report.txt"
 _ledgers.PICK_LOG_FILE = _ledger_tmp / "pick_lists_log.jsonl"
+_ledgers.RULE_SHADOW_FILE = _ledger_tmp / "rule_shadow.jsonl"
 # The weekly R&D runner writes Data/pattern_discovery_<date>_ai.md (scripts/backtesting, not on sys.path).
 _sys_path_rd = str(Path(__file__).resolve().parent.parent / "scripts" / "backtesting")
 if _sys_path_rd not in sys.path:
