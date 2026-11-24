@@ -31,6 +31,7 @@ import math
 import os
 import subprocess
 import sys
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
@@ -134,6 +135,9 @@ def _stdev(vals: list[float]) -> float:
 
 # ── Phase 1: reconstruct scores ───────────────────────────────────────────────
 
+PROGRESS_EVERY = 100   # symbols between Phase 1 progress lines
+SLOW_SYMBOL_S = 10.0   # a symbol slower than this is named in the log
+
 def reconstruct_scores(replay_date: str, symbols: list[str] | None = None) -> list[dict]:
     """Reconstruct every symbol's AETHER scores as of replay_date."""
     if symbols is None:
@@ -203,13 +207,26 @@ def reconstruct_scores(replay_date: str, symbols: list[str] | None = None) -> li
             "gain":              None if gain is None else round(gain, 2),
         }
 
+    def _timed(sym: str):
+        t0 = time.perf_counter()
+        row = _process_one(sym)
+        return row, time.perf_counter() - t0
+
+    # Progress and slow symbols are logged: PROD 2026-11-21 sat in this phase past the task's
+    # 900 s limit with no line after "Cache index built", so the slow step was unknown.
     results = []
+    start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=10) as pool:
-        futures = {pool.submit(_process_one, sym): sym for sym in symbols}
-        for fut in as_completed(futures):
-            row = fut.result()
+        futures = {pool.submit(_timed, sym): sym for sym in symbols}
+        for done, fut in enumerate(as_completed(futures), 1):
+            row, took = fut.result()
+            if took >= SLOW_SYMBOL_S:
+                _log.warning(f"Phase 1: {futures[fut]} took {took:.0f}s")
             if row:
                 results.append(row)
+            if done % PROGRESS_EVERY == 0 or done == len(futures):
+                _log.info(f"Phase 1: {done}/{len(futures)} symbols, {len(results)} scored, "
+                          f"{time.perf_counter() - start:.0f}s")
 
     _log.info(f"Reconstructed {len(results)} symbols with Chaikin cache on {replay_date}")
     return results
