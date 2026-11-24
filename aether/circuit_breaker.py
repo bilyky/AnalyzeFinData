@@ -51,17 +51,34 @@ def load_spy_history() -> list[dict]:
         _log.warning(f"Failed to load SPY history for circuit breaker: {e}")
         return []
 
+def _today_et() -> str:
+    return datetime.datetime.now(pytz.timezone("America/New_York")).date().isoformat()
+
+
+def prev_session_close(ts: dict, today: str | None = None) -> float | None:
+    """The close of the last bar dated before ``today`` (ET): the session a live price is compared with.
+    A morning run's cache ends yesterday, so that is the last bar; an evening cache already holds today's bar,
+    so it is the one before it. (Before 2026-11-24 it was always the second-to-last bar: two sessions back on
+    a morning run, the same off-by-one as the SPY move; #318 review.)"""
+    today = today or _today_et()
+    before = [d for d in sorted(ts) if d < today]
+    if not before:
+        return None
+    try:
+        return float(ts[before[-1]]["4. close"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def load_vxx_prev_close() -> float | None:
-    """Load yesterday's VXX close from local cache. Returns None if unavailable (disables VXX check)."""
+    """The previous session's VXX close from the local cache (prev_session_close). None if unavailable
+    (disables the VXX check)."""
     if not VXX_FILE.exists():
         return None
     try:
         with open(VXX_FILE, "r") as f:
             ts = json.load(f).get("Time Series (Daily)", {})
-        dates = sorted(ts.keys())
-        if len(dates) >= 2:
-            return float(ts[dates[-2]]["4. close"])
-        return None
+        return prev_session_close(ts)
     except Exception:
         return None
 
@@ -90,6 +107,45 @@ def is_single_stock_gap_frozen(symbol: str, live_price: float, prev_close: float
     gap_pct = ((live_price - prev_close) / prev_close) * 100
     return gap_pct <= -8.0
 
+DAY_DROP_PCT = -2.0          # single-day capitulation
+DRAWDOWN_PCT = -5.0          # rolling 10-day drawdown
+DRAWDOWN_WINDOW = 10
+VXX_SURGE_PCT = 15.0
+
+
+def breaker_measures(closes: list, live: float | None = None, last_is_today: bool = True) -> tuple[float, float]:
+    """(one-day return %, drawdown % from the 10-session peak) the way the breaker measures them.
+
+    ``closes``: SPY daily closes, oldest first. ``live``: today's live price, if any.
+    ``last_is_today``: the last close is today's own bar, so ``live`` replaces it. When it is an earlier session
+    (the 07:00 run reads a cache that ends yesterday), ``live`` is today's price and is compared with that close.
+    Before 2026-11-24 the live price always replaced the last close and the one-day move was measured against the
+    close before it, i.e. two sessions back on a morning run: on 11-24 that read Friday's 689.81 for a day that
+    opened 1.1% under Monday's 722.29 (+3.5% instead of -1.1%)."""
+    s = [float(c) for c in closes]
+    if live and live > 0:
+        if last_is_today and s:
+            s[-1] = float(live)
+        else:
+            s.append(float(live))
+    if len(s) < 2:
+        return 0.0, 0.0
+    day = (s[-1] / s[-2] - 1) * 100 if s[-2] else 0.0
+    peak = max(s[-DRAWDOWN_WINDOW:])
+    return day, (s[-1] / peak - 1) * 100 if peak else 0.0
+
+
+def breaker_reason(day_pct: float, drawdown_pct: float, vxx_pct: float = 0.0) -> str | None:
+    """The active-session trigger, or None. One home for the thresholds (the G1 study replays this)."""
+    if day_pct <= DAY_DROP_PCT:
+        return f"Single-Day Capitulation (SPY fell {day_pct:+.2f}% in a single session)."
+    if drawdown_pct <= DRAWDOWN_PCT:
+        return f"Rolling 10-day Drawdown Breach (SPY is down {drawdown_pct:+.2f}% from its 10-day peak)."
+    if vxx_pct >= VXX_SURGE_PCT:
+        return f"Volatility Capitulation (VXX Volatility ETF surged {vxx_pct:+.2f}% on systemic panic)."
+    return None
+
+
 def check_systemic_risk(prices=None) -> tuple[bool, str]:
     """
     Audit systemic risk factors to determine if the Circuit Breaker is active.
@@ -109,21 +165,13 @@ def check_systemic_risk(prices=None) -> tuple[bool, str]:
     if len(spy_series) < 15:  # need at least 15 days for rolling drawdown check
         return False, ""
         
-    latest_day = spy_series[-1]
-    prev_day = spy_series[-2]
-    
-    # 1. Single-Day Price Capitulation (SPY down > 2.0%)
-    spy_price = live_spy_price if (live_spy_price and live_spy_price > 0) else latest_day["close"]
-    prev_close = prev_day["close"]
-    spy_return = ((spy_price - prev_close) / prev_close) * 100 if prev_close else 0.0
-    
-    # 2. Rolling 10-day Drawdown Breaker (Slow-bleed protection)
-    recent_closes = [r["close"] for r in spy_series[-10:]]
-    if live_spy_price and live_spy_price > 0:
-        recent_closes[-1] = live_spy_price
-    spy_peak = max(recent_closes)
-    spy_drawdown = ((spy_price - spy_peak) / spy_peak) * 100 if spy_peak else 0.0
-    
+    # 1. Single-day move and 2. rolling 10-day drawdown, measured once (breaker_measures). A bar without a date
+    #    keeps the old reading (the live price replaces it); a bar dated before today is an earlier session.
+    today_et = _today_et()
+    last_date = spy_series[-1].get("date")
+    spy_return, spy_drawdown = breaker_measures([r["close"] for r in spy_series], live_spy_price,
+                                                last_is_today=(last_date is None or last_date >= today_et))
+
     # VXX Volatility Proxy: surge > +15% signals systemic panic
     vxx_prev = load_vxx_prev_close()
     vxx_price = (prices or {}).get("VXX") if prices else None
@@ -134,22 +182,14 @@ def check_systemic_risk(prices=None) -> tuple[bool, str]:
     # If the market opened with a gap-down, we freeze buying immediately,
     # but we DO NOT tighten stops or execute panic-sells during the first 30 minutes!
     if is_market_opening_window():
-        if spy_return <= -2.0 or spy_drawdown <= -5.0 or volatility_capitulation:
+        if spy_return <= DAY_DROP_PCT or spy_drawdown <= DRAWDOWN_PCT or volatility_capitulation:
             vxx_desc = f", VXX: {vxx_return:+.1f}%" if volatility_capitulation else ""
             return True, f"Market Open Freeze (SPY: {spy_return:+.2f}%, Drawdown: {spy_drawdown:+.2f}%{vxx_desc}). Whipsaw protection active: stops held wide."
         return False, ""
 
     # 4. Enforce Systemic Rejection Triggers (Active Session after 10:00 AM EST)
-    if spy_return <= -2.0:
-        return True, f"Single-Day Capitulation (SPY fell {spy_return:+.2f}% in a single session)."
-        
-    if spy_drawdown <= -5.0:
-        return True, f"Rolling 10-day Drawdown Breach (SPY is down {spy_drawdown:+.2f}% from its 10-day peak)."
-        
-    if volatility_capitulation:
-        return True, f"Volatility Capitulation (VXX Volatility ETF surged {vxx_return:+.2f}% on systemic panic)."
-        
-    return False, ""
+    reason = breaker_reason(spy_return, spy_drawdown, vxx_return if volatility_capitulation else 0.0)
+    return (True, reason) if reason else (False, "")
 
 def log_circuit_breaker_trigger_dna(reason: str, state: dict, prices=None, _spy_series=None):
     """Backfeed the systemic trigger event directly into the unified Trade History DNA Ledger."""
@@ -172,9 +212,9 @@ def log_circuit_breaker_trigger_dna(reason: str, state: dict, prices=None, _spy_
     spy_series = _spy_series if _spy_series is not None else load_spy_history()
     spy_return = 0.0
     if spy_series and len(spy_series) >= 2:
-        prev_close_val = spy_series[-2]["close"]
-        live_spy = (prices or {}).get("SPY") or spy_series[-1]["close"]
-        spy_return = round(((live_spy - prev_close_val) / prev_close_val) * 100, 2) if prev_close_val > 0 else 0.0
+        last_date = spy_series[-1].get("date")
+        spy_return = round(breaker_measures([r["close"] for r in spy_series], (prices or {}).get("SPY"),
+                                            last_is_today=(last_date is None or last_date >= _today_et()))[0], 2)
 
     vxx_prev = load_vxx_prev_close()
     live_vxx = (prices or {}).get("VXX") if vxx_prev else None
