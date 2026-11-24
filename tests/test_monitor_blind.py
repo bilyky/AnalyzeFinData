@@ -13,6 +13,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "utils"))
 import intraday_monitor as monitor
 
+
+# monitor() skips non-trading days (PROD review 11-22); these tests check a session day's logic,
+# so the suite must not depend on the weekday it runs on.
+_TRADING_DAY = mock.patch.object(monitor, "_trading_day", return_value=True)
+
+
+def setUpModule():
+    _TRADING_DAY.start()
+
+
+def tearDownModule():
+    _TRADING_DAY.stop()
+
 _STOPS = {f"S{i}": 10.0 for i in range(44)}
 
 

@@ -14,6 +14,8 @@ from pathlib import Path
 
 from aether.core import DEFAULT_PORTFOLIO, Clock, EventBus, StorageError, SystemClock
 from aether.services.portfolio.adapters.json_repository import JsonPortfolioRepository, PortfolioFile
+from aether.services.market_data.adapters.etrade_clock import EtradeMarketClock
+from aether.services.market_data.api import SessionService
 from aether.services.portfolio.adapters.json_queries import JsonPortfolioQueries
 from aether.services.portfolio.adapters.legacy_state import LegacyStateGateway
 from aether.services.portfolio.adapters.memory import InMemoryPortfolioQueries, InMemoryPortfolioRepository
@@ -22,7 +24,8 @@ from aether.services.portfolio.api import PortfolioQueries, PortfolioRepository,
 PORTFOLIO_STORE_ENV = "AETHER_PORTFOLIO_STORE"
 STARTING_CAPITAL = 10000.0
 
-__all__ = ["App", "LegacyStateGateway", "PortfolioFile", "bootstrap", "default_portfolio_files", "portfolio_store_kind"]
+__all__ = ["App", "LegacyStateGateway", "PortfolioFile", "bootstrap", "default_portfolio_files", "market_data_service",
+           "portfolio_store_kind"]
 
 # The checkout's Data/ folder, where the game keeps its state today. This is the one place
 # that names the game's state file (the game itself asks bootstrap). Whether the state should
@@ -52,10 +55,18 @@ class App:
     portfolio: PortfolioService
     portfolio_state: LegacyStateGateway  # the raw state dict for the game, until S9
     portfolio_queries: PortfolioQueries  # read-only views for the dashboard, reports and tools
+    market_data: SessionService  # is the market open (session rules + the live E*TRADE clock)
     events: EventBus = field(default_factory=EventBus)
 
 
+def market_data_service(*, clock: Clock | None = None, market_clock=None, log=None) -> SessionService:
+    """Only the market-data service: no portfolio wiring, so a market question never depends on
+    the portfolio store setting (#309 review)."""
+    return SessionService(clock or SystemClock(), market_clock or EtradeMarketClock(log=log), log=log)
+
+
 def bootstrap(*, clock: Clock | None = None, portfolio_repository: PortfolioRepository | None = None,
+              market_clock=None,
               portfolio_files: dict | None = None, starting_capital: float = STARTING_CAPITAL,
               log=None) -> App:
     """The wired app. The CLI and the dashboard pass nothing; tests pass fakes or temp paths."""
@@ -70,5 +81,7 @@ def bootstrap(*, clock: Clock | None = None, portfolio_repository: PortfolioRepo
         portfolio_queries = InMemoryPortfolioQueries(portfolio_repository)
     service = PortfolioService(portfolio_repository, events)
     gateway = LegacyStateGateway(service, quarantine=getattr(portfolio_repository, "quarantine", None), log=log)
-    return App(clock=clock or SystemClock(), portfolio=service, portfolio_state=gateway,
-               portfolio_queries=portfolio_queries, events=events)
+    clock = clock or SystemClock()
+    market = market_data_service(clock=clock, market_clock=market_clock, log=log)
+    return App(clock=clock, portfolio=service, portfolio_state=gateway,
+               portfolio_queries=portfolio_queries, market_data=market, events=events)
