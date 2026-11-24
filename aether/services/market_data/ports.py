@@ -11,7 +11,8 @@ class MarketClock(Protocol):
 
 
 class PriceSource(Protocol):
-    """Quotes for symbols; a symbol with no price is left out."""
+    """Quotes for symbols; a symbol with no price is left out. ``today`` is the date the prices
+    are for (a source that needs it uses the local date when it is not given)."""
 
     def quotes(self, symbols, today=None) -> dict: ...
 

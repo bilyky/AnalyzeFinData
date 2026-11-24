@@ -121,6 +121,15 @@ class TestSources(unittest.TestCase):
             self.assertEqual(src.quotes(["AAA", "BAD"], WED), {})  # one bad file -> {} (as before)
             self.assertIn("Failed to load local JSON prices", log.console.call_args[0][0])
 
+    def test_ohlcv_closes_without_today_uses_the_local_date(self):
+        # #320 review: without ``today`` the source returned {} and logged a misleading error.
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "AAA_daily.json").write_text(json.dumps(
+                {"Time Series (Daily)": {str(datetime.date.today()): {"4. close": "7.5"}}}))
+            log = mock.Mock()
+            self.assertEqual(OhlcvCloses(d, log=log).quotes(["AAA"]), {"AAA": 7.5})
+        log.console.assert_not_called()
+
     def test_google_parses_the_price_and_tries_each_exchange(self):
         page = mock.Mock(status_code=200, text='<div jsname="Pdsbrc" class="x"> <span>$1,234.50</span></div>')
         miss = mock.Mock(status_code=404, text="")

@@ -5,6 +5,7 @@ Each one is moved as-is from ``ai_portfolio_game`` (``etrade.ETradeClient`` quot
 with the same log lines. ``aether.etrade`` and ``requests`` are looked up at call time, so a
 patched client or HTTP call in a test applies.
 """
+import datetime
 import json
 import re
 from pathlib import Path
@@ -77,6 +78,9 @@ class OhlcvCloses:
         self._log = log or get_logger("ai_game")
 
     def quotes(self, symbols, today=None) -> dict:
+        """The newest current close per symbol. ``today`` defaults to the local date (#320 review:
+        a missing ``today`` used to return {} with a misleading log line)."""
+        today = today or datetime.date.today()
         quotes = {}
         try:
             for sym in symbols:
