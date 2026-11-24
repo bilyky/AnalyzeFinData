@@ -37,6 +37,26 @@ class TestAccountView(unittest.TestCase):
         self.assertAlmostEqual(v["call_drop"], 1 - 4000 / 7000)
         self.assertAlmostEqual(v["excess"], 3000.0)
 
+    def test_pay_down_for_a_buffer(self):
+        # Plan O3. value 10000, requirement 30% = 3000, debt 6000: a fall f reaches the call when
+        # 6000 = (1 - f) x 7000 -> f = 14.3%. To survive 20%: debt <= 0.8 x 7000 = 5600.
+        v = mw.account_view(acct([("BBB", 100, 100.0, 0.0)], equity=4000.0), {"9999": {"BBB": 0.30}})
+        p20, p30 = v["pay_down_for"]
+        self.assertAlmostEqual(p20["cash"], 400.0)
+        self.assertAlmostEqual(p20["sell"], 400 / (1 - 0.8 * 0.7))
+        # The sale really restores the buffer: after selling S, debt = (1 - 20%) x (value - requirement).
+        s_ = p20["sell"]
+        self.assertAlmostEqual(6000 - s_, 0.8 * ((10000 - s_) - 0.3 * (10000 - s_)))
+        self.assertAlmostEqual(p30["cash"], 6000 - 0.7 * 7000)
+        html = mw.render_html([v])
+        self.assertIn("To survive a 20% fall: deposit", html)
+
+    def test_pay_down_is_zero_when_the_buffer_holds(self):
+        v = mw.account_view(acct([("BBB", 100, 100.0, 0.0)], equity=6000.0), {"9999": {"BBB": 0.30}})
+        self.assertEqual([(p["cash"], p["sell"]) for p in v["pay_down_for"]], [(0.0, 0.0), (0.0, 0.0)])
+        self.assertIn("a 20% fall: covered", mw.render_html([v]))
+        self.assertIsNone(mw.pay_down_for(0.2, 0.0, 0.0, 100.0))
+
     def test_cash_field_is_not_in_the_debt(self):
         # the broker's cash field misread a margined account (2026-11-10); holdings - net value matched
         v = mw.account_view(acct([("BBB", 100, 100.0, 0.0)], equity=6000.0, cash=150.0), {})
