@@ -341,11 +341,17 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
 6. **S5 `market_data`:** clock/session (computed once per run), `OhlcvStore` (freshness and heal,
    per-run caches), `ChainedPriceFeed`. The game's functions delegate, so external importers keep
    working. (F3 already landed early, as step 1c.)
+
+   **Order of the S5 PRs:** (1) session and clock: the rules, a `MarketClock` port with the
+   E*TRADE adapter, and `run_scope` so a run asks the live clock once; (2) the price chain
+   (`ChainedPriceFeed`); (3) the OHLCV store (freshness, heal, per-run caches).
 7. **S6 `research`:** `ResearchSource` plus the column map, read once per run. Then **F6**.
 8. **S7 `ledger`:** DNA, decision log and failure rules as event subscribers.
 9. **S8 `trading`:** `StrategyProfile`, the policies and the spec sets, then `DailyRunService`
    replacing the scenario stages one group per PR (settle/queued, exits, entries, deploy). The
-   `Portfolio` methods replace the dict mutation. Golden (a) on each PR. Then **F5**.
+   `Portfolio` methods replace the dict mutation. The run builds its `MarketSession` once and passes it
+   to each stage, and the temporary `market_data.run_scope` (S5, #309) is removed. Golden (a) on each
+   PR. Then **F5**.
 10. **S9 delete `aether/scenario/`,** `_pkg`, the validator exemptions and `test_scenario_*`.
     **Gate (measured):** before deleting the stage tests and `mutate_scenario_steps.py`, the new policy and
     service unit tests must catch all 155 mutants, or a mapped equivalent of each, listed in the PR.

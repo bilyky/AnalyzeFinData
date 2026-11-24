@@ -12,9 +12,16 @@ so ``mock.patch.object(game, ...)`` reaches the runner and every stage.
 from __future__ import annotations
 
 from aether.scenario import steps
+from aether.services.market_data.api import run_scope
 
 
 def run_daily_management(force=False, manual_profile=None):
+    """One daily run inside one market-data run scope (the live clock is asked once)."""
+    with run_scope():
+        return _run_daily_management(force=force, manual_profile=manual_profile)
+
+
+def _run_daily_management(force=False, manual_profile=None):
     """One daily management run, stage by stage. Same contract as the root.
 
     * Market closed and not ``force``: logs and returns before loading state.
