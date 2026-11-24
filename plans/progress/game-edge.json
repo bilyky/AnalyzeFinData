@@ -1,7 +1,7 @@
 {
  "project": "Winner hunt (Track G)",
  "goal": "Find at least one strategy, or a combination, that beats SPY after costs.",
- "updated": "2026-11-20",
+ "updated": "2026-11-24",
  "stages": [
   {
    "id": "G-A",
@@ -29,10 +29,11 @@
   },
   {
    "id": "G1",
-   "title": "Circuit-breaker tightened-stop study",
-   "status": "todo",
-   "pr": null,
-   "prod": false
+   "title": "Circuit-breaker buy freeze study (R&D #125) + one-day-move fix",
+   "status": "in_review",
+   "pr": 318,
+   "prod": false,
+   "note": "INCONCLUSIVE: freeze kept; stop tightening not measured"
   },
   {
    "id": "G2",

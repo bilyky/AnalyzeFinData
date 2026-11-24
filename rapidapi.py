@@ -113,6 +113,11 @@ def _queue_rank(existing: dict | None, today_str: str, path: str | None = None) 
     return (2, last) if last < cutoff else (1, last)
 
 
+# Errors worth one retry in the same run: the request never got an answer. An API answer
+# ("Invalid API call", a 429) is not retried here.
+NETWORK_ERRORS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
+
+
 def _is_quota_error(err: Exception) -> bool:
     resp = getattr(err, "response", None)
     return getattr(resp, "status_code", None) == 429
@@ -364,7 +369,10 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
 
         quota_hits = 0
         burst_retries = 0
+        calls = 0
+        network_failed = []          # priority symbols that failed on a timeout or a dropped connection
         for i, (_last, _order, sym, path, existing) in enumerate(queue[:budget], 1):
+            calls += 1
             outputsize = "full" if existing is None else "compact"
             try:
                 try:
@@ -385,6 +393,8 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
                 results["errors"].append((sym, str(e)))
                 if priority and sym.upper() in priority:
                     results["failed_priority"].append(sym)
+                    if isinstance(e, NETWORK_ERRORS):
+                        network_failed.append((sym, path, existing))
                 # WARNING: the next pass retries it (most-starved first). log_run_summary raises
                 # the run to ERROR (the recovery email) only when it matters.
                 _log.warning("  [RapidAPI] %s: fetch failed - %s", sym, e)
@@ -397,6 +407,25 @@ def repair_missing(symbols: list[str], today_str: str, force: bool = False,
                                  "%d more deferred to the next run", quota_hits, left)
                     break
                 # Sleep even on failure to avoid a rapid-fire cascade hammering the API
+                time.sleep(SLEEP_SEC)
+
+        # Priority symbols go first, so a short outage at the start of the pass hits exactly
+        # them (PROD 2026-11-23 17:06-17:10: read timeouts, all 9 held names and SPY/RSP/XLK/GDX
+        # failed, and waited a day). Retry those once at the end, within the run's budget.
+        room = max(0, budget - calls)
+        if network_failed and room and not results["quota_stopped"]:
+            _log.info("  [RapidAPI] Retrying %d priority symbol(s) that failed on a network error: %s",
+                      min(len(network_failed), room), ", ".join(s for s, _p, _e in network_failed[:room]))
+            for sym, path, existing in network_failed[:room]:
+                try:
+                    _fetch_and_merge(sym, path, outputsize="full" if existing is None else "compact")
+                except Exception as e:
+                    _log.warning("  [RapidAPI] %s: retry failed - %s", sym, e)
+                else:
+                    results["updated"] += 1
+                    results["failed_priority"].remove(sym)
+                    results["errors"] = [x for x in results["errors"] if x[0] != sym]
+                    _log.console("  [RapidAPI] %s: retry OK", sym)
                 time.sleep(SLEEP_SEC)
     finally:
         if fd is not None:
