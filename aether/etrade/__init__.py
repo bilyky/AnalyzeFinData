@@ -5,6 +5,7 @@ import re as _re
 import sys
 import threading
 import time
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import pyetrade
@@ -720,6 +721,24 @@ def _get_verifier_via_totp(auth_url, username, password, totp_secret, headless=T
         except Exception:
             pass
 
+    def _page_state(page) -> str:
+        """What the login page shows, without any field value: the URL path, the title, and
+        which known controls are visible. Safe to log (no username, password or code); the
+        screenshots stay opt-in (_snap). PROD 2026-11-17 and 11-21/22: "Security-code field not
+        shown", then no submit button, with nothing logged about what the page was."""
+        try:
+            parts = [f"url={urlsplit(page.url).path[:60]}", f"title={(page.title() or '')[:60]!r}"]
+            for label, sel in (("user", _USER_SEL), ("password", _PASS_SEL),
+                               ("security-code box", "input#useSecurityCode, [for='useSecurityCode']"),
+                               ("security-code field", _SECCODE_SEL), ("submit", _SUBMIT_SEL),
+                               ("captcha", "iframe[src*='captcha'], iframe[title*='challenge']")):
+                loc = page.locator(sel)
+                n = loc.count()
+                parts.append(f"{label}={'visible' if n and loc.first.is_visible() else ('hidden' if n else 'absent')}")
+            return ", ".join(parts)
+        except Exception as e:   # diagnostics must never break the login path
+            return f"page state unavailable ({type(e).__name__})"
+
     def _fill_verified(page, sel, value, label):
         """Type into a field that renders from a skeleton then HYDRATES a moment later.
 
@@ -801,9 +820,14 @@ def _get_verifier_via_totp(auth_url, username, password, totp_secret, headless=T
             except Exception:
                 # No security-code control on this render — device already trusted / no MFA
                 # prompt. Proceed to submit; the login may complete without a code.
-                _log.info("  [TOTP] Security-code field not shown — submitting without a code.")
+                _log.info("  [TOTP] Security-code field not shown — submitting without a code. "
+                          "Page: %s", _page_state(page))
 
-            page.click(_SUBMIT_SEL, timeout=8000)
+            try:
+                page.click(_SUBMIT_SEL, timeout=8000)
+            except PWTimeout:
+                _log.warning("  [TOTP] No submit button within 8s. Page: %s", _page_state(page))
+                raise
             _snap(page, "02_submitted")
 
             # Leave the login page (bounded — a stall fails fast instead of hanging).
