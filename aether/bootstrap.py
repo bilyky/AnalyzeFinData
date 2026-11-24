@@ -15,7 +15,8 @@ from pathlib import Path
 from aether.core import DEFAULT_PORTFOLIO, Clock, EventBus, StorageError, SystemClock
 from aether.services.portfolio.adapters.json_repository import JsonPortfolioRepository, PortfolioFile
 from aether.services.market_data.adapters.etrade_clock import EtradeMarketClock
-from aether.services.market_data.api import SessionService
+from aether.services.market_data.adapters.prices import EtradeQuotes, GooglePrices, OhlcvCloses
+from aether.services.market_data.api import PriceService, SessionService
 from aether.services.portfolio.adapters.json_queries import JsonPortfolioQueries
 from aether.services.portfolio.adapters.legacy_state import LegacyStateGateway
 from aether.services.portfolio.adapters.memory import InMemoryPortfolioQueries, InMemoryPortfolioRepository
@@ -24,7 +25,7 @@ from aether.services.portfolio.api import PortfolioQueries, PortfolioRepository,
 PORTFOLIO_STORE_ENV = "AETHER_PORTFOLIO_STORE"
 STARTING_CAPITAL = 10000.0
 
-__all__ = ["App", "LegacyStateGateway", "PortfolioFile", "bootstrap", "default_portfolio_files", "market_data_service",
+__all__ = ["App", "LegacyStateGateway", "PortfolioFile", "bootstrap", "default_portfolio_files", "market_data_service", "market_prices",
            "portfolio_store_kind"]
 
 # The checkout's Data/ folder, where the game keeps its state today. This is the one place
@@ -63,6 +64,14 @@ def market_data_service(*, clock: Clock | None = None, market_clock=None, log=No
     """Only the market-data service: no portfolio wiring, so a market question never depends on
     the portfolio store setting (#309 review)."""
     return SessionService(clock or SystemClock(), market_clock or EtradeMarketClock(log=log), log=log)
+
+
+def market_prices(*, cache_dir, broker=None, google=None, cache=None, log=None) -> PriceService:
+    """The live-price chain: E*TRADE, then Google for the gaps; the OHLCV cache on weekends and
+    after hours. ``cache_dir`` is the per-symbol OHLCV folder; until the OHLCV store moves here
+    (S5, next PR) the caller passes its own (the game: ``SYMBOL_FULL_DIR``)."""
+    return PriceService(broker or EtradeQuotes(log=log), google or GooglePrices(log=log),
+                        cache or OhlcvCloses(cache_dir, log=log), log=log)
 
 
 def bootstrap(*, clock: Clock | None = None, portfolio_repository: PortfolioRepository | None = None,

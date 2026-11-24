@@ -12,6 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ai_portfolio_game as game
+from aether.services.market_data.adapters.prices import GooglePrices  # the chain's Google source
 
 
 class TestLiveEquity(unittest.TestCase):
@@ -48,8 +49,7 @@ class TestGetLivePricesPartialFill(unittest.TestCase):
              mock.patch.object(game.etrade, "get_tokens", return_value=["tok"]), \
              mock.patch.object(game.etrade, "fetch_quotes",
                                return_value={"AAA": 10.0}), \
-             mock.patch.object(game, "get_google_prices_fallback",
-                               return_value={"BBB": 20.0}) as goog:
+             mock.patch.object(GooglePrices, "quotes", return_value={"BBB": 20.0}) as goog:
             out = game.get_live_prices(["AAA", "BBB"])
         # E*TRADE quote preserved, gap filled, and only the gap was scraped.
         self.assertEqual(out, {"AAA": 10.0, "BBB": 20.0})
@@ -61,7 +61,7 @@ class TestGetLivePricesPartialFill(unittest.TestCase):
              mock.patch.object(game.etrade, "get_tokens", return_value=["tok"]), \
              mock.patch.object(game.etrade, "fetch_quotes",
                                return_value={"AAA": 10.0, "BBB": 20.0}), \
-             mock.patch.object(game, "get_google_prices_fallback") as goog:
+             mock.patch.object(GooglePrices, "quotes") as goog:
             out = game.get_live_prices(["AAA", "BBB"])
         self.assertEqual(out, {"AAA": 10.0, "BBB": 20.0})
         goog.assert_not_called()
