@@ -29,4 +29,5 @@ To monitor every 30 minutes during market hours (6:30 AM – 1:30 PM PST):
 - Program: `venv\Scripts\python.exe`
 - Arguments: `scripts/utils/intraday_monitor.py`
 - Trigger: Daily, repeat every 30 min for 7 hours starting 06:30
+- The script itself exits on a weekend or NYSE holiday (`market_calendar.is_session`), so a daily trigger is fine.
 - Task name: `AnalyzeFinData_Monitor`
