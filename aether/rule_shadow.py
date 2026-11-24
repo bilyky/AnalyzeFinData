@@ -38,16 +38,7 @@ def log(entries: list, path=None) -> None:
     if not entries:
         return
     try:
-        p = Path(path or ledgers.RULE_SHADOW_FILE)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "a", encoding="utf-8") as f:
-            for e in entries:
-                f.write(json.dumps(e) + "\n")
-        with open(p, encoding="utf-8") as f:
-            lines = f.readlines()
-        if len(lines) > MAX_LINES:
-            with open(p, "w", encoding="utf-8") as f:
-                f.writelines(lines[-MAX_LINES:])
+        ledgers.append_jsonl(Path(path or ledgers.RULE_SHADOW_FILE), entries, MAX_LINES)
     except Exception as e:
         _log.warning(f"[rule_shadow] log write failed: {e}")
 
@@ -67,7 +58,9 @@ def read(path=None) -> list:
 
 def score(entries: list, closes_by_symbol: dict, horizons=HORIZONS) -> dict:
     """Mean forward return by group ("would_hold_back" vs "admitted_by_rule") for each horizon, over entries whose
-    window has passed. ``closes_by_symbol``: {symbol: {date: close}}. Descriptive only, with n."""
+    window has passed. ``closes_by_symbol``: {symbol: {date: close}}. Descriptive only, with n. The reference is
+    the close of the decision date (the game decides at 07:00, so that day's close is the first price it could
+    have filled near); an entry without a bar on its own date is skipped."""
     out = {}
     for h in horizons:
         groups = {"would_hold_back": [], "admitted_by_rule": []}
