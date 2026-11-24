@@ -72,6 +72,7 @@ from scoring import (
     fibonacci_retracement_score as _fib_score,
     rsi_divergence_score        as _rsi_div_score,
     digit_sum_score             as _digit_sum_score,   # close→next-day only
+    digit_sum_allowed           as _digit_sum_allowed,
     short_score          as _short_score_fn,
     long_score           as _long_score_fn,
 )
@@ -1655,7 +1656,10 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
                 _prev_close = float(ohlcv_ts[all_d[idx_d - 1]].get('4. close', 0) or 0)
             except (ValueError, TypeError):
                 _prev_close = None
-    fields['digit_sum'] = _digit_sum_score(power_g.symbol, close_price=_prev_close)
+    # Shadowed unless the monthly per-stock check confirmed this stock (owner 2026-11-24, R&D #72):
+    # the raw score is kept for the record, the scores only see it on the confirmed list.
+    fields['digit_sum_raw'] = _digit_sum_score(power_g.symbol, close_price=_prev_close)
+    fields['digit_sum'] = fields['digit_sum_raw'] if _digit_sum_allowed(power_g.symbol) else 0.0
     fields['short_score']  = _short_score_fn(fields)
     fields['long_score']   = _long_score_fn(fields)
     return fields
