@@ -980,6 +980,13 @@ def rotate_positions(state, prices, profile, available_slots, max_positions, top
                      active_position_scores, today, now_time, new_transactions):
     """Sell mature positions to free slots for stronger candidates (B6, R&D #27).
 
+    Nothing is rotated when the run's buys are frozen (``circuit_breaker.FREEZE_KEY``): the freed
+    slot could not be filled (PROD 2026-11-24). On a normal day a rotation can sell a position the
+    exit check just held as a protected winner. That is by design: the anti-churn study (#135,
+    ``scripts/backtesting/anti_churn_study.py``) found the 6 rotated winners on the PROD ledger fell
+    -5.5% / -12% over the next 10 / 20 bars, so winner protection for rotations was not wired
+    (one ledger, a small sample).
+
     Extracted verbatim from the ``# R&D #27: Dynamic Momentum Rotation Engine``
     block in ``run_daily_ai_management`` — the stage after :func:`screen_buys`
     and before BUY execution. Unchanged from the root:
