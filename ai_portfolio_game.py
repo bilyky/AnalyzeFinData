@@ -17,7 +17,7 @@ from pathlib import Path
 import aether_oracle
 from aether.utils import _to_float
 from aether.config import CFG
-from aether.bootstrap import STARTING_CAPITAL, bootstrap
+from aether.bootstrap import STARTING_CAPITAL, bootstrap, market_data_service
 from aether.run_guard import DailyRunGuard, RunSkipped
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
@@ -41,7 +41,7 @@ import instruments
 from aether import options
 from aether.scenario import runners
 from aether.core import DEFAULT_PORTFOLIO
-from aether.market_calendar import NYSE_HOLIDAYS, is_session, last_session_on_or_before
+from aether.market_calendar import NYSE_HOLIDAYS, last_session_on_or_before  # NYSE_HOLIDAYS: re-export for tests
 from aether_logger import get_logger as _get_logger
 from aether.scoring import digit_sum_open_score as _digit_open_score
 _log = _get_logger("ai_game")
@@ -635,23 +635,18 @@ def _execute_buys(state, top_buys, available_slots, min_cash_required, rules,
     return buys_executed
 
 
-def is_market_open():
-    """US market session gate: weekday, not an NYSE full-day holiday, 9:30 AM - 4:00 PM ET."""
-    tz = pytz.timezone("America/New_York")
-    now = datetime.datetime.now(tz)
-    
-    if now.weekday() >= 5:
-        return False, "Market is closed (Weekend)."
-    if not is_session(now.date()):
-        return False, f"Market is closed (NYSE holiday {now.date().isoformat()})."
+def _market():
+    """The market-data service (R&D #78 S5), built per call. Only that service: a market
+    question must not depend on the portfolio store setting (#309 review)."""
+    return market_data_service(log=_log)
 
-    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    
-    if market_open <= now <= market_close:
-        return True, "Market is Open."
-    else:
-        return False, f"Market is Closed. (Current EST: {now.strftime('%H:%M')})"
+
+def is_market_open():
+    """US market session gate: weekday, not an NYSE full-day holiday, 9:30 AM - 4:00 PM ET.
+
+    The rules live in the market-data service; "now" is read here, so a test that replaces this
+    module's ``datetime`` still controls the clock."""
+    return _market().market_open(datetime.datetime.now(pytz.timezone("America/New_York")))
 
 def calculate_ticker_trend_score(symbol: str):
     """
@@ -1000,42 +995,13 @@ def get_live_google_price(symbol):
     return None
 
 def is_market_hours():
-    """Return True if current time is within active US equity market hours (6:30 AM - 1:15 PM PST, weekdays) and NOT a market holiday."""
+    """True within 6:30 AM - 1:15 PM PT on a weekday that isn't an NYSE holiday, and open by
+    E*TRADE's live clock when it answers. The rules live in the market-data service; inside a
+    daily run the live clock is asked once (``run_scope``)."""
     try:
-        tz_la = pytz.timezone("America/Los_Angeles")
-        now_la = datetime.datetime.now(tz_la)
-        
-        # 1. Hard Time-Window check: Must be within 6:30 AM - 1:15 PM PST
-        start_time = now_la.replace(hour=6, minute=30, second=0, microsecond=0)
-        end_time = now_la.replace(hour=13, minute=15, second=0, microsecond=0)
-        if not (start_time <= now_la <= end_time):
-            return False
-            
-        # 2. Weekend check (Saturday=5, Sunday=6)
-        if now_la.weekday() in (5, 6):
-            return False
-            
-        # 3. Static US Stock Market Holiday (NYSE)
-        
-        today_str = now_la.strftime("%Y-%m-%d")
-        if today_str in NYSE_HOLIDAYS:
-            return False
-            
-        # 4. Dynamic Live Verification (Clock API + SPY Ticker)
-        try:
-            _et = etrade.ETradeClient("production", role="auth")
-            tokens = _et.auth.get_tokens()
-            if tokens:
-                is_open = _et.market.is_open_now(tokens)
-                if is_open is not None:
-                    if not is_open:
-                        _log.console("  [AETHER] Dynamic Market Checks confirm market is CLOSED (Holiday/Weekend).")
-                    return is_open
-        except Exception as e:
-            _log.warning(f"  [AETHER] Dynamic market clock failed: {e}. Falling back to static datetime checks.")
-            
-        return True
-    except Exception:
+        now_la = datetime.datetime.now(pytz.timezone("America/Los_Angeles"))
+        return _market().market_hours(now_la)
+    except Exception:  # any failure, wiring included, means "not market hours" (#309 review)
         _log.warning("is_market_hours: timezone check failed — defaulting to False (skip run).")
         return False  # safe default: skip trade rather than run at unknown hours
 

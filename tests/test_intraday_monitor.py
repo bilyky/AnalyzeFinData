@@ -11,6 +11,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../scripts/utils"))
 
 import intraday_monitor as monitor
 
+
+# monitor() skips non-trading days (PROD review 11-22); these tests check a session day's logic,
+# so the suite must not depend on the weekday it runs on.
+_TRADING_DAY = mock.patch.object(monitor, "_trading_day", return_value=True)
+
+
+def setUpModule():
+    _TRADING_DAY.start()
+
+
+def tearDownModule():
+    _TRADING_DAY.stop()
+
 class TestIntradayMonitor(unittest.TestCase):
 
     @mock.patch("intraday_monitor.load_state")
@@ -168,8 +181,9 @@ class TestBreachIsEmailedOnce(unittest.TestCase):
         self.assertNotIn("out of date", body)
 
     def test_out_of_date_needs_a_breach_deeper_than_20_pct(self):
-        # Already alerted and a new low, but only 10% under the stop: AI analysis, no note.
-        state = {"last_breached": {}, "alerted": {"TT": {"stop": 100.0, "price": 92.0}}}
+        # Already alerted and a new low (5% deeper: past the 3% re-alert step), but only 10% under
+        # the stop: AI analysis, no note.
+        state = {"last_breached": {}, "alerted": {"TT": {"stop": 100.0, "price": 95.0}}}
         send, ai, _ = self._run({"TT": 100.0}, {"TT": 90.0}, state)
         ai.assert_called_once_with("TT", 90.0, 100.0)
         self.assertNotIn("out of date", send.call_args.args[1])
