@@ -51,6 +51,8 @@ class TestSummary(unittest.TestCase):
         self.assertEqual(hv.summarize(rows, self.sale, RATES)["wash_risk_buys"], ["2026-11-05"])
         old = [_row("ABC", "2024-01-02", 1000, 500), _row("ABC", "2026-10-23", 100, 90)]   # 31 days: clean
         self.assertEqual(hv.summarize(old, self.sale, RATES)["wash_risk_buys"], [])
+        edge = [_row("ABC", "2024-01-02", 1000, 500), _row("ABC", "2026-10-24", 100, 90)]  # exactly 30 days: inside
+        self.assertEqual(hv.summarize(edge, self.sale, RATES)["wash_risk_buys"], ["2026-10-24"])
 
     def test_a_short_term_loss_lot_about_to_turn_long_term_is_flagged(self):
         rows = [_row("ABC", "2025-12-01", 1000, 500)]

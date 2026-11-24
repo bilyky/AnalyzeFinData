@@ -35,7 +35,8 @@ from aether.lots_refresh import et_date
 
 WASH_DAYS = 30
 DEFAULT_RATES = {"st_rate": 0.371, "lt_rate": 0.281}    # position-watch's defaults; the private config overrides
-NOT_CHECKED = "accounts the API doesn't list (stock plan, 401(k), other brokers) are not checked for wash sales"
+NOT_CHECKED = ("accounts the API doesn't list (stock plan, 401(k), other brokers) are not checked for wash sales, "
+               "and neither are future buys such as dividend reinvestment (turn it off for a name you harvest)")
 
 
 def anniversary(day: datetime.date) -> datetime.date:
