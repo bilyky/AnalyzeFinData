@@ -17,7 +17,7 @@ from pathlib import Path
 import aether_oracle
 from aether.utils import _to_float
 from aether.config import CFG
-from aether.bootstrap import STARTING_CAPITAL, bootstrap, market_data_service
+from aether.bootstrap import STARTING_CAPITAL, bootstrap, market_data_service, market_prices
 from aether.run_guard import DailyRunGuard, RunSkipped
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
@@ -975,24 +975,15 @@ def update_excel_log(state, new_transactions):
             except Exception:
                 pass
 
+def _prices():
+    """The live-price chain (market-data service, R&D #78 S5), built per call with the game's own
+    OHLCV folder, so a redirected SYMBOL_FULL_DIR (tests) applies."""
+    return market_prices(cache_dir=SYMBOL_FULL_DIR, log=_log)
+
+
 def get_live_google_price(symbol):
     """Scrape the latest price from Google Finance as a fallback when E*TRADE is unavailable."""
-    exchanges = ["NASDAQ", "NYSE", "NYSEARCA", "AMEX"]
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-    
-    for ex in exchanges:
-        url = f'https://www.google.com/finance/quote/{symbol}:{ex}'
-        try:
-            r = requests.get(url, headers=headers, timeout=5)
-            if r.status_code == 200:
-                # Regex looking specifically for the jsname="Pdsbrc" span enclosing the dollar price
-                match = re.search(r'jsname="Pdsbrc"[^>]*>\s*<span>\$([0-9,.]+)<', r.text)
-                if match:
-                    price_str = match.group(1).replace(',', '')
-                    return float(price_str)
-        except Exception:
-            pass
-    return None
+    return _prices().google.price(symbol)
 
 def is_market_hours():
     """True within 6:30 AM - 1:15 PM PT on a weekday that isn't an NYSE holiday, and open by
@@ -1008,104 +999,36 @@ def is_market_hours():
 def get_json_prices_fallback(symbols):
     """Retrieve the latest closing prices from the local per-symbol OHLCV JSON caches.
     Accepts prices from the last 4 calendar days to handle weekends and market holidays."""
-    quotes = {}
+    return _prices().cache.quotes(symbols, datetime.date.today())
+
+
+def _workbook_synced_today():
+    """True if today's workbook (XLSX_FILE) was written today."""
     try:
-        today = datetime.date.today()
-        today_str = str(today)
-        is_weekend = today.weekday() in (5, 6)
-        # Accept a close up to 4 days old — covers 3-day weekends and market holidays
-        cutoff = (today - datetime.timedelta(days=4)).isoformat()
-        for sym in symbols:
-            path = SYMBOL_FULL_DIR / f"{sym}_daily.json"
-            if path.exists():
-                with open(path) as f:
-                    ts = json.load(f).get("Time Series (Daily)", {})
-                if ts:
-                    newest_date = sorted(ts.keys())[-1]
-                    if newest_date == today_str or is_weekend or newest_date >= cutoff:
-                        quotes[sym] = float(ts[newest_date]["4. close"])
-        return quotes
-    except Exception as e:
-        _log.console(f"  [AETHER] Failed to load local JSON prices: {e}")
-        return {}
+        if os.path.exists(XLSX_FILE):
+            mtime = os.path.getmtime(XLSX_FILE)
+            return datetime.date.fromtimestamp(mtime) == datetime.date.today()
+    except Exception:
+        pass
+    return False
+
 
 def get_live_prices(symbols):
-    """Fetch real-time market prices via E*TRADE safely with automated recovery."""
+    """Fetch real-time market prices via E*TRADE safely with automated recovery.
+
+    The source rules live in the market-data service (``PriceService``): the cache on weekends
+    and after hours with today's workbook, else E*TRADE, with Google for the gaps."""
     try:
-        # Weekend Gate: Bypass E*TRADE only on weekends to prevent offline lockout sweeps
-        if datetime.date.today().weekday() in (5, 6):
-            _log.console("  [AETHER] Weekend detected — bypassing E*TRADE login.")
-            _log.console("  [AETHER] Attempting instant local price extraction from per-symbol JSON cache...")
-            quotes = get_json_prices_fallback(symbols)
-            # Find any missing gaps (symbols not in our local workbook)
-            missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
-            if missing:
-                _log.console(f"  [AETHER] Local cache missing prices for {missing}. Falling back to Google Finance.")
-                quotes.update(get_google_prices_fallback(missing))
-            return quotes
-
-        # After-Hours Synced Gate: If after-hours on a weekday, and today's workbook is ALREADY
-        # fresh and synced, we can safely bypass E*TRADE entirely and load directly from the local cache!
-        if not is_market_hours():
-            is_fresh = False
-            try:
-                if os.path.exists(XLSX_FILE):
-                    mtime = os.path.getmtime(XLSX_FILE)
-                    mdate = datetime.date.fromtimestamp(mtime)
-                    is_fresh = (mdate == datetime.date.today())
-            except Exception:
-                pass
-
-            if is_fresh:
-                _log.console("  [AETHER] After-hours detected & workbook is ALREADY synced today.")
-                _log.console("  [AETHER] Bypassing E*TRADE login to load directly from per-symbol JSON cache...")
-                quotes = get_json_prices_fallback(symbols)
-                missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
-                if missing:
-                    _log.console(f"  [AETHER] Local cache missing prices for {missing}. Falling back to Google Finance.")
-                    quotes.update(get_google_prices_fallback(missing))
-                return quotes
-            else:
-                _log.console("  [AETHER] After-hours detected, but workbook is STALE/UN-SYNCED today.")
-                _log.console("  [AETHER] Connecting to E*TRADE to fetch fresh settled closes...")
-
-        # Call the hardened get_tokens() which is safe and has an active headless safety gate.
-        # This ensures we always actively attempt to re-authenticate when tokens expire.
-        _et = etrade.ETradeClient("production", role="auth")
-        tokens = _et.auth.get_tokens()
-        if not tokens:
-            _log.warning("  [AETHER] E*TRADE authentication failed. Attempting Google Finance live fallback.")
-            return get_google_prices_fallback(symbols)
-
-        quotes = _et.market.quotes(symbols, tokens)
-        _log.info(f"  [AETHER] Prices: E*TRADE quotes for {len(quotes)}/{len(symbols)} symbols.")
-
-        # Fill only the gaps from Google — keep the E*TRADE quotes we already have.
-        # Surface dead/delisted/misaligned tickers loudly instead of discarding
-        # every good quote and re-scraping the whole list.
-        missing = [s for s in symbols if s not in quotes or not quotes[s] or quotes[s] <= 0]
-        if missing:
-            _log.console(f"  [AETHER] E*TRADE returned no quote for {missing} (possibly dead/delisted/misaligned); filling gaps via Google Finance.")
-            quotes.update(get_google_prices_fallback(missing))
-            still_missing = [s for s in missing if s not in quotes or not quotes[s] or quotes[s] <= 0]
-            if still_missing:
-                _log.console(f"  [AETHER] SYMBOLOGY ERROR: No live quote from any source for: {still_missing}")
-
-        return quotes
+        today = datetime.date.today()
     except Exception as e:
         _log.warning(f"  [AETHER] E*TRADE connection failed: {e}. Attempting Google Finance live fallback.")
         return get_google_prices_fallback(symbols)
+    return _prices().live_prices(symbols, today=today, market_hours=lambda: is_market_hours(),
+                                 workbook_fresh=_workbook_synced_today)
 
 def get_google_prices_fallback(symbols):
     """Scrape Google Finance for multiple symbols in parallel/sequence as a robust fallback."""
-    quotes = {}
-    _log.console(f"  [Google] Scraping live quotes for: {symbols}")
-    for sym in symbols:
-        price = get_live_google_price(sym)
-        if price and price > 0:
-            quotes[sym] = price
-            _log.info(f"    - Google Verified {sym}: ${price:.2f}")
-    return quotes
+    return _prices().google.quotes(symbols)
 
 def send_daily_summary(return_html=False):
     state = load_game()
