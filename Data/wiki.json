@@ -483,6 +483,19 @@
       "Shown on the OceanView tab when the plan file exists"
     ]
   },
+  "harvest_list": {
+    "title": "Tax-Loss Harvest List",
+    "summary": "A read-only list of every losing position across the listed E*TRADE accounts, built from the live tax lots: short- and long-term loss, the estimated tax value at your rates, wash-sale warnings and the first clean buy-back date. Recommend-only.",
+    "origin": "OceanView year-end harvest (R&D #81, plan stage O2a): the list used to live in hand notes, where a recent buy or a lot about to turn long-term was easy to miss.",
+    "body": "<p><code>python -m aether.harvest</code> reads each losing position's tax lots through the E*TRADE client (read-only, no login) and ranks the symbols by the tax value of selling them today. A lot is long-term once the sale date is past its one-year anniversary. A buy of the same symbol in any listed account within the last 30 days is flagged: selling only the older lots at a loss would then be partly a wash sale, so sell every lot or wait. Accounts the API doesn't list (the stock plan, a 401(k), other brokers) aren't checked. The figures are planning estimates, not tax advice.</p>",
+    "config": [
+      "python -m aether.harvest (add --json for the full list)",
+      "Tax rates: st_rate / lt_rate in Data/position_watch/config.json",
+      "Scheduled buys: acquisition_dates in Data/position_watch/config.json (vest / purchase dates of the watched symbol); a loss sale within 30 days of one is flagged with the next clean day",
+      "The watched symbol's loss lots are listed even when the whole position is up (sell them by specific lot)",
+      "Never places an order and writes nothing"
+    ]
+  },
   "margin_watch": {
     "title": "Oracle Margin Watch",
     "summary": "The Oracle's daily email adds a <b>Margin watch</b> for every real account with a margin loan: debt, equity, the maintenance requirement, how far holdings can fall before a call, any open call as the broker states it, and the sales that free the most requirement first.",
@@ -491,7 +504,8 @@
     "config": [
       "aether/margin_watch.py; private Data/margin_requirements.json ({last4: {SYMBOL: rate}})",
       "Optional oracle.margin_rate_pct for the interest line",
-      "One broker read per Oracle run, shared with its audit"
+      "One broker read per Oracle run, shared with its audit",
+      "Pay-down for a buffer (plan O3): the deposit, or the sales at the account's average requirement, that keep a 20% / 30% fall from reaching a call"
     ]
   },
   "options_adviser": {
