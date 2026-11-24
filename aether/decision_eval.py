@@ -16,7 +16,7 @@ real data.
 import json
 from pathlib import Path
 
-from aether import ai_client, paths, sell_eval, sell_rules
+from aether import ai_client, ledgers, paths, sell_eval, sell_rules
 from aether.logger import get_logger as _get_logger
 
 _log = _get_logger("decision_eval")
@@ -66,25 +66,15 @@ def log_decisions(entries, path=None):
     """Append decision records as JSON lines (best-effort; never raises).
     path=None resolves LOG at call time, so a redirected LOG is honored."""
     try:
-        path = Path(path or LOG)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            for e in entries:
-                f.write(json.dumps(e) + "\n")
-        _trim_log(path)
+        ledgers.append_jsonl(Path(path or LOG), entries, _MAX_LOG_LINES)
     except Exception as e:
         _log.warning(f"[decision_eval] log write failed: {e}")
 
 
 def _trim_log(path, max_lines=_MAX_LOG_LINES):
     """Keep the append-only log bounded to the most recent max_lines so it can't
-    grow without limit. No-op while under the cap."""
-    with open(path, encoding="utf-8") as f:
-        lines = f.readlines()
-    if len(lines) <= max_lines:
-        return
-    with open(path, "w", encoding="utf-8") as f:
-        f.writelines(lines[-max_lines:])
+    grow without limit. No-op while under the cap. (One writer for every ledger: ledgers.trim_jsonl.)"""
+    ledgers.trim_jsonl(path, max_lines)
 
 
 def read_log(path=None):
