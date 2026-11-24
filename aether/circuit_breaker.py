@@ -51,17 +51,34 @@ def load_spy_history() -> list[dict]:
         _log.warning(f"Failed to load SPY history for circuit breaker: {e}")
         return []
 
+def _today_et() -> str:
+    return datetime.datetime.now(pytz.timezone("America/New_York")).date().isoformat()
+
+
+def prev_session_close(ts: dict, today: str | None = None) -> float | None:
+    """The close of the last bar dated before ``today`` (ET): the session a live price is compared with.
+    A morning run's cache ends yesterday, so that is the last bar; an evening cache already holds today's bar,
+    so it is the one before it. (Before 2026-11-24 it was always the second-to-last bar: two sessions back on
+    a morning run, the same off-by-one as the SPY move; #318 review.)"""
+    today = today or _today_et()
+    before = [d for d in sorted(ts) if d < today]
+    if not before:
+        return None
+    try:
+        return float(ts[before[-1]]["4. close"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def load_vxx_prev_close() -> float | None:
-    """Load yesterday's VXX close from local cache. Returns None if unavailable (disables VXX check)."""
+    """The previous session's VXX close from the local cache (prev_session_close). None if unavailable
+    (disables the VXX check)."""
     if not VXX_FILE.exists():
         return None
     try:
         with open(VXX_FILE, "r") as f:
             ts = json.load(f).get("Time Series (Daily)", {})
-        dates = sorted(ts.keys())
-        if len(dates) >= 2:
-            return float(ts[dates[-2]]["4. close"])
-        return None
+        return prev_session_close(ts)
     except Exception:
         return None
 
@@ -150,7 +167,7 @@ def check_systemic_risk(prices=None) -> tuple[bool, str]:
         
     # 1. Single-day move and 2. rolling 10-day drawdown, measured once (breaker_measures). A bar without a date
     #    keeps the old reading (the live price replaces it); a bar dated before today is an earlier session.
-    today_et = datetime.datetime.now(pytz.timezone("America/New_York")).date().isoformat()
+    today_et = _today_et()
     last_date = spy_series[-1].get("date")
     spy_return, spy_drawdown = breaker_measures([r["close"] for r in spy_series], live_spy_price,
                                                 last_is_today=(last_date is None or last_date >= today_et))
@@ -195,9 +212,9 @@ def log_circuit_breaker_trigger_dna(reason: str, state: dict, prices=None, _spy_
     spy_series = _spy_series if _spy_series is not None else load_spy_history()
     spy_return = 0.0
     if spy_series and len(spy_series) >= 2:
-        prev_close_val = spy_series[-2]["close"]
-        live_spy = (prices or {}).get("SPY") or spy_series[-1]["close"]
-        spy_return = round(((live_spy - prev_close_val) / prev_close_val) * 100, 2) if prev_close_val > 0 else 0.0
+        last_date = spy_series[-1].get("date")
+        spy_return = round(breaker_measures([r["close"] for r in spy_series], (prices or {}).get("SPY"),
+                                            last_is_today=(last_date is None or last_date >= _today_et()))[0], 2)
 
     vxx_prev = load_vxx_prev_close()
     live_vxx = (prices or {}).get("VXX") if vxx_prev else None
