@@ -46,6 +46,15 @@ class TestRules(unittest.TestCase):
         self.assertEqual(game._MAX_STALE_DAYS, MAX_STALE_DAYS)  # one home
 
 
+class TestWiring(unittest.TestCase):
+    def test_the_sma_rule_is_required(self):
+        # #327 review: without it sma50 returned None with a misleading "data" log line.
+        with self.assertRaises(TypeError):
+            OhlcvService(JsonOhlcvStore("."), mock.Mock(), set())
+        with self.assertRaises(TypeError):
+            OhlcvService(JsonOhlcvStore("."), mock.Mock(), set(), sma=None)
+
+
 class TestReads(_Base):
     def test_closes_and_age(self):
         self.write("AAA", _bars(3))

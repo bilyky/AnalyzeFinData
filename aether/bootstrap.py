@@ -75,7 +75,7 @@ def market_prices(*, cache_dir, broker=None, google=None, cache=None, log=None) 
                         cache or OhlcvCloses(cache_dir, log=log), log=log)
 
 
-def market_ohlcv(*, symbol_dir, repair, attempted: set, sma=None, log=None) -> OhlcvService:
+def market_ohlcv(*, symbol_dir, repair, attempted: set, sma, log=None) -> OhlcvService:
     """The OHLCV cache service. ``symbol_dir`` is the per-symbol folder and ``repair`` the refresh
     call (``rapidapi.repair_missing``); the game passes both (and its once-per-process heal guard)
     until the folder has one home for all modules (a follow-up)."""

@@ -13,10 +13,12 @@ from aether.services.market_data.domain import ohlcv
 
 
 class OhlcvService:
-    def __init__(self, store, repair, attempted: set, sma=None, log=None):
+    def __init__(self, store, repair, attempted: set, *, sma, log=None):
         self._store = store
         self._repair = repair
         self._attempted = attempted
+        if not callable(sma):  # #327 review: a missing rule used to read like a data problem
+            raise TypeError("OhlcvService needs sma= (sell_rules.sma_from_closes)")
         self._sma = sma  # sell_rules.sma_from_closes (injected; the trading rule stays there)
         self._log = log or get_logger("ai_game")
 
