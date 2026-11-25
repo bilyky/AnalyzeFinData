@@ -344,7 +344,10 @@ It replaces `get_live_prices` and the unused copy in `scenario/prices.py`.
 
    **Order of the S5 PRs:** (1) session and clock: the rules, a `MarketClock` port with the
    E*TRADE adapter, and `run_scope` so a run asks the live clock once; (2) the price chain
-   (`ChainedPriceFeed`); (3) the OHLCV store (freshness, heal, per-run caches).
+   (`ChainedPriceFeed`, done as `PriceService`, #320); (3) the OHLCV store (freshness, heal). Per-run
+   caching of bars was dropped: local file reads, and a heal rewrites the file mid-run (see the
+   service README). One home for the OHLCV folder across the modules that keep their own
+   constant is a follow-up PR.
 7. **S6 `research`:** `ResearchSource` plus the column map, read once per run. Then **F6**.
 8. **S7 `ledger`:** DNA, decision log and failure rules as event subscribers.
 9. **S8 `trading`:** `StrategyProfile`, the policies and the spec sets, then `DailyRunService`
