@@ -104,6 +104,15 @@
       "manual_run": "ai_game_summary"
     },
     {
+      "name": "AETHER_Earnings8K",
+      "schedule": {"type": "daily", "at": "18:30"},
+      "script": "scripts/monitoring/earnings_8k_labels.py", "args": "--refresh-history --max 150",
+      "time_limit_min": 45,
+      "log": "earnings_8k_task.log",
+      "summary": "Nightly: new SEC earnings filings, AI labels for their press releases (R&D #98 Part B).",
+      "description": "Re-reads SEC 8-K item 2.02 filings for our stocks (Data/earnings_history.json), fetches each new report's press release and asks the configured cheap AI tier for three labels with one fixed prompt: results beat/miss, guidance raised/lowered, tone. Writes Data/earnings_8k_labels.jsonl. New reports first, then the 2021+ backfill, at most 150 per night (free-tier limits). Stops at the first AI skip. Only public SEC documents go to the model."
+    },
+    {
       "name": "AETHER_PreFlight_Audit",
       "schedule": {"type": "daily", "at": "21:30"},
       "script": "scripts/diagnostics/preflight_validator.py", "args": "--email",

@@ -14,7 +14,8 @@ FAILURE_RULES_FILE = _DATA / "failure_dna_rules.json"    # retrospective_analyze
 FAILURE_RULES_PROPOSED_FILE = _DATA / "failure_dna_rules_proposed.json"  # a --report-only run: not read by the game
 RETRO_REPORT_FILE = _DATA / "retrospective_report.txt"   # retrospective_analyzer human report
 PICK_LOG_FILE = _DATA / "pick_lists_log.jsonl"          # daily email pick lists -> aether/pick_eval scorecard
-RULE_SHADOW_FILE = _DATA / "rule_shadow.jsonl"         # buy rules in shadow (plan T0.4) -> aether/rule_shadow scorer
+RULE_SHADOW_FILE = _DATA / "rule_shadow.jsonl"
+EARNINGS_8K_LABELS_FILE = _DATA / "earnings_8k_labels.jsonl"   # AI labels of earnings press releases (aether/earnings_8k)         # buy rules in shadow (plan T0.4) -> aether/rule_shadow scorer
 
 
 def trim_jsonl(path, max_lines: int) -> None:
