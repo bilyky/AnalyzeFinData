@@ -114,6 +114,7 @@ STALE_DAYS = 200
 
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+_SUBMISSIONS_FILE_URL = "https://data.sec.gov/submissions/{name}"
 _FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 _CACHE_TTL_HOURS = 20
 _REQUEST_GAP_S = 0.15   # SEC fair-access limit is 10 requests/second
@@ -251,6 +252,16 @@ def _get_json(url: str, cache_name: str, ttl_hours: float = _CACHE_TTL_HOURS):
     return data
 
 
+def stale_served() -> frozenset:
+    """Cache names served past their lifetime this run because a refresh failed."""
+    return frozenset(_stale_served)
+
+
+def sec_blocked() -> bool:
+    """True once SEC has refused this run (repeated 403s): later calls use the cache only."""
+    return _blocked[0]
+
+
 def ticker_cik_map() -> dict:
     data = _get_json(_TICKERS_URL, "company_tickers.json", ttl_hours=24 * 7) or {}
     return {v["ticker"].upper(): int(v["cik_str"]) for v in data.values()}
@@ -258,6 +269,14 @@ def ticker_cik_map() -> dict:
 
 def submissions(cik: int, ttl_hours: float = _CACHE_TTL_HOURS):
     return _get_json(_SUBMISSIONS_URL.format(cik=cik), f"sub_{cik}.json", ttl_hours)
+
+
+def submissions_file(name: str, ttl_hours: float = 24 * 365):
+    """An older page of a company's filings (listed in submissions()["filings"]["files"]). These
+    pages cover closed date ranges, so they are cached for a long time."""
+    if not name.startswith("CIK") or not name.endswith(".json") or "/" in name or "\\" in name:
+        raise ValueError(f"not a submissions page name: {name!r}")
+    return _get_json(_SUBMISSIONS_FILE_URL.format(name=name), f"subfile_{name}", ttl_hours)
 
 
 def company_facts(cik: int, ttl_hours: float = _CACHE_TTL_HOURS):
