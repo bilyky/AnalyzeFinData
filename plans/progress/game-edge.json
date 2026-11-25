@@ -1,6 +1,6 @@
 {
  "project": "Winner hunt (Track G)",
- "goal": "Find at least one strategy, or a combination, that beats SPY after costs.",
+ "goal": "Maximum return, deterministic decisions, minimum risk (owner 2026-11-24); SPY is the yardstick.",
  "updated": "2026-11-24",
  "stages": [
   {
@@ -22,15 +22,15 @@
   {
    "id": "G-C",
    "title": "Range surfing of sideways high-amplitude stocks (#122)",
-   "status": "decision",
-   "pr": null,
+   "status": "done",
+   "pr": 321,
    "prod": false,
-   "note": "needs the bar and the channel parameters"
+   "note": "FAIL_RISK 2026-11-24: deeper drawdowns than SPY; not wired"
   },
   {
    "id": "G1",
    "title": "Circuit-breaker buy freeze study (R&D #125) + one-day-move fix",
-   "status": "in_review",
+   "status": "done",
    "pr": 318,
    "prod": false,
    "note": "INCONCLUSIVE: freeze kept; stop tightening not measured"
@@ -65,12 +65,20 @@
    "note": "INCONCLUSIVE, not wired"
   },
   {
+   "id": "G-S",
+   "title": "Adventure sleeve: 20% of realized profit, paper game first (#40/#45)",
+   "status": "todo",
+   "pr": null,
+   "prod": false,
+   "note": "owner 2026-11-24"
+  },
+  {
    "id": "R1",
    "title": "Rules-version replay: July scoring vs now (#126)",
    "status": "in_progress",
    "pr": null,
    "prod": false,
-   "note": "owner order 2026-11-24; pre-registered, run pending"
+   "note": "owner order 2026-11-24; NO_REGRESSION 2026-11-24, PR pending"
   },
   {
    "id": "R2",

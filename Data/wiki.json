@@ -26,7 +26,7 @@
       "Contrarian LT Trend: Weak (+1.5), Neutral (0), Strong (-1.5)",
       "Seasonality: +-1.0 | Market Regime: Bull +1.0 / Bear -1.0 | Fibonacci: +-1.0",
       "RSI Divergence: *0.5 | Candlestick: *-0.15 | Chart Pattern: *-0.15 | Momentum: *-0.15",
-      "Digit-Sum Numerology: +-1.0 (only for symbol/digit pairs with |z|\u22652.0)"
+      "Digit-Sum Numerology: +-1.0 (only for symbol/digit pairs with |z|\u22652.0, and only for stocks on the monthly confirmed list; 0 for every other stock)"
     ]
   },
   "l60_score": {
@@ -42,7 +42,7 @@
       "OB/OS: Optimal (+1.5), Early (+0.5), Neutral (0), Wait (-0.5)",
       "Seasonality: +-0.5 | Market Regime: Bull +1.5 / Bear -1.5 | Fibonacci: +-0.5",
       "RSI Divergence: *0.25 | Candlestick: *-0.075 | Chart Pattern: *-0.075 | Momentum: *-0.075",
-      "Digit-Sum Numerology: +-0.5 (only for symbol/digit pairs with |z|\u22652.0)"
+      "Digit-Sum Numerology: +-0.5 (only for symbol/digit pairs with |z|\u22652.0, and only for stocks on the monthly confirmed list; 0 for every other stock)"
     ]
   },
   "seasonality_engine": {
@@ -270,7 +270,7 @@
   },
   "digit_sum_numerology": {
     "title": "Digit-Sum Numerology Factor",
-    "summary": "<b class=\"text-amber-400\">Status (2026-11-12, R&amp;D #72): failed its out-of-sample test. Rebuilt from pre-2023 data, it didn't improve candidate ranking (IC -0.0008, t -0.61) or the portfolio (t 1.42; 40% of robustness draws). Still in the live scores until its removal PR lands.</b> Backtested across 522 symbols \u00d7 9+ years. Tests whether the digit-sum of a stock's open/close price predicts same-day or next-day direction. Two variants (integer and full-cents) cover 228 unique symbols with 95%+ confidence signals. Of 473 raw signals, <b>224 pass the full 4-layer quality validator</b> and are active in scoring. Symbol page shows a Stability column: <b class=\"text-green-400\">stable</b> / <b class=\"text-amber-400\">mixed</b> / <b class=\"text-orange-400\">sparse</b> / <b class=\"text-red-400\">flip</b>.",
+    "summary": "<b class=\"text-amber-400\">Status (2026-11-12, R&amp;D #72): failed its out-of-sample test. Rebuilt from pre-2023 data, it didn't improve candidate ranking (IC -0.0008, t -0.61) or the portfolio (t 1.42; 40% of robustness draws). Owner decision (2026-11-24): shadowed. The score is still computed for every stock (<code>digit_sum_raw</code>) but adds nothing to Short10 or Long60, except for stocks on <code>Data/digit_sum_allowlist.json</code>, which a monthly per-stock check writes (<code>scripts/backtesting/digit_sum_per_stock.py</code>: discover on 24 months with Benjamini-Hochberg at 10%, confirm on the next 12). First check (2026-11-24): 114 stocks tested, none confirmed, so the term is off for every stock.</b> Backtested across 522 symbols \u00d7 9+ years. Tests whether the digit-sum of a stock's open/close price predicts same-day or next-day direction. Two variants (integer and full-cents) cover 228 unique symbols with 95%+ confidence signals. Of 473 raw signals, <b>224 pass the full 4-layer quality validator</b> and are active in scoring. Symbol page shows a Stability column: <b class=\"text-green-400\">stable</b> / <b class=\"text-amber-400\">mixed</b> / <b class=\"text-orange-400\">sparse</b> / <b class=\"text-red-400\">flip</b>.",
     "origin": "Inspired by W.D. Gann's numerology research (1878\u20131955). Empirically backtested by AETHER across 522 symbols \u00d7 9+ years of daily OHLCV data (2014\u20132026).",
     "body": "<p>Tests whether the <b>digit-sum of a stock's price</b> predicts short-term direction. Digit-sum collapses any price to a single digit: <code>$247.35 \u2192 2+4+7+3+5=21 \u2192 3</code>.</p>\n<p class=\"mt-2\">AETHER runs <b>two variants</b> simultaneously:</p>\n<ul class=\"list-disc pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>Integer digit-sum</b> \u2014 whole-dollar only ($247 \u2192 4). 162/522 symbols with 95%+ signals.</li>\n  <li><b>Full-cents digit-sum</b> \u2014 includes cents ($247.35 \u2192 3). Adds 106 unique symbols not captured by integer-only.</li>\n</ul>\n<p class=\"mt-2\"><b>Two timing modes:</b></p>\n<ul class=\"list-disc pl-4 mt-1 space-y-1 text-sm\">\n  <li><b>Prior-close \u2192 next-day</b>: standing factor in S10/L60, computed nightly from OHLCV cache.</li>\n  <li><b>Today's open \u2192 same-day</b>: real-time tiebreaker in <code>_execute_buys()</code> using live open price. Logged as <code>\ud83d\udd22 [Digit-Sum]</code>.</li>\n</ul>\n<p class=\"mt-2\">Of 473 signals at 95%+ confidence, <b>only 224 pass all four quality gates</b> and are used in scoring. See the Signal Quality Validator wiki entry for the full filter pipeline.</p>\n<p class=\"mt-2\">The Symbol detail modal shows a digit table with a <b>Stability</b> column: <span class=\"text-green-400\">stable</span> / <span class=\"text-amber-400\">mixed</span> / <span class=\"text-orange-400\">sparse</span> / <span class=\"text-red-400\">flip</span> / <span class=\"text-slate-500\">stale</span>.</p>",
     "config": [
@@ -280,7 +280,8 @@
       "Activation gate: |z|\u22652.0 (95%+ confidence), N\u226550 per bucket",
       "Score scale: z/3.0 capped at \u00b11.0 per variant; averaged when both fire",
       "Quality filter: temporal + flip + sparse checks \u2014 473 raw \u2192 224 active signals",
-      "Monthly refresh: python scripts/backtesting/digit_sum_study.py + digit_sum_full_study.py"
+      "Monthly per-stock check: AETHER_DigitSum_Monthly (Saturdays, runs when the list is 28+ days old) writes Data/digit_sum_allowlist.json; only listed stocks keep the term",
+      "Index rebuild (not scheduled; last 2026-07-22): python scripts/backtesting/digit_sum_study.py + digit_sum_full_study.py"
     ]
   },
   "pattern_discovery": {
