@@ -48,32 +48,6 @@ def _load_digit_index() -> dict:
         _digit_index = _build_digit_index(_DIGIT_STUDY_PATH)
     return _digit_index
 
-# Owner 2026-11-24 (R&D #72 follow-up): the term counts only for stocks the monthly per-stock check
-# confirmed (scripts/backtesting/digit_sum_per_stock.py, the list's only writer). Every other stock is
-# shadowed: the score is still computed (fields['digit_sum_raw']) but adds nothing.
-DIGIT_ALLOWLIST_NAME = "digit_sum_allowlist.json"
-_digit_allow: dict = {"key": None, "symbols": frozenset()}
-_digit_allow_lock = threading.Lock()
-
-
-def digit_sum_allowed(symbol: str, path: str | None = None) -> bool:
-    """True only for a stock on the confirmed list. A missing or unreadable list means no stock."""
-    p = path or os.path.join(paths.data_dir(), DIGIT_ALLOWLIST_NAME)
-    try:
-        key = (p, os.path.getmtime(p))
-    except OSError:
-        return False
-    with _digit_allow_lock:
-        if _digit_allow["key"] != key:
-            try:
-                with open(p, encoding="utf-8") as f:
-                    syms = frozenset(str(s).upper().strip() for s in json.load(f).get("symbols", []))
-            except (OSError, ValueError, AttributeError, TypeError):
-                syms = frozenset()
-            _digit_allow.update(key=key, symbols=syms)
-        return (symbol or "").upper().strip() in _digit_allow["symbols"]
-
-
 def _load_digit_full_index() -> dict:
     global _digit_full_index
     with _digit_full_lock:

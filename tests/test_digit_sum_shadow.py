@@ -14,15 +14,19 @@ from aether import scoring  # noqa: E402
 from tests.test_compute import _make_pg_with_ohlcv  # noqa: E402
 
 
+def _allowed(symbol, path=None):
+    return symbol.upper().strip() in powergauge._digit_allowlist(path)
+
+
 class TestAllowlist(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = os.path.join(self.tmp.name, "allow.json")
-        scoring._digit_allow.update(key=None, symbols=frozenset())
+        powergauge._digit_allow.update(key=None, symbols=frozenset())
 
     def tearDown(self):
         self.tmp.cleanup()
-        scoring._digit_allow.update(key=None, symbols=frozenset())
+        powergauge._digit_allow.update(key=None, symbols=frozenset())
 
     def _write(self, payload, bump=0):
         with open(self.path, "w", encoding="utf-8") as f:
@@ -31,31 +35,31 @@ class TestAllowlist(unittest.TestCase):
         os.utime(self.path, (t, t))
 
     def test_missing_list_means_no_stock(self):
-        self.assertFalse(scoring.digit_sum_allowed("AAPL", self.path))
+        self.assertFalse(_allowed("AAPL", self.path))
 
     def test_listed_stock_only(self):
         self._write({"symbols": ["aapl", " MSFT "]})
-        self.assertTrue(scoring.digit_sum_allowed("AAPL", self.path))
-        self.assertTrue(scoring.digit_sum_allowed("msft", self.path))
-        self.assertFalse(scoring.digit_sum_allowed("NVDA", self.path))
+        self.assertTrue(_allowed("AAPL", self.path))
+        self.assertTrue(_allowed("msft", self.path))
+        self.assertFalse(_allowed("NVDA", self.path))
 
     def test_reloads_when_the_list_changes(self):
         self._write({"symbols": ["AAPL"]})
-        self.assertTrue(scoring.digit_sum_allowed("AAPL", self.path))
+        self.assertTrue(_allowed("AAPL", self.path))
         self._write({"symbols": []}, bump=5)
-        self.assertFalse(scoring.digit_sum_allowed("AAPL", self.path))
+        self.assertFalse(_allowed("AAPL", self.path))
 
     def test_unreadable_list_means_no_stock(self):
         self._write("not json")
-        self.assertFalse(scoring.digit_sum_allowed("AAPL", self.path))
+        self.assertFalse(_allowed("AAPL", self.path))
         self._write(["AAPL"], bump=5)                       # wrong shape
-        self.assertFalse(scoring.digit_sum_allowed("AAPL", self.path))
+        self.assertFalse(_allowed("AAPL", self.path))
 
     def test_default_path_is_the_data_dir(self):
-        with mock.patch.object(scoring.paths, "data_dir", return_value=self.tmp.name):
-            with open(os.path.join(self.tmp.name, scoring.DIGIT_ALLOWLIST_NAME), "w") as f:
+        with mock.patch.object(powergauge.paths, "data_dir", return_value=self.tmp.name):
+            with open(os.path.join(self.tmp.name, powergauge.DIGIT_ALLOWLIST_NAME), "w") as f:
                 json.dump({"symbols": ["TEST"]}, f)
-            self.assertTrue(scoring.digit_sum_allowed("TEST"))
+            self.assertTrue(_allowed("TEST"))
 
 
 class TestFieldsShadow(unittest.TestCase):
@@ -70,7 +74,8 @@ class TestFieldsShadow(unittest.TestCase):
     def _fields(self, allowed):
         pg, ohlcv = _make_pg_with_ohlcv()
         with mock.patch.object(powergauge, "_digit_sum_score", return_value=0.8), \
-             mock.patch.object(powergauge, "_digit_sum_allowed", return_value=allowed):
+             mock.patch.object(powergauge, "_digit_allowlist",
+                               return_value=frozenset({"TEST"}) if allowed else frozenset()):
             return powergauge._compute_pgr_fields(pg, ohlcv_ts=ohlcv)
 
     def test_shadowed_stock_keeps_the_raw_score_but_scores_ignore_it(self):

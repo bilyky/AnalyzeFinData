@@ -18,6 +18,6 @@ Owner decision 2026-11-24: the digit-sum term no longer moves Short10 / Long60, 
 
 ## Evidence to expect in the next drop
 
-- `python -c "from aether import scoring; print(scoring.digit_sum_allowed('AAPL'))"` prints `False` (no stock is listed).
+- `python -c "import powergauge; print(sorted(powergauge._digit_allowlist()))"` prints `[]` (no stock is listed).
 - After the first Saturday: `Data/digit_sum_allowlist.json` with a `run_at` date and `digit_sum_monthly.log`.
 - A second Saturday within 28 days logs "monthly check skipped".

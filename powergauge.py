@@ -72,7 +72,6 @@ from scoring import (
     fibonacci_retracement_score as _fib_score,
     rsi_divergence_score        as _rsi_div_score,
     digit_sum_score             as _digit_sum_score,   # close→next-day only
-    digit_sum_allowed           as _digit_sum_allowed,
     short_score          as _short_score_fn,
     long_score           as _long_score_fn,
 )
@@ -1549,6 +1548,32 @@ def _append_ohlcv_entry(symbol: str, date_str: str, power_g: "PowerGauge", ohlcv
         _pg_log.warning(f"  [OHLCV] {symbol}: could not append today's entry: {e}")
 
 
+# Digit-sum allowlist (owner 2026-11-24, R&D #72 follow-up): the term counts only for stocks the
+# monthly per-stock check confirmed (scripts/backtesting/digit_sum_per_stock.py, the list's only
+# writer). The caller reads the list; scoring stays a pure rule. Missing or unreadable list -> no stock.
+DIGIT_ALLOWLIST_NAME = "digit_sum_allowlist.json"
+_digit_allow: dict = {"key": None, "symbols": frozenset()}
+_digit_allow_lock = threading.Lock()
+
+
+def _digit_allowlist(path: str | None = None) -> frozenset:
+    """The confirmed stocks, reloaded when the file changes."""
+    p = path or os.path.join(paths.data_dir(), DIGIT_ALLOWLIST_NAME)
+    try:
+        key = (p, os.path.getmtime(p))
+    except OSError:
+        return frozenset()
+    with _digit_allow_lock:
+        if _digit_allow["key"] != key:
+            try:
+                with open(p, encoding="utf-8") as f:
+                    syms = frozenset(str(s).upper().strip() for s in json.load(f).get("symbols", []))
+            except (OSError, ValueError, AttributeError, TypeError):
+                syms = frozenset()
+            _digit_allow.update(key=key, symbols=syms)
+        return _digit_allow["symbols"]
+
+
 def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
     pgr_value = _pgr_str(power_g.pgr_value)
     pgr_corrected_value = _pgr_str(power_g.pgr_corrected_value)
@@ -1659,7 +1684,8 @@ def _compute_pgr_fields(power_g: PowerGauge, ohlcv_ts: dict = None) -> dict:
     # Shadowed unless the monthly per-stock check confirmed this stock (owner 2026-11-24, R&D #72):
     # the raw score is kept for the record, the scores only see it on the confirmed list.
     fields['digit_sum_raw'] = _digit_sum_score(power_g.symbol, close_price=_prev_close)
-    fields['digit_sum'] = fields['digit_sum_raw'] if _digit_sum_allowed(power_g.symbol) else 0.0
+    _on_list = (power_g.symbol or "").upper().strip() in _digit_allowlist()
+    fields['digit_sum'] = fields['digit_sum_raw'] if _on_list else 0.0
     fields['short_score']  = _short_score_fn(fields)
     fields['long_score']   = _long_score_fn(fields)
     return fields
