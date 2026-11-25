@@ -179,6 +179,7 @@ _ledgers.FAILURE_RULES_PROPOSED_FILE = _ledger_tmp / "failure_dna_rules_proposed
 _ledgers.RETRO_REPORT_FILE = _ledger_tmp / "retrospective_report.txt"
 _ledgers.PICK_LOG_FILE = _ledger_tmp / "pick_lists_log.jsonl"
 _ledgers.RULE_SHADOW_FILE = _ledger_tmp / "rule_shadow.jsonl"
+_ledgers.BREAKER_LAST_RUN_FILE = _ledger_tmp / "breaker_last_run.json"
 # The weekly R&D runner writes Data/pattern_discovery_<date>_ai.md (scripts/backtesting, not on sys.path).
 _sys_path_rd = str(Path(__file__).resolve().parent.parent / "scripts" / "backtesting")
 if _sys_path_rd not in sys.path:
@@ -190,6 +191,13 @@ except Exception:
     pass
 import aether.preflight_status as _preflight_status  # noqa: E402
 _preflight_status.STATUS_FILE = _ledger_tmp / "preflight_status.json"
+# The Chaikin session-alert throttle: a test that "sends" the alert (send_email mocked) must not
+# stamp the real Data/chaikin_alert_state.json, or the next real alert is suppressed for 6 h (#324 review).
+try:
+    _powergauge = _importlib.import_module("powergauge")
+    _powergauge._alert_state_file = lambda: str(_ledger_tmp / "chaikin_alert_state.json")
+except Exception:
+    pass
 
 # ---------------------------------------------------------------------------
 # Singleton-lock / trash / run-guard guard. run_watchdog() and

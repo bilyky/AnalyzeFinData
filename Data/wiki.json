@@ -241,7 +241,9 @@
       "Measured against the right session: a morning run compares the live SPY price with the last cached close (yesterday) and keeps that close in the 10-session window; the rolling drawdown trigger is 5% under the 10-session peak",
       "Whipsaw Protection: Stabilization window blocks stop-tightening or selling during the first 30 minutes of the market open (6:30 AM - 7:00 AM PST).",
       "Stop Tightening: Dynamically tightens stop-losses to a conservative 1.0x ATR floor on all active satellites.",
-      "Elastic Memory: Automatically caches your original stop under 'original_stop_loss' and restores it once market panic settles!"
+      "Elastic Memory: Automatically caches your original stop under 'original_stop_loss' and restores it once market panic settles!",
+      "Tested: the buy freeze is neutral on average (R&D #125); the 1.0x ATR stop tightening cuts the share of -10% outcomes by about 3 points with no clear return cost over 66 breaker episodes since 2000 (R&D #130)",
+      "Shown in the daily summary email: each run saves its verdict to Data/breaker_last_run.json (the breaker's own file); when the breaker was on, the email says so next to the profile, with the reason and the stocks whose stops it tightened"
     ]
   },
   "risk_reward_gate": {
@@ -580,12 +582,13 @@
     "title": "Chaikin Session Renewal",
     "summary": "The Chaikin login token lasts about 7 days. A daily task renews it on a weekday before it runs out, and a morning check emails a reminder when fewer than 2.5 days are left.",
     "origin": "PR #251 (2026-11-10): the token kept expiring on Sunday evening, and the weekly Sunday renewal had nobody to fix a failure.",
-    "body": "<p><b>AETHER_Chaikin_Reauth</b> (daily 08:00; needs a logged-on desktop because it opens Chrome) renews on a weekday when the token wouldn't outlive the next weekday run plus a day, so a Friday renews a token that would die over the weekend. At the weekend it renews only if the token dies before Monday 08:00. <b>AETHER_Chaikin_Runway_Watch</b> (daily 07:00) never opens a browser: it emails a reminder, at most once a day, naming the expiry time. On the System page, <i>Check Token Runway</i> and <i>Login &amp; Refresh Token</i> run the same script (admin only).</p>",
+    "body": "<p><b>AETHER_Chaikin_Reauth</b> (daily 08:00; needs a logged-on desktop because it opens Chrome) renews on a weekday when the token wouldn't outlive the next weekday run plus a day, so a Friday renews a token that would die over the weekend. At the weekend it renews only if the token dies before Monday 08:00. <b>AETHER_Chaikin_Runway_Watch</b> (daily 07:00) never opens a browser: it emails a reminder, at most once a day, naming the expiry time. On the System page, <i>Check Token Runway</i> and <i>Login &amp; Refresh Token</i> run the same script (admin only).</p><p>The 08:00 renewal fills in the login and then waits up to 10 minutes for someone to click Login (or the Turnstile box), emailing once that it is waiting. Background jobs (the hourly watchdog, data fetches) never open a browser, because a headless login cannot pass Turnstile; when the session is dead they send one 'session needs a login' email at most every 6 hours.</p>",
     "config": [
       "Task: scripts/monitoring/chaikin_reauth.py --weekday-aware",
       "Reminder: --notify-days 2.5",
       "System page: --check, and --cdp --force",
-      "Shared session (opt-in, AETHER_CHAIKIN_STORE=db): the session is also kept, encrypted, in the shared database, so PROD and dev use one renewed session; session.json stays as the local copy and the newer of the two is used. python -m aether.chaikin_store --status shows both"
+      "Shared session (opt-in, AETHER_CHAIKIN_STORE=db): the session is also kept, encrypted, in the shared database, so PROD and dev use one renewed session; session.json stays as the local copy and the newer of the two is used. python -m aether.chaikin_store --status shows both",
+      "Login wait: --login-timeout (default 600 s); alert throttle: Data/chaikin_alert_state.json (6 h)"
     ]
   },
   "data_completeness": {

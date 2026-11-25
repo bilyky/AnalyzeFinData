@@ -36,6 +36,14 @@
    "note": "INCONCLUSIVE: freeze kept; stop tightening not measured"
   },
   {
+   "id": "G1b",
+   "title": "Breaker stop tightening study (R&D #130) + breaker line in the summary email",
+   "status": "in_review",
+   "pr": 326,
+   "prod": false,
+   "note": "KEEP_TIGHTENING: -3.1 pts of -10% outcomes, no return cost"
+  },
+  {
    "id": "G2",
    "title": "#113 A in the game: wire or kill",
    "status": "todo",
@@ -83,10 +91,10 @@
   {
    "id": "R2",
    "title": "Historical earnings dates from SEC 8-K 2.02 (#98), then earnings risk / drift / #102",
-   "status": "todo",
-   "pr": null,
+   "status": "in_review",
+   "pr": 325,
    "prod": false,
-   "note": "owner order 2026-11-24"
+   "note": "data step (453 symbols, 34,729 reports from 2004) + pre-report risk TRADE_OFF; owner decides skip / half size / keep"
   },
   {
    "id": "R3",
