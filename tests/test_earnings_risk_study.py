@@ -67,6 +67,15 @@ class TestStats(unittest.TestCase):
         self.assertEqual(er.verdict([h(3, 0), h(1.9, 0)]), "INCONCLUSIVE")
         self.assertEqual(er.verdict([h(None, 0), h(3, 0)]), "INCONCLUSIVE")
 
+    def test_half_stats_uses_the_overlap_lag(self):
+        # blocks of 10 equal daily differences (overlapping 10-session windows): the Newey-West t with
+        # lag H - 1 = 9 is far smaller than a plain (lag 0) t on the same series (#325 review)
+        vals = [(0.02 if (i // 10) % 3 else -0.01) for i in range(200)]
+        diffs = {f"2010-{i:04d}": (v, v, 5, 5) for i, v in enumerate(vals)}
+        st = er.half_stats(diffs, "2010-0000", None, h=10)
+        self.assertAlmostEqual(st["big_drop_t"], round(er._t_hac(vals, 9), 2))
+        self.assertLess(st["big_drop_t"], er._t_hac(vals, 0) * 0.6)
+
     def test_report_day_share(self):
         days = ["a", "b", "c"]
         self.assertAlmostEqual(er.report_day_share(days, [100.0, 110.0, 99.0], {"c"}), 0.10 / 0.20)
