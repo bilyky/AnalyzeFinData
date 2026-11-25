@@ -86,7 +86,7 @@
    "status": "in_review",
    "pr": 325,
    "prod": false,
-   "note": "data step (453 symbols, 34,729 reports from 2004) + pre-report risk TRADE_OFF; owner decides skip / half size / keep"
+   "note": "data + pre-report risk (#325, TRADE_OFF) + drift Part A DRIFT_UP; Part B 8-K reading waits for labels"
   },
   {
    "id": "R3",
