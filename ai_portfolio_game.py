@@ -1136,7 +1136,7 @@ def send_daily_summary(return_html=False):
         _log.info(f"Failed to include retrospective reflection in email: {e}")
         refl_html = ""
 
-    _note = circuit_breaker.breaker_note(state)
+    _note = circuit_breaker.breaker_note()
     breaker_html = (f'<p style="background: #fdecea; border-left: 4px solid #c0392b; padding: 8px 12px; margin: 10px 0;">'
                     f'<b>🛑 {html_escape(_note)}</b></p>') if _note else ""
 

@@ -76,35 +76,29 @@ class TestNote(_RecordFile):
         self.assertIsNone(circuit_breaker.breaker_note(today="2026-11-25"))
 
 
-class TestEmail(unittest.TestCase):
-    """Patches the breaker module object the game holds (``game.circuit_breaker``) directly. On CI (77b3bf9) the
-    file-based patch did not reach the email in the full suite's order, while it passed alone and locally; the cause
-    was not pinned down, so this test no longer depends on it."""
-
-    def _html(self, record):
+class TestEmail(_RecordFile):
+    def _html(self):
         state = {"balance": 1000.0, "positions": {"AAA": {"qty": 10, "cost": 5.0}}, "equity": 1050.0,
                  "history": [], "start_date": "2026-01-01", "profile": "AGGRESSIVE"}
         with mock.patch.object(game, "load_game", return_value=state), \
              mock.patch.object(game, "get_live_prices", return_value={"AAA": 5.0}), \
              mock.patch.object(game, "save_game"), \
              mock.patch.object(game.openpyxl, "load_workbook", side_effect=Exception("no wb")), \
-             mock.patch.object(game.circuit_breaker, "load_record", return_value=record),              mock.patch.object(game.circuit_breaker, "_today_et", return_value="2026-11-25"):
-            cb = game.circuit_breaker
-            self.diag = (f"cb={cb.__name__} file={getattr(cb, '__file__', '?')} id={id(cb)} "
-                         f"aether.cb id={id(sys.modules.get('aether.circuit_breaker'))} "
-                         f"note={cb.breaker_note()!r} today={cb._today_et()!r} rec={cb.load_record()!r} "
-                         f"summary globals cb id={id(game.send_daily_summary.__globals__.get('circuit_breaker'))}")
+             mock.patch.object(circuit_breaker, "_today_et", return_value="2026-11-25"):
             return game.send_daily_summary(return_html=True)
 
     def test_email_shows_the_breaker_and_labels_the_profile(self):
-        html = self._html({"date": "2026-11-25", "on": True, "reason": REASON, "tightened": ["ON"]})
-        self.assertIn("Circuit breaker ON this run", html, self.diag)
+        self.write({"date": "2026-11-25", "on": True, "reason": REASON, "tightened": ["ON"]})
+        html = self._html()
+        self.assertIn("Circuit breaker ON this run", html)
         self.assertIn("Profile</b> (from the morning SPY Long60 score)", html)
         self.assertNotIn("Active Strategy", html)
 
     def test_no_breaker_line_when_stale_or_missing(self):
-        self.assertNotIn("Circuit breaker ON", self._html({"date": "2026-11-24", "on": True, "reason": REASON}))
-        self.assertNotIn("Circuit breaker ON", self._html({}))
+        self.write({"date": "2026-11-24", "on": True, "reason": REASON})
+        self.assertNotIn("Circuit breaker ON", self._html())
+        self.path.unlink()
+        self.assertNotIn("Circuit breaker ON", self._html())
 
 
 if __name__ == "__main__":
