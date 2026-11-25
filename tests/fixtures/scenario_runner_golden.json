@@ -73,6 +73,12 @@
   "save_calls": 1,
   "saved": {
    "balance": 23890.0,
+   "breaker_last_run": {
+    "date": "2026-10-30",
+    "on": false,
+    "reason": null,
+    "tightened": []
+   },
    "equity": 52420.0,
    "history": [
     {
@@ -338,6 +344,12 @@
   "save_calls": 1,
   "saved": {
    "balance": 34100.0,
+   "breaker_last_run": {
+    "date": "2026-10-30",
+    "on": false,
+    "reason": null,
+    "tightened": []
+   },
    "equity": 52420.0,
    "history": [
     {
@@ -626,6 +638,12 @@
   "save_calls": 1,
   "saved": {
    "balance": 34995.0,
+   "breaker_last_run": {
+    "date": "2026-10-30",
+    "on": false,
+    "reason": null,
+    "tightened": []
+   },
    "equity": 58300.0,
    "history": [
     {
@@ -854,6 +872,12 @@
   "save_calls": 1,
   "saved": {
    "balance": 32160.0,
+   "breaker_last_run": {
+    "date": "2026-10-30",
+    "on": false,
+    "reason": null,
+    "tightened": []
+   },
    "equity": 52420.0,
    "history": [
     {
@@ -1007,6 +1031,12 @@
   "save_calls": 1,
   "saved": {
    "balance": 23890.0,
+   "breaker_last_run": {
+    "date": "2026-10-30",
+    "on": false,
+    "reason": null,
+    "tightened": []
+   },
    "equity": 52420.0,
    "history": [
     {
@@ -1277,6 +1307,12 @@
   "save_calls": 1,
   "saved": {
    "balance": 23890.0,
+   "breaker_last_run": {
+    "date": "2026-10-30",
+    "on": false,
+    "reason": null,
+    "tightened": []
+   },
    "equity": 52420.0,
    "history": [
     {
