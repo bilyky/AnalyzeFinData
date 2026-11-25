@@ -83,16 +83,18 @@ def events_from_pages(pages: list, sessions: list) -> list:
             seen.add(acc)
             at = accepted_et((p.get("acceptanceDateTime") or [""] * len(forms))[i])
             filed = (p.get("filingDate") or [""] * len(forms))[i]
+            primary = (p.get("primaryDocument") or [None] * len(forms))[i]
             out.append({"filed": filed, "accepted_et": at.isoformat(timespec="seconds") if at else None,
-                        "first_session": first_session(at, sessions) if at else None})
+                        "first_session": first_session(at, sessions) if at else None,
+                        "accession": acc, "primary_doc": primary})
     return sorted(out, key=lambda e: (e["filed"], e["accepted_et"] or ""))
 
 
-def pages_for(cik: int) -> tuple:
+def pages_for(cik: int, recent_ttl_hours: float = 24 * 7) -> tuple:
     """(pages, stale, missing): the recent page plus every older page for one company; stale when
     any page came from an expired cache because SEC could not be reached; missing = older pages
     that could not be read at all. pages is None when EDGAR has nothing for the company."""
-    sub = ai_buildout.submissions(cik, ttl_hours=24 * 7)
+    sub = ai_buildout.submissions(cik, ttl_hours=recent_ttl_hours)
     if not sub:
         return None, False, 0
     names = [f"sub_{cik}.json"]
@@ -119,7 +121,7 @@ def universe() -> list:
     return sorted(os.path.basename(p)[:-len("_daily.json")] for p in glob.glob(os.path.join(paths.ohlcv_dir(), "*_daily.json")))
 
 
-def build(symbols: list | None = None, path: str | None = None) -> dict:
+def build(symbols: list | None = None, path: str | None = None, recent_ttl_hours: float = 24 * 7) -> dict:
     """Fetch (through the EDGAR cache) and write the history. Symbols without a SEC CIK or without
     any 8-K 2.02 are listed, not dropped silently."""
     symbols = symbols or universe()
@@ -133,7 +135,7 @@ def build(symbols: list | None = None, path: str | None = None) -> dict:
         if not cik:
             out["no_cik"].append(sym)
             continue
-        pages, stale, missing = pages_for(cik)
+        pages, stale, missing = pages_for(cik, recent_ttl_hours)
         if pages is None:
             out["fetch_failed"].append(sym)
             continue

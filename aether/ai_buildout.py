@@ -189,8 +189,8 @@ def _read_cache(cache_name: str):
         return None
 
 
-def _fetch(url: str):
-    """One SEC GET with retries on 5xx / timeouts. Returns parsed JSON or None.
+def _fetch(url: str, as_text: bool = False):
+    """One SEC GET with retries on 5xx / timeouts. Returns parsed JSON (or the text with as_text) or None.
     Counts consecutive 403s and trips _blocked so the run stops requesting."""
     for attempt in range(_RETRIES + 1):
         wait = _REQUEST_GAP_S - (time.time() - _last_request[0])
@@ -218,7 +218,7 @@ def _fetch(url: str):
                 time.sleep(_RETRY_BACKOFF_S * (attempt + 1))
                 continue
             r.raise_for_status()
-            return r.json()
+            return r.text if as_text else r.json()
         except requests.exceptions.Timeout as e:
             if attempt < _RETRIES:
                 time.sleep(_RETRY_BACKOFF_S * (attempt + 1))
@@ -260,6 +260,45 @@ def stale_served() -> frozenset:
 def sec_blocked() -> bool:
     """True once SEC has refused this run (repeated 403s): later calls use the cache only."""
     return _blocked[0]
+
+
+def _get_text(url: str, cache_name: str):
+    """A SEC document as text through the file cache. Filed documents never change, so a cached copy is
+    used whenever it exists. None when it can't be fetched (or SEC has blocked this run)."""
+    path = _cache_dir() / cache_name
+    if path.exists():
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    text = None if _blocked[0] else _fetch(url, as_text=True)
+    if text is None:
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return text
+
+
+def _accession_parts(cik: int, accession: str) -> tuple[int, str]:
+    acc = (accession or "").replace("-", "")
+    if not acc.isdigit() or len(acc) != 18:
+        raise ValueError(f"not an accession number: {accession!r}")
+    return int(cik), acc
+
+
+def filing_index(cik: int, accession: str):
+    """The file list of one filing (EDGAR's index.json for the accession)."""
+    cik, acc = _accession_parts(cik, accession)
+    return _get_json(f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/index.json",
+                     f"fidx_{cik}_{acc}.json", ttl_hours=24 * 365)
+
+
+def filing_document(cik: int, accession: str, name: str):
+    """One document of a filing as text (e.g. the press-release exhibit of an earnings 8-K)."""
+    cik, acc = _accession_parts(cik, accession)
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        raise ValueError(f"not a document name: {name!r}")
+    return _get_text(f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{name}", f"fdoc_{cik}_{acc}_{name}")
 
 
 def ticker_cik_map() -> dict:
