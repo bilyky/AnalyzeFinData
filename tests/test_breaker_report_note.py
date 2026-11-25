@@ -89,11 +89,16 @@ class TestEmail(unittest.TestCase):
              mock.patch.object(game, "save_game"), \
              mock.patch.object(game.openpyxl, "load_workbook", side_effect=Exception("no wb")), \
              mock.patch.object(game.circuit_breaker, "load_record", return_value=record),              mock.patch.object(game.circuit_breaker, "_today_et", return_value="2026-11-25"):
+            cb = game.circuit_breaker
+            self.diag = (f"cb={cb.__name__} file={getattr(cb, '__file__', '?')} id={id(cb)} "
+                         f"aether.cb id={id(sys.modules.get('aether.circuit_breaker'))} "
+                         f"note={cb.breaker_note()!r} today={cb._today_et()!r} rec={cb.load_record()!r} "
+                         f"summary globals cb id={id(game.send_daily_summary.__globals__.get('circuit_breaker'))}")
             return game.send_daily_summary(return_html=True)
 
     def test_email_shows_the_breaker_and_labels_the_profile(self):
         html = self._html({"date": "2026-11-25", "on": True, "reason": REASON, "tightened": ["ON"]})
-        self.assertIn("Circuit breaker ON this run", html)
+        self.assertIn("Circuit breaker ON this run", html, self.diag)
         self.assertIn("Profile</b> (from the morning SPY Long60 score)", html)
         self.assertNotIn("Active Strategy", html)
 
