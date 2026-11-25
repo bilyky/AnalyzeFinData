@@ -135,6 +135,15 @@
       "manual_run": "pattern_discovery"
     },
     {
+      "name": "AETHER_DigitSum_Monthly",
+      "schedule": {"type": "weekly", "at": "11:00", "day": "Saturday"},
+      "script": "scripts/backtesting/digit_sum_per_stock.py", "args": "--write-allowlist --monthly",
+      "time_limit_min": 20,
+      "log": "digit_sum_monthly.log",
+      "summary": "Monthly per-stock digit-sum check; writes the list of stocks that keep the term.",
+      "description": "Runs only when Data/digit_sum_allowlist.json is missing or 28+ days old (about once a month). Rebuilds the digit-sum index from older bars, discovers stocks on 24 months (Benjamini-Hochberg 10%) and confirms them on the next 12; the confirmed stocks keep the digit-sum term in Short10/Long60, every other stock gets 0 (owner 2026-11-24, R&D #72)."
+    },
+    {
       "name": "AETHER_StatusReport",
       "schedule": {"type": "daily", "at": "14:00"},
       "script": "scripts/utils/skill_report.py", "args": "--skill status --title \"Portfolio status\" --sessions-only",
