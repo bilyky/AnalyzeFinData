@@ -1,5 +1,6 @@
 """R&D #126 rules replay: version loading, the pair rates, the comparison and the verdict."""
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -7,6 +8,18 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "backtesting"))
 import backtest_ratings as br  # noqa: E402
 import rules_replay_study as rr  # noqa: E402
+
+
+def _have_history() -> bool:
+    """CI checks out a shallow clone: the old commits the replay reads are not there."""
+    try:
+        return all(subprocess.run(["git", "cat-file", "-e", f"{c}^{{commit}}"], cwd=rr.BASE_DIR,
+                                  capture_output=True).returncode == 0 for _t, c in rr.VERSIONS)
+    except OSError:
+        return False
+
+
+HISTORY = _have_history()
 
 
 def _m(dd, cagr):
@@ -18,6 +31,7 @@ def _draw(**rows):
 
 
 class TestVersions(unittest.TestCase):
+    @unittest.skipUnless(HISTORY, "needs the full git history (CI clones shallow)")
     def test_every_version_has_the_score_functions(self):
         for tag, commit in rr.VERSIONS:
             src = rr.version_source(commit)
@@ -37,6 +51,7 @@ class TestVersions(unittest.TestCase):
             finally:
                 br._short_score_fn, br._long_score_fn = saved
 
+    @unittest.skipUnless(HISTORY, "needs the full git history (CI clones shallow)")
     def test_old_july_formula_differs_from_today(self):
         # a Strong lt_trend / Strong industry stock with no other signal: v0721 Long60 penalised it
         with tempfile.TemporaryDirectory() as tmp:
