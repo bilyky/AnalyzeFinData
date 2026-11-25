@@ -190,6 +190,13 @@ except Exception:
     pass
 import aether.preflight_status as _preflight_status  # noqa: E402
 _preflight_status.STATUS_FILE = _ledger_tmp / "preflight_status.json"
+# The Chaikin session-alert throttle: a test that "sends" the alert (send_email mocked) must not
+# stamp the real Data/chaikin_alert_state.json, or the next real alert is suppressed for 6 h (#324 review).
+try:
+    _powergauge = _importlib.import_module("powergauge")
+    _powergauge._alert_state_file = lambda: str(_ledger_tmp / "chaikin_alert_state.json")
+except Exception:
+    pass
 
 # ---------------------------------------------------------------------------
 # Singleton-lock / trash / run-guard guard. run_watchdog() and

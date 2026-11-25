@@ -291,7 +291,10 @@ class TestWeekdayAwareMain(unittest.TestCase):
         self._run(_pt(2026, 11, 12), TestWeekdayRefreshDue.EXP_1116).assert_not_called()
 
     def test_due_runs_the_headed_login(self):
-        self._run(_pt(2026, 11, 13), TestWeekdayRefreshDue.EXP_1116).assert_called_once_with(headless=False)
+        # Headed, and it waits --login-timeout (default 600 s) for the person to click Login, telling
+        # them first (PROD 2026-11-24: the form was filled, the 60 s wait ran out before the click).
+        self._run(_pt(2026, 11, 13), TestWeekdayRefreshDue.EXP_1116).assert_called_once_with(
+            headless=False, human_wait_s=600, on_waiting=cr._notify_login_waiting)
 
 
 class TestReminderNamesTheDeadline(unittest.TestCase):
