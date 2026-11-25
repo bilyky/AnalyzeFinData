@@ -75,10 +75,10 @@
   {
    "id": "R1",
    "title": "Rules-version replay: July scoring vs now (#126)",
-   "status": "in_progress",
-   "pr": null,
+   "status": "done",
+   "pr": 323,
    "prod": false,
-   "note": "owner order 2026-11-24; NO_REGRESSION 2026-11-24, PR pending"
+   "note": "NO_REGRESSION 2026-11-24: no scoring version beats today's; none beats SPY"
   },
   {
    "id": "R2",
