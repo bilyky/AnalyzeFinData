@@ -833,9 +833,17 @@ def _load_credentials() -> tuple[str, str]:
     return email, password
 
 
-def _wait_for_login_or_submit(page, deadline: float) -> str:
+LOGIN_NOTIFY_AFTER_S = 15.0   # tell the owner only when the login has not finished by itself
+
+
+def _wait_for_login_or_submit(page, deadline: float, on_waiting=None,
+                              notify_after_s: float = LOGIN_NOTIFY_AFTER_S, clock=time.time) -> str:
     """Wait until a person has logged in (the page left /login: "human") or Turnstile enabled the
-    submit button, which is then clicked ("clicked"). TimeoutError at the deadline (time.time())."""
+    submit button, which is then clicked ("clicked"). TimeoutError at the deadline (clock()).
+
+    on_waiting() is called once, and only after notify_after_s with neither: with a warm profile
+    Turnstile can pass by itself, and then no "click Login" message is needed (#324 review)."""
+    start, told = clock(), False
     while True:
         try:
             if page.evaluate("() => window.location.pathname") != "/login":
@@ -845,8 +853,15 @@ def _wait_for_login_or_submit(page, deadline: float) -> str:
         if page.query_selector('button[type="submit"]:not([disabled])') is not None:
             page.click('button[type="submit"]')
             return "clicked"
-        if time.time() >= deadline:
+        now = clock()
+        if now >= deadline:
             raise TimeoutError("Chaikin login not completed in the browser before the wait ended")
+        if on_waiting and not told and now - start >= notify_after_s:
+            told = True
+            try:
+                on_waiting()
+            except Exception as e:
+                _pg_log.warning(f"Login-waiting notice failed: {e}")
         page.wait_for_timeout(1000)
 
 
@@ -855,7 +870,7 @@ def _login_via_browser(headless: bool = False, human_wait_s: int | None = None, 
 
     human_wait_s (headed only): after filling the form, wait up to this many seconds for a person to
     finish the login (click Login, or the Turnstile box) instead of the default 60 s, calling
-    on_waiting() once first so they can be told (PROD 2026-11-24: the form was filled, only the click
+    on_waiting() once if it has not finished after LOGIN_NOTIFY_AFTER_S (PROD 2026-11-24: the form was filled, only the click
     was missing, and the 60 s wait ran out)."""
     if not sync_playwright:
         raise ImportError("Playwright is not installed in the environment.")
@@ -920,12 +935,7 @@ def _login_via_browser(headless: bool = False, human_wait_s: int | None = None, 
                 if human_wait_s and not headless:
                     _pg_log.console(f"Waiting up to {human_wait_s}s for the login to finish: click Login "
                                     "(or the Turnstile box) in the Chrome window...")
-                    if on_waiting:
-                        try:
-                            on_waiting()
-                        except Exception as e:
-                            _pg_log.warning(f"Login-waiting notice failed: {e}")
-                    how = _wait_for_login_or_submit(page, time.time() + human_wait_s)
+                    how = _wait_for_login_or_submit(page, time.time() + human_wait_s, on_waiting=on_waiting)
                     _pg_log.info(f"Chaikin login finished ({'by you' if how == 'human' else 'Turnstile passed, clicked'}).")
                 else:
                     _pg_log.console("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")

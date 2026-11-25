@@ -345,7 +345,7 @@ def main() -> int:
     ap.add_argument("--cdp-endpoint", default=_CDP_ENDPOINT,
                     help=f"Chrome DevTools endpoint for --cdp (default {_CDP_ENDPOINT}).")
     ap.add_argument("--login-timeout", type=int, default=600,
-                    help="Seconds to wait for the human login in --cdp mode (default 600).")
+                    help="Seconds to wait for the human login: in --cdp mode, and in the headed renewal (it fills the form and waits for the Login click). Default 600.")
     ap.add_argument("--no-launch", action="store_true",
                     help="In --cdp mode, attach to an already-running debug Chrome; do not launch one.")
     ap.add_argument("--notify-days", type=float, default=None,

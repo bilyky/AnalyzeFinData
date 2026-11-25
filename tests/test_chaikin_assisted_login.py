@@ -39,6 +39,41 @@ class _Page:
         self.polls += 1
 
 
+class _Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+class _TickPage(_Page):
+    """Each poll advances the fake clock by 1 s, like the real 1 s wait."""
+
+    def __init__(self, clock, **kw):
+        super().__init__(**kw)
+        self.clock = clock
+
+    def wait_for_timeout(self, ms):
+        super().wait_for_timeout(ms)
+        self.clock.t += ms / 1000
+
+
+class WaitNoticeTest(unittest.TestCase):
+    def test_no_notice_when_turnstile_passes_by_itself(self):
+        clock, told = _Clock(), []
+        page = _TickPage(clock, enable_after=3)
+        pg._wait_for_login_or_submit(page, clock() + 600, on_waiting=lambda: told.append(1), clock=clock)
+        self.assertEqual(told, [])
+
+    def test_one_notice_after_15_s_without_progress(self):
+        clock, told = _Clock(), []
+        page = _TickPage(clock, leave_after=40)
+        self.assertEqual(pg._wait_for_login_or_submit(page, clock() + 600, on_waiting=lambda: told.append(clock()),
+                                                      clock=clock), "human")
+        self.assertEqual(told, [1015.0])                     # once, at 15 s
+
+
 class WaitForLoginTest(unittest.TestCase):
     def test_a_person_logging_in_ends_the_wait(self):
         page = _Page(leave_after=3)
@@ -89,11 +124,25 @@ class UnattendedLoginTest(unittest.TestCase):
         browser.assert_called_once_with(headless=False)
 
 
+class HarnessRedirectTest(unittest.TestCase):
+    def test_the_suite_never_writes_the_real_alert_state(self):
+        """#324 review: a test 'sending' the alert (send_email mocked) stamped the real
+        Data/chaikin_alert_state.json, which would silence the next real alert for 6 h."""
+        real_data = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "Data"))
+        path = os.path.realpath(pg._alert_state_file())
+        self.assertFalse(path.startswith(real_data + os.sep), path)
+        with mock.patch.object(pg, "send_email"):
+            pg._send_session_alert("test")
+        self.assertFalse(os.path.exists(os.path.join(real_data, "chaikin_alert_state.json"))
+                         and os.path.getmtime(os.path.join(real_data, "chaikin_alert_state.json")) > time.time() - 60)
+
+
 class SessionAlertTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        p = mock.patch.object(pg.paths, "data_dir", return_value=self._tmp.name)
+        self.state = os.path.join(self._tmp.name, "chaikin_alert_state.json")
+        p = mock.patch.object(pg, "_alert_state_file", return_value=self.state)
         p.start()
         self.addCleanup(p.stop)
 
@@ -108,7 +157,7 @@ class SessionAlertTest(unittest.TestCase):
         self.assertNotIn("JSESSIONID", body)                      # the old copy-from-DevTools steps
 
     def test_an_old_alert_lets_a_new_one_through(self):
-        with open(os.path.join(self._tmp.name, "chaikin_alert_state.json"), "w") as f:
+        with open(self.state, "w") as f:
             json.dump({"sent_at": time.time() - 7 * 3600}, f)
         with mock.patch.object(pg, "send_email") as send:
             self.assertTrue(pg._send_session_alert("expired"))
@@ -117,7 +166,8 @@ class SessionAlertTest(unittest.TestCase):
     def test_a_failed_send_is_not_recorded(self):
         with mock.patch.object(pg, "send_email", side_effect=OSError("smtp down")):
             self.assertFalse(pg._send_session_alert("expired"))
-        self.assertFalse(os.path.exists(os.path.join(self._tmp.name, "chaikin_alert_state.json")))
+        self.assertFalse(os.path.exists(self.state))
+
 
 
 if __name__ == "__main__":
