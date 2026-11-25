@@ -9,7 +9,7 @@
    "status": "decision",
    "pr": null,
    "prod": false,
-   "note": "bar agreed 2026-11-24 (risk first); after G-C"
+   "note": "after R1 (G-B) / after R2-R4 (G-A), owner order 2026-11-24"
   },
   {
    "id": "G-B",
@@ -17,7 +17,7 @@
    "status": "decision",
    "pr": null,
    "prod": false,
-   "note": "bar agreed 2026-11-24 (risk first); after G-C"
+   "note": "after R1 (G-B) / after R2-R4 (G-A), owner order 2026-11-24"
   },
   {
    "id": "G-C",
@@ -34,6 +34,14 @@
    "pr": 318,
    "prod": false,
    "note": "INCONCLUSIVE: freeze kept; stop tightening not measured"
+  },
+  {
+   "id": "G1b",
+   "title": "Breaker stop tightening study (R&D #130) + breaker line in the summary email",
+   "status": "in_review",
+   "pr": 326,
+   "prod": false,
+   "note": "KEEP_TIGHTENING: -3.1 pts of -10% outcomes, no return cost"
   },
   {
    "id": "G2",
@@ -71,6 +79,46 @@
    "pr": null,
    "prod": false,
    "note": "owner 2026-11-24"
+  },
+  {
+   "id": "R1",
+   "title": "Rules-version replay: July scoring vs now (#126)",
+   "status": "done",
+   "pr": 323,
+   "prod": false,
+   "note": "NO_REGRESSION 2026-11-24: no scoring version beats today's; none beats SPY"
+  },
+  {
+   "id": "R2",
+   "title": "Historical earnings dates from SEC 8-K 2.02 (#98), then earnings risk / drift / #102",
+   "status": "todo",
+   "pr": null,
+   "prod": false,
+   "note": "owner order 2026-11-24"
+  },
+  {
+   "id": "R3",
+   "title": "Per-stock pattern library (#127)",
+   "status": "todo",
+   "pr": null,
+   "prod": false,
+   "note": "owner order 2026-11-24"
+  },
+  {
+   "id": "R4",
+   "title": "Dependency graph: #95 remora trade test, then demand vacuum (#128)",
+   "status": "todo",
+   "pr": null,
+   "prod": false,
+   "note": "owner order 2026-11-24"
+  },
+  {
+   "id": "R5",
+   "title": "Continuous discovery monitor: missed winners, dependencies, patterns, wide sideways watch (#129)",
+   "status": "todo",
+   "pr": null,
+   "prod": false,
+   "note": "owner order 2026-11-24"
   }
  ],
  "plan": "approved plan 2026-11-20 (private); R&D items in plans/roadmap.md"
