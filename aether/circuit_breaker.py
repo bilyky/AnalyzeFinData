@@ -25,6 +25,10 @@ VXX_FILE = Path(paths.ohlcv_dir()) / "VXX_daily.json"
 # Transient key on the run's state: the breaker's verdict for the buy stage (deploy_capital), so it
 # acts on the same check with no second market-data read. finalize_run removes it before saving.
 FREEZE_KEY = "_breaker_freeze"
+# Saved with the game state (one record, overwritten each run) so reports written by another process,
+# such as the daily summary email, can say whether the breaker was on this run (owner 2026-11-25: the email
+# said "AGGRESSIVE" while the breaker had frozen buys and tightened stops).
+RECORD_KEY = "breaker_last_run"
 
 def load_spy_history() -> list[dict]:
     """Load sorted daily price series for the SPY ETF from the local cache."""
@@ -191,6 +195,17 @@ def check_systemic_risk(prices=None) -> tuple[bool, str]:
     reason = breaker_reason(spy_return, spy_drawdown, vxx_return if volatility_capitulation else 0.0)
     return (True, reason) if reason else (False, "")
 
+def breaker_note(state: dict, today: str | None = None) -> str | None:
+    """One line for reports when the breaker was on in today's run, else None."""
+    rec = (state or {}).get(RECORD_KEY) or {}
+    if not rec.get("on") or rec.get("date") != (today or _today_et()):
+        return None
+    note = f"Circuit breaker ON this run: {rec.get('reason') or 'no reason recorded'}. New buys and scale-ins frozen"
+    if rec.get("tightened"):
+        note += f"; stops tightened to 1x ATR on {', '.join(rec['tightened'])}"
+    return note + "."
+
+
 def log_circuit_breaker_trigger_dna(reason: str, state: dict, prices=None, _spy_series=None):
     """Backfeed the systemic trigger event directly into the unified Trade History DNA Ledger."""
     dna_file = ledgers.TRADE_DNA_FILE
@@ -255,6 +270,8 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
     """
     is_active, reason = check_systemic_risk(prices)
     positions = state.get("positions", {})
+    record = {"date": _today_et(), "on": bool(is_active), "reason": reason or None, "tightened": []}
+    state[RECORD_KEY] = record
     if is_active:
         state[FREEZE_KEY] = reason     # the buy stage freezes new buys and scale-ins on this
     else:
@@ -314,7 +331,9 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
                     pos["breaker_stop_loss"] = tight_stop
                     tightened_symbols.append(sym)
                     
+        record["tightened"] = list(tightened_symbols)
         if tightened_symbols:
-            _log.warning(f"  [Breaker] Tightened stop-losses to 1.0x ATR (scarcity holdings left wide): {', '.join(tightened_symbols)}")
+            _log.warning(f"  [Breaker] Tightened stop-losses to 1.0x ATR on: {', '.join(tightened_symbols)} "
+                         "(scarcity holdings are left wide)")
             
     return tightened_symbols

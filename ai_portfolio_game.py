@@ -5,6 +5,7 @@ import os
 import pytz
 import re
 import requests
+from html import escape as html_escape
 from aether import etrade, paths
 import rapidapi
 import sys
@@ -1135,11 +1136,16 @@ def send_daily_summary(return_html=False):
         _log.info(f"Failed to include retrospective reflection in email: {e}")
         refl_html = ""
 
+    _note = circuit_breaker.breaker_note(state)
+    breaker_html = (f'<p style="background: #fdecea; border-left: 4px solid #c0392b; padding: 8px 12px; margin: 10px 0;">'
+                    f'<b>🛑 {html_escape(_note)}</b></p>') if _note else ""
+
     html = f"""
     <html>
     <body style="font-family: sans-serif; color: #333; max-width: 700px; margin: 0 auto; padding: 20px;">
         <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 20px;">🤖 AI Portfolio: Daily Performance Summary</h2>
-        <p><b>Date:</b> {today} | <b>Active Strategy:</b> <span style="background: #2c3e50; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold;">{state.get('profile', 'BALANCED')}</span></p>
+        <p><b>Date:</b> {today} | <b>Profile</b> (from the morning SPY Long60 score): <span style="background: #2c3e50; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold;">{state.get('profile', 'BALANCED')}</span></p>
+        {breaker_html}
         <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
         
         <h3 style="color: #2c3e50;">🛒 Market Action Today:</h3>
