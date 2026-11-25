@@ -101,8 +101,11 @@ def run_command(command_list, timeout=STEP_TIMEOUT_S):
     step = os.path.basename(command_list[1]) if len(command_list) > 1 else command_list[0]
 
     try:
+        # stdin=DEVNULL: a child must never wait for typed input. PROD 2026-11-24 17:01: after a failed
+        # Chaikin browser login, login() asked on the console for a JSESSIONID, and run_history.py and
+        # main.py each sat until the 1800 s kill.
         result = subprocess.run(command_list, capture_output=True, text=True, timeout=timeout,
-                                encoding="utf-8", errors="replace")
+                                encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
         if result.returncode != 0:
             _failed_steps.append(f"{step}: exit code {result.returncode}")
             _log.error(f"🚨 {step} failed (exit code {result.returncode}): {(result.stderr or '')[-2000:]}")
