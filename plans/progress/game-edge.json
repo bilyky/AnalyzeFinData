@@ -23,7 +23,7 @@
    "id": "G-C",
    "title": "Range surfing of sideways high-amplitude stocks (#122)",
    "status": "done",
-   "pr": null,
+   "pr": 321,
    "prod": false,
    "note": "FAIL_RISK 2026-11-24: deeper drawdowns than SPY; not wired"
   },
