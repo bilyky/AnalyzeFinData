@@ -36,6 +36,14 @@
    "note": "INCONCLUSIVE: freeze kept; stop tightening not measured"
   },
   {
+   "id": "G1b",
+   "title": "Breaker stop tightening study (R&D #130) + breaker line in the summary email",
+   "status": "in_review",
+   "pr": 326,
+   "prod": false,
+   "note": "KEEP_TIGHTENING: -3.1 pts of -10% outcomes, no return cost"
+  },
+  {
    "id": "G2",
    "title": "#113 A in the game: wire or kill",
    "status": "todo",
