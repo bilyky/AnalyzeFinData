@@ -136,8 +136,6 @@ class _Run:
         excel.side_effect = lambda s, t: snap.__setitem__("txs", copy.deepcopy(t))
         patches = [
             mock.patch.object(game, "datetime", _Clock()),
-            # The breaker's per-run record is dated by its own ET clock; pin it to the same test day.
-            mock.patch.object(game.circuit_breaker, "_today_et", return_value=_TODAY),
             mock.patch.object(game, "_log", log),
             mock.patch.object(game, "is_market_open", return_value=(self.market_open, "closed (test)")),
             mock.patch.object(game, "is_market_hours", return_value=self.market_hours),

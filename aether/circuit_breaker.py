@@ -11,6 +11,7 @@ and backfeeds systemic trigger events to the Failure DNA Ledger for weekly retro
 
 import json
 import datetime
+import os
 import pytz
 from pathlib import Path
 from aether import ledgers, paths, risk_utils
@@ -25,10 +26,28 @@ VXX_FILE = Path(paths.ohlcv_dir()) / "VXX_daily.json"
 # Transient key on the run's state: the breaker's verdict for the buy stage (deploy_capital), so it
 # acts on the same check with no second market-data read. finalize_run removes it before saving.
 FREEZE_KEY = "_breaker_freeze"
-# Saved with the game state (one record, overwritten each run) so reports written by another process,
-# such as the daily summary email, can say whether the breaker was on this run (owner 2026-11-25: the email
-# said "AGGRESSIVE" while the breaker had frozen buys and tightened stops).
-RECORD_KEY = "breaker_last_run"
+# The breaker's verdict of its last run, in its own file (ledgers.BREAKER_LAST_RUN_FILE, this module is the only
+# writer) so reports can say whether the breaker was on (owner 2026-11-25: the email said "AGGRESSIVE" while the
+# breaker had frozen buys and tightened stops). Not in the game state: a market-wide verdict is not portfolio data
+# (#326 review; the #288 -> #297 pattern).
+
+
+def _save_record(record: dict) -> None:
+    p = Path(ledgers.BREAKER_LAST_RUN_FILE)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(json.dumps(record), encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError as e:
+        _log.warning(f"Could not save the breaker's run record: {e}")
+
+
+def load_record() -> dict:
+    try:
+        return json.loads(Path(ledgers.BREAKER_LAST_RUN_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
 
 def load_spy_history() -> list[dict]:
     """Load sorted daily price series for the SPY ETF from the local cache."""
@@ -195,9 +214,9 @@ def check_systemic_risk(prices=None) -> tuple[bool, str]:
     reason = breaker_reason(spy_return, spy_drawdown, vxx_return if volatility_capitulation else 0.0)
     return (True, reason) if reason else (False, "")
 
-def breaker_note(state: dict, today: str | None = None) -> str | None:
+def breaker_note(today: str | None = None) -> str | None:
     """One line for reports when the breaker was on in today's run, else None."""
-    rec = (state or {}).get(RECORD_KEY) or {}
+    rec = load_record()
     if not rec.get("on") or rec.get("date") != (today or _today_et()):
         return None
     note = f"Circuit breaker ON this run: {rec.get('reason') or 'no reason recorded'}. New buys and scale-ins frozen"
@@ -271,7 +290,6 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
     is_active, reason = check_systemic_risk(prices)
     positions = state.get("positions", {})
     record = {"date": _today_et(), "on": bool(is_active), "reason": reason or None, "tightened": []}
-    state[RECORD_KEY] = record
     if is_active:
         state[FREEZE_KEY] = reason     # the buy stage freezes new buys and scale-ins on this
     else:
@@ -298,6 +316,7 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
             _log.info(f"  [Breaker Recovery] Market stabilized. Restored stop-losses to original levels on: {', '.join(restored_symbols)}")
         if kept_symbols:
             _log.info(f"  [Breaker Recovery] Kept stops raised after the tightening (not restored): {', '.join(kept_symbols)}")
+        _save_record(record)
         return []
         
     _log.warning(f"CIRCUIT BREAKER TRIGGERED! Reason: {reason}")
@@ -330,10 +349,10 @@ def enforce_circuit_breaker(state, prices=None) -> list[str]:
                     pos["stop_loss"] = tight_stop
                     pos["breaker_stop_loss"] = tight_stop
                     tightened_symbols.append(sym)
-                    
-        record["tightened"] = list(tightened_symbols)
-        if tightened_symbols:
-            _log.warning(f"  [Breaker] Tightened stop-losses to 1.0x ATR on: {', '.join(tightened_symbols)} "
-                         "(scarcity holdings are left wide)")
-            
+
+    if tightened_symbols:
+        _log.warning(f"  [Breaker] Tightened stop-losses to 1.0x ATR on: {', '.join(tightened_symbols)} "
+                     "(scarcity holdings are left wide)")
+    record["tightened"] = list(tightened_symbols)
+    _save_record(record)
     return tightened_symbols
