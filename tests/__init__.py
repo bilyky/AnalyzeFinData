@@ -179,6 +179,7 @@ _ledgers.FAILURE_RULES_PROPOSED_FILE = _ledger_tmp / "failure_dna_rules_proposed
 _ledgers.RETRO_REPORT_FILE = _ledger_tmp / "retrospective_report.txt"
 _ledgers.PICK_LOG_FILE = _ledger_tmp / "pick_lists_log.jsonl"
 _ledgers.RULE_SHADOW_FILE = _ledger_tmp / "rule_shadow.jsonl"
+_ledgers.BREAKER_LAST_RUN_FILE = _ledger_tmp / "breaker_last_run.json"
 _ledgers.EARNINGS_8K_LABELS_FILE = _ledger_tmp / "earnings_8k_labels.jsonl"
 # The weekly R&D runner writes Data/pattern_discovery_<date>_ai.md (scripts/backtesting, not on sys.path).
 _sys_path_rd = str(Path(__file__).resolve().parent.parent / "scripts" / "backtesting")

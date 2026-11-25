@@ -241,7 +241,9 @@
       "Measured against the right session: a morning run compares the live SPY price with the last cached close (yesterday) and keeps that close in the 10-session window; the rolling drawdown trigger is 5% under the 10-session peak",
       "Whipsaw Protection: Stabilization window blocks stop-tightening or selling during the first 30 minutes of the market open (6:30 AM - 7:00 AM PST).",
       "Stop Tightening: Dynamically tightens stop-losses to a conservative 1.0x ATR floor on all active satellites.",
-      "Elastic Memory: Automatically caches your original stop under 'original_stop_loss' and restores it once market panic settles!"
+      "Elastic Memory: Automatically caches your original stop under 'original_stop_loss' and restores it once market panic settles!",
+      "Tested: the buy freeze is neutral on average (R&D #125); the 1.0x ATR stop tightening cuts the share of -10% outcomes by about 3 points with no clear return cost over 66 breaker episodes since 2000 (R&D #130)",
+      "Shown in the daily summary email: each run saves its verdict to Data/breaker_last_run.json (the breaker's own file); when the breaker was on, the email says so next to the profile, with the reason and the stocks whose stops it tightened"
     ]
   },
   "risk_reward_gate": {
