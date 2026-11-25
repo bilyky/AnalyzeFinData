@@ -547,9 +547,9 @@ def main():
             try:
                 script_path = str(BASE_DIR / "run_history.py")
                 subprocess.run(
-                    [sys.executable, script_path, "5"], 
-                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, 
-                    encoding="utf-8", errors="replace",
+                    [sys.executable, script_path, "5"],
+                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                    encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,   # never wait for typed input
                     timeout=600  # Fail fast after 10 minutes!
                 )
                 log("History backfilled.")
