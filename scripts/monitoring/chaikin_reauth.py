@@ -236,6 +236,23 @@ def _stamp_email_sent(kind: str) -> None:
         _log.warning("Could not persist notify-throttle state to %s", _NOTIFY_STATE)
 
 
+def _notify_login_waiting() -> None:
+    """Email (throttled 6h) that the Chrome login on this machine is filled in and waiting for a click."""
+    if _email_throttled("login_waiting", 6.0):
+        return
+    try:
+        send_email(
+            subject="Chaikin login is waiting for your click on the PROD machine",
+            body=("The Chaikin token refresh opened Chrome on the PROD machine and filled in the login. "
+                  "Click Login (or the Turnstile box) in that window to finish. It waits a few minutes; "
+                  "if it times out, click 'Chaikin - Login & Refresh Token (opens Chrome)' on the "
+                  "dashboard System page instead."),
+        )
+        _stamp_email_sent("login_waiting")
+    except Exception as mail_err:
+        _log.warning("Failed to send the login-waiting email: %s", mail_err)
+
+
 def _notify_manual_reauth(reason: str) -> None:
     """Throttled (6h) email telling the user to click the System login button."""
     if _email_throttled("reauth_failed", 6.0):
@@ -403,7 +420,8 @@ def main() -> int:
     try:
         # Headed by default (CHAIKIN_HEADLESS_LOGIN is intentionally left unset). This
         # mints a fresh 7-day sessionToken AND re-warms the profile's cf_clearance.
-        new_session = pg._login_via_browser(headless=False)
+        new_session = pg._login_via_browser(headless=False, human_wait_s=args.login_timeout,
+                                            on_waiting=_notify_login_waiting)
     except Exception as e:
         _log.error("Headed re-auth failed: %s", e)
         _notify_manual_reauth(f"headed persistent-context login failed ({e})")

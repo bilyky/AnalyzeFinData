@@ -111,8 +111,50 @@ _session_valid_until = 0.0   # monotonic timestamp; avoids HTTP validation on ev
 _AUTH_BREAKER_COOLDOWN = 900  # seconds to suspend browser re-auth AND throttle alert email after a failure
 _auth_circuit_breaker_until = 0.0            # monotonic timestamp; 0.0 = breaker open (monotonic() is always >= 0)
 _breaker_warned_until       = 0.0            # the breaker window already warned about (one warning per window)
-_last_email_alert_time      = float("-inf")  # monotonic timestamp; -inf so the FIRST alert always sends
-                                             # (monotonic() counts from boot, so 0.0 would suppress alerts in the first cooldown after a reboot)
+
+# The session alert is throttled through a file, not process memory: the hourly watchdog is a new
+# process each time, so an in-memory throttle sent the email every hour (PROD 2026-11-24).
+def _alert_state_file() -> str:
+    return os.path.join(paths.data_dir(), "chaikin_alert_state.json")
+
+
+_ALERT_MIN_HOURS = 6.0
+
+
+def _send_session_alert(err) -> bool:
+    """Email that the Chaikin session needs a human login, at most once per _ALERT_MIN_HOURS
+    across processes. Returns True when an email went out."""
+    now = time.time()
+    try:
+        with open(_alert_state_file(), encoding="utf-8") as f:
+            last = float(json.load(f).get("sent_at", 0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        last = 0.0
+    if now - last < _ALERT_MIN_HOURS * 3600:
+        _pg_log.info("Chaikin session alert already sent within %.0fh; not sending again.", _ALERT_MIN_HOURS)
+        return False
+    try:
+        send_email(
+            subject="ALERT: Chaikin session needs a login",
+            body=(f"The Chaikin session could not be renewed automatically.\n\nReason: {err}\n\n"
+                  "To renew it: open the AETHER dashboard System page and click "
+                  "'Chaikin - Login & Refresh Token (opens Chrome)', then click Login once "
+                  "(one Turnstile). On the PROD machine you can also run "
+                  "'python scripts/monitoring/chaikin_reauth.py --force': it opens Chrome, fills the "
+                  "form and waits for your click. A fresh ~7-day token is captured automatically."),
+        )
+    except Exception as mail_err:
+        _pg_log.warning("Failed to send the Chaikin session alert email: %s", mail_err)
+        return False
+    try:
+        tmp = _alert_state_file() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"sent_at": now}, f)
+        os.replace(tmp, _alert_state_file())
+    except OSError as e:
+        _pg_log.warning("Could not save the Chaikin alert throttle (%s): %s", _alert_state_file(), e)
+    return True
+
 
 class ChaikinSessionUnavailable(EnvironmentError):
     """No usable Chaikin session: the re-auth failed, its breaker is open, or the API rejected
@@ -207,20 +249,9 @@ def ensure_valid_session() -> dict:
             _session_valid_until = time.monotonic() + _SESSION_VALID_TTL
         return new_session or session or {}
     except EnvironmentError as e:
-        _auth_circuit_breaker_until = time.monotonic() + _AUTH_BREAKER_COOLDOWN # Suspend further browser launches
-        global _last_email_alert_time
-        # We are now OUTSIDE the cross-process lock! We can safely send the email alert
-        # ONLY if we haven't already sent one within the cooldown window to prevent massive spam.
-        if time.monotonic() > _last_email_alert_time + _AUTH_BREAKER_COOLDOWN:
-            try:
-                session_abs_path = os.path.abspath(SESSION_FILE)
-                send_email(
-                    subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
-                    body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
-                )
-                _last_email_alert_time = time.monotonic()
-            except Exception as mail_err:
-                _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
+        _auth_circuit_breaker_until = time.monotonic() + _AUTH_BREAKER_COOLDOWN # Suspend further re-auth attempts
+        # Outside the cross-process lock: the alert is throttled across processes (_send_session_alert).
+        _send_session_alert(e)
         if isinstance(e, ChaikinSessionUnavailable):
             raise
         raise ChaikinSessionUnavailable(str(e)) from e
@@ -802,7 +833,30 @@ def _load_credentials() -> tuple[str, str]:
     return email, password
 
 
-def _login_via_browser(headless: bool = False) -> dict:
+def _wait_for_login_or_submit(page, deadline: float) -> str:
+    """Wait until a person has logged in (the page left /login: "human") or Turnstile enabled the
+    submit button, which is then clicked ("clicked"). TimeoutError at the deadline (time.time())."""
+    while True:
+        try:
+            if page.evaluate("() => window.location.pathname") != "/login":
+                return "human"
+        except Exception:
+            pass   # mid-navigation; check again
+        if page.query_selector('button[type="submit"]:not([disabled])') is not None:
+            page.click('button[type="submit"]')
+            return "clicked"
+        if time.time() >= deadline:
+            raise TimeoutError("Chaikin login not completed in the browser before the wait ended")
+        page.wait_for_timeout(1000)
+
+
+def _login_via_browser(headless: bool = False, human_wait_s: int | None = None, on_waiting=None) -> dict:
+    """Log in to Chaikin in the persistent-profile browser and capture the session.
+
+    human_wait_s (headed only): after filling the form, wait up to this many seconds for a person to
+    finish the login (click Login, or the Turnstile box) instead of the default 60 s, calling
+    on_waiting() once first so they can be told (PROD 2026-11-24: the form was filled, only the click
+    was missing, and the 60 s wait ran out)."""
     if not sync_playwright:
         raise ImportError("Playwright is not installed in the environment.")
 
@@ -863,10 +917,21 @@ def _login_via_browser(headless: bool = False) -> dict:
                 # Wait for Turnstile to enable the submit button (auto-verifies with a warm
                 # profile; a human can click the widget in the rare cold-profile case).
                 # Shorten timeout in headless mode to enforce a true fast-fail and prevent hangs.
-                _pg_log.console("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
-                turnstile_timeout = 10000 if headless else 60000
-                page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=turnstile_timeout)
-                page.click('button[type="submit"]')
+                if human_wait_s and not headless:
+                    _pg_log.console(f"Waiting up to {human_wait_s}s for the login to finish: click Login "
+                                    "(or the Turnstile box) in the Chrome window...")
+                    if on_waiting:
+                        try:
+                            on_waiting()
+                        except Exception as e:
+                            _pg_log.warning(f"Login-waiting notice failed: {e}")
+                    how = _wait_for_login_or_submit(page, time.time() + human_wait_s)
+                    _pg_log.info(f"Chaikin login finished ({'by you' if how == 'human' else 'Turnstile passed, clicked'}).")
+                else:
+                    _pg_log.console("Waiting for Turnstile to complete (up to 60s — click the checkbox if it appears)...")
+                    turnstile_timeout = 10000 if headless else 60000
+                    page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=turnstile_timeout)
+                    page.click('button[type="submit"]')
 
                 _pg_log.console("Waiting for login to complete (up to 60s)...")
                 try:
@@ -975,7 +1040,13 @@ def login(interactive=True) -> dict:
     elif _hl_env in ("0", "false", "no"):
         headless_run = False
     else:
-        headless_run = not interactive
+        if not interactive:
+            # An unattended run (the hourly watchdog, a data fetch) would launch a headless browser
+            # that cannot pass Turnstile: it failed on every attempt and emailed each hour
+            # (PROD 2026-11-24). Renewal is the headed chaikin_reauth.py run, which waits for a click.
+            raise EnvironmentError("Chaikin session expired and the JWT refresh failed; an unattended "
+                                   "run does not open a browser (headless cannot pass Turnstile)")
+        headless_run = False
 
     try:
         return _login_via_browser(headless=headless_run)
@@ -1311,14 +1382,7 @@ def check_from_file(prefer_cache: bool, date=None):
     try:
         session_id = login()
     except EnvironmentError as e:
-        try:
-            session_abs_path = os.path.abspath(SESSION_FILE)
-            send_email(
-                subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
-                body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
-            )
-        except Exception as mail_err:
-            _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
+        _send_session_alert(e)
         raise
     _pg_log.debug("Session loaded", extra={"jsid_prefix": str(session_id)[:12] + "..."})
     syms_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "symbols_to_check.txt")
@@ -1726,14 +1790,7 @@ def check_from_xls(prefer_cache: bool, date=None, symbols=None):
     try:
         session_id = login()
     except EnvironmentError as e:
-        try:
-            session_abs_path = os.path.abspath(SESSION_FILE)
-            send_email(
-                subject="ALERT: Chaikin Turnstile Block - Manual Auth Required",
-                body=f"Chaikin automated session token renewal failed due to browser login timeout/Turnstile challenge.\n\nError: {e}\n\nActions required:\n1. Log in manually at https://app.chaikinanalytics.com in a regular browser.\n2. Extract JSESSIONID from DevTools request headers.\n3. Save JSESSIONID to {session_abs_path}.\n4. Re-run the daily pipeline."
-            )
-        except Exception as mail_err:
-            _pg_log.warning("Failed to send Turnstile block alert email: %s", mail_err)
+        _send_session_alert(e)
         raise
     _pg_log.debug("Session loaded", extra={"jsid_prefix": str(session_id)[:12] + "..."})
 
