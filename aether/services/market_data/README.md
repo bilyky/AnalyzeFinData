@@ -3,7 +3,7 @@
 **Purpose:** market facts every portfolio shares. Today: is the market open. Next: prices (the
 E*TRADE -> Google -> cache chain) and the OHLCV store (R&D #78 S5, `plans/aether-services.md`).
 
-**Public API (`api.py`, `API_VERSION` 0.2.0):**
+**Public API (`api.py`, `API_VERSION` 0.3.0):**
 - `SessionService.market_open(now=None) -> (open, message)`: the run gate. A weekday, an NYSE
   session day, and 9:30-16:00 New York time.
 - `SessionService.market_hours(now=None) -> bool`: 6:30-13:15 Los Angeles time on a weekday
@@ -24,6 +24,14 @@ E*TRADE -> Google -> cache chain) and the OHLCV store (R&D #78 S5, `plans/aether
   `PriceService.google` and `.cache` are the single sources behind
   `get_google_prices_fallback` / `get_json_prices_fallback`.
 - `missing(symbols, quotes)` and `cached_close_is_current(newest_date, today)`: the pure rules.
+- `OhlcvService`: the per-symbol OHLCV cache.
+  - `series(symbol)` is the raw daily series, or None if there is no file.
+  - `closes(symbol)` returns the closes, oldest first; `[]` when the file is missing or unreadable.
+  - `age_days(symbol, today)` is the age of the newest bar.
+  - `heal(symbol, today)` refreshes a stale cache, at most once per symbol per process. A locked
+    RapidAPI doesn't count as a try.
+  - `sma50(symbol, today, max_stale_days, heal=)` heals a missing or stale cache first.
+- `closes`, `age_days`, `is_stale` and `MAX_STALE_DAYS` (10): the pure rules.
 
 **Layout:**
 - `domain/session.py`: the rules, pure;
@@ -34,12 +42,25 @@ E*TRADE -> Google -> cache chain) and the OHLCV store (R&D #78 S5, `plans/aether
   (`quotes(symbols, today=None)`), `BrokerQuotes` (`session()`, `quotes(session, symbols)`);
 - `adapters/prices.py`: `EtradeQuotes`, `GooglePrices` (scrapes Google Finance), `OhlcvCloses`
   (the newest current close in `<symbol>_daily.json`).
+- `ohlcv_app.py` (`OhlcvService`), `domain/ohlcv.py`, and `adapters/ohlcv_json.py`:
+  `JsonOhlcvStore` (`OhlcvStore` port: `path`, `series`).
 
 **Wiring:** `aether.bootstrap` builds `App.market_data`, and `market_prices(cache_dir=...)` builds
 the price chain. Until the OHLCV store moves here (next S5 PR), the game passes its own
 `SYMBOL_FULL_DIR`. Tests pass `market_clock=` and a
 `FixedClock`. `ai_portfolio_game.is_market_open()` / `is_market_hours()` delegate here and still
 read "now" themselves, so tests that replace the game's `datetime` keep working.
+
+**The OHLCV folder:** the game still passes its own `SYMBOL_FULL_DIR`, the refresh call
+(`rapidapi.repair_missing`, root code this package must not import) and its heal guard
+(`_HEAL_ATTEMPTED`). Seven other modules keep their own OHLCV-folder constant (`risk_utils`,
+`rapidapi`, `powergauge`, `backtest_ratings`, `circuit_breaker`, `scoring`, `decision_eval`,
+plus `data_api`'s). Giving the folder one home is a follow-up PR.
+
+**Per-run caching of bars: not done, on purpose.** The plan lists it for S5. These are local file
+reads (milliseconds), and the expensive live call (the E*TRADE clock) is already asked once per
+run. A read cache would also have to see a file that a heal rewrites mid-run. Revisit only if a
+profile shows the reads matter.
 
 **Not here yet:** `watchdog.py` and `autonomous_pipeline.py` have their own `is_market_hours`.
 They move onto this service later in S5 or in S11.

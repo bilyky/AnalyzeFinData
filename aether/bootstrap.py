@@ -15,8 +15,9 @@ from pathlib import Path
 from aether.core import DEFAULT_PORTFOLIO, Clock, EventBus, StorageError, SystemClock
 from aether.services.portfolio.adapters.json_repository import JsonPortfolioRepository, PortfolioFile
 from aether.services.market_data.adapters.etrade_clock import EtradeMarketClock
+from aether.services.market_data.adapters.ohlcv_json import JsonOhlcvStore
 from aether.services.market_data.adapters.prices import EtradeQuotes, GooglePrices, OhlcvCloses
-from aether.services.market_data.api import PriceService, SessionService
+from aether.services.market_data.api import OhlcvService, PriceService, SessionService
 from aether.services.portfolio.adapters.json_queries import JsonPortfolioQueries
 from aether.services.portfolio.adapters.legacy_state import LegacyStateGateway
 from aether.services.portfolio.adapters.memory import InMemoryPortfolioQueries, InMemoryPortfolioRepository
@@ -25,7 +26,7 @@ from aether.services.portfolio.api import PortfolioQueries, PortfolioRepository,
 PORTFOLIO_STORE_ENV = "AETHER_PORTFOLIO_STORE"
 STARTING_CAPITAL = 10000.0
 
-__all__ = ["App", "LegacyStateGateway", "PortfolioFile", "bootstrap", "default_portfolio_files", "market_data_service", "market_prices",
+__all__ = ["App", "LegacyStateGateway", "PortfolioFile", "bootstrap", "default_portfolio_files", "market_data_service", "market_ohlcv", "market_prices",
            "portfolio_store_kind"]
 
 # The checkout's Data/ folder, where the game keeps its state today. This is the one place
@@ -72,6 +73,13 @@ def market_prices(*, cache_dir, broker=None, google=None, cache=None, log=None) 
     (S5, next PR) the caller passes its own (the game: ``SYMBOL_FULL_DIR``)."""
     return PriceService(broker or EtradeQuotes(log=log), google or GooglePrices(log=log),
                         cache or OhlcvCloses(cache_dir, log=log), log=log)
+
+
+def market_ohlcv(*, symbol_dir, repair, attempted: set, sma=None, log=None) -> OhlcvService:
+    """The OHLCV cache service. ``symbol_dir`` is the per-symbol folder and ``repair`` the refresh
+    call (``rapidapi.repair_missing``); the game passes both (and its once-per-process heal guard)
+    until the folder has one home for all modules (a follow-up)."""
+    return OhlcvService(JsonOhlcvStore(symbol_dir), repair, attempted, sma=sma, log=log)
 
 
 def bootstrap(*, clock: Clock | None = None, portfolio_repository: PortfolioRepository | None = None,

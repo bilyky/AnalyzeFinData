@@ -17,7 +17,8 @@ from pathlib import Path
 import aether_oracle
 from aether.utils import _to_float
 from aether.config import CFG
-from aether.bootstrap import STARTING_CAPITAL, bootstrap, market_data_service, market_prices
+from aether.bootstrap import STARTING_CAPITAL, bootstrap, market_data_service, market_ohlcv, market_prices
+from aether.services.market_data.api import MAX_STALE_DAYS, is_stale
 from aether.run_guard import DailyRunGuard, RunSkipped
 
 # Windows CP1252 console fallback (bug-fix workaround, not a feature): must run
@@ -199,123 +200,46 @@ def log_closed_trade_dna(sym, pos, price, today_str):
         _log.warning(f"Failed to log trade DNA: {e}")
 
 
+def _ohlcv():
+    """The OHLCV cache service (market-data, R&D #78 S5), built per call with the game's own
+    folder, refresh call and heal guard, so a redirected SYMBOL_FULL_DIR (tests) applies."""
+    return market_ohlcv(symbol_dir=SYMBOL_FULL_DIR, repair=lambda syms, day: rapidapi.repair_missing(syms, day),
+                        attempted=_HEAL_ATTEMPTED, sma=sell_rules.sma_from_closes, log=_log)
+
+
 def _load_closes(symbol):
     """Sorted daily closes for a symbol from the local OHLCV cache, or [] when the
     file is missing/unreadable. Single loader so the cache path is defined once —
     trend-score and bubble-z-score previously used a wrong doubled-`Data` path and
     silently read nothing."""
-    try:
-        path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
-        if not path.exists():
-            return []
-        with open(path) as f:
-            ts = json.load(f).get("Time Series (Daily)", {})
-        return [float(ts[d]["4. close"]) for d in sorted(ts.keys())]
-    except Exception:
-        return []
+    return _ohlcv().closes(symbol)
 
 
 _HEAL_ATTEMPTED: set = set()  # per-process guard: each symbol healed at most once
-_MAX_STALE_DAYS = 10          # single source of truth for the OHLCV freshness horizon
+_MAX_STALE_DAYS = MAX_STALE_DAYS  # single source of truth: the market-data service
 
 
 def _heal_symbol_cache(symbol) -> bool:
     """Pull fresh OHLCV history via rapidapi when a stale cache is detected.
     Each symbol is attempted at most once per process run."""
-    if symbol in _HEAL_ATTEMPTED:
-        return False
-    _HEAL_ATTEMPTED.add(symbol)
-    try:
-        today_str = str(datetime.date.today())
-        res = rapidapi.repair_missing([symbol], today_str)
-        if res.get("locked"):
-            # Another process holds the RapidAPI lock — this was never a real attempt.
-            # Release the once-per-run guard so a later pass can still heal this symbol.
-            _HEAL_ATTEMPTED.discard(symbol)
-            _log.info(f"[Self-Healer] {symbol} heal deferred — RapidAPI busy in another process.")
-            return False
-        if res.get("updated", 0) > 0:
-            _log.info(f"[Self-Healer] Healed {symbol} OHLCV cache.")
-            return True
-        else:
-            _log.warning(f"[Self-Healer] On-demand refresh for {symbol} yielded 0 updates.")
-            return False
-    except Exception as e:
-        _log.warning(f"[Self-Healer] Failed to heal {symbol} cache: {e}")
-        return False
+    return _ohlcv().heal(symbol, datetime.date.today())
 
 
 def _cache_age_days(symbol):
     """Age in days of the newest RAW cached bar (no split-adjust), or None if the cache
-    is missing/empty/unreadable. Cheap sibling of risk_utils.ohlcv_age_days — reads the
-    same raw JSON _cache_stale already consults, so the freshness gate can report an age
-    without a second, heavier split-adjusting load."""
-    path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
-    if not path.exists():
-        return None
-    try:
-        with open(path) as f:
-            ts = json.load(f).get("Time Series (Daily)", {})
-        dates = sorted(ts.keys())
-        if not dates:
-            return None
-        return (datetime.date.today() - datetime.date.fromisoformat(dates[-1])).days
-    except Exception:
-        return None
+    is missing/empty/unreadable. Cheap sibling of risk_utils.ohlcv_age_days."""
+    return _ohlcv().age_days(symbol, datetime.date.today())
 
 
 def _cache_stale(symbol, max_stale_days=_MAX_STALE_DAYS) -> bool:
     """Return True if the symbol's OHLCV cache is missing or older than max_stale_days."""
-    age = _cache_age_days(symbol)
-    return age is None or age > max_stale_days
+    return is_stale(_cache_age_days(symbol), max_stale_days)
 
 
 def _sma50(symbol, max_stale_days=_MAX_STALE_DAYS):
-    """50-day SMA of closes from the local OHLCV cache, with autonomic on-demand self-healing."""
-    try:
-        path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
-        
-        # Check if cache is missing or stale
-        needs_healing = False
-        last_bar_date = "None"
-        if not path.exists():
-            needs_healing = True
-            _log.warning(f"[sma50] {symbol} OHLCV cache missing — winner protection unavailable.")
-        else:
-            try:
-                with open(path) as f:
-                    ts = json.load(f).get("Time Series (Daily)", {})
-                dates = sorted(ts.keys())
-                if not dates:
-                    needs_healing = True
-                else:
-                    last_bar_date = dates[-1]
-                    stale_days = (datetime.date.today() - datetime.date.fromisoformat(last_bar_date)).days
-                    if stale_days > max_stale_days:
-                        needs_healing = True
-                        _log.warning(f"[sma50] {symbol} OHLCV cache stale by {stale_days}d (last bar: {last_bar_date}).")
-            except Exception:
-                needs_healing = True
-
-        if needs_healing:
-            healed = _heal_symbol_cache(symbol)
-            if not healed:
-                _log.warning(f"[sma50] {symbol} cache heal failed; winner protection unavailable this run.")
-                return None
-
-        # Re-read the newly healed/fresh cache file
-        if not path.exists():
-            return None
-        with open(path) as f:
-            ts = json.load(f).get("Time Series (Daily)", {})
-        dates = sorted(ts.keys())
-        if not dates:
-            return None
-        closes = [float(ts[d]["4. close"]) for d in dates]
-        return sell_rules.sma_from_closes(closes, 50)
-    except Exception as e:
-        _log.warning(f"Failed to calculate 50-day SMA for {symbol}: {e}")
-        return None
+    """50-day SMA of closes from the local OHLCV cache, with autonomic on-demand self-healing.
+    The heal goes through this module's _heal_symbol_cache (one guard, one patch point)."""
+    return _ohlcv().sma50(symbol, datetime.date.today(), max_stale_days, heal=lambda s: _heal_symbol_cache(s))
 
 def _live_equity(cash, positions, price_of):
     """Cash + Σ qty·price across positions, falling back to each position's cost when
@@ -889,14 +813,10 @@ def save_game(state):
 def backtrack_verify(symbol):
     """Verify the consistency of a price trend over the last 3 trading days using local daily history."""
     try:
-        path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
-        if not path.exists():
+        ts = _ohlcv().series(symbol)
+        if ts is None:
             return False, "No local daily history found."
-        
-        with open(path) as f:
-            data = json.load(f)
-            
-        ts = data.get("Time Series (Daily)", {})
+
         sorted_dates = sorted(list(ts.keys()), reverse=True)
         if len(sorted_dates) < 3:
             return False, f"Insufficient history (found {len(sorted_dates)}/3 days) for verification."
@@ -918,14 +838,10 @@ def backtrack_verify(symbol):
 def is_bottom_confirmed(symbol):
     """Verify if a stock is forming a technical bottom based on its 3-day price slope."""
     try:
-        path = SYMBOL_FULL_DIR / f"{symbol}_daily.json"
-        if not path.exists():
+        ts = _ohlcv().series(symbol)
+        if ts is None:
             return False, "No local daily history found."
-        
-        with open(path) as f:
-            data = json.load(f)
-            
-        ts = data.get("Time Series (Daily)", {})
+
         sorted_dates = sorted(list(ts.keys()), reverse=True)
         if len(sorted_dates) < 4:
             return False, f"Insufficient history (found {len(sorted_dates)}/4 days) for slope check."
