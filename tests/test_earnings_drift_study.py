@@ -41,6 +41,15 @@ class TestEvents(unittest.TestCase):
                                        start="2010-01-01"), [])
 
 
+class TestInSession(unittest.TestCase):
+    def test_in_session(self):
+        self.assertTrue(ed.in_session("2026-10-29T09:30:00-04:00"))
+        self.assertTrue(ed.in_session("2026-10-29T15:59:59-04:00"))
+        self.assertFalse(ed.in_session("2026-10-29T16:00:00-04:00"))
+        self.assertFalse(ed.in_session("2026-10-29T07:02:04-04:00"))
+        self.assertFalse(ed.in_session(None))
+
+
 class TestHolding(unittest.TestCase):
     def test_held_excess_window(self):
         days = _days(10)

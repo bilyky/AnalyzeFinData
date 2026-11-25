@@ -70,6 +70,12 @@ HAC_LAG = 5
 GATE_T = 2.0
 
 
+def in_session(accepted_et: str | None) -> bool:
+    """Accepted between 09:30 and 16:00 New York time (the ISO string earnings_history stores)."""
+    hhmm = (accepted_et or "")[11:16]
+    return "09:30" <= hhmm < "16:00" if len(hhmm) == 5 else False
+
+
 def classify(reaction: float, vol_ratio: float | None) -> str | None:
     if vol_ratio is None or vol_ratio < VOL_MULT:
         return None
@@ -138,6 +144,9 @@ def verdict(up_halves: list, down_halves: list) -> list:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().split("\n")[0])
     ap.add_argument("--max-symbols", type=int, default=None, help="smoke test on a slice (don't read results)")
+    ap.add_argument("--exclude-in-session", action="store_true",
+                    help="sensitivity (added after the result, #328 review; reported, not judged): drop reports "
+                         "accepted 09:30-16:00 ET, where a pre-open release filed late is dated a day late")
     a = ap.parse_args(argv)
     hist = earnings_history.load()
     if not earnings_history.status(hist).get("complete"):
@@ -154,7 +163,8 @@ def main(argv=None) -> int:
             continue
         days = sorted(b["idx"], key=b["idx"].get)
         vols = [float(ts[d].get("5. volume") or 0) for d in days]
-        sessions = {e["first_session"] for e in hist["symbols"][s]["events"] if e.get("first_session")}
+        sessions = {e["first_session"] for e in hist["symbols"][s]["events"] if e.get("first_session")
+                    and not (a.exclude_in_session and in_session(e.get("accepted_et")))}
         for i, g, reaction, vr in events_for(days, b["c"], vols, spy, sessions):
             for h in (H, H_CONTEXT):
                 ex = held_excess(days, b["c"], spy, i, h)
@@ -180,8 +190,10 @@ def main(argv=None) -> int:
            "mean_reaction_pct": {g: round(100 * float(np.mean([e["reaction"] for e in per_event[g]])), 2)
                                  if per_event[g] else None for g in per_event}}
     sys.stdout.write(json.dumps(rep, indent=1) + "\n")
+    rep["exclude_in_session"] = bool(a.exclude_in_session)
     if not a.max_symbols:
-        out = os.path.join(paths.data_dir(), f"earnings_drift_study_{datetime.date.today().isoformat()}.json")
+        tag = "_no_in_session" if a.exclude_in_session else ""
+        out = os.path.join(paths.data_dir(), f"earnings_drift_study{tag}_{datetime.date.today().isoformat()}.json")
         with open(out, "w", encoding="utf-8") as f:
             json.dump({**rep, "per_event": per_event}, f, indent=1)
         sys.stdout.write(f"wrote {out}\n")
